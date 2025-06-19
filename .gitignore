@@ -1,0 +1,35 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Configuration
+config.toml
+
+# Data directories
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+test_*.m3u
+test_*.m3u8
+
+# Downloaded M3U files
+*.m3u
+*.m3u8
+get.php*

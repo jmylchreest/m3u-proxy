@@ -1,0 +1,829 @@
+/* Modern CSS for M3U Proxy */
+:root {
+    --primary-color: #007bff;
+    --primary-hover: #0056b3;
+    --secondary-color: #6c757d;
+    --success-color: #28a745;
+    --danger-color: #dc3545;
+    --warning-color: #ffc107;
+    --light-bg: #f8f9fa;
+    --border-color: #dee2e6;
+    --text-color: #343a40;
+    --text-muted: #6c757d;
+    --border-radius: 0.375rem;
+    --box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    --transition: all 0.15s ease-in-out;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family:
+        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+        Arial, sans-serif;
+    line-height: 1.5;
+    color: var(--text-color);
+    background-color: #fff;
+}
+
+/* Layout */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 1rem;
+}
+
+/* Header */
+header {
+    background: var(--light-bg);
+    border-bottom: 1px solid var(--border-color);
+    padding: 1rem 0;
+    margin-bottom: 2rem;
+}
+
+.header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--primary-color);
+    text-decoration: none;
+}
+
+/* Navigation */
+nav {
+    background: var(--light-bg);
+    padding: 1rem;
+    border-radius: var(--border-radius);
+    margin-bottom: 2rem;
+}
+
+nav ul {
+    list-style: none;
+    display: flex;
+    gap: 1rem;
+}
+
+nav a {
+    text-decoration: none;
+    color: var(--primary-color);
+    padding: 0.5rem 1rem;
+    border-radius: var(--border-radius);
+    transition: var(--transition);
+}
+
+nav a:hover,
+nav a.active {
+    background: var(--primary-color);
+    color: white;
+}
+
+/* Cards */
+.card {
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+    box-shadow: var(--box-shadow);
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-title {
+    margin: 0;
+    color: var(--text-color);
+}
+
+/* Buttons */
+.btn {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    border: 1px solid transparent;
+    border-radius: var(--border-radius);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    text-decoration: none;
+    text-align: center;
+    cursor: pointer;
+    transition: var(--transition);
+    background: none;
+    font-family: inherit;
+}
+
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+}
+
+.btn-secondary {
+    background: var(--secondary-color);
+    border-color: var(--secondary-color);
+    color: white;
+}
+
+.btn-danger {
+    background: var(--danger-color);
+    border-color: var(--danger-color);
+    color: white;
+}
+
+.btn-outline-primary {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.btn-outline-primary:hover:not(:disabled) {
+    background: var(--primary-color);
+    color: white;
+}
+
+.btn-outline-secondary {
+    color: var(--secondary-color);
+    border-color: var(--secondary-color);
+}
+
+.btn-outline-secondary:hover:not(:disabled) {
+    background: var(--secondary-color);
+    color: white;
+}
+
+.btn-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+/* Forms */
+.form-group {
+    margin-bottom: 1rem;
+}
+
+.form-label {
+    display: block;
+    margin-bottom: 0.25rem;
+    font-weight: 500;
+    color: var(--text-color);
+}
+
+.form-control,
+.form-select {
+    display: block;
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background: white;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    transition: var(--transition);
+}
+
+.form-control:focus,
+.form-select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+.form-check {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Tables */
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+    table-layout: fixed;
+}
+
+.table th,
+.table td {
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
+}
+
+.table th {
+    background: var(--light-bg);
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.table tbody tr:hover {
+    background: rgba(0, 123, 255, 0.05);
+}
+
+/* Stream sources table specific styling */
+.table th:nth-child(1),
+.table td:nth-child(1) {
+    width: 30%;
+    word-wrap: break-word;
+}
+
+.table th:nth-child(2),
+.table td:nth-child(2) {
+    width: 7%;
+}
+
+.table th:nth-child(3),
+.table td:nth-child(3) {
+    width: 8%;
+}
+
+.table th:nth-child(4),
+.table td:nth-child(4) {
+    width: 10%;
+}
+
+.table th:nth-child(5),
+.table td:nth-child(5) {
+    width: 12%;
+}
+
+.table th:nth-child(6),
+.table td:nth-child(6) {
+    width: 13%;
+}
+
+.table th:nth-child(7),
+.table td:nth-child(7) {
+    width: 20%;
+    white-space: nowrap;
+}
+
+/* Ensure URLs can wrap in the name/URL column */
+.table td:nth-child(1) small {
+    word-break: break-all;
+    line-height: 1.3;
+}
+
+/* Badges */
+.badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 0.25rem;
+    text-transform: uppercase;
+}
+
+.badge-success {
+    background: var(--success-color);
+    color: white;
+}
+
+.badge-secondary {
+    background: var(--secondary-color);
+    color: white;
+}
+
+/* Modal */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1040;
+    pointer-events: auto;
+}
+
+/* Channels modal gets higher z-index */
+.channels-modal {
+    z-index: 1050;
+    pointer-events: auto;
+}
+
+.modal.show {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+}
+
+.modal-content {
+    background: white;
+    border-radius: var(--border-radius);
+    max-width: 500px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-title {
+    margin: 0;
+}
+
+.modal-close {
+    background: var(--light-bg);
+    border: 2px solid var(--border-color);
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--text-color);
+    border-radius: 50%;
+    width: 2.5rem;
+    height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+}
+
+.modal-close:hover {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+.modal-body {
+    padding: 1rem;
+}
+
+.modal-footer {
+    padding: 1rem;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+/* Alerts */
+.alert {
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    border: 1px solid transparent;
+    border-radius: var(--border-radius);
+}
+
+.alert-success {
+    background: rgba(40, 167, 69, 0.1);
+    border-color: rgba(40, 167, 69, 0.2);
+    color: #155724;
+}
+
+.alert-danger {
+    background: rgba(220, 53, 69, 0.1);
+    border-color: rgba(220, 53, 69, 0.2);
+    color: #721c24;
+}
+
+/* Loading */
+.loading {
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid transparent;
+    border-top: 2px solid var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* Progress bars */
+.progress {
+    display: flex;
+    height: 1rem;
+    overflow: hidden;
+    background-color: var(--light-bg);
+    border-radius: var(--border-radius);
+}
+
+.progress-bar {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+    color: #fff;
+    text-align: center;
+    white-space: nowrap;
+    background-color: var(--primary-color);
+    transition: width 0.6s ease;
+}
+
+/* Password Field with Toggle */
+.password-field {
+    position: relative;
+}
+
+.password-toggle {
+    position: absolute;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0.25rem;
+    font-size: 1rem;
+    line-height: 1;
+    transition: var(--transition);
+}
+
+.password-toggle:hover {
+    color: var(--primary-color);
+}
+
+.password-toggle:focus {
+    outline: none;
+    color: var(--primary-color);
+}
+
+/* Eye icons using CSS */
+.password-toggle::before {
+    content: "👁️";
+    font-size: 1rem;
+}
+
+.password-toggle.hidden::before {
+    content: "🙈";
+}
+
+/* Adjust padding for password inputs to make room for toggle */
+.form-control.password-input {
+    padding-right: 2.5rem;
+}
+
+/* Utilities */
+.text-center {
+    text-align: center;
+}
+.text-right {
+    text-align: right;
+}
+.text-muted {
+    color: var(--text-muted);
+}
+.text-primary {
+    color: var(--primary-color);
+}
+.text-danger {
+    color: var(--danger-color);
+}
+.text-success {
+    color: var(--success-color);
+}
+
+.mb-0 {
+    margin-bottom: 0;
+}
+.mb-1 {
+    margin-bottom: 0.25rem;
+}
+.mb-2 {
+    margin-bottom: 0.5rem;
+}
+.mb-3 {
+    margin-bottom: 1rem;
+}
+
+.mt-0 {
+    margin-top: 0;
+}
+.mt-1 {
+    margin-top: 0.25rem;
+}
+.mt-2 {
+    margin-top: 0.5rem;
+}
+.mt-3 {
+    margin-top: 1rem;
+}
+
+.d-none {
+    display: none;
+}
+.d-block {
+    display: block;
+}
+.d-flex {
+    display: flex;
+}
+
+.justify-content-between {
+    justify-content: space-between;
+}
+.align-items-center {
+    align-items: center;
+}
+
+.w-100 {
+    width: 100%;
+}
+
+/* Channels Modal - Full Screen */
+.channels-modal .modal-content {
+    max-width: 95vw;
+    width: 95vw;
+    height: 95vh;
+    max-height: 95vh;
+    margin: 2.5vh auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Override base modal overflow */
+    pointer-events: auto;
+    position: relative;
+}
+
+/* Ensure channels modal close button is visible */
+.channels-modal .modal-close {
+    background: var(--danger-color);
+    color: white;
+    border-color: var(--danger-color);
+    font-weight: bold;
+}
+
+.channels-modal .modal-close:hover {
+    background: #c82333;
+    border-color: #bd2130;
+}
+
+.channels-modal .modal-header {
+    flex-shrink: 0;
+    padding: 1.5rem;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.channels-modal .modal-body {
+    flex: 1;
+    padding: 1.5rem;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* Allow flex item to shrink below content size */
+}
+
+.channels-modal .modal-footer {
+    flex-shrink: 0;
+    padding: 1.5rem;
+    border-top: 2px solid var(--border-color);
+    justify-content: center;
+}
+
+.channels-table-container {
+    flex: 1;
+    overflow-y: scroll !important;
+    overflow-x: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    min-height: 300px; /* Minimum height to ensure scroll works */
+    max-height: 60vh; /* Maximum height to force scrolling */
+    height: 60vh; /* Force a specific height to ensure scrolling works */
+    pointer-events: auto;
+    position: relative;
+    z-index: 1;
+    background: white;
+    box-sizing: border-box;
+}
+
+.channels-table-container .table {
+    margin-bottom: 0;
+}
+
+/* Ensure the table has proper layout */
+.channels-modal .table {
+    table-layout: fixed;
+    width: 100%;
+}
+
+/* Fix for interactive elements in modal */
+.channels-modal input,
+.channels-modal button,
+.channels-modal .form-control {
+    position: relative;
+    z-index: auto;
+    pointer-events: auto;
+    background: white;
+}
+
+/* Ensure modal body and content area allow interactions */
+.channels-modal .modal-body,
+.channels-modal .modal-header,
+.channels-modal .modal-footer {
+    pointer-events: auto;
+    position: relative;
+    z-index: auto;
+}
+
+/* Ensure the filter input is accessible */
+.channels-modal #channelsFilter {
+    border: 2px solid var(--border-color);
+    background: white;
+    position: relative;
+    z-index: auto;
+    pointer-events: auto;
+}
+
+/* Ensure all interactive elements work properly */
+.channels-modal * {
+    pointer-events: auto;
+}
+
+/* Custom scrollbar styling for better visibility */
+.channels-table-container::-webkit-scrollbar {
+    width: 16px;
+    background: var(--light-bg);
+}
+
+.channels-table-container::-webkit-scrollbar-track {
+    background: var(--light-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.channels-table-container::-webkit-scrollbar-thumb {
+    background: var(--primary-color);
+    border-radius: 8px;
+    border: 2px solid var(--light-bg);
+    min-height: 20px;
+}
+
+.channels-table-container::-webkit-scrollbar-thumb:hover {
+    background: var(--primary-hover);
+}
+
+/* Ensure scrollbar is always visible and interactive */
+.channels-table-container {
+    scrollbar-width: auto;
+    scrollbar-color: var(--primary-color) var(--light-bg);
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Force scrollbar to always be visible */
+.channels-table-container::-webkit-scrollbar-thumb {
+    background: var(--primary-color) !important;
+    visibility: visible !important;
+    display: block !important;
+}
+
+.channels-table-container::-webkit-scrollbar {
+    background: var(--light-bg) !important;
+    visibility: visible !important;
+    display: block !important;
+    width: 16px !important;
+}
+
+.channels-table-container::-webkit-scrollbar-corner {
+    background: var(--light-bg);
+}
+
+/* Ensure the table content forces scrolling */
+.channels-table-container .table {
+    min-height: calc(100% + 1px);
+}
+
+/* Channel modal table styling */
+.channels-modal .table th:nth-child(1),
+.channels-modal .table td:nth-child(1) {
+    width: 40%;
+}
+
+.channels-modal .table th:nth-child(2),
+.channels-modal .table td:nth-child(2) {
+    width: 25%;
+}
+
+.channels-modal .table th:nth-child(3),
+.channels-modal .table td:nth-child(3) {
+    width: 20%;
+}
+
+.channels-modal .table th:nth-child(4),
+.channels-modal .table td:nth-child(4) {
+    width: 15%;
+    text-align: center;
+}
+
+/* Table striping for better readability */
+.table-striped tbody tr:nth-of-type(odd) {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+.table-striped tbody tr:hover {
+    background-color: rgba(0, 123, 255, 0.08);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .container {
+        padding: 0 0.5rem;
+    }
+
+    .modal-content {
+        width: 95%;
+    }
+
+    /* Channels modal responsive */
+    .channels-modal .modal-content {
+        width: 100vw;
+        height: 100vh;
+        max-width: 100vw;
+        max-height: 100vh;
+        margin: 0;
+        border-radius: 0;
+    }
+
+    .channels-modal .channels-table-container {
+        height: calc(100vh - 300px);
+        max-height: calc(100vh - 300px);
+    }
+
+    .channels-modal .modal-header,
+    .channels-modal .modal-body,
+    .channels-modal .modal-footer {
+        padding: 1rem;
+    }
+
+    .channels-modal .table th:nth-child(4),
+    .channels-modal .table td:nth-child(4) {
+        display: none; /* Hide logo column on mobile */
+    }
+
+    .channels-modal .table th:nth-child(1),
+    .channels-modal .table td:nth-child(1) {
+        width: 50%;
+    }
+
+    .channels-modal .table th:nth-child(2),
+    .channels-modal .table td:nth-child(2) {
+        width: 30%;
+    }
+
+    .channels-modal .table th:nth-child(3),
+    .channels-modal .table td:nth-child(3) {
+        width: 20%;
+    }
+
+    .table-responsive {
+        overflow-x: auto;
+    }
+
+    nav ul {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    /* Stack table buttons vertically on mobile */
+    .table td:nth-child(7) {
+        white-space: normal;
+    }
+
+    .table td:nth-child(7) .btn {
+        display: block;
+        width: 100%;
+        margin-bottom: 0.25rem;
+    }
+}

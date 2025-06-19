@@ -1,0 +1,27 @@
+# M3U Proxy Configuration Example
+# Copy this file to config.toml and modify as needed
+
+[database]
+# Database connection URL
+# Supported: sqlite://, postgres://, mysql://
+url = "sqlite://./m3u-proxy.db"
+
+# Maximum number of database connections
+max_connections = 10
+
+[web]
+# Web server bind address
+host = "0.0.0.0"
+
+# Web server port
+port = 8080
+
+[storage]
+# Directory for M3U file storage
+m3u_path = "./data/m3u"
+
+# Directory for cached logos
+logo_path = "./data/logos"
+
+# Number of proxy versions to keep (0 = only current)
+proxy_versions_to_keep = 3

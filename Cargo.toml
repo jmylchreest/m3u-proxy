@@ -1,0 +1,84 @@
+[package]
+name = "m3u-proxy"
+version = "0.1.0"
+edition = "2021"
+authors = ["John Mylchreest <jmylchreest@gmail.com>"]
+description = "A modern M3U proxy service with filtering and source management"
+repository = "https://github.com/jmylchreest/m3u-proxy"
+license = "MIT"
+keywords = ["m3u", "iptv", "proxy", "streaming", "xtream"]
+categories = ["multimedia", "web-programming", "network-programming"]
+
+[dependencies]
+# Web framework and HTTP client
+axum = { version = "0.7", features = ["macros", "multipart"] }
+tokio = { version = "1.0", features = ["full"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+hyper = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json", "stream"] }
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "postgres", "mysql", "chrono", "uuid", "migrate"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID and ID generation
+uuid = { version = "1.0", features = ["v4", "serde"] }
+ulid = { version = "1.0", features = ["serde"] }
+
+# Async and concurrency
+futures = "0.3"
+async-trait = "0.1"
+tokio-tungstenite = "0.20"
+axum-tungstenite = "0.2"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Configuration
+config = "0.13"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Cron scheduling
+cron = "0.12"
+
+# Regex for filtering
+regex = "1.0"
+
+# URL parsing and manipulation
+url = "2.4"
+
+
+# M3U parsing (will search for a good crate)
+m3u8-rs = "5.0"
+
+# Image processing for logo caching
+image = "0.24"
+
+# Hashing for logo ULID generation
+sha2 = "0.10"
+
+# CLI argument parsing (for future CLI interface)
+clap = { version = "4.0", features = ["derive"] }
+
+# Template engine for web interface
+askama = { version = "0.12", features = ["with-axum"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

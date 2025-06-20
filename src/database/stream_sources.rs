@@ -1,6 +1,8 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use cron::Schedule;
 use sqlx::Row;
+use std::str::FromStr;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -69,9 +71,19 @@ impl Database {
                     .await?
                     .unwrap_or(0);
 
+            // Calculate next scheduled update
+            let next_scheduled_update = if source.is_active {
+                Schedule::from_str(&source.update_cron)
+                    .ok()
+                    .and_then(|schedule| schedule.upcoming(Utc).next())
+            } else {
+                None
+            };
+
             sources.push(StreamSourceWithStats {
                 source,
                 channel_count,
+                next_scheduled_update,
             });
         }
 
@@ -308,12 +320,31 @@ impl Database {
         &self,
         source_id: Uuid,
         channels: &[Channel],
+        state_manager: Option<&crate::ingestor::IngestionStateManager>,
     ) -> Result<()> {
         info!(
             "Updating {} channels for source ({})",
             channels.len(),
             source_id
         );
+
+        // Update state to processing if state manager is provided
+        if let Some(state_mgr) = state_manager {
+            state_mgr
+                .update_progress(
+                    source_id,
+                    crate::models::IngestionState::Processing,
+                    crate::models::ProgressInfo {
+                        current_step: "Processing channels into database".to_string(),
+                        total_bytes: None,
+                        downloaded_bytes: None,
+                        channels_parsed: Some(channels.len()),
+                        channels_saved: Some(0),
+                        percentage: Some(0.0),
+                    },
+                )
+                .await;
+        }
 
         // Acquire exclusive lock for channel updates to prevent concurrent modifications
         let _lock = self.acquire_channel_update_lock().await;
@@ -335,6 +366,7 @@ impl Database {
 
         // For very large channel sets, use chunked transactions
         const CHUNK_SIZE: usize = 5000;
+        let progress_update_interval = self.ingestion_config.progress_update_interval;
         let mut inserted_count = 0;
 
         if channels.len() > CHUNK_SIZE {
@@ -375,12 +407,60 @@ impl Database {
                     })?;
 
                     inserted_count += 1;
+
+                    // Update progress every progress_update_interval channels
+                    if let Some(state_mgr) = state_manager {
+                        if inserted_count % progress_update_interval == 0 {
+                            let percentage =
+                                (inserted_count as f64 / channels.len() as f64) * 100.0;
+                            state_mgr
+                                .update_progress(
+                                    source_id,
+                                    crate::models::IngestionState::Processing,
+                                    crate::models::ProgressInfo {
+                                        current_step: format!(
+                                            "Processing channels into database ({}/{})",
+                                            inserted_count,
+                                            channels.len()
+                                        ),
+                                        total_bytes: None,
+                                        downloaded_bytes: None,
+                                        channels_parsed: Some(channels.len()),
+                                        channels_saved: Some(inserted_count),
+                                        percentage: Some(percentage),
+                                    },
+                                )
+                                .await;
+                        }
+                    }
                 }
 
                 // Commit chunk
                 chunk_tx.commit().await?;
 
-                // Log progress every 10 chunks
+                // Update progress after each chunk and log every 10 chunks
+                if let Some(state_mgr) = state_manager {
+                    let percentage = (inserted_count as f64 / channels.len() as f64) * 100.0;
+                    state_mgr
+                        .update_progress(
+                            source_id,
+                            crate::models::IngestionState::Processing,
+                            crate::models::ProgressInfo {
+                                current_step: format!(
+                                    "Processing channels into database ({}/{})",
+                                    inserted_count,
+                                    channels.len()
+                                ),
+                                total_bytes: None,
+                                downloaded_bytes: None,
+                                channels_parsed: Some(channels.len()),
+                                channels_saved: Some(inserted_count),
+                                percentage: Some(percentage),
+                            },
+                        )
+                        .await;
+                }
+
                 if chunk_idx % 10 == 0
                     || chunk_idx == (channels.len() + CHUNK_SIZE - 1) / CHUNK_SIZE - 1
                 {
@@ -418,6 +498,33 @@ impl Database {
                 })?;
 
                 inserted_count += 1;
+
+                // Update progress every progress_update_interval channels for small sets too
+                if let Some(state_mgr) = state_manager {
+                    if inserted_count % progress_update_interval == 0
+                        || inserted_count == channels.len()
+                    {
+                        let percentage = (inserted_count as f64 / channels.len() as f64) * 100.0;
+                        state_mgr
+                            .update_progress(
+                                source_id,
+                                crate::models::IngestionState::Processing,
+                                crate::models::ProgressInfo {
+                                    current_step: format!(
+                                        "Processing channels into database ({}/{})",
+                                        inserted_count,
+                                        channels.len()
+                                    ),
+                                    total_bytes: None,
+                                    downloaded_bytes: None,
+                                    channels_parsed: Some(channels.len()),
+                                    channels_saved: Some(inserted_count),
+                                    percentage: Some(percentage),
+                                },
+                            )
+                            .await;
+                    }
+                }
             }
 
             // Commit the transaction
@@ -440,7 +547,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn update_source_last_ingested(&self, source_id: Uuid) -> Result<()> {
+    pub async fn update_source_last_ingested(&self, source_id: Uuid) -> Result<DateTime<Utc>> {
         let now = chrono::Utc::now();
         sqlx::query("UPDATE stream_sources SET last_ingested_at = ? WHERE id = ?")
             .bind(now.to_rfc3339())
@@ -448,7 +555,7 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
-        Ok(())
+        Ok(now)
     }
 
     #[allow(dead_code)]
@@ -461,6 +568,7 @@ impl Database {
         Ok(count)
     }
 
+    #[allow(dead_code)]
     pub async fn get_source_channels(&self, source_id: Uuid) -> Result<Vec<Channel>> {
         let rows = sqlx::query(
             "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
@@ -501,85 +609,138 @@ impl Database {
     ) -> Result<ChannelListResponse> {
         let offset = (page - 1) * limit;
 
-        // Build the WHERE clause with filtering
-        let (where_clause, count_where_clause) = if let Some(filter_text) = filter {
-            let filter_pattern = format!("%{}%", filter_text);
-            (
-                "WHERE source_id = ? AND (
-                    channel_name LIKE ? OR
-                    tvg_id LIKE ? OR
-                    tvg_name LIKE ? OR
-                    group_title LIKE ? OR
-                    stream_url LIKE ?
-                ) ORDER BY channel_name LIMIT ? OFFSET ?",
-                "WHERE source_id = ? AND (
-                    channel_name LIKE ? OR
-                    tvg_id LIKE ? OR
-                    tvg_name LIKE ? OR
-                    group_title LIKE ? OR
-                    stream_url LIKE ?
-                )",
-            )
-        } else {
-            (
-                "WHERE source_id = ? ORDER BY channel_name LIMIT ? OFFSET ?",
-                "WHERE source_id = ?",
-            )
-        };
+        if let Some(filter_text) = filter {
+            // Fuzzy filtering: split into words and match each word
+            let words: Vec<&str> = filter_text.split_whitespace().collect();
 
-        // Get total count first
-        let total_count: i64 = if let Some(filter_text) = filter {
-            let filter_pattern = format!("%{}%", filter_text);
-            sqlx::query_scalar(&format!(
-                "SELECT COUNT(*) FROM channels {}",
-                count_where_clause
-            ))
-            .bind(source_id.to_string())
-            .bind(&filter_pattern)
-            .bind(&filter_pattern)
-            .bind(&filter_pattern)
-            .bind(&filter_pattern)
-            .bind(&filter_pattern)
-            .fetch_one(&self.pool)
-            .await?
-        } else {
-            sqlx::query_scalar(&format!(
-                "SELECT COUNT(*) FROM channels {}",
-                count_where_clause
-            ))
-            .bind(source_id.to_string())
-            .fetch_one(&self.pool)
-            .await?
-        };
+            if words.is_empty() {
+                // If no valid words, fall through to no-filter case
+                // (avoid recursion by not calling self again)
+            } else {
+                // Build dynamic query with proper parameter binding
+                let mut where_conditions = Vec::new();
+                let mut count_bind_params = Vec::new();
+                let mut select_bind_params = Vec::new();
 
-        // Get the paginated results
-        let rows = if let Some(filter_text) = filter {
-            let filter_pattern = format!("%{}%", filter_text);
-            sqlx::query(&format!(
-                "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
-                 FROM channels {}", where_clause
-            ))
-            .bind(source_id.to_string())
-            .bind(&filter_pattern)
-            .bind(&filter_pattern)
-            .bind(&filter_pattern)
-            .bind(&filter_pattern)
-            .bind(&filter_pattern)
-            .bind(limit as i64)
-            .bind(offset as i64)
-            .fetch_all(&self.pool)
-            .await?
-        } else {
-            sqlx::query(&format!(
-                "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
-                 FROM channels {}", where_clause
-            ))
-            .bind(source_id.to_string())
-            .bind(limit as i64)
-            .bind(offset as i64)
-            .fetch_all(&self.pool)
-            .await?
-        };
+                // For each word, create fuzzy match conditions
+                for word in &words {
+                    let pattern = format!("%{}%", word.to_lowercase());
+                    where_conditions.push(
+                        "(LOWER(channel_name) LIKE ? OR
+                          LOWER(tvg_id) LIKE ? OR
+                          LOWER(tvg_name) LIKE ? OR
+                          LOWER(group_title) LIKE ? OR
+                          LOWER(stream_url) LIKE ?)",
+                    );
+                    // Add 5 copies of the pattern for each field (for count query)
+                    for _ in 0..5 {
+                        count_bind_params.push(pattern.clone());
+                    }
+                    // Add 5 copies of the pattern for each field (for select query)
+                    for _ in 0..5 {
+                        select_bind_params.push(pattern.clone());
+                    }
+                }
+
+                let where_clause = format!(
+                    "WHERE source_id = ? AND {} ORDER BY
+                     CASE
+                       WHEN LOWER(channel_name) LIKE ? THEN 1
+                       WHEN LOWER(tvg_name) LIKE ? THEN 2
+                       WHEN LOWER(group_title) LIKE ? THEN 3
+                       ELSE 4
+                     END, channel_name",
+                    where_conditions.join(" AND ")
+                );
+
+                // Add ranking parameters for select query
+                let lower_filter = format!("%{}%", filter_text.to_lowercase());
+                select_bind_params.push(lower_filter.clone());
+                select_bind_params.push(lower_filter.clone());
+                select_bind_params.push(lower_filter);
+
+                // Get total count
+                let count_query = format!(
+                    "SELECT COUNT(*) FROM channels WHERE source_id = ? AND {}",
+                    where_conditions.join(" AND ")
+                );
+
+                let mut count_query_builder = sqlx::query_scalar(&count_query);
+                count_query_builder = count_query_builder.bind(source_id.to_string());
+
+                // Bind parameters for count query
+                for param in &count_bind_params {
+                    count_query_builder = count_query_builder.bind(param);
+                }
+
+                let total_count: i64 = count_query_builder.fetch_one(&self.pool).await?;
+
+                // Get paginated results
+                let select_query = format!(
+                    "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
+                     FROM channels {} LIMIT ? OFFSET ?",
+                    where_clause
+                );
+
+                let mut query_builder = sqlx::query(&select_query);
+                query_builder = query_builder.bind(source_id.to_string());
+
+                // Bind all parameters in order
+                for param in &select_bind_params {
+                    query_builder = query_builder.bind(param);
+                }
+                query_builder = query_builder.bind(limit as i64);
+                query_builder = query_builder.bind(offset as i64);
+
+                let rows = query_builder.fetch_all(&self.pool).await?;
+
+                let mut channels = Vec::new();
+                for row in rows {
+                    let created_at = row.get::<String, _>("created_at");
+                    let updated_at = row.get::<String, _>("updated_at");
+
+                    channels.push(Channel {
+                        id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                        source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                        tvg_id: row.get("tvg_id"),
+                        tvg_name: row.get("tvg_name"),
+                        tvg_logo: row.get("tvg_logo"),
+                        group_title: row.get("group_title"),
+                        channel_name: row.get("channel_name"),
+                        stream_url: row.get("stream_url"),
+                        created_at: parse_datetime(&created_at)?,
+                        updated_at: parse_datetime(&updated_at)?,
+                    });
+                }
+
+                let total_pages = ((total_count as f64) / (limit as f64)).ceil() as u32;
+
+                return Ok(ChannelListResponse {
+                    channels,
+                    total_count,
+                    page,
+                    limit,
+                    total_pages,
+                });
+            }
+        }
+
+        // No filter - simple query
+        let total_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM channels WHERE source_id = ?")
+                .bind(source_id.to_string())
+                .fetch_one(&self.pool)
+                .await?;
+
+        let rows = sqlx::query(
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
+             FROM channels WHERE source_id = ? ORDER BY channel_name LIMIT ? OFFSET ?"
+        )
+        .bind(source_id.to_string())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
 
         let mut channels = Vec::new();
         for row in rows {

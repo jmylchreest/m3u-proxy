@@ -7,6 +7,7 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub web: WebConfig,
     pub storage: StorageConfig,
+    pub ingestion: IngestionConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +29,12 @@ pub struct StorageConfig {
     pub proxy_versions_to_keep: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestionConfig {
+    pub progress_update_interval: usize,
+    pub run_missed_immediately: bool,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -44,14 +51,19 @@ impl Default for Config {
                 logo_path: PathBuf::from("./data/logos"),
                 proxy_versions_to_keep: 3,
             },
+            ingestion: IngestionConfig {
+                progress_update_interval: 1000,
+                run_missed_immediately: true,
+            },
         }
     }
 }
 
 impl Config {
     pub fn load() -> Result<Self> {
-        let config_file = std::env::var("CONFIG_FILE").unwrap_or_else(|_| "config.toml".to_string());
-        
+        let config_file =
+            std::env::var("CONFIG_FILE").unwrap_or_else(|_| "config.toml".to_string());
+
         if std::path::Path::new(&config_file).exists() {
             let contents = std::fs::read_to_string(&config_file)?;
             Ok(toml::from_str(&contents)?)

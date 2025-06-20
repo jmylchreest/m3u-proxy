@@ -3,6 +3,7 @@ use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+pub mod assets;
 mod config;
 mod database;
 mod ingestor;
@@ -12,7 +13,10 @@ mod web;
 
 use config::Config;
 use database::Database;
-use ingestor::IngestionStateManager;
+use ingestor::{
+    scheduler::{create_cache_invalidation_channel, SchedulerService},
+    IngestionStateManager,
+};
 use web::WebServer;
 
 #[derive(Parser)]
@@ -76,7 +80,7 @@ async fn main() -> Result<()> {
 
     info!("Using database: {}", config.database.url);
 
-    let database = Database::new(&config.database).await?;
+    let database = Database::new(&config.database, &config.ingestion).await?;
     database.migrate().await?;
     info!("Database connection established and migrations applied");
 
@@ -84,7 +88,24 @@ async fn main() -> Result<()> {
     let state_manager = IngestionStateManager::new();
     info!("Ingestion state manager initialized");
 
-    let web_server = WebServer::new(config, database, state_manager).await?;
+    // Create cache invalidation channel for scheduler
+    let (cache_invalidation_tx, cache_invalidation_rx) = create_cache_invalidation_channel();
+
+    // Start scheduler service
+    let scheduler = SchedulerService::new(
+        state_manager.clone(),
+        database.clone(),
+        config.ingestion.run_missed_immediately,
+        Some(cache_invalidation_rx),
+    );
+
+    tokio::spawn(async move {
+        if let Err(e) = scheduler.start().await {
+            tracing::error!("Scheduler service failed: {}", e);
+        }
+    });
+
+    let web_server = WebServer::new(config, database, state_manager, cache_invalidation_tx).await?;
 
     info!(
         "Starting web server on {}:{}",

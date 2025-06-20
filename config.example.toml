@@ -25,3 +25,14 @@ logo_path = "./data/logos"
 
 # Number of proxy versions to keep (0 = only current)
 proxy_versions_to_keep = 3
+
+[ingestion]
+# How often to update progress during channel processing (in number of channels)
+# Lower values = more frequent updates but higher overhead
+# Higher values = less frequent updates but better performance
+progress_update_interval = 1000
+
+# Whether to run missed scheduled refreshes immediately on startup
+# If true, sources that missed their scheduled refresh will run immediately
+# If false, sources will wait for their next scheduled time
+run_missed_immediately = true

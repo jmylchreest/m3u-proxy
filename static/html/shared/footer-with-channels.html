@@ -1,0 +1,12 @@
+<!-- Include shared channels modal -->
+<div id="channelsModalContainer"></div>
+<script>
+    // Load shared channels modal
+    fetch("/static/html/shared/channels-modal.html")
+        .then((response) => response.text())
+        .then((html) => {
+            document.getElementById("channelsModalContainer").innerHTML = html;
+        });
+</script>
+
+<script src="/static/js/channels-viewer.js"></script>

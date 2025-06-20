@@ -12,8 +12,21 @@ A modern, high-performance M3U proxy service built in Rust for managing and filt
 - **Database Support**: SQLite (default), PostgreSQL, MySQL, MariaDB
 - **Scheduled Updates**: Configurable cron-based source updates
 - **RESTful API**: Complete API for programmatic management
+- **Self-Contained Binary**: All assets and migrations embedded for zero-dependency deployment
+- **Shared Components**: Modular web interface with reusable templates and components
 
 ## Quick Start
+
+### Pre-built Binary
+
+Download the latest release binary - it's completely self-contained with all web assets and database migrations embedded:
+
+```bash
+# Download and run (no additional files needed)
+wget https://github.com/jmylchreest/m3u-proxy/releases/latest/download/m3u-proxy
+chmod +x m3u-proxy
+./m3u-proxy
+```
 
 ### Building from Source
 

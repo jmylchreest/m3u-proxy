@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Filters - M3U Proxy</title>
+        <link rel="stylesheet" href="/static/css/main.css" />
+    </head>
+    <body>
+        <div id="headerContainer"></div>
+
+        <div class="container">
+            <div id="navContainer"></div>
+
+            <div id="alertsContainer"></div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Channel Filters</h2>
+                    <button id="addFilterBtn" class="btn btn-primary">
+                        Add Filter
+                    </button>
+                </div>
+
+                <div
+                    id="loadingIndicator"
+                    class="text-center"
+                    style="display: none"
+                >
+                    <span class="loading"></span> Loading filters...
+                </div>
+
+                <div class="filters-container" id="filtersTableBody">
+                    <!-- Filters will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter Modal -->
+        <div id="filterModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modalTitle" class="modal-title">Add Filter</h3>
+                </div>
+                <div class="modal-body">
+                    <form id="filterForm">
+                        <div class="form-group">
+                            <label for="filterName" class="form-label"
+                                >Filter Name *</label
+                            >
+                            <input
+                                type="text"
+                                id="filterName"
+                                class="form-control"
+                                required
+                            />
+                            <small class="text-muted"
+                                >A descriptive name for this filter</small
+                            >
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Filter Type</label>
+                            <div class="filter-type-tabs">
+                                <button
+                                    type="button"
+                                    id="visualFilterTab"
+                                    class="filter-tab active"
+                                    onclick="filtersManager.switchFilterType('visual')"
+                                >
+                                    Visual Builder
+                                </button>
+                                <button
+                                    type="button"
+                                    id="advancedFilterTab"
+                                    class="filter-tab"
+                                    onclick="filtersManager.switchFilterType('advanced')"
+                                >
+                                    Advanced
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Visual Builder Tab -->
+                        <div id="visualFilterPanel" class="filter-panel active">
+                            <div class="advanced-filter-builder">
+                                <div class="builder-header">
+                                    <div class="builder-title">
+                                        Filter Conditions
+                                    </div>
+                                    <div class="builder-actions">
+                                        <button
+                                            type="button"
+                                            class="btn btn-sm btn-outline-primary"
+                                            onclick="filtersManager.addCondition()"
+                                        >
+                                            Add Condition
+                                        </button>
+                                    </div>
+                                </div>
+                                <div
+                                    id="conditionsContainer"
+                                    class="conditions-container"
+                                >
+                                    <!-- Conditions will be rendered here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Advanced Filter Tab -->
+                        <div id="advancedFilterPanel" class="filter-panel">
+                            <div class="form-group">
+                                <label for="filterPattern" class="form-label"
+                                    >Filter Pattern *</label
+                                >
+                                <textarea
+                                    id="filterPattern"
+                                    class="form-control"
+                                    rows="5"
+                                    placeholder='Enter filter pattern... (e.g., channel_name contains "sport" AND group_title equals "Sports")'
+                                ></textarea>
+                                <small class="text-muted">
+                                    Use natural language to describe your
+                                    filter.
+                                    <a
+                                        href="#"
+                                        onclick="filtersManager.showExamplesModal()"
+                                        >View examples</a
+                                    >
+                                </small>
+                            </div>
+
+                            <div id="patternValidation" class="mt-2">
+                                <!-- Validation feedback will appear here -->
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label
+                                for="startingChannelNumber"
+                                class="form-label"
+                                >Starting Channel Number</label
+                            >
+                            <input
+                                type="number"
+                                id="startingChannelNumber"
+                                class="form-control"
+                                min="1"
+                                value="1"
+                            />
+                            <small class="text-muted"
+                                >Channel numbering starts from this
+                                number</small
+                            >
+                        </div>
+
+                        <div class="form-group">
+                            <div class="form-check">
+                                <input
+                                    type="checkbox"
+                                    id="isInverse"
+                                    class="form-check-input"
+                                />
+                                <label for="isInverse" class="form-label"
+                                    >Inverse Filter (Exclude matching
+                                    channels)</label
+                                >
+                            </div>
+                        </div>
+
+                        <!-- Filter Preview -->
+                        <div class="filter-preview-container">
+                            <div class="filter-preview-label">
+                                Filter Preview:
+                            </div>
+                            <div class="filter-preview" id="filterPreview">
+                                Add conditions above to see the generated filter
+                            </div>
+                        </div>
+
+                        <!-- Test Section -->
+                        <div class="form-group">
+                            <label for="testSource" class="form-label"
+                                >Test Source</label
+                            >
+                            <select id="testSource" class="form-select">
+                                <option value="">
+                                    Select a source to test this filter
+                                </option>
+                                <!-- Options will be loaded dynamically -->
+                            </select>
+                            <button
+                                type="button"
+                                id="testPatternBtn"
+                                class="btn btn-outline-primary btn-sm mt-2"
+                                disabled
+                            >
+                                Test Filter
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button id="cancelFilter" class="btn btn-secondary">
+                        Cancel
+                    </button>
+                    <button id="saveFilter" class="btn btn-primary">
+                        Save
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Examples Modal -->
+        <div id="examplesModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 class="modal-title">Filter Pattern Examples</h3>
+                </div>
+                <div class="modal-body">
+                    <div class="examples-container">
+                        <div class="example-item">
+                            <div class="example-title">Basic Text Matching</div>
+                            <div class="example-pattern">
+                                channel_name contains "sport"
+                            </div>
+                            <div class="example-description">
+                                Matches channels with "sport" in the name
+                            </div>
+                        </div>
+
+                        <div class="example-item">
+                            <div class="example-title">Multiple Conditions</div>
+                            <div class="example-pattern">
+                                channel_name contains "news" AND group_title
+                                equals "International"
+                            </div>
+                            <div class="example-description">
+                                Matches news channels in the International group
+                            </div>
+                        </div>
+
+                        <div class="example-item">
+                            <div class="example-title">OR Logic</div>
+                            <div class="example-pattern">
+                                group_title contains "sport" OR group_title
+                                contains "football"
+                            </div>
+                            <div class="example-description">
+                                Matches channels in either sports or football
+                                groups
+                            </div>
+                        </div>
+
+                        <div class="example-item">
+                            <div class="example-title">Starts/Ends With</div>
+                            <div class="example-pattern">
+                                channel_name starts_with "US" AND channel_name
+                                ends_with "HD"
+                            </div>
+                            <div class="example-description">
+                                Matches US HD channels
+                            </div>
+                        </div>
+
+                        <div class="example-item">
+                            <div class="example-title">Negation</div>
+                            <div class="example-pattern">
+                                NOT (channel_name contains "adult" OR
+                                channel_name contains "xxx")
+                            </div>
+                            <div class="example-description">
+                                Excludes adult content channels
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button
+                        onclick="filtersManager.hideExamplesModal()"
+                        class="btn btn-secondary"
+                    >
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <script src="/static/js/shared-loader.js"></script>
+        <script>
+            // Load shared footer with channels modal
+            templateLoader
+                .loadTemplate("/static/html/shared/footer-with-channels.html")
+                .then((html) => {
+                    document.body.insertAdjacentHTML("beforeend", html);
+                });
+        </script>
+        <script src="/static/js/filters.js"></script>
+    </body>
+</html>

@@ -7,7 +7,7 @@ pub mod scheduler;
 pub mod state_manager;
 pub mod xtream_parser;
 
-pub use state_manager::IngestionStateManager;
+pub use state_manager::{IngestionStateManager, ProcessingTrigger};
 
 #[async_trait]
 pub trait SourceIngestor {
@@ -28,6 +28,27 @@ impl IngestorService {
     }
 
     pub async fn ingest_source(&self, source: &StreamSource) -> Result<Vec<Channel>> {
+        self.ingest_source_with_trigger(source, ProcessingTrigger::Manual)
+            .await
+    }
+
+    pub async fn ingest_source_with_trigger(
+        &self,
+        source: &StreamSource,
+        trigger: ProcessingTrigger,
+    ) -> Result<Vec<Channel>> {
+        // Check if we can start processing this source
+        if !self
+            .state_manager
+            .try_start_processing(source.id, trigger)
+            .await
+        {
+            return Err(anyhow::anyhow!(
+                "Source '{}' is already being processed or is in backoff period",
+                source.name
+            ));
+        }
+
         self.state_manager.start_ingestion(source.id).await;
 
         let result = match source.source_type {
@@ -41,13 +62,15 @@ impl IngestorService {
             }
         };
 
+        let success = result.is_ok();
+
+        // Always finish processing to update failure state
+        self.state_manager
+            .finish_processing(source.id, success)
+            .await;
+
         match result {
-            Ok(channels) => {
-                self.state_manager
-                    .complete_ingestion(source.id, channels.len())
-                    .await;
-                Ok(channels)
-            }
+            Ok(channels) => Ok(channels),
             Err(e) => {
                 self.state_manager.set_error(source.id, e.to_string()).await;
                 Err(e)

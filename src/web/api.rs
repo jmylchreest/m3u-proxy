@@ -39,7 +39,11 @@ pub async fn create_source(
     Json(payload): Json<StreamSourceCreateRequest>,
 ) -> Result<Json<StreamSource>, StatusCode> {
     match state.database.create_stream_source(&payload).await {
-        Ok(source) => Ok(Json(source)),
+        Ok(source) => {
+            // Invalidate scheduler cache since we added a new source
+            let _ = state.cache_invalidation_tx.send(());
+            Ok(Json(source))
+        }
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
@@ -61,7 +65,11 @@ pub async fn update_source(
     Json(payload): Json<StreamSourceUpdateRequest>,
 ) -> Result<Json<StreamSource>, StatusCode> {
     match state.database.update_stream_source(id, &payload).await {
-        Ok(Some(source)) => Ok(Json(source)),
+        Ok(Some(source)) => {
+            // Invalidate scheduler cache since source was updated
+            let _ = state.cache_invalidation_tx.send(());
+            Ok(Json(source))
+        }
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
@@ -72,7 +80,11 @@ pub async fn delete_source(
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
     match state.database.delete_stream_source(id).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(true) => {
+            // Invalidate scheduler cache since source was deleted
+            let _ = state.cache_invalidation_tx.send(());
+            Ok(StatusCode::NO_CONTENT)
+        }
         Ok(false) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
@@ -106,23 +118,6 @@ pub async fn refresh_source(
     // Create ingestor with state manager and trigger refresh
     let ingestor = IngestorService::new(state.state_manager.clone());
 
-    // Update state to indicate saving phase
-    state
-        .state_manager
-        .update_progress(
-            source.id,
-            crate::models::IngestionState::Saving,
-            crate::models::ProgressInfo {
-                current_step: "Saving channels to database".to_string(),
-                total_bytes: None,
-                downloaded_bytes: None,
-                channels_parsed: None,
-                channels_saved: None,
-                percentage: Some(90.0),
-            },
-        )
-        .await;
-
     match ingestor.ingest_source(&source).await {
         Ok(channels) => {
             info!(
@@ -132,15 +127,33 @@ pub async fn refresh_source(
             );
 
             // Update the channels in database
-            match state.database.update_source_channels(id, &channels).await {
+            match state
+                .database
+                .update_source_channels(id, &channels, Some(&state.state_manager))
+                .await
+            {
                 Ok(_) => {
                     // Update last_ingested_at timestamp
-                    if let Err(e) = state.database.update_source_last_ingested(id).await {
-                        error!(
-                            "Failed to update last_ingested_at for source '{}': {}",
-                            source.name, e
-                        );
+                    match state.database.update_source_last_ingested(id).await {
+                        Ok(_last_ingested_timestamp) => {
+                            // Timestamp updated successfully
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to update last_ingested_at for source '{}': {}",
+                                source.name, e
+                            );
+                        }
                     }
+
+                    // Mark ingestion as completed with final channel count
+                    state
+                        .state_manager
+                        .complete_ingestion(source.id, channels.len())
+                        .await;
+
+                    // Invalidate scheduler cache since last_ingested_at was updated
+                    let _ = state.cache_invalidation_tx.send(());
 
                     info!(
                         "Manual refresh completed for source '{}': {} channels saved",
@@ -163,12 +176,14 @@ pub async fn refresh_source(
                         .state_manager
                         .set_error(source.id, format!("Failed to save channels: {}", e))
                         .await;
+
                     Err(StatusCode::INTERNAL_SERVER_ERROR)
                 }
             }
         }
         Err(err) => {
             error!("Ingestion failed for source '{}': {}", source.name, err);
+
             Ok(Json(RefreshResponse {
                 success: false,
                 message: format!("Failed to ingest source: {}", err),
@@ -192,6 +207,52 @@ pub async fn get_all_progress(
 ) -> Result<Json<std::collections::HashMap<Uuid, IngestionProgress>>, StatusCode> {
     let progress = state.state_manager.get_all_progress().await;
     Ok(Json(progress))
+}
+
+pub async fn cancel_source_ingestion(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<RefreshResponse>, StatusCode> {
+    use tracing::{info, warn};
+
+    // Check if source exists
+    match state.database.get_stream_source(id).await {
+        Ok(Some(source)) => {
+            info!(
+                "Attempting to cancel ingestion for source '{}' ({})",
+                source.name, source.id
+            );
+
+            let cancelled = state.state_manager.cancel_ingestion(id).await;
+
+            if cancelled {
+                info!(
+                    "Successfully cancelled ingestion for source '{}'",
+                    source.name
+                );
+                Ok(Json(RefreshResponse {
+                    success: true,
+                    message: "Ingestion cancelled successfully".to_string(),
+                    channel_count: 0,
+                }))
+            } else {
+                warn!("No active ingestion found for source '{}'", source.name);
+                Ok(Json(RefreshResponse {
+                    success: false,
+                    message: "No active ingestion to cancel".to_string(),
+                    channel_count: 0,
+                }))
+            }
+        }
+        Ok(None) => {
+            warn!("Source ({}) not found for cancellation", id);
+            Err(StatusCode::NOT_FOUND)
+        }
+        Err(e) => {
+            error!("Database error getting source ({}): {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 pub async fn get_source_channels(
@@ -258,40 +319,107 @@ pub async fn delete_proxy(
 }
 
 // Filters API
-pub async fn list_filters(State(_state): State<AppState>) -> Result<Json<Vec<Filter>>, StatusCode> {
-    // TODO: Implement list filters
-    Ok(Json(vec![]))
+pub async fn list_filters(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<FilterWithUsage>>, StatusCode> {
+    match state.database.get_filters_with_usage().await {
+        Ok(filters) => Ok(Json(filters)),
+        Err(e) => {
+            error!("Failed to list filters: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_filter_fields(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<FilterFieldInfo>>, StatusCode> {
+    match state.database.get_available_filter_fields().await {
+        Ok(fields) => Ok(Json(fields)),
+        Err(e) => {
+            error!("Failed to get filter fields: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 pub async fn create_filter(
-    State(_state): State<AppState>,
-    Json(_payload): Json<Filter>,
+    State(state): State<AppState>,
+    Json(payload): Json<FilterCreateRequest>,
 ) -> Result<Json<Filter>, StatusCode> {
-    // TODO: Implement create filter
-    Err(StatusCode::NOT_IMPLEMENTED)
+    match state.database.create_filter(&payload).await {
+        Ok(filter) => Ok(Json(filter)),
+        Err(e) => {
+            error!("Failed to create filter: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 pub async fn get_filter(
-    Path(_id): Path<Uuid>,
-    State(_state): State<AppState>,
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
 ) -> Result<Json<Filter>, StatusCode> {
-    // TODO: Implement get filter
-    Err(StatusCode::NOT_FOUND)
+    match state.database.get_filter(id).await {
+        Ok(Some(filter)) => Ok(Json(filter)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to get filter {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 pub async fn update_filter(
-    Path(_id): Path<Uuid>,
-    State(_state): State<AppState>,
-    Json(_payload): Json<Filter>,
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(payload): Json<FilterUpdateRequest>,
 ) -> Result<Json<Filter>, StatusCode> {
-    // TODO: Implement update filter
-    Err(StatusCode::NOT_IMPLEMENTED)
+    match state.database.update_filter(id, &payload).await {
+        Ok(Some(filter)) => Ok(Json(filter)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to update filter {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 pub async fn delete_filter(
-    Path(_id): Path<Uuid>,
-    State(_state): State<AppState>,
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
-    // TODO: Implement delete filter
-    Err(StatusCode::NOT_IMPLEMENTED)
+    match state.database.delete_filter(id).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to delete filter {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn test_filter(
+    State(state): State<AppState>,
+    Json(payload): Json<FilterTestRequest>,
+) -> Result<Json<FilterTestResult>, StatusCode> {
+    match state
+        .database
+        .test_filter_pattern(payload.source_id, &payload)
+        .await
+    {
+        Ok(result) => Ok(Json(result)),
+        Err(e) => {
+            error!("Failed to test filter: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_source_processing_info(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<Option<crate::ingestor::state_manager::ProcessingInfo>>, StatusCode> {
+    let processing_info = state.state_manager.get_processing_info(id).await;
+    Ok(Json(processing_info))
 }

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>M3U Proxy</title>
+        <link rel="stylesheet" href="/static/css/main.css" />
+    </head>
+    <body>
+        <div id="headerContainer"></div>
+
+        <div class="container">
+            <div id="navContainer"></div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Welcome to M3U Proxy</h2>
+                </div>
+                <p>
+                    A modern M3U proxy service with filtering and source
+                    management.
+                </p>
+                <p>
+                    Use the navigation above to manage your stream sources,
+                    proxies, and filters.
+                </p>
+
+                <div style="margin-top: 2rem">
+                    <h3>Quick Start</h3>
+                    <ul style="list-style: none; margin-top: 1rem">
+                        <li class="mb-2">
+                            <strong>1. Add Stream Sources:</strong>
+                            <a
+                                href="/sources"
+                                class="btn btn-outline-primary"
+                                style="margin-left: 0.5rem"
+                                >Manage Sources</a
+                            >
+                        </li>
+                        <li class="mb-2">
+                            <strong>2. Create Filters:</strong>
+                            <a
+                                href="/filters"
+                                class="btn btn-outline-primary"
+                                style="margin-left: 0.5rem"
+                                >Manage Filters</a
+                            >
+                        </li>
+                        <li class="mb-2">
+                            <strong>3. Set up Proxies:</strong>
+                            <a
+                                href="/proxies"
+                                class="btn btn-outline-primary"
+                                style="margin-left: 0.5rem"
+                                >Manage Proxies</a
+                            >
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <script src="/static/js/shared-loader.js"></script>
+    </body>
+</html>

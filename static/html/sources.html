@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Stream Sources - M3U Proxy</title>
+        <link rel="stylesheet" href="/static/css/main.css" />
+    </head>
+    <body>
+        <div id="headerContainer"></div>
+
+        <div class="container">
+            <div id="navContainer"></div>
+
+            <div id="alertsContainer"></div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Stream Sources</h2>
+                    <button id="addSourceBtn" class="btn btn-primary">
+                        Add Source
+                    </button>
+                </div>
+
+                <div
+                    id="loadingIndicator"
+                    class="text-center"
+                    style="display: none"
+                >
+                    <span class="loading"></span> Loading sources...
+                </div>
+
+                <div class="table-responsive">
+                    <table id="sourcesTable" class="table">
+                        <thead>
+                            <tr>
+                                <th>Name / URL</th>
+                                <th>Channels</th>
+                                <th>Status</th>
+                                <th>Refresh</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sourcesTableBody">
+                            <!-- Sources will be loaded here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Source Modal -->
+        <div id="sourceModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modalTitle" class="modal-title">
+                        Add Stream Source
+                    </h3>
+                    <button id="closeModal" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="sourceForm">
+                        <div class="form-group">
+                            <label for="sourceName" class="form-label"
+                                >Source Name *</label
+                            >
+                            <input
+                                type="text"
+                                id="sourceName"
+                                class="form-control"
+                                required
+                            />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sourceType" class="form-label"
+                                >Source Type *</label
+                            >
+                            <select
+                                id="sourceType"
+                                class="form-select"
+                                required
+                            >
+                                <option value="m3u">M3U Playlist</option>
+                                <option value="xtream">Xtream Codes</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sourceUrl" class="form-label"
+                                >Source URL *</label
+                            >
+                            <input
+                                type="url"
+                                id="sourceUrl"
+                                class="form-control"
+                                required
+                            />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="maxStreams" class="form-label"
+                                >Max Concurrent Streams</label
+                            >
+                            <input
+                                type="number"
+                                id="maxStreams"
+                                class="form-control"
+                                min="1"
+                                value="1"
+                            />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="updateCron" class="form-label"
+                                >Update Schedule (Cron)</label
+                            >
+                            <input
+                                type="text"
+                                id="updateCron"
+                                class="form-control"
+                                placeholder="0 0 */6 * * * *"
+                            />
+                            <small class="text-muted"
+                                >7-field format: sec min hour day-of-month month
+                                day-of-week year<br />Default: Every 6 hours (0
+                                0 */6 * * * *)<br /><strong>Note:</strong> All
+                                times are calculated in UTC</small
+                            >
+                        </div>
+
+                        <!-- Xtream Codes Fields -->
+                        <div id="xtreamFields" style="display: none">
+                            <div class="form-group">
+                                <label for="username" class="form-label"
+                                    >Username *</label
+                                >
+                                <input
+                                    type="text"
+                                    id="username"
+                                    class="form-control"
+                                />
+                            </div>
+
+                            <div class="form-group">
+                                <label for="password" class="form-label"
+                                    >Password *</label
+                                >
+                                <div class="password-field">
+                                    <input
+                                        type="password"
+                                        id="password"
+                                        class="form-control password-input"
+                                    />
+                                    <button
+                                        type="button"
+                                        class="password-toggle"
+                                        onclick="togglePassword('password')"
+                                    ></button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- M3U Fields -->
+                        <div id="m3uFields">
+                            <div class="form-group">
+                                <label for="fieldMap" class="form-label"
+                                    >Field Mapping (JSON)</label
+                                >
+                                <textarea
+                                    id="fieldMap"
+                                    class="form-control"
+                                    rows="3"
+                                    placeholder='{"group_field": "group-title", "logo_field": "tvg-logo"}'
+                                ></textarea>
+                                <small class="text-muted"
+                                    >Optional: Custom field mapping for M3U
+                                    parsing</small
+                                >
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <div class="form-check">
+                                <input
+                                    type="checkbox"
+                                    id="isActive"
+                                    class="form-check-input"
+                                    checked
+                                />
+                                <label for="isActive" class="form-label"
+                                    >Active</label
+                                >
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button id="cancelSource" class="btn btn-secondary">
+                        Cancel
+                    </button>
+                    <button id="saveSource" class="btn btn-primary">
+                        Save
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <script src="/static/js/shared-loader.js"></script>
+        <script>
+            // Load shared footer with channels modal
+            templateLoader
+                .loadTemplate("/static/html/shared/footer-with-channels.html")
+                .then((html) => {
+                    document.body.insertAdjacentHTML("beforeend", html);
+                });
+        </script>
+        <script src="/static/js/sources.js"></script>
+    </body>
+</html>

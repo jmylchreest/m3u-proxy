@@ -31,6 +31,9 @@ impl SourceIngestor for M3uIngestor {
             source.name, source.id
         );
 
+        // Get cancellation receiver (for future use)
+        let _cancel_rx = state_manager.get_cancellation_receiver(source.id).await;
+
         // Update state to connecting
         state_manager
             .update_progress(

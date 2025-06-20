@@ -4,9 +4,13 @@ use axum::{
     Router,
 };
 use std::net::SocketAddr;
-use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-use crate::{config::Config, database::Database, ingestor::IngestionStateManager};
+use crate::{
+    config::Config,
+    database::Database,
+    ingestor::{scheduler::CacheInvalidationSender, IngestionStateManager},
+};
 
 pub mod api;
 pub mod handlers;
@@ -21,6 +25,7 @@ impl WebServer {
         config: Config,
         database: Database,
         state_manager: IngestionStateManager,
+        cache_invalidation_tx: CacheInvalidationSender,
     ) -> Result<Self> {
         let app = Router::new()
             // Proxy endpoints
@@ -38,7 +43,15 @@ impl WebServer {
                     .delete(api::delete_source),
             )
             .route("/api/sources/:id/refresh", post(api::refresh_source))
+            .route(
+                "/api/sources/:id/cancel",
+                post(api::cancel_source_ingestion),
+            )
             .route("/api/sources/:id/progress", get(api::get_source_progress))
+            .route(
+                "/api/sources/:id/processing",
+                get(api::get_source_processing_info),
+            )
             .route("/api/sources/:id/channels", get(api::get_source_channels))
             .route("/api/progress", get(api::get_all_progress))
             .route(
@@ -55,19 +68,21 @@ impl WebServer {
                 "/api/filters",
                 get(api::list_filters).post(api::create_filter),
             )
+            .route("/api/filters/fields", get(api::get_filter_fields))
             .route(
                 "/api/filters/:id",
                 get(api::get_filter)
                     .put(api::update_filter)
                     .delete(api::delete_filter),
             )
+            .route("/api/filters/test", post(api::test_filter))
             // Web interface
             .route("/", get(handlers::index))
             .route("/sources", get(handlers::sources_page))
             .route("/proxies", get(handlers::proxies_page))
             .route("/filters", get(handlers::filters_page))
-            // Static files
-            .nest_service("/static", ServeDir::new("static"))
+            // Static files (embedded)
+            .route("/static/*path", get(handlers::serve_static_asset))
             // Middleware
             .layer(CorsLayer::permissive())
             .layer(TraceLayer::new_for_http())
@@ -76,6 +91,7 @@ impl WebServer {
                 database,
                 config: config.clone(),
                 state_manager,
+                cache_invalidation_tx,
             });
 
         let addr: SocketAddr = format!("{}:{}", config.web.host, config.web.port).parse()?;
@@ -104,4 +120,5 @@ pub struct AppState {
     #[allow(dead_code)]
     pub config: Config,
     pub state_manager: IngestionStateManager,
+    pub cache_invalidation_tx: CacheInvalidationSender,
 }

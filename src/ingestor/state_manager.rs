@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -11,10 +11,26 @@ pub type ProgressSender = broadcast::Sender<IngestionProgress>;
 #[allow(dead_code)]
 pub type ProgressReceiver = broadcast::Receiver<IngestionProgress>;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProcessingInfo {
+    pub started_at: DateTime<Utc>,
+    pub triggered_by: ProcessingTrigger,
+    pub failure_count: u32,
+    pub next_retry_after: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ProcessingTrigger {
+    Scheduler,
+    Manual,
+}
+
 #[derive(Clone)]
 pub struct IngestionStateManager {
     states: Arc<RwLock<HashMap<Uuid, IngestionProgress>>>,
     progress_tx: ProgressSender,
+    cancellation_tokens: Arc<RwLock<HashMap<Uuid, broadcast::Sender<()>>>>,
+    processing_info: Arc<RwLock<HashMap<Uuid, ProcessingInfo>>>,
 }
 
 impl IngestionStateManager {
@@ -23,12 +39,89 @@ impl IngestionStateManager {
         Self {
             states: Arc::new(RwLock::new(HashMap::new())),
             progress_tx,
+            cancellation_tokens: Arc::new(RwLock::new(HashMap::new())),
+            processing_info: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     #[allow(dead_code)]
     pub fn subscribe(&self) -> ProgressReceiver {
         self.progress_tx.subscribe()
+    }
+
+    /// Try to start processing for a source. Returns true if processing was started,
+    /// false if already processing or in backoff period.
+    pub async fn try_start_processing(&self, source_id: Uuid, trigger: ProcessingTrigger) -> bool {
+        let mut processing = self.processing_info.write().await;
+
+        // Check if already processing
+        if processing.contains_key(&source_id) {
+            return false;
+        }
+
+        // Check if we have existing failure info and are in backoff
+        if let Some(info) = processing.get(&source_id) {
+            if let Some(retry_after) = info.next_retry_after {
+                if Utc::now() < retry_after {
+                    return false; // Still in backoff period
+                }
+            }
+        }
+
+        // Start processing
+        let info = ProcessingInfo {
+            started_at: Utc::now(),
+            triggered_by: trigger,
+            failure_count: processing
+                .get(&source_id)
+                .map(|i| i.failure_count)
+                .unwrap_or(0),
+            next_retry_after: None,
+        };
+
+        processing.insert(source_id, info);
+        true
+    }
+
+    /// Finish processing and update failure state
+    pub async fn finish_processing(&self, source_id: Uuid, success: bool) {
+        let mut processing = self.processing_info.write().await;
+
+        if let Some(mut info) = processing.remove(&source_id) {
+            if success {
+                // Reset failure count on success
+                info.failure_count = 0;
+                info.next_retry_after = None;
+            } else {
+                // Increment failure count and calculate backoff with jitter
+                info.failure_count += 1;
+                let backoff_seconds = self.calculate_backoff_with_jitter(info.failure_count);
+                info.next_retry_after =
+                    Some(Utc::now() + Duration::seconds(backoff_seconds as i64));
+
+                // Store the failure info for future attempts
+                processing.insert(source_id, info);
+            }
+        }
+    }
+
+    /// Get processing info including backoff state
+    pub async fn get_processing_info(&self, source_id: Uuid) -> Option<ProcessingInfo> {
+        let processing = self.processing_info.read().await;
+        processing.get(&source_id).cloned()
+    }
+
+    /// Calculate exponential backoff with jitter (25% jitter)
+    fn calculate_backoff_with_jitter(&self, failure_count: u32) -> u64 {
+        let base_delay = 2_u64.pow(failure_count.min(10)); // Cap at 2^10 = 1024 seconds
+        let max_delay = 3600; // Cap at 1 hour
+        let capped_delay = base_delay.min(max_delay);
+
+        // Add 25% jitter
+        let jitter_range = capped_delay / 4;
+        let jitter = fastrand::u64(0..=jitter_range);
+
+        capped_delay + jitter
     }
 
     pub async fn start_ingestion(&self, source_id: Uuid) {
@@ -48,6 +141,13 @@ impl IngestionStateManager {
             completed_at: None,
             error: None,
         };
+
+        // Create cancellation token for this ingestion
+        let (cancel_tx, _) = broadcast::channel(1);
+        {
+            let mut tokens = self.cancellation_tokens.write().await;
+            tokens.insert(source_id, cancel_tx);
+        }
 
         {
             let mut states = self.states.write().await;
@@ -105,6 +205,12 @@ impl IngestionStateManager {
 
             let _ = self.progress_tx.send(progress.clone());
         }
+
+        // Clean up cancellation token
+        {
+            let mut tokens = self.cancellation_tokens.write().await;
+            tokens.remove(&source_id);
+        }
     }
 
     pub async fn complete_ingestion(&self, source_id: Uuid, channels_saved: usize) {
@@ -121,6 +227,12 @@ impl IngestionStateManager {
             },
         )
         .await;
+
+        // Clean up cancellation token
+        {
+            let mut tokens = self.cancellation_tokens.write().await;
+            tokens.remove(&source_id);
+        }
     }
 
     pub async fn get_progress(&self, source_id: Uuid) -> Option<IngestionProgress> {
@@ -131,6 +243,34 @@ impl IngestionStateManager {
     pub async fn get_all_progress(&self) -> HashMap<Uuid, IngestionProgress> {
         let states = self.states.read().await;
         states.clone()
+    }
+
+    pub async fn cancel_ingestion(&self, source_id: Uuid) -> bool {
+        let cancel_tx = {
+            let tokens = self.cancellation_tokens.read().await;
+            tokens.get(&source_id).cloned()
+        };
+
+        if let Some(tx) = cancel_tx {
+            // Send cancellation signal
+            let _ = tx.send(());
+
+            // Update state to show cancellation
+            self.set_error(source_id, "Operation cancelled by user".to_string())
+                .await;
+
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn get_cancellation_receiver(
+        &self,
+        source_id: Uuid,
+    ) -> Option<broadcast::Receiver<()>> {
+        let tokens = self.cancellation_tokens.read().await;
+        tokens.get(&source_id).map(|tx| tx.subscribe())
     }
 
     #[allow(dead_code)]

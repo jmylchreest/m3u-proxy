@@ -51,15 +51,26 @@ pub struct ProxySource {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Filter {
     pub id: Uuid,
     pub name: String,
-    pub pattern: String,
     pub starting_channel_number: i32,
     pub is_inverse: bool,
+    pub logical_operator: LogicalOperator,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterCondition {
+    pub id: Uuid,
+    pub filter_id: Uuid,
+    pub field_name: String,
+    pub operator: FilterOperator,
+    pub value: String,
+    pub sort_order: i32,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -153,6 +164,7 @@ pub struct StreamSourceWithStats {
     #[serde(flatten)]
     pub source: StreamSource,
     pub channel_count: i64,
+    pub next_scheduled_update: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +186,7 @@ pub enum IngestionState {
     Downloading,
     Parsing,
     Saving,
+    Processing,
     Completed,
     Error,
 }
@@ -202,4 +215,123 @@ pub struct ChannelListResponse {
     pub page: u32,
     pub limit: u32,
     pub total_pages: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterCreateRequest {
+    pub name: String,
+    pub conditions: Vec<FilterConditionRequest>,
+    pub logical_operator: LogicalOperator,
+    pub starting_channel_number: i32,
+    pub is_inverse: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterUpdateRequest {
+    pub name: String,
+    pub conditions: Vec<FilterConditionRequest>,
+    pub logical_operator: LogicalOperator,
+    pub starting_channel_number: i32,
+    pub is_inverse: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterConditionRequest {
+    pub field_name: String,
+    pub operator: FilterOperator,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterWithUsage {
+    #[serde(flatten)]
+    pub filter: Filter,
+    pub conditions: Vec<FilterCondition>,
+    pub usage_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterTestRequest {
+    pub source_id: Uuid,
+    pub conditions: Vec<FilterConditionRequest>,
+    pub logical_operator: LogicalOperator,
+    pub is_inverse: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterTestResult {
+    pub is_valid: bool,
+    pub error: Option<String>,
+    pub matching_channels: Vec<FilterTestChannel>,
+    pub total_channels: usize,
+    pub matched_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterTestChannel {
+    pub channel_name: String,
+    pub group_title: Option<String>,
+    pub matched_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterField {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+pub enum FilterOperator {
+    #[serde(rename = "matches")]
+    Matches, // Regex match
+    #[serde(rename = "equals")]
+    Equals, // Exact match
+    #[serde(rename = "contains")]
+    Contains, // Contains substring
+    #[serde(rename = "starts_with")]
+    StartsWith, // Starts with
+    #[serde(rename = "ends_with")]
+    EndsWith, // Ends with
+    #[serde(rename = "not_matches")]
+    NotMatches, // Does not match regex
+    #[serde(rename = "not_equals")]
+    NotEquals, // Does not equal
+    #[serde(rename = "not_contains")]
+    NotContains, // Does not contain
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+pub enum LogicalOperator {
+    #[serde(rename = "and")]
+    And,
+    #[serde(rename = "or")]
+    Or,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterGroup {
+    pub conditions: Vec<FilterConditionRequest>,
+    pub groups: Vec<FilterGroup>,
+    pub logical_operator: LogicalOperator,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdvancedFilter {
+    pub root_group: FilterGroup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterFieldInfo {
+    pub name: String,
+    pub display_name: String,
+    pub field_type: String,
+    pub nullable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyFilterWithDetails {
+    #[serde(flatten)]
+    pub proxy_filter: ProxyFilter,
+    pub filter: Filter,
 }

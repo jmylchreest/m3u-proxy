@@ -1,0 +1,26 @@
+<nav>
+    <ul>
+        <li><a href="/" id="nav-home">Home</a></li>
+        <li><a href="/sources" id="nav-sources">Stream Sources</a></li>
+        <li><a href="/proxies" id="nav-proxies">Stream Proxies</a></li>
+        <li><a href="/filters" id="nav-filters">Filters</a></li>
+    </ul>
+</nav>
+
+<script>
+    // Set active navigation item based on current page
+    (function() {
+        const path = window.location.pathname;
+        const navItems = {
+            '/': 'nav-home',
+            '/sources': 'nav-sources',
+            '/proxies': 'nav-proxies',
+            '/filters': 'nav-filters'
+        };
+
+        const activeId = navItems[path];
+        if (activeId) {
+            document.getElementById(activeId).classList.add('active');
+        }
+    })();
+</script>

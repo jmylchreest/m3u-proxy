@@ -54,12 +54,7 @@ class SourcesManager {
       this.toggleSourceTypeFields(e.target.value);
     });
 
-    // Click outside modal to close
-    document.getElementById("sourceModal").addEventListener("click", (e) => {
-      if (e.target.id === "sourceModal") {
-        this.hideSourceModal();
-      }
-    });
+    // Removed click-outside-to-close to prevent accidental closure
 
     // Channels modal functionality is now handled by shared channels-viewer.js
   }
@@ -68,17 +63,20 @@ class SourcesManager {
     try {
       this.showLoading();
       const response = await fetch("/api/sources");
-
+      
       if (!response.ok) {
-        throw new Error("Failed to load sources");
+        throw new Error(`Failed to load sources: ${response.status} ${response.statusText}`);
       }
 
-      this.sources = await response.json();
+      const data = await response.json();
+      this.sources = Array.isArray(data) ? data : [];
       await this.loadProcessingInfo();
       this.renderSources();
     } catch (error) {
       this.showAlert("Failed to load sources: " + error.message, "danger");
       console.error("Error loading sources:", error);
+      this.sources = [];
+      this.renderSources();
     } finally {
       this.hideLoading();
     }
@@ -86,11 +84,16 @@ class SourcesManager {
 
   renderSources() {
     const tbody = document.getElementById("sourcesTableBody");
+    
+    if (!tbody) {
+      console.error("sourcesTableBody element not found!");
+      return;
+    }
 
-    if (this.sources.length === 0) {
+    if (!this.sources || this.sources.length === 0) {
       tbody.innerHTML = `
                 <tr>
-                    <td colspan="7" class="text-center text-muted">
+                    <td colspan="5" class="text-center text-muted">
                         No stream sources configured. Click "Add Source" to get started.
                     </td>
                 </tr>
@@ -115,7 +118,7 @@ class SourcesManager {
                         <small class="text-muted">${this.escapeHtml(sourceWithStats.url)}</small>
                     </td>
                     <td>
-                        <button class="btn btn-link p-0 text-primary" onclick="channelsViewer.showChannels('${sourceWithStats.id}', '${this.escapeHtml(sourceWithStats.name)}')" title="View channels">
+                        <button class="btn btn-link p-0 text-primary" onclick="sourcesManager.showChannels('${sourceWithStats.id}', '${this.escapeHtml(sourceWithStats.name)}')" title="View channels">
                             ${sourceWithStats.channel_count.toLocaleString()} ${sourceWithStats.channel_count === 1 ? "channel" : "channels"}
                         </button>
                     </td>
@@ -398,14 +401,6 @@ class SourcesManager {
     const source = this.sources.find((s) => s.id === id);
     if (!source) return;
 
-    if (
-      !confirm(
-        `Force refresh "${source.name}"? This will immediately fetch and update channels from the source.`,
-      )
-    ) {
-      return;
-    }
-
     try {
       const response = await fetch(`/api/sources/${id}/refresh`, {
         method: "POST",
@@ -458,7 +453,15 @@ class SourcesManager {
     }
   }
 
-  // Channel viewing functionality moved to shared channels-viewer.js
+  // Channel viewing functionality
+  async showChannels(sourceId, sourceName) {
+    try {
+      await window.channelsViewer.showChannels(sourceId, sourceName);
+    } catch (error) {
+      console.error("Error showing channels:", error);
+      this.showAlert("Failed to show channels: " + error.message, "danger");
+    }
+  }
 
   showAlert(message, type = "info") {
     const alertsContainer = document.getElementById("alertsContainer");
@@ -599,77 +602,19 @@ class SourcesManager {
   }
 
   escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
+    return SharedUtils.escapeHtml(text);
   }
 
   parseDateTime(dateStr) {
-    // Handle RFC3339 format with potential timezone issues
-    if (dateStr) {
-      // Replace +00:00 with Z for better JavaScript compatibility
-      const normalizedDateStr = dateStr.replace(/\+00:00$/, "Z");
-      const date = new Date(normalizedDateStr);
-
-      // If that fails, try removing nanoseconds
-      if (isNaN(date.getTime()) && dateStr.includes(".")) {
-        const withoutNanos = dateStr
-          .replace(/\.\d+/, "")
-          .replace(/\+00:00$/, "Z");
-        return new Date(withoutNanos);
-      }
-
-      return date;
-    }
-    return null;
+    return SharedUtils.parseDateTime(dateStr);
   }
 
   formatTimeCompact(date) {
-    // Ensure we have a valid date object
-    if (!date || isNaN(date.getTime())) {
-      return "Invalid date";
-    }
-
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime(); // now - date for proper past/future calculation
-    const diffDays = Math.floor(Math.abs(diffMs) / (1000 * 60 * 60 * 24));
-    const diffHours = Math.floor(Math.abs(diffMs) / (1000 * 60 * 60));
-    const diffMins = Math.floor(Math.abs(diffMs) / (1000 * 60));
-
-    // For past dates (positive diffMs means date is in the past)
-    if (diffMs > 0) {
-      if (diffDays > 0) {
-        return `${diffDays}d ago`;
-      } else if (diffHours > 0) {
-        return `${diffHours}h ago`;
-      } else if (diffMins > 5) {
-        return `${diffMins}m ago`;
-      } else {
-        return "Just now";
-      }
-    }
-
-    // For future dates (negative diffMs means date is in the future)
-    if (diffDays > 0) {
-      return `in ${diffDays}d`;
-    } else if (diffHours > 0) {
-      return `in ${diffHours}h`;
-    } else if (diffMins > 5) {
-      return `in ${diffMins}m`;
-    } else {
-      return "Soon";
-    }
+    return SharedUtils.formatTimeCompact(date);
   }
 
   formatBytes(bytes) {
-    if (bytes === 0) return "0 B";
-    if (!bytes) return "";
-
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+    return SharedUtils.formatFileSize(bytes);
   }
 
   formatProgressText(progress) {
@@ -768,4 +713,5 @@ function togglePassword(fieldId) {
 let sourcesManager;
 document.addEventListener("DOMContentLoaded", () => {
   sourcesManager = new SourcesManager();
+  window.sourcesManager = sourcesManager;
 });

@@ -87,6 +87,7 @@ image = "0.24"
 
 # Hashing for logo ULID generation
 sha2 = "0.10"
+md5 = "0.7"
 
 # CLI argument parsing (for future CLI interface)
 clap = { version = "4.0", features = ["derive"] }

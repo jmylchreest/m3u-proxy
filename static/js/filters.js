@@ -29,8 +29,12 @@ class FiltersManager {
       this.showFilterModal();
     });
 
-    // Modal close button
+    // Modal close buttons
     document.getElementById("cancelFilter").addEventListener("click", () => {
+      this.hideFilterModal();
+    });
+    
+    document.getElementById("closeFilterModal").addEventListener("click", () => {
       this.hideFilterModal();
     });
 
@@ -160,11 +164,17 @@ class FiltersManager {
   async loadFilters() {
     this.showLoading();
     try {
-      const response = await fetch("/api/filters");
+      console.log("Loading filters..."); // Debug log
+      const response = await fetch("/api/filters?" + new Date().getTime());
+      console.log("Filters API response status:", response.status); // Debug log
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      this.filters = await response.json();
+      const data = await response.json();
+      console.log("Filters data:", data); // Debug log
+      console.log("Filters data type:", typeof data, "Array?", Array.isArray(data)); // Debug log
+      this.filters = Array.isArray(data) ? data : [];
+      console.log("Processed filters count:", this.filters.length); // Debug log
       this.renderFilters();
     } catch (error) {
       console.error("Failed to load filters:", error);
@@ -913,7 +923,7 @@ class FiltersManager {
   }
 
   renderConditions() {
-    const container = document.getElementById("filterConditions");
+    const container = document.getElementById("conditionsContainer");
     if (!container) {
       console.warn("filterConditions element not found");
       return;
@@ -1366,15 +1376,28 @@ class FiltersManager {
 
   // Comprehensive pattern validation
   validatePattern() {
-    const pattern = document.getElementById("filterPattern").value.trim();
-    const validationContainer = document.getElementById("patternValidation");
     const textarea = document.getElementById("filterPattern");
+    const validationContainer = document.getElementById("patternValidation");
+    
+    if (!textarea) {
+      console.warn("filterPattern element not found, skipping validation");
+      return;
+    }
+    
+    const pattern = textarea.value.trim();
 
-    // Show validation container if there's content
-    if (pattern) {
-      validationContainer.style.display = "block";
-    } else {
-      validationContainer.style.display = "none";
+    // Show validation container if there's content and the container exists
+    if (validationContainer) {
+      if (pattern) {
+        validationContainer.style.display = "block";
+      } else {
+        validationContainer.style.display = "none";
+        textarea.classList.remove("valid", "invalid", "warning");
+        return;
+      }
+    }
+
+    if (!pattern) {
       textarea.classList.remove("valid", "invalid", "warning");
       return;
     }
@@ -1598,8 +1621,10 @@ class FiltersManager {
     const messagesContainer = document.getElementById("validationMessages");
 
     // Update textarea styling
-    textarea.classList.remove("valid", "invalid", "warning");
-    textarea.classList.add(validation.overall);
+    if (textarea) {
+      textarea.classList.remove("valid", "invalid", "warning");
+      textarea.classList.add(validation.overall);
+    }
 
     // Update validation icons
     this.updateValidationIcon(syntaxIcon, validation.syntax, "Syntax");
@@ -1608,6 +1633,10 @@ class FiltersManager {
     this.updateValidationIcon(regexIcon, validation.regex, "Regex");
 
     // Update messages
+    if (!messagesContainer) {
+      console.warn("validationMessages container not found, skipping message updates");
+      return;
+    }
     messagesContainer.innerHTML = "";
 
     const allMessages = [
@@ -1648,6 +1677,8 @@ class FiltersManager {
 
   // Update individual validation icon
   updateValidationIcon(icon, validation, label) {
+    if (!icon) return; // Skip if element doesn't exist
+    
     icon.classList.remove("valid", "invalid", "warning");
     icon.textContent = label;
 
@@ -1663,10 +1694,20 @@ class FiltersManager {
 
 // Initialize the filters manager when the page loads
 let filtersManager;
-document.addEventListener("DOMContentLoaded", async () => {
+
+async function initializeFiltersManager() {
+  console.log("Initializing FiltersManager..."); // Debug log
   filtersManager = new FiltersManager();
   await filtersManager.init();
-});
+}
+
+// Check if DOM is already loaded, if so initialize immediately
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeFiltersManager);
+} else {
+  // DOM is already loaded, initialize immediately
+  initializeFiltersManager();
+}
 
 // Helper function to show examples modal
 function showFilterExamples() {

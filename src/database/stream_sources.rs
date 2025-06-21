@@ -771,4 +771,35 @@ impl Database {
             total_pages,
         })
     }
+
+    pub async fn get_channels_for_source(&self, source_id: Uuid) -> Result<Vec<Channel>> {
+        let rows = sqlx::query(
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
+             FROM channels WHERE source_id = ? ORDER BY channel_name"
+        )
+        .bind(source_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut channels = Vec::new();
+        for row in rows {
+            let created_at = row.get::<String, _>("created_at");
+            let updated_at = row.get::<String, _>("updated_at");
+
+            channels.push(Channel {
+                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                tvg_id: row.get("tvg_id"),
+                tvg_name: row.get("tvg_name"),
+                tvg_logo: row.get("tvg_logo"),
+                group_title: row.get("group_title"),
+                channel_name: row.get("channel_name"),
+                stream_url: row.get("stream_url"),
+                created_at: parse_datetime(&created_at)?,
+                updated_at: parse_datetime(&updated_at)?,
+            });
+        }
+
+        Ok(channels)
+    }
 }

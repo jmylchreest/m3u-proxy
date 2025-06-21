@@ -1,18 +1,20 @@
 use anyhow::Result;
 use chrono::Utc;
+use std::path::PathBuf;
 use uuid::Uuid;
 
+use crate::config::StorageConfig;
 use crate::models::*;
 
 #[allow(dead_code)]
 pub struct ProxyGenerator {
-    // TODO: Add dependencies
+    storage_config: StorageConfig,
 }
 
 impl ProxyGenerator {
     #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(storage_config: StorageConfig) -> Self {
+        Self { storage_config }
     }
 
     #[allow(dead_code)]
@@ -83,6 +85,79 @@ impl ProxyGenerator {
         // 3. Check if logo already exists on disk
         // 4. If not, download and cache it
         // 5. Update channel.tvg_logo to point to local cached version
+        Ok(())
+    }
+
+    /// Save M3U content to the configured storage path
+    #[allow(dead_code)]
+    pub async fn save_m3u_file(&self, proxy_id: Uuid, content: &str) -> Result<PathBuf> {
+        // Ensure the M3U storage directory exists
+        std::fs::create_dir_all(&self.storage_config.m3u_path)?;
+
+        // Generate filename: proxy_id.m3u8
+        let filename = format!("{}.m3u8", proxy_id);
+        let file_path = self.storage_config.m3u_path.join(filename);
+
+        // Write content to file
+        std::fs::write(&file_path, content)?;
+
+        Ok(file_path)
+    }
+
+    /// Get the storage path for M3U files
+    #[allow(dead_code)]
+    pub fn get_m3u_storage_path(&self) -> &PathBuf {
+        &self.storage_config.m3u_path
+    }
+
+    /// Get the storage path for logos
+    #[allow(dead_code)]
+    pub fn get_logo_storage_path(&self) -> &PathBuf {
+        &self.storage_config.cached_logo_path
+    }
+
+    /// Clean up old proxy versions (keep only the configured number)
+    #[allow(dead_code)]
+    pub async fn cleanup_old_versions(&self, proxy_id: Uuid) -> Result<()> {
+        let m3u_dir = &self.storage_config.m3u_path;
+        if !m3u_dir.exists() {
+            return Ok(());
+        }
+
+        // Find all files matching proxy_id pattern
+        let proxy_pattern = format!("{}_", proxy_id);
+        let mut versions = Vec::new();
+
+        for entry in std::fs::read_dir(m3u_dir)? {
+            let entry = entry?;
+            let file_name = entry.file_name().to_string_lossy().to_string();
+
+            if file_name.starts_with(&proxy_pattern) && file_name.ends_with(".m3u8") {
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        versions.push((file_name, modified, entry.path()));
+                    }
+                }
+            }
+        }
+
+        // Sort by modification time (newest first)
+        versions.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Keep only the configured number of versions
+        let keep_count = self.storage_config.proxy_versions_to_keep as usize;
+        if versions.len() > keep_count {
+            for (_, _, path) in versions.into_iter().skip(keep_count) {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    tracing::warn!(
+                        "Failed to remove old proxy version {}: {}",
+                        path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 }

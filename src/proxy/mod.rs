@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::config::StorageConfig;
 use crate::models::*;
 
 pub mod filter_engine;
@@ -7,18 +8,18 @@ pub mod generator;
 
 #[allow(dead_code)]
 pub struct ProxyService {
-    // TODO: Add database and other dependencies
+    storage_config: StorageConfig,
 }
 
 impl ProxyService {
     #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(storage_config: StorageConfig) -> Self {
+        Self { storage_config }
     }
 
     #[allow(dead_code)]
     pub async fn generate_proxy(&self, proxy: &StreamProxy) -> Result<ProxyGeneration> {
-        let generator = generator::ProxyGenerator::new();
+        let generator = generator::ProxyGenerator::new(self.storage_config.clone());
         generator.generate(proxy).await
     }
 

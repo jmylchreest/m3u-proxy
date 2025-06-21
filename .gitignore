@@ -21,6 +21,10 @@ config.toml
 *.swp
 *.swo
 
+# agentic ai
+.claude
+.cursor
+
 # OS
 .DS_Store
 Thumbs.db

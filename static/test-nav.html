@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Navigation Test - M3U Proxy</title>
+        <link rel="stylesheet" href="/static/css/main.css" />
+        <style>
+            body {
+                padding: 20px;
+                background: #f8f9fa;
+            }
+            .test-container {
+                max-width: 1200px;
+                margin: 0 auto;
+            }
+            .test-section {
+                margin-bottom: 40px;
+                padding: 20px;
+                background: white;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            }
+            .test-title {
+                margin-top: 0;
+                color: #333;
+                border-bottom: 2px solid #007bff;
+                padding-bottom: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="test-container">
+            <h1>Navigation Test Page</h1>
+
+            <div class="test-section">
+                <h2 class="test-title">Desktop Navigation</h2>
+                <nav class="workflow-nav">
+                    <!-- Global Tools Section -->
+                    <div class="nav-section global-tools">
+                        <a href="#" class="nav-item nav-box">Home</a>
+                        <a href="#" class="nav-item nav-box active"
+                            >Logos</a
+                        >
+                        <a href="#" class="nav-item nav-box">Filters</a>
+                    </div>
+
+                    <!-- Workflow Section -->
+                    <div class="nav-section workflow-steps">
+                        <a
+                            href="#"
+                            class="nav-item workflow-step workflow-first"
+                            >Stream Sources</a
+                        >
+                        <a
+                            href="#"
+                            class="nav-item workflow-step workflow-middle"
+                            >Data Mapping</a
+                        >
+                        <a href="#" class="nav-item workflow-step workflow-last"
+                            >Stream Proxies</a
+                        >
+                    </div>
+
+                    <!-- Relay Section -->
+                    <div class="nav-section relay-section">
+                        <a href="#" class="nav-item relay-step nav-box"
+                            >Relay</a
+                        >
+                    </div>
+                </nav>
+            </div>
+
+            <div class="test-section">
+                <h2 class="test-title">
+                    Navigation with Different Active States
+                </h2>
+
+                <h3>Stream Sources Active</h3>
+                <nav class="workflow-nav">
+                    <div class="nav-section global-tools">
+                        <a href="#" class="nav-item nav-box">Home</a>
+                        <a href="#" class="nav-item nav-box">Logos</a>
+                        <a href="#" class="nav-item nav-box">Filters</a>
+                    </div>
+                    <div class="nav-section workflow-steps">
+                        <a
+                            href="#"
+                            class="nav-item workflow-step workflow-first active"
+                            >Stream Sources</a
+                        >
+                        <a
+                            href="#"
+                            class="nav-item workflow-step workflow-middle"
+                            >Data Mapping</a
+                        >
+                        <a href="#" class="nav-item workflow-step workflow-last"
+                            >Stream Proxies</a
+                        >
+                    </div>
+                    <div class="nav-section relay-section">
+                        <a href="#" class="nav-item relay-step nav-box"
+                            >Relay</a
+                        >
+                    </div>
+                </nav>
+
+                <h3 style="margin-top: 30px">Data Mapping Active</h3>
+                <nav class="workflow-nav">
+                    <div class="nav-section global-tools">
+                        <a href="#" class="nav-item nav-box">Home</a>
+                        <a href="#" class="nav-item nav-box">Logos</a>
+                        <a href="#" class="nav-item nav-box">Filters</a>
+                    </div>
+                    <div class="nav-section workflow-steps">
+                        <a
+                            href="#"
+                            class="nav-item workflow-step workflow-first"
+                            >Stream Sources</a
+                        >
+                        <a
+                            href="#"
+                            class="nav-item workflow-step workflow-middle active"
+                            >Data Mapping</a
+                        >
+                        <a href="#" class="nav-item workflow-step workflow-last"
+                            >Stream Proxies</a
+                        >
+                    </div>
+                    <div class="nav-section relay-section">
+                        <a href="#" class="nav-item relay-step nav-box"
+                            >Relay</a
+                        >
+                    </div>
+                </nav>
+
+                <h3 style="margin-top: 30px">Relay Active</h3>
+                <nav class="workflow-nav">
+                    <div class="nav-section global-tools">
+                        <a href="#" class="nav-item nav-box">Home</a>
+                        <a href="#" class="nav-item nav-box">Logos</a>
+                        <a href="#" class="nav-item nav-box">Filters</a>
+                    </div>
+                    <div class="nav-section workflow-steps">
+                        <a
+                            href="#"
+                            class="nav-item workflow-step workflow-first"
+                            >Stream Sources</a
+                        >
+                        <a
+                            href="#"
+                            class="nav-item workflow-step workflow-middle"
+                            >Data Mapping</a
+                        >
+                        <a href="#" class="nav-item workflow-step workflow-last"
+                            >Stream Proxies</a
+                        >
+                    </div>
+                    <div class="nav-section relay-section">
+                        <a href="#" class="nav-item relay-step nav-box active"
+                            >Relay</a
+                        >
+                    </div>
+                </nav>
+            </div>
+
+            <div class="test-section">
+                <h2 class="test-title">Mobile View Test</h2>
+                <p>
+                    Resize your browser window to less than 768px width to see
+                    mobile styles, or use browser dev tools.
+                </p>
+                <div
+                    style="
+                        max-width: 400px;
+                        border: 2px dashed #ccc;
+                        padding: 20px;
+                    "
+                >
+                    <nav class="workflow-nav">
+                        <div class="nav-section global-tools">
+                            <a href="#" class="nav-item nav-box">Home</a>
+                            <a href="#" class="nav-item nav-box active"
+                                >Logos</a
+                            >
+                            <a href="#" class="nav-item nav-box">Filters</a>
+                        </div>
+                        <div class="nav-section workflow-steps">
+                            <a
+                                href="#"
+                                class="nav-item workflow-step workflow-first"
+                                >Stream Sources</a
+                            >
+                            <a
+                                href="#"
+                                class="nav-item workflow-step workflow-middle"
+                                >Data Mapping</a
+                            >
+                            <a
+                                href="#"
+                                class="nav-item workflow-step workflow-last"
+                                >Stream Proxies</a
+                            >
+                        </div>
+                        <div class="nav-section relay-section">
+                            <a href="#" class="nav-item relay-step nav-box"
+                                >Relay</a
+                            >
+                        </div>
+                    </nav>
+                </div>
+            </div>
+
+            <div class="test-section">
+                <h2 class="test-title">Design Goals Check</h2>
+                <ul>
+                    <li>✓ Removed || separators and white arrows</li>
+                    <li>✓ Created bordered boxes for all navigation items</li>
+                    <li>✓ Workflow section hugs content more tightly</li>
+                    <li>✓ Added chevron (>) shapes to workflow boxes</li>
+                    <li>✓ Compact design with connected workflow steps</li>
+                    <li>✓ Responsive design for mobile screens</li>
+                </ul>
+            </div>
+        </div>
+    </body>
+</html>

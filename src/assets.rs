@@ -211,6 +211,23 @@ mod tests {
                 "shared-loader.js should contain TemplateLoader class"
             );
         }
+
+        // Test relay.html content
+        if let Some(relay_html) = StaticAssets::get_asset("static/html/relay.html") {
+            let content = String::from_utf8_lossy(&relay_html.data);
+            assert!(
+                content.contains("Stream Relay"),
+                "relay.html should contain Stream Relay title"
+            );
+            assert!(
+                content.contains("<!doctype html>"),
+                "relay.html should be valid HTML"
+            );
+            assert!(
+                content.contains("uses FFmpeg"),
+                "relay.html should contain FFmpeg description"
+            );
+        }
     }
 
     #[test]

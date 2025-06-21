@@ -5,18 +5,23 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod assets;
 mod config;
+mod data_mapping;
 mod database;
 mod ingestor;
+mod logo_assets;
 mod models;
 mod proxy;
+mod utils;
 mod web;
 
 use config::Config;
+use data_mapping::DataMappingService;
 use database::Database;
 use ingestor::{
     scheduler::{create_cache_invalidation_channel, SchedulerService},
     IngestionStateManager,
 };
+use logo_assets::{LogoAssetService, LogoAssetStorage};
 use web::WebServer;
 
 #[derive(Parser)]
@@ -88,6 +93,17 @@ async fn main() -> Result<()> {
     let state_manager = IngestionStateManager::new();
     info!("Ingestion state manager initialized");
 
+    // Initialize data mapping service
+    let data_mapping_service = DataMappingService::new(database.pool());
+    info!("Data mapping service initialized");
+
+    // Initialize logo asset service and storage
+    let logo_asset_storage = LogoAssetStorage::new(
+        config.storage.uploaded_logo_path.clone(),
+        config.storage.cached_logo_path.clone(),
+    );
+    let logo_asset_service = LogoAssetService::new(database.pool());
+
     // Create cache invalidation channel for scheduler
     let (cache_invalidation_tx, cache_invalidation_rx) = create_cache_invalidation_channel();
 
@@ -95,6 +111,8 @@ async fn main() -> Result<()> {
     let scheduler = SchedulerService::new(
         state_manager.clone(),
         database.clone(),
+        data_mapping_service.clone(),
+        logo_asset_service.clone(),
         config.ingestion.run_missed_immediately,
         Some(cache_invalidation_rx),
     );
@@ -104,8 +122,18 @@ async fn main() -> Result<()> {
             tracing::error!("Scheduler service failed: {}", e);
         }
     });
+    info!("Logo asset service and storage initialized");
 
-    let web_server = WebServer::new(config, database, state_manager, cache_invalidation_tx).await?;
+    let web_server = WebServer::new(
+        config,
+        database,
+        state_manager,
+        cache_invalidation_tx,
+        data_mapping_service,
+        logo_asset_service,
+        logo_asset_storage,
+    )
+    .await?;
 
     info!(
         "Starting web server on {}:{}",

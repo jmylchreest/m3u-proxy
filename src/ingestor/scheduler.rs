@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 use super::{IngestionStateManager, IngestorService};
 use crate::database::Database;
+use crate::data_mapping::DataMappingService;
+use crate::logo_assets::LogoAssetService;
 use crate::ingestor::state_manager::ProcessingTrigger;
 use crate::models::*;
 
@@ -31,6 +33,8 @@ struct CachedSource {
 pub struct SchedulerService {
     ingestor: IngestorService,
     database: Database,
+    data_mapping_service: DataMappingService,
+    logo_asset_service: LogoAssetService,
     run_missed_immediately: bool,
     cached_sources: Arc<RwLock<HashMap<Uuid, CachedSource>>>,
     last_cache_refresh: Arc<RwLock<DateTime<Utc>>>,
@@ -41,6 +45,8 @@ impl SchedulerService {
     pub fn new(
         state_manager: IngestionStateManager,
         database: Database,
+        data_mapping_service: DataMappingService,
+        logo_asset_service: LogoAssetService,
         run_missed_immediately: bool,
         cache_invalidation_rx: Option<CacheInvalidationReceiver>,
     ) -> Self {
@@ -48,6 +54,8 @@ impl SchedulerService {
         Self {
             ingestor,
             database,
+            data_mapping_service,
+            logo_asset_service,
             run_missed_immediately,
             cached_sources: Arc::new(RwLock::new(HashMap::new())),
             last_cache_refresh: Arc::new(RwLock::new(Utc::now())),
@@ -252,12 +260,28 @@ impl SchedulerService {
                     channels.len()
                 );
 
+                // Apply data mapping rules
+                let mapped_channels = match self
+                    .data_mapping_service
+                    .apply_mapping_to_channels(channels.clone(), source.id, &self.logo_asset_service)
+                    .await
+                {
+                    Ok(mapped) => mapped,
+                    Err(e) => {
+                        error!(
+                            "Data mapping failed for source '{}': {}, proceeding with original channels",
+                            source.name, e
+                        );
+                        channels
+                    }
+                };
+
                 // Update the channels in database
                 match self
                     .database
                     .update_source_channels(
                         source.id,
-                        &channels,
+                        &mapped_channels,
                         Some(self.ingestor.get_state_manager()),
                     )
                     .await
@@ -291,7 +315,7 @@ impl SchedulerService {
                         // Mark ingestion as completed with final channel count
                         self.ingestor
                             .get_state_manager()
-                            .complete_ingestion(source.id, channels.len())
+                            .complete_ingestion(source.id, mapped_channels.len())
                             .await;
 
                         // Calculate next update time

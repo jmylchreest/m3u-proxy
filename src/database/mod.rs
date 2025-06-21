@@ -16,6 +16,10 @@ pub struct Database {
 }
 
 impl Database {
+    pub fn pool(&self) -> Pool<Sqlite> {
+        self.pool.clone()
+    }
+
     pub async fn new(config: &DatabaseConfig, ingestion_config: &IngestionConfig) -> Result<Self> {
         // Create database if it doesn't exist (for SQLite)
         if !Sqlite::database_exists(&config.url).await? {
@@ -127,10 +131,6 @@ impl Database {
         hasher.finish().to_be_bytes().to_vec()
     }
 
-    #[allow(dead_code)]
-    pub fn pool(&self) -> &Pool<Sqlite> {
-        &self.pool
-    }
 
     pub async fn acquire_channel_update_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.channel_update_lock.lock().await

@@ -1,7 +1,7 @@
 <!-- Include shared channels modal -->
 <div id="channelsModalContainer"></div>
 <script>
-    // Load shared channels modal
+    // Load shared channels modal HTML
     fetch("/static/html/shared/channels-modal.html")
         .then((response) => response.text())
         .then((html) => {
@@ -9,4 +9,5 @@
         });
 </script>
 
+<!-- Load channels viewer script -->
 <script src="/static/js/channels-viewer.js"></script>

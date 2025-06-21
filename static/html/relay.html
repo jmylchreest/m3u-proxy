@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Stream Relay - M3U Proxy</title>
+        <link rel="stylesheet" href="/static/css/main.css" />
+    </head>
+    <body>
+        <div id="headerContainer"></div>
+
+        <div class="container">
+            <div id="navContainer"></div>
+
+            <!-- Main Content -->
+            <main>
+                <!-- Concept Explanation -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">What is Stream Relay?</h2>
+                    </div>
+                    <div class="card-content">
+                        <p>
+                            Stream Relay is an advanced feature that uses FFmpeg
+                            processes to create optimized relay streams from
+                            original source transport stream (TS) URLs. Each
+                            relay creates a direct connection to the source and
+                            maintains an in-memory buffer to efficiently serve
+                            multiple internal m3u-proxy clients.
+                        </p>
+
+                        <h3>Key Benefits:</h3>
+                        <ul>
+                            <li>
+                                <strong>Reduced Bandwidth:</strong> One
+                                connection to source serves multiple clients
+                            </li>
+                            <li>
+                                <strong>Hardware Acceleration:</strong> Optional
+                                GPU-accelerated transcoding
+                            </li>
+                            <li>
+                                <strong>Buffer Management:</strong> In-memory
+                                buffering for smooth playback
+                            </li>
+                            <li>
+                                <strong>Format Optimization:</strong> Transcode
+                                streams for better compatibility
+                            </li>
+                            <li>
+                                <strong>Connection Pooling:</strong> Efficient
+                                resource utilization
+                            </li>
+                        </ul>
+
+                        <h3>How it Works:</h3>
+                        <ol>
+                            <li>
+                                A relay profile defines FFmpeg parameters and
+                                transcoding settings
+                            </li>
+                            <li>
+                                Stream proxies can be linked to relay profiles
+                                for enhanced delivery
+                            </li>
+                            <li>
+                                FFmpeg process connects to the original TS URL
+                                and maintains the stream
+                            </li>
+                            <li>
+                                Multiple clients connect to the relay instead of
+                                the original source
+                            </li>
+                            <li>
+                                Real-time statistics track performance and
+                                connection health
+                            </li>
+                        </ol>
+
+                        <div class="alert alert-info">
+                            <h4>
+                                <strong
+                                    >Technical Implementation Details</strong
+                                >
+                            </h4>
+
+                            <h5>HLS Relay & Circular TS Hosting</h5>
+                            <p>
+                                The Stream Relay implements
+                                <strong
+                                    >HLS (HTTP Live Streaming)
+                                    relay/redistribution</strong
+                                >. It takes a Transport Stream (TS) input from
+                                remote sources and creates an optimized HLS
+                                output for multiple internal clients through a
+                                circular buffer system.
+                            </p>
+
+                            <h6>Circular Buffer Approach:</h6>
+                            <ul>
+                                <li>
+                                    <strong>Minimal Disk Usage:</strong> Uses a
+                                    small rotating TS file buffer (typically
+                                    60-120 seconds)
+                                </li>
+                                <li>
+                                    <strong>Fixed Storage:</strong> Buffer size
+                                    remains constant, preventing disk space
+                                    issues
+                                </li>
+                                <li>
+                                    <strong>Client Proxy Access:</strong> The
+                                    m3u-proxy service serves the circular TS
+                                    file to clients
+                                </li>
+                                <li>
+                                    <strong>Connection Tracking:</strong>
+                                    Built-in Rust web server tracks all client
+                                    connections and statistics
+                                </li>
+                            </ul>
+
+                            <h6>On-Demand Process Management:</h6>
+                            <p class="important-note">
+                                <strong>⚡ Important:</strong> FFmpeg relay
+                                processes are
+                                <strong
+                                    >only spawned when there is an active client
+                                    connection</strong
+                                >
+                                to the streaming endpoint in the M3U playlist.
+                                This ensures efficient resource utilization and
+                                prevents unnecessary processing of unused
+                                streams.
+                            </p>
+
+                            <h6>Example FFmpeg Commands:</h6>
+                            <div class="code-examples">
+                                <p>
+                                    <strong
+                                        >Basic HW-Accelerated
+                                        Passthrough:</strong
+                                    >
+                                </p>
+                                <code
+                                    >ffmpeg -i http://remote.server/input.ts -c
+                                    copy -f mpegts
+                                    http://localhost:8080/stream.ts</code
+                                >
+
+                                <p>
+                                    <strong
+                                        >NVIDIA Hardware Acceleration:</strong
+                                    >
+                                </p>
+                                <code
+                                    >ffmpeg -hwaccel cuda -i
+                                    http://remote.server/input.ts -c:v
+                                    h264_nvenc -c:a copy -f mpegts
+                                    output.ts</code
+                                >
+
+                                <p>
+                                    <strong
+                                        >Circular Buffer with Size
+                                        Limit:</strong
+                                    >
+                                </p>
+                                <code
+                                    >ffmpeg -i http://remote.server/input.ts -c
+                                    copy -f segment -segment_time 30
+                                    -segment_wrap 2 -segment_format mpegts
+                                    output%d.ts</code
+                                >
+                            </div>
+
+                            <h6>Client Access Flow:</h6>
+                            <ol>
+                                <li>
+                                    Client requests stream from M3U playlist
+                                    endpoint
+                                </li>
+                                <li>
+                                    M3U-proxy detects connection and logs client
+                                    statistics
+                                </li>
+                                <li>
+                                    FFmpeg process spawns (if not already
+                                    running) and begins relay
+                                </li>
+                                <li>
+                                    Stream is buffered to circular TS file(s)
+                                </li>
+                                <li>
+                                    Rust web server serves buffered content to
+                                    client(s)
+                                </li>
+                                <li>
+                                    Process automatically terminates when no
+                                    active connections remain
+                                </li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Relays -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Active Relays</h2>
+                        <button
+                            class="btn btn-primary"
+                            onclick="refreshRelayStats()"
+                        >
+                            Refresh Stats
+                        </button>
+                    </div>
+                    <div class="card-content">
+                        <div id="active-relays">
+                            <div class="empty-state">
+                                <h3>No Active Relays</h3>
+                                <p>
+                                    No relay processes are currently running.
+                                    Relays will appear here when stream proxies
+                                    with relay profiles are accessed by clients.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Relay Profiles -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Relay Profiles</h2>
+                        <button
+                            class="btn btn-success"
+                            onclick="showCreateProfileModal()"
+                        >
+                            Create Profile
+                        </button>
+                    </div>
+                    <div class="card-content">
+                        <div id="relay-profiles">
+                            <div class="empty-state">
+                                <h3>No Relay Profiles</h3>
+                                <p>
+                                    Create relay profiles to configure FFmpeg
+                                    settings for stream transcoding and
+                                    optimization.
+                                </p>
+                                <button
+                                    class="btn btn-primary"
+                                    onclick="showCreateProfileModal()"
+                                >
+                                    Create Your First Profile
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- System Resources -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">System Resources</h2>
+                    </div>
+                    <div class="card-content">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="stat-card">
+                                    <h4>CPU Usage</h4>
+                                    <div class="stat-value" id="cpu-usage">
+                                        --
+                                    </div>
+                                    <div class="stat-label">
+                                        Average across all relays
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="stat-card">
+                                    <h4>Memory Usage</h4>
+                                    <div class="stat-value" id="memory-usage">
+                                        --
+                                    </div>
+                                    <div class="stat-label">
+                                        Buffer + Process memory
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="stat-card">
+                                    <h4>Total Bandwidth</h4>
+                                    <div
+                                        class="stat-value"
+                                        id="total-bandwidth"
+                                    >
+                                        --
+                                    </div>
+                                    <div class="stat-label">
+                                        Combined output streams
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            <!-- Footer -->
+            <div id="footer-placeholder"></div>
+        </div>
+
+        <!-- Create Profile Modal (Placeholder) -->
+        <div id="createProfileModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Create Relay Profile</h3>
+                    <button
+                        class="modal-close"
+                        onclick="hideCreateProfileModal()"
+                    >
+                        &times;
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="profileName">Profile Name</label>
+                        <input
+                            type="text"
+                            id="profileName"
+                            class="form-control"
+                            placeholder="e.g., HD Transcode"
+                        />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ffmpegParams">FFmpeg Parameters</label>
+                        <textarea
+                            id="ffmpegParams"
+                            class="form-control"
+                            rows="4"
+                            placeholder="-c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k"
+                        ></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <div class="form-check">
+                            <input
+                                type="checkbox"
+                                id="hwAccel"
+                                class="form-check-input"
+                            />
+                            <label for="hwAccel" class="form-check-label"
+                                >Enable Hardware Acceleration</label
+                            >
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="bufferSize">Buffer Size (seconds)</label>
+                        <input
+                            type="number"
+                            id="bufferSize"
+                            class="form-control"
+                            value="10"
+                            min="1"
+                            max="60"
+                        />
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button
+                        class="btn btn-secondary"
+                        onclick="hideCreateProfileModal()"
+                    >
+                        Cancel
+                    </button>
+                    <button class="btn btn-success" onclick="createProfile()">
+                        Create Profile
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            // Load shared components
+            async function loadSharedComponents() {
+                try {
+                    const navResponse = await fetch(
+                        "/static/html/shared/nav.html",
+                    );
+                    if (navResponse.ok) {
+                        document.getElementById("nav-placeholder").innerHTML =
+                            await navResponse.text();
+                    }
+
+                    const footerResponse = await fetch(
+                        "/static/html/shared/footer-basic.html",
+                    );
+                    if (footerResponse.ok) {
+                        document.getElementById(
+                            "footer-placeholder",
+                        ).innerHTML = await footerResponse.text();
+                    }
+                } catch (error) {
+                    console.error("Error loading shared components:", error);
+                }
+            }
+
+            // Placeholder functions for future implementation
+            function refreshRelayStats() {
+                // TODO: Implement relay statistics refresh
+                console.log("Refreshing relay statistics...");
+            }
+
+            function showCreateProfileModal() {
+                document
+                    .getElementById("createProfileModal")
+                    .classList.add("show");
+            }
+
+            function hideCreateProfileModal() {
+                document
+                    .getElementById("createProfileModal")
+                    .classList.remove("show");
+            }
+
+            function createProfile() {
+                // TODO: Implement profile creation
+                const profileName =
+                    document.getElementById("profileName").value;
+                const ffmpegParams =
+                    document.getElementById("ffmpegParams").value;
+                const hwAccel = document.getElementById("hwAccel").checked;
+                const bufferSize = document.getElementById("bufferSize").value;
+
+                console.log("Creating profile:", {
+                    name: profileName,
+                    ffmpegParams,
+                    hwAccel,
+                    bufferSize,
+                });
+
+                hideCreateProfileModal();
+            }
+
+            // Load components when page loads
+            document.addEventListener("DOMContentLoaded", loadSharedComponents);
+
+            // Simulate some stats updates (placeholder)
+            function updatePlaceholderStats() {
+                // These would be real stats in the actual implementation
+                document.getElementById("cpu-usage").textContent = "--";
+                document.getElementById("memory-usage").textContent = "--";
+                document.getElementById("total-bandwidth").textContent = "--";
+            }
+
+            // Update stats periodically (when implemented)
+            setInterval(updatePlaceholderStats, 5000);
+        </script>
+
+        <style>
+            .row {
+                display: flex;
+                gap: 1rem;
+                margin: -0.5rem;
+            }
+
+            .col-md-4 {
+                flex: 1;
+                padding: 0.5rem;
+            }
+
+            .stat-card {
+                background: #f8f9fa;
+                padding: 1.5rem;
+                border-radius: 8px;
+                text-align: center;
+                border: 1px solid #e9ecef;
+            }
+
+            .stat-card h4 {
+                margin: 0 0 1rem 0;
+                color: #495057;
+                font-size: 0.9rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
+            .stat-value {
+                font-size: 2rem;
+                font-weight: bold;
+                color: #ff6b6b;
+                margin-bottom: 0.5rem;
+            }
+
+            .stat-label {
+                font-size: 0.8rem;
+                color: #6c757d;
+            }
+
+            .empty-state {
+                text-align: center;
+                padding: 3rem 1rem;
+                color: #6c757d;
+            }
+
+            .empty-state h3 {
+                margin-bottom: 1rem;
+                color: #495057;
+            }
+
+            .empty-state p {
+                margin-bottom: 1.5rem;
+            }
+
+            .card-content ul,
+            .card-content ol {
+                margin: 1rem 0;
+                padding-left: 2rem;
+            }
+
+            .card-content li {
+                margin-bottom: 0.5rem;
+            }
+
+            .card-content h3 {
+                margin: 1.5rem 0 1rem 0;
+                color: #495057;
+            }
+
+            .alert {
+                background: #e7f3ff;
+                border: 1px solid #b8daff;
+                border-radius: 8px;
+                padding: 1.5rem;
+                margin: 1.5rem 0;
+                border-left: 4px solid #007bff;
+            }
+
+            .alert-info {
+                background: #f0f8ff;
+                border-color: #bee5eb;
+                border-left-color: #17a2b8;
+            }
+
+            .alert h4 {
+                margin: 0 0 1rem 0;
+                color: #004085;
+                font-size: 1.1rem;
+            }
+
+            .alert h5 {
+                margin: 1.5rem 0 0.5rem 0;
+                color: #155724;
+                font-size: 1rem;
+                font-weight: 600;
+            }
+
+            .alert h6 {
+                margin: 1rem 0 0.5rem 0;
+                color: #495057;
+                font-size: 0.9rem;
+                font-weight: 600;
+            }
+
+            .alert p {
+                margin: 0.5rem 0;
+                line-height: 1.6;
+            }
+
+            .alert ul,
+            .alert ol {
+                margin: 0.5rem 0;
+                padding-left: 2rem;
+            }
+
+            .alert li {
+                margin-bottom: 0.5rem;
+            }
+
+            .important-note {
+                background: #fff3cd;
+                border: 1px solid #ffeaa7;
+                border-left: 4px solid #ffc107;
+                padding: 1rem;
+                margin: 1rem 0;
+                border-radius: 4px;
+                font-weight: 500;
+            }
+
+            .code-examples {
+                background: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 4px;
+                padding: 1rem;
+                margin: 1rem 0;
+            }
+
+            .code-examples p {
+                margin: 1rem 0 0.5rem 0;
+                font-weight: 600;
+                color: #495057;
+            }
+
+            .code-examples code {
+                display: block;
+                background: #2d3748;
+                color: #e2e8f0;
+                padding: 0.75rem;
+                border-radius: 4px;
+                font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+                font-size: 0.85rem;
+                line-height: 1.4;
+                overflow-x: auto;
+                margin-bottom: 1rem;
+                white-space: pre-wrap;
+                word-break: break-all;
+            }
+
+            @media (max-width: 768px) {
+                .row {
+                    flex-direction: column;
+                }
+
+                .col-md-4 {
+                    flex: none;
+                }
+
+                .code-examples code {
+                    font-size: 0.75rem;
+                    padding: 0.5rem;
+                }
+
+                .alert {
+                    padding: 1rem;
+                }
+            }
+        </style>
+
+        <script src="/static/js/shared-utils.js"></script>
+        <script src="/static/js/shared-loader.js"></script>
+    </body>
+</html>

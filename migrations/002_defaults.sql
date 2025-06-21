@@ -1,4 +1,4 @@
--- Add default filters to help users get started with common filtering patterns
+-- Default filters and data mapping rules to help users get started
 
 -- SD Quality Channels (720p and below)
 INSERT INTO filters (

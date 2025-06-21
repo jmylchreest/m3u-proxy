@@ -4,7 +4,9 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 pub mod channel;
+pub mod data_mapping;
 pub mod filter;
+pub mod logo_asset;
 pub mod stream_proxy;
 pub mod stream_source;
 

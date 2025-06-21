@@ -25,7 +25,8 @@ pub struct WebConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub m3u_path: PathBuf,
-    pub logo_path: PathBuf,
+    pub uploaded_logo_path: PathBuf,
+    pub cached_logo_path: PathBuf,
     pub proxy_versions_to_keep: u32,
 }
 
@@ -48,7 +49,8 @@ impl Default for Config {
             },
             storage: StorageConfig {
                 m3u_path: PathBuf::from("./data/m3u"),
-                logo_path: PathBuf::from("./data/logos"),
+                uploaded_logo_path: PathBuf::from("./data/logos/uploaded"),
+                cached_logo_path: PathBuf::from("./data/logos/cached"),
                 proxy_versions_to_keep: 3,
             },
             ingestion: IngestionConfig {

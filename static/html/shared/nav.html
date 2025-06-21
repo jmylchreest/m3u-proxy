@@ -1,26 +1,56 @@
-<nav>
-    <ul>
-        <li><a href="/" id="nav-home">Home</a></li>
-        <li><a href="/sources" id="nav-sources">Stream Sources</a></li>
-        <li><a href="/proxies" id="nav-proxies">Stream Proxies</a></li>
-        <li><a href="/filters" id="nav-filters">Filters</a></li>
-    </ul>
+<nav class="workflow-nav">
+    <!-- Global Tools Section -->
+    <div class="nav-section global-tools">
+        <a href="/" id="nav-home" class="nav-item">Home</a>
+        <a href="/logos" id="nav-logos" class="nav-item">Logos</a>
+        <a href="/filters" id="nav-filters" class="nav-item">Filters</a>
+    </div>
+
+    <!-- Workflow Section -->
+    <div class="nav-section workflow-steps">
+        <a
+            href="/sources"
+            id="nav-sources"
+            class="nav-item workflow-step workflow-first"
+            >Stream Sources</a
+        >
+        <a
+            href="/data-mapping"
+            id="nav-data-mapping"
+            class="nav-item workflow-step workflow-middle"
+            >Data Mapping</a
+        >
+        <a
+            href="/proxies"
+            id="nav-proxies"
+            class="nav-item workflow-step workflow-last"
+            >Stream Proxies</a
+        >
+    </div>
+
+    <!-- Relay Section -->
+    <div class="nav-section relay-section">
+        <a href="/relay" id="nav-relay" class="nav-item relay-step">Relay</a>
+    </div>
 </nav>
 
 <script>
     // Set active navigation item based on current page
-    (function() {
+    (function () {
         const path = window.location.pathname;
         const navItems = {
-            '/': 'nav-home',
-            '/sources': 'nav-sources',
-            '/proxies': 'nav-proxies',
-            '/filters': 'nav-filters'
+            "/": "nav-home",
+            "/sources": "nav-sources",
+            "/proxies": "nav-proxies",
+            "/filters": "nav-filters",
+            "/data-mapping": "nav-data-mapping",
+            "/logos": "nav-logos",
+            "/relay": "nav-relay",
         };
 
         const activeId = navItems[path];
         if (activeId) {
-            document.getElementById(activeId).classList.add('active');
+            document.getElementById(activeId).classList.add("active");
         }
     })();
 </script>

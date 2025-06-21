@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Data Mapping - M3U Proxy</title>
+        <link rel="stylesheet" href="/static/css/main.css" />
+    </head>
+    <body>
+        <div id="headerContainer"></div>
+
+        <div class="container">
+            <div id="navContainer"></div>
+
+            <div id="alertsContainer"></div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Data Mapping Rules</h2>
+                    <button class="btn btn-primary" onclick="createRule()">
+                        ➕ Add Rule
+                    </button>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted mb-3">
+                        Data mapping rules transform channel data after
+                        ingestion but before filtering. Rules are processed in
+                        order and can set default values, transform fields, or
+                        assign custom logos.
+                    </p>
+
+                    <div id="rulesContainer">
+                        <div class="loading-container text-center">
+                            <div class="loading"></div>
+                            <span class="ml-2">Loading rules...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Rule Editor Modal -->
+        <div id="ruleModal" class="modal" style="display: none">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 class="modal-title" id="ruleModalTitle">
+                        Create Data Mapping Rule
+                    </h3>
+                </div>
+                <div class="modal-body">
+                    <form id="ruleForm">
+                        <div class="form-group">
+                            <label for="ruleName">Rule Name</label>
+                            <input
+                                type="text"
+                                id="ruleName"
+                                name="name"
+                                required
+                                placeholder="e.g., Set default group for ungrouped channels"
+                            />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ruleDescription"
+                                >Description (optional)</label
+                            >
+                            <textarea
+                                id="ruleDescription"
+                                name="description"
+                                rows="2"
+                                placeholder="Describe what this rule does"
+                            ></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    id="ruleActive"
+                                    name="is_active"
+                                    checked
+                                />
+                                Rule is active
+                            </label>
+                        </div>
+
+                        <hr />
+
+                        <h4>Conditions</h4>
+                        <p class="text-muted small">
+                            Define when this rule should apply
+                        </p>
+                        <div id="conditionsContainer">
+                            <!-- Conditions will be added here -->
+                        </div>
+                        <button
+                            type="button"
+                            class="btn btn-outline-primary btn-sm"
+                            onclick="addCondition()"
+                        >
+                            ➕ Add Condition
+                        </button>
+
+                        <hr />
+
+                        <h4>Actions</h4>
+                        <p class="text-muted small">
+                            Define what changes to make when conditions match
+                        </p>
+                        <div id="actionsContainer">
+                            <!-- Actions will be added here -->
+                        </div>
+                        <button
+                            type="button"
+                            class="btn btn-outline-primary btn-sm"
+                            onclick="addAction()"
+                        >
+                            ➕ Add Action
+                        </button>
+
+                        <div
+                            id="testResults"
+                            class="test-results"
+                            style="display: none"
+                        >
+                            <h5>Test Results</h5>
+                            <div id="testResultsContent"></div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button
+                        type="button"
+                        class="btn btn-outline-secondary"
+                        onclick="testRule()"
+                    >
+                        🧪 Test Rule
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        onclick="closeRuleModal()"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-primary"
+                        onclick="saveRule()"
+                    >
+                        💾 Save Rule
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Logo Picker Modal -->
+        <div id="logoPickerModal" class="modal" style="display: none">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 class="modal-title">Choose Logo</h3>
+                </div>
+                <div class="modal-body">
+                    <div class="search-bar">
+                        <input
+                            type="text"
+                            id="logoSearch"
+                            placeholder="Search logos..."
+                            onkeyup="searchLogos()"
+                        />
+                    </div>
+                    <div id="logoPickerGrid" class="logos-grid">
+                        <!-- Logo options will be loaded here -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        onclick="closeLogoPicker()"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-primary"
+                        onclick="selectLogo()"
+                    >
+                        Select Logo
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Source Selector Modal -->
+        <div id="sourceModal" class="modal" style="display: none">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 class="modal-title">Choose Source for Testing</h3>
+                </div>
+                <div class="modal-body">
+                    <div id="sourcesList">
+                        <!-- Sources will be loaded here -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        onclick="closeSourceModal()"
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <script src="/static/js/shared-utils.js"></script>
+        <script src="/static/js/shared-loader.js"></script>
+        <script src="/static/js/data-mapping.js"></script>
+    </body>
+</html>

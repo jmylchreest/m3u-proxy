@@ -9,22 +9,64 @@ use super::AppState;
 use crate::assets::StaticAssets;
 
 pub async fn serve_proxy_m3u(
-    Path(_ulid): Path<String>,
-    State(_state): State<AppState>,
+    Path(ulid): Path<String>,
+    State(state): State<AppState>,
 ) -> Result<Response<String>, StatusCode> {
-    // TODO: Implement M3U serving logic
-    Ok(Response::builder()
-        .header("content-type", "application/vnd.apple.mpegurl")
-        .body(format!("#EXTM3U\n# Proxy ULID: {}\n", _ulid))
-        .unwrap())
+    // Construct path to M3U file using configured storage path
+    let filename = format!("{}.m3u8", ulid);
+    let file_path = state.config.storage.m3u_path.join(filename);
+
+    // Try to read the M3U file
+    match std::fs::read_to_string(&file_path) {
+        Ok(content) => Ok(Response::builder()
+            .header("content-type", "application/vnd.apple.mpegurl")
+            .header("cache-control", "no-cache")
+            .body(content)
+            .unwrap()),
+        Err(_) => {
+            // Return 404 if file doesn't exist
+            Err(StatusCode::NOT_FOUND)
+        }
+    }
 }
 
 pub async fn serve_logo(
-    Path(_logo_id): Path<String>,
-    State(_state): State<AppState>,
-) -> StatusCode {
-    // TODO: Implement logo serving logic
-    StatusCode::NOT_FOUND
+    Path(logo_id): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    // Get logo asset from database
+    match uuid::Uuid::parse_str(&logo_id) {
+        Ok(uuid) => {
+            match state.logo_asset_service.get_asset(uuid).await {
+                Ok(logo_asset) => {
+                    // Use storage service to get file
+                    match state
+                        .logo_asset_storage
+                        .get_file(&logo_asset.file_path)
+                        .await
+                    {
+                        Ok(file_data) => Response::builder()
+                            .header("content-type", &logo_asset.mime_type)
+                            .header("cache-control", "public, max-age=3600")
+                            .body(Body::from(file_data))
+                            .unwrap(),
+                        Err(_) => Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(Body::from("Logo file not found"))
+                            .unwrap(),
+                    }
+                }
+                Err(_) => Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::from("Logo not found"))
+                    .unwrap(),
+            }
+        }
+        Err(_) => Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from("Invalid logo ID"))
+            .unwrap(),
+    }
 }
 
 pub async fn index() -> impl IntoResponse {
@@ -41,6 +83,18 @@ pub async fn proxies_page() -> impl IntoResponse {
 
 pub async fn filters_page() -> impl IntoResponse {
     serve_embedded_asset("static/html/filters.html").await
+}
+
+pub async fn data_mapping_page() -> impl IntoResponse {
+    serve_embedded_asset("static/html/data-mapping.html").await
+}
+
+pub async fn logo_assets_page() -> impl IntoResponse {
+    serve_embedded_asset("static/html/logos.html").await
+}
+
+pub async fn relay_page() -> impl IntoResponse {
+    serve_embedded_asset("static/html/relay.html").await
 }
 
 pub async fn serve_static_asset(Path(path): Path<String>) -> impl IntoResponse {

@@ -26,21 +26,14 @@ class ChannelsViewer {
       this.hideModal();
     });
 
-    // Modal click outside to close
-    document.getElementById("channelsModal").addEventListener("click", (e) => {
-      if (e.target.id === "channelsModal") {
-        this.hideModal();
-      }
-    });
-
-    // Search filter
-    document.getElementById("channelsFilter").addEventListener("input", () => {
-      this.filterChannels();
-    });
-
-    // Prevent modal content clicks from closing modal
-    document.querySelector("#channelsModal .modal-content").addEventListener("click", (e) => {
-      e.stopPropagation();
+    // Search filter with debouncing
+    const filterInput = document.getElementById("channelsFilter");
+    let filterTimeout;
+    filterInput.addEventListener("input", () => {
+      clearTimeout(filterTimeout);
+      filterTimeout = setTimeout(() => {
+        this.filterChannels();
+      }, 300); // 300ms debounce
     });
   }
 
@@ -81,16 +74,11 @@ class ChannelsViewer {
         }
       }, 100);
 
-      this.renderChannelsProgressively();
+      this.renderAllChannels();
       this.updateChannelCount();
 
       loading.style.display = "none";
       content.style.display = "block";
-
-      // Set up scroll container for progressive loading
-      setTimeout(() => {
-        this.setupScrollContainer();
-      }, 100);
 
     } catch (error) {
       console.error("Error loading channels:", error);
@@ -100,11 +88,32 @@ class ChannelsViewer {
   }
 
   async loadChannelsFromAPI(sourceId) {
-    const response = await fetch(`/api/sources/${sourceId}/channels`);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    this.currentChannels = await response.json();
+    let allChannels = [];
+    let page = 1;
+    let totalPages = 1;
+    
+    // Load all pages of channels
+    do {
+      const response = await fetch(`/api/sources/${sourceId}/channels?page=${page}&limit=10000`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      
+      // Handle both paginated response and direct array response
+      if (data.channels) {
+        allChannels = allChannels.concat(data.channels);
+        totalPages = data.total_pages || 1;
+      } else if (Array.isArray(data)) {
+        allChannels = data;
+        totalPages = 1; // No pagination
+      }
+      
+      page++;
+    } while (page <= totalPages);
+    
+    this.currentChannels = allChannels;
+    console.log(`Loaded ${allChannels.length} channels from ${totalPages} pages`);
   }
 
   setupScrollContainer() {
@@ -147,11 +156,38 @@ class ChannelsViewer {
     }
   }
 
-  renderChannelsProgressively() {
+  renderAllChannels() {
+    console.log("Rendering all channels, filtered count:", this.filteredChannels.length);
     const tbody = document.getElementById("channelsTableBody");
+    
+    if (this.filteredChannels.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No channels found</td></tr>';
+      return;
+    }
+    
+    // Render all channels at once
+    const fragment = document.createDocumentFragment();
+    
+    this.filteredChannels.forEach(channel => {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td>
+          <strong>${this.escapeHtml(channel.channel_name)}</strong>
+          ${
+            channel.tvg_name && channel.tvg_name !== channel.channel_name
+              ? `<br><small class="text-muted">TVG: ${this.escapeHtml(channel.tvg_name)}</small>`
+              : ""
+          }
+        </td>
+        <td>${channel.group_title ? this.escapeHtml(channel.group_title) : '<span class="text-muted">-</span>'}</td>
+        <td>${channel.tvg_id ? this.escapeHtml(channel.tvg_id) : '<span class="text-muted">-</span>'}</td>
+      `;
+      fragment.appendChild(row);
+    });
+    
     tbody.innerHTML = "";
-    this.renderedChannels = 0;
-    this.loadMoreChannels();
+    tbody.appendChild(fragment);
+    console.log("Rendered", this.filteredChannels.length, "channels");
   }
 
   async loadMoreChannels() {
@@ -191,13 +227,6 @@ class ChannelsViewer {
         </td>
         <td>${channel.group_title ? this.escapeHtml(channel.group_title) : '<span class="text-muted">-</span>'}</td>
         <td>${channel.tvg_id ? this.escapeHtml(channel.tvg_id) : '<span class="text-muted">-</span>'}</td>
-        <td>
-          ${
-            channel.tvg_logo
-              ? `<img src="${this.escapeHtml(channel.tvg_logo)}" alt="Logo" style="max-width: 40px; max-height: 40px;" onerror="this.style.display='none'">`
-              : '<span class="text-muted">-</span>'
-          }
-        </td>
       `;
       fragment.appendChild(row);
     }
@@ -224,6 +253,8 @@ class ChannelsViewer {
     const filterInput = document.getElementById("channelsFilter");
     const searchTerm = filterInput.value.toLowerCase().trim();
 
+    console.log("Filter called with:", searchTerm); // Debug
+
     if (searchTerm === this.currentFilter) {
       return; // No change in filter
     }
@@ -232,9 +263,11 @@ class ChannelsViewer {
 
     if (!searchTerm) {
       this.filteredChannels = [...this.currentChannels];
+      console.log("Filter cleared, showing all channels:", this.filteredChannels.length);
     } else {
       // Split search terms for multi-word search
       const searchTerms = searchTerm.split(/\s+/).filter(term => term.length > 0);
+      console.log("Filtering with terms:", searchTerms);
 
       this.filteredChannels = this.currentChannels.filter(channel => {
         const searchableText = [
@@ -245,14 +278,22 @@ class ChannelsViewer {
         ].join(" ").toLowerCase();
 
         // All search terms must match (AND logic)
-        return searchTerms.every(term => {
-          // Fuzzy matching: allow some character differences
-          return this.fuzzyMatch(searchableText, term);
+        const matches = searchTerms.every(term => {
+          const result = searchableText.includes(term); // Simple contains match for now
+          return result;
         });
+        
+        // Debug first few matches
+        if (this.filteredChannels.length < 5) {
+          console.log("Channel:", channel.channel_name, "Searchable:", searchableText.substring(0, 50), "Matches:", matches);
+        }
+        
+        return matches;
       });
+      console.log("Filtered channels:", this.filteredChannels.length, "out of", this.currentChannels.length);
     }
 
-    this.renderChannelsProgressively();
+    this.renderAllChannels();
     this.updateChannelCount();
   }
 
@@ -342,14 +383,13 @@ class ChannelsViewer {
   }
 
   escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
+    return SharedUtils.escapeHtml(text);
   }
 }
 
 // Create global instance
 const channelsViewer = new ChannelsViewer();
+window.channelsViewer = channelsViewer;
 
 // Initialize when DOM is loaded
 if (document.readyState === "loading") {

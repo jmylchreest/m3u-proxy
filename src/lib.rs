@@ -1,7 +1,10 @@
 pub mod assets;
 pub mod config;
+pub mod data_mapping;
 pub mod database;
 pub mod ingestor;
+pub mod logo_assets;
 pub mod models;
 pub mod proxy;
+pub mod utils;
 pub mod web;

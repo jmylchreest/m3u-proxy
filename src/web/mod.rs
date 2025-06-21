@@ -8,8 +8,10 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     config::Config,
+    data_mapping::DataMappingService,
     database::Database,
     ingestor::{scheduler::CacheInvalidationSender, IngestionStateManager},
+    logo_assets::{LogoAssetService, LogoAssetStorage},
 };
 
 pub mod api;
@@ -26,6 +28,9 @@ impl WebServer {
         database: Database,
         state_manager: IngestionStateManager,
         cache_invalidation_tx: CacheInvalidationSender,
+        data_mapping_service: DataMappingService,
+        logo_asset_service: LogoAssetService,
+        logo_asset_storage: LogoAssetStorage,
     ) -> Result<Self> {
         let app = Router::new()
             // Proxy endpoints
@@ -76,11 +81,47 @@ impl WebServer {
                     .delete(api::delete_filter),
             )
             .route("/api/filters/test", post(api::test_filter))
+            // Data Mapping API
+            .route(
+                "/api/data-mapping",
+                get(api::list_data_mapping_rules).post(api::create_data_mapping_rule),
+            )
+            .route(
+                "/api/data-mapping/:id",
+                get(api::get_data_mapping_rule)
+                    .put(api::update_data_mapping_rule)
+                    .delete(api::delete_data_mapping_rule),
+            )
+            .route(
+                "/api/data-mapping/reorder",
+                post(api::reorder_data_mapping_rules),
+            )
+            .route("/api/data-mapping/test", post(api::test_data_mapping_rule))
+            // Logo Assets API
+            .route("/api/logos", get(api::list_logo_assets))
+            .route("/api/logos/upload", post(api::upload_logo_asset))
+            .route(
+                "/api/logos/:id",
+                get(api::get_logo_asset)
+                    .put(api::update_logo_asset)
+                    .delete(api::delete_logo_asset),
+            )
+            .route(
+                "/api/logos/:id/formats",
+                get(api::get_logo_asset_with_formats),
+            )
+            .route("/api/logos/search", get(api::search_logo_assets))
+            .route("/api/logos/stats", get(api::get_logo_cache_stats))
+            // Health check endpoint
+            .route("/health", get(api::health_check))
             // Web interface
             .route("/", get(handlers::index))
             .route("/sources", get(handlers::sources_page))
             .route("/proxies", get(handlers::proxies_page))
             .route("/filters", get(handlers::filters_page))
+            .route("/data-mapping", get(handlers::data_mapping_page))
+            .route("/logos", get(handlers::logo_assets_page))
+            .route("/relay", get(handlers::relay_page))
             // Static files (embedded)
             .route("/static/*path", get(handlers::serve_static_asset))
             // Middleware
@@ -92,6 +133,9 @@ impl WebServer {
                 config: config.clone(),
                 state_manager,
                 cache_invalidation_tx,
+                data_mapping_service,
+                logo_asset_service,
+                logo_asset_storage,
             });
 
         let addr: SocketAddr = format!("{}:{}", config.web.host, config.web.port).parse()?;
@@ -121,4 +165,7 @@ pub struct AppState {
     pub config: Config,
     pub state_manager: IngestionStateManager,
     pub cache_invalidation_tx: CacheInvalidationSender,
+    pub data_mapping_service: DataMappingService,
+    pub logo_asset_service: LogoAssetService,
+    pub logo_asset_storage: LogoAssetStorage,
 }

@@ -1,0 +1,80 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/
+
+# Documentation
+README.md
+docs/
+
+# Logs
+*.log
+server.log
+
+# Database files (will be created in container)
+*.db
+*.db-shm
+*.db-wal
+
+# Data directories (will be mounted)
+data/
+
+# Test files
+test.*
+
+# Config files (example will be copied)
+config.toml
+
+# Temporary files
+tmp/
+temp/
+
+# Build cache
+.cache/
+
+# Node modules (if any)
+node_modules/
+
+# Python cache (if any)
+__pycache__/
+*.pyc
+
+# Backup files
+*.bak
+*.backup
+
+# Archive files
+*.tar.gz
+*.zip
+*.tar
+*.rar
+
+# Local development files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# SQLx prepared queries (will be prepared in build)
+.sqlx/
+
+# Cross compilation files
+Cross.toml

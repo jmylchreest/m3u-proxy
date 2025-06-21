@@ -20,8 +20,11 @@ port = 8080
 # Directory for M3U file storage
 m3u_path = "./data/m3u"
 
+# Directory for uploaded logos
+uploaded_logo_path = "./data/logos/uploaded"
+
 # Directory for cached logos
-logo_path = "./data/logos"
+cached_logo_path = "./data/logos/cached"
 
 # Number of proxy versions to keep (0 = only current)
 proxy_versions_to_keep = 3

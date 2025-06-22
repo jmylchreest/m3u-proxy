@@ -14,202 +14,236 @@
 
             <div id="alertsContainer"></div>
 
+            <!-- Stream Proxies Header -->
+            <div class="dashboard-header">
+                <h1>📺 Stream Proxies</h1>
+                <p class="text-muted">
+                    Generate customised M3U playlists and XMLTV EPG feeds from
+                    your processed sources
+                </p>
+            </div>
+
             <div class="card">
                 <div class="card-header">
                     <h2 class="card-title">Stream Proxies</h2>
-                    <button id="addProxyBtn" class="btn btn-primary">
-                        Create Proxy
-                    </button>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="createProxy()">
+                            ➕ Add Proxy
+                        </button>
+                        <button
+                            class="btn btn-success"
+                            onclick="regenerateAllProxies()"
+                        >
+                            🔄 Regenerate All
+                        </button>
+                    </div>
                 </div>
+                <div class="card-body">
+                    <p class="text-muted mb-3">
+                        Stream proxies are the final output of your M3U
+                        processing pipeline. Each proxy combines data from
+                        sources, applies mapping rules, and filters to create a
+                        customized channel list.
+                    </p>
 
-                <div
-                    id="loadingIndicator"
-                    class="text-center"
-                    style="display: none"
-                >
-                    <span class="loading"></span> Loading proxies...
-                </div>
-
-                <div class="table-responsive">
-                    <table id="proxiesTable" class="table">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>ULID</th>
-                                <th>Sources</th>
-                                <th>Filters</th>
-                                <th>Status</th>
-                                <th>Last Generated</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="proxiesTableBody">
-                            <!-- Proxies will be loaded here -->
-                        </tbody>
-                    </table>
+                    <div id="proxiesContainer">
+                        <div class="loading-container text-center">
+                            <div class="loading"></div>
+                            <span class="ml-2">Loading proxies...</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Proxy Modal -->
-        <div id="proxyModal" class="modal">
-            <div class="modal-content">
+        <!-- Proxy Editor Modal -->
+        <div id="proxyModal" class="modal" style="display: none">
+            <div class="modal-content standard-modal">
                 <div class="modal-header">
-                    <h3 id="modalTitle" class="modal-title">
+                    <h3 class="modal-title" id="proxyModalTitle">
                         Create Stream Proxy
                     </h3>
-                    <button id="closeModal" class="modal-close">&times;</button>
                 </div>
                 <div class="modal-body">
                     <form id="proxyForm">
                         <div class="form-group">
-                            <label for="proxyName" class="form-label"
-                                >Proxy Name *</label
-                            >
+                            <label for="proxyName">Proxy Name</label>
                             <input
                                 type="text"
                                 id="proxyName"
-                                class="form-control"
+                                name="name"
                                 required
+                                placeholder="e.g., Sports Channels"
                             />
-                            <small class="text-muted"
-                                >A descriptive name for this proxy</small
-                            >
                         </div>
 
                         <div class="form-group">
-                            <div class="form-check">
+                            <label for="proxyDescription"
+                                >Description (optional)</label
+                            >
+                            <textarea
+                                id="proxyDescription"
+                                name="description"
+                                rows="2"
+                                placeholder="Describe what this proxy contains"
+                            ></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="proxySource">Source</label>
+                            <select id="proxySource" name="source_id" required>
+                                <option value="">Select a source...</option>
+                                <!-- Sources will be loaded here -->
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="proxyFilters">Filters (optional)</label>
+                            <div id="proxyFilters" class="filters-container">
+                                <!-- Filters will be loaded here -->
+                            </div>
+                            <small class="text-muted">
+                                Select filters to apply to this proxy. Filters
+                                are applied after data mapping.
+                            </small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>
                                 <input
                                     type="checkbox"
-                                    id="isActive"
-                                    class="form-check-input"
+                                    id="proxyActive"
+                                    name="is_active"
                                     checked
                                 />
-                                <label for="isActive" class="form-label"
-                                    >Active</label
-                                >
-                            </div>
-                            <small class="text-muted"
-                                >Inactive proxies won't generate M3U
-                                files</small
-                            >
+                                Proxy is active
+                            </label>
                         </div>
 
                         <div class="form-group">
-                            <label class="form-label">Select Sources</label>
-                            <div id="sourcesSelection" class="mb-3">
-                                <!-- Sources will be populated here -->
-                            </div>
-                            <small class="text-muted"
-                                >Choose which stream sources to include in this
-                                proxy</small
-                            >
-                        </div>
-
-                        <div class="form-group">
-                            <label class="form-label"
-                                >Configure Filters (Optional)</label
-                            >
-                            <div id="filtersConfiguration">
-                                <div id="selectedFilters" class="mb-3">
-                                    <!-- Selected filters will appear here -->
-                                </div>
-                                <div class="d-flex">
-                                    <select
-                                        id="availableFilters"
-                                        class="form-select"
-                                    >
-                                        <option value="">
-                                            Select a filter to add...
-                                        </option>
-                                    </select>
-                                    <button
-                                        type="button"
-                                        id="addFilterBtn"
-                                        class="btn btn-outline-primary btn-sm"
-                                        disabled
-                                    >
-                                        Add Filter
-                                    </button>
-                                </div>
-                            </div>
-                            <small class="text-muted"
-                                >Filters are applied in order. Drag to
-                                reorder.</small
-                            >
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    id="proxyAutoRegenerate"
+                                    name="auto_regenerate"
+                                    checked
+                                />
+                                Auto-regenerate when source or filters change
+                            </label>
                         </div>
                     </form>
                 </div>
                 <div class="modal-footer">
-                    <button id="cancelProxy" class="btn btn-secondary">
+                    <button
+                        type="button"
+                        class="btn btn-outline-secondary"
+                        onclick="previewProxy()"
+                    >
+                        👁️ Preview
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-primary"
+                        onclick="saveProxy()"
+                    >
+                        Save Proxy
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        onclick="closeProxyModal()"
+                    >
                         Cancel
                     </button>
-                    <button id="saveProxy" class="btn btn-primary">Save</button>
                 </div>
             </div>
         </div>
 
-        <!-- Preview Modal -->
-        <div id="previewModal" class="modal">
-            <div class="modal-content">
+        <!-- Proxy Preview Modal -->
+        <div id="proxyPreviewModal" class="modal" style="display: none">
+            <div class="modal-content standard-modal preview-modal-large">
                 <div class="modal-header">
                     <h3 class="modal-title">Proxy Preview</h3>
-                    <button
-                        onclick="proxiesManager.hidePreviewModal()"
-                        class="modal-close"
-                    >
-                        &times;
-                    </button>
                 </div>
                 <div class="modal-body">
-                    <div id="previewContent">
-                        <div class="mb-3">
-                            <strong>M3U URL:</strong>
-                            <div class="input-group">
-                                <input
-                                    type="text"
-                                    id="proxyUrl"
-                                    class="form-control"
-                                    readonly
-                                />
-                                <button
-                                    class="btn btn-outline-secondary"
-                                    onclick="proxiesManager.copyUrl()"
-                                >
-                                    Copy
-                                </button>
-                            </div>
-                        </div>
+                    <div class="preview-tabs">
+                        <button
+                            class="tab-button active"
+                            onclick="showPreviewTab('channels')"
+                        >
+                            📺 Channels
+                        </button>
+                        <button
+                            class="tab-button"
+                            onclick="showPreviewTab('m3u')"
+                        >
+                            📄 M3U Output
+                        </button>
+                        <button
+                            class="tab-button"
+                            onclick="showPreviewTab('stats')"
+                        >
+                            📊 Statistics
+                        </button>
+                    </div>
 
-                        <div class="mb-3">
-                            <strong>Channel Preview:</strong>
-                            <div
-                                id="channelPreview"
-                                class="table-responsive"
-                                style="max-height: 400px; overflow-y: auto"
+                    <div id="channelsTab" class="tab-content active">
+                        <div class="preview-controls">
+                            <input
+                                type="text"
+                                id="channelSearch"
+                                placeholder="Search channels..."
+                                onkeyup="filterPreviewChannels()"
+                            />
+                            <select
+                                id="groupFilter"
+                                onchange="filterPreviewChannels()"
                             >
-                                <!-- Channel preview will be loaded here -->
-                            </div>
+                                <option value="">All Groups</option>
+                            </select>
+                        </div>
+                        <div id="channelsPreview" class="channels-preview">
+                            <!-- Channel list will be loaded here -->
+                        </div>
+                    </div>
+
+                    <div id="m3uTab" class="tab-content">
+                        <div class="preview-controls">
+                            <button
+                                class="btn btn-outline-primary"
+                                onclick="copyM3uContent()"
+                            >
+                                📋 Copy M3U
+                            </button>
+                            <button
+                                class="btn btn-outline-primary"
+                                onclick="downloadM3u()"
+                            >
+                                💾 Download M3U
+                            </button>
+                        </div>
+                        <pre id="m3uContent" class="m3u-preview"></pre>
+                    </div>
+
+                    <div id="statsTab" class="tab-content">
+                        <div id="proxyStats" class="stats-grid">
+                            <!-- Statistics will be loaded here -->
                         </div>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button
-                        onclick="proxiesManager.hidePreviewModal()"
+                        type="button"
                         class="btn btn-secondary"
+                        onclick="closeProxyPreview()"
                     >
                         Close
-                    </button>
-                    <button
-                        onclick="proxiesManager.generateProxy()"
-                        class="btn btn-primary"
-                    >
-                        Generate M3U
                     </button>
                 </div>
             </div>
         </div>
 
+        <script src="/static/js/shared-utils.js"></script>
         <script src="/static/js/shared-loader.js"></script>
         <script src="/static/js/proxies.js"></script>
     </body>

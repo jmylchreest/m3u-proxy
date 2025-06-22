@@ -1,18 +1,28 @@
 <nav class="workflow-nav">
+    <!-- Dashboard Section -->
+    <div class="nav-section dashboard-section">
+        <a href="/" id="nav-home" class="nav-item">Dashboard</a>
+    </div>
+
     <!-- Global Tools Section -->
     <div class="nav-section global-tools">
-        <a href="/" id="nav-home" class="nav-item">Home</a>
         <a href="/logos" id="nav-logos" class="nav-item">Logos</a>
         <a href="/filters" id="nav-filters" class="nav-item">Filters</a>
     </div>
 
-    <!-- Workflow Section -->
-    <div class="nav-section workflow-steps">
+    <!-- Stream Workflow Section -->
+    <div class="nav-section workflow-steps stream-workflow">
         <a
             href="/sources"
             id="nav-sources"
             class="nav-item workflow-step workflow-first"
             >Stream Sources</a
+        >
+        <a
+            href="/epg-sources"
+            id="nav-epg-sources"
+            class="nav-item workflow-step workflow-middle"
+            >EPG Sources</a
         >
         <a
             href="/data-mapping"
@@ -45,6 +55,7 @@
             "/filters": "nav-filters",
             "/data-mapping": "nav-data-mapping",
             "/logos": "nav-logos",
+            "/epg-sources": "nav-epg-sources",
             "/relay": "nav-relay",
         };
 

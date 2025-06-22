@@ -1,5 +1,5 @@
 use image::ImageFormat;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::fs;
 use uuid::Uuid;
 

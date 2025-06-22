@@ -192,6 +192,7 @@ impl LogoAssetService {
     pub async fn list_assets(
         &self,
         request: LogoAssetListRequest,
+        base_url: &str,
     ) -> Result<LogoAssetListResponse, sqlx::Error> {
         let page = request.page.unwrap_or(1);
         let limit = request.limit.unwrap_or(50);
@@ -261,7 +262,7 @@ impl LogoAssetService {
                 updated_at: utils::parse_datetime(&row.get::<String, _>("updated_at"))?,
             };
 
-            let url = format!("/api/logos/{}", asset.id);
+            let url = crate::utils::generate_logo_url(base_url, asset.id);
             assets.push(LogoAssetWithUrl { asset, url });
         }
 
@@ -327,6 +328,7 @@ impl LogoAssetService {
     pub async fn search_assets(
         &self,
         request: LogoAssetSearchRequest,
+        base_url: &str,
     ) -> Result<LogoAssetSearchResult, sqlx::Error> {
         let limit = request.limit.unwrap_or(20);
 
@@ -377,7 +379,7 @@ impl LogoAssetService {
                 updated_at: utils::parse_datetime(&row.get::<String, _>("updated_at"))?,
             };
 
-            let url = format!("/api/logos/{}", asset.id);
+            let url = crate::utils::generate_logo_url(base_url, asset.id);
             assets.push(LogoAssetWithUrl { asset, url });
         }
 

@@ -16,6 +16,14 @@ host = "0.0.0.0"
 # Web server port
 port = 8080
 
+# Base URL for generating full URLs (logos, streams, etc.)
+# This should be the public URL that clients will use to access the service
+# Examples:
+#   http://localhost:8080 (for local development)
+#   https://m3u-proxy.example.com (for production with domain)
+#   http://192.168.1.100:8080 (for local network access)
+base_url = "http://localhost:8080"
+
 [storage]
 # Directory for M3U file storage
 m3u_path = "./data/m3u"

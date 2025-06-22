@@ -21,6 +21,10 @@ function initializeLogosPage() {
 
   // Setup page-level drag and drop
   setupPageLevelDragAndDrop();
+
+  // Setup standard modal close handlers
+  SharedUtils.setupStandardModalCloseHandlers("uploadModal");
+  SharedUtils.setupStandardModalCloseHandlers("editModal");
 }
 
 // Check if DOM is already loaded, if so initialize immediately
@@ -406,25 +410,123 @@ function refreshStats() {
 
 // Upload logo (placeholder)
 function uploadLogo() {
+  // Check if this is being called from the button click to submit, or to open modal
+  const uploadBtn = document.querySelector(
+    "#uploadModal .modal-footer .btn-primary",
+  );
   const modal = document.getElementById("uploadModal");
-  modal.style.display = "flex";
-  modal.style.alignItems = "center";
-  modal.style.justifyContent = "center";
 
-  // Clear form for fresh start (allows auto-population to work)
+  // If modal is visible, this is a submit action
+  if (
+    modal &&
+    modal.style.display !== "none" &&
+    modal.classList.contains("show")
+  ) {
+    submitUpload();
+    return;
+  }
+
+  // Otherwise, open the modal
   clearSelectedFile();
   document.getElementById("logoName").value = "";
   document.getElementById("logoDescription").value = "";
 
   // Setup drag and drop when modal opens
   setupDragAndDrop();
+
+  // Disable upload button initially
+  disableUploadButton();
+
+  // Show modal using standard utilities
+  SharedUtils.showStandardModal("uploadModal");
 }
 
 // Close upload modal
 function closeUploadModal() {
-  document.getElementById("uploadModal").style.display = "none";
+  SharedUtils.hideStandardModal("uploadModal");
   document.getElementById("uploadForm").reset();
   document.getElementById("uploadPreview").style.display = "none";
+  disableUploadButton();
+}
+
+// Enable upload button
+function enableUploadButton() {
+  const uploadBtn = document.querySelector(
+    "#uploadModal .modal-footer .btn-primary",
+  );
+  if (uploadBtn) {
+    uploadBtn.disabled = false;
+    uploadBtn.style.cursor = "pointer";
+  }
+}
+
+// Disable upload button
+function disableUploadButton() {
+  const uploadBtn = document.querySelector(
+    "#uploadModal .modal-footer .btn-primary",
+  );
+  if (uploadBtn) {
+    uploadBtn.disabled = true;
+    uploadBtn.style.cursor = "not-allowed";
+  }
+}
+
+// Submit upload form
+async function submitUpload() {
+  const form = document.getElementById("uploadForm");
+  const fileInput = document.getElementById("logoFile");
+  const nameInput = document.getElementById("logoName");
+
+  // Get file from input or dropped file
+  const file = fileInput.files[0] || fileInput._droppedFile;
+  if (!file) {
+    showError("Please select a file to upload");
+    return;
+  }
+
+  if (!nameInput.value.trim()) {
+    showError("Please enter a logo name");
+    nameInput.focus();
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("name", nameInput.value.trim());
+  formData.append(
+    "description",
+    document.getElementById("logoDescription").value.trim(),
+  );
+
+  const uploadBtn = document.querySelector(
+    "#uploadModal .modal-footer .btn-primary",
+  );
+  const originalText = uploadBtn.textContent;
+  uploadBtn.textContent = "Uploading...";
+  uploadBtn.disabled = true;
+
+  try {
+    const response = await fetch("/api/logos/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(error || `HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    showSuccess(`Logo "${result.name}" uploaded successfully`);
+    closeUploadModal();
+    loadLogos(); // Refresh the logos list
+  } catch (error) {
+    console.error("Upload failed:", error);
+    showError(`Upload failed: ${error.message}`);
+  } finally {
+    uploadBtn.textContent = originalText;
+    enableUploadButton();
+  }
 }
 
 // Handle file preview
@@ -470,6 +572,9 @@ function handleFilePreview(event) {
     document.getElementById("uploadPreview").style.display = "block";
   };
   reader.readAsDataURL(file);
+
+  // Enable the upload button since we have a valid file
+  enableUploadButton();
 }
 
 // Clear selected file
@@ -483,6 +588,9 @@ function clearSelectedFile() {
   document.getElementById("uploadPreview").style.display = "none";
   document.getElementById("selectedFileName").textContent = "";
   document.getElementById("selectedFileSize").textContent = "";
+
+  // Disable upload button
+  disableUploadButton();
 }
 
 // Setup drag and drop functionality
@@ -627,6 +735,9 @@ function handleDrop(e) {
     // Store the file reference for upload
     fileInput._droppedFile = file;
     console.log("File stored for upload:", file.name);
+
+    // Enable the upload button since we have a valid file
+    enableUploadButton();
   } else {
     console.error("No files in drop event");
   }
@@ -690,12 +801,11 @@ async function editLogoAsset(logoId) {
     const logoData = await response.json();
     editingLogo = logoData;
     populateEditForm(logoData);
-    const modal = document.getElementById("editModal");
-    modal.style.display = "flex";
-    modal.style.alignItems = "center";
-    modal.style.justifyContent = "center";
+
+    // Show modal using standard utilities
+    SharedUtils.showStandardModal("editModal");
   } catch (error) {
-    console.error("Error loading logo details:", error);
+    console.error("Error loading logo for editing:", error);
     showError("Failed to load logo details");
   }
 }
@@ -758,7 +868,7 @@ async function saveLogoEdit() {
 
 // Close edit modal
 function closeEditModal() {
-  document.getElementById("editModal").style.display = "none";
+  SharedUtils.hideStandardModal("editModal");
   editingLogo = null;
 }
 
@@ -787,7 +897,7 @@ async function deleteLogo(logoId) {
 
     // Close edit modal if open
     const editModal = document.getElementById("editModal");
-    if (editModal && editModal.style.display !== "none") {
+    if (editModal && editModal.classList.contains("show")) {
       closeEditModal();
     }
 
@@ -814,9 +924,9 @@ function showError(message) {
     const uploadModal = document.getElementById("uploadModal");
     const editModal = document.getElementById("editModal");
 
-    if (uploadModal && uploadModal.style.display === "flex") {
+    if (uploadModal && uploadModal.classList.contains("show")) {
       SharedUtils.showError(message, "alertsContainer");
-    } else if (editModal && editModal.style.display === "flex") {
+    } else if (editModal && editModal.classList.contains("show")) {
       SharedUtils.showError(message, "alertsContainerEdit");
     } else {
       SharedUtils.showError(message);
@@ -834,9 +944,9 @@ function showSuccess(message) {
     const uploadModal = document.getElementById("uploadModal");
     const editModal = document.getElementById("editModal");
 
-    if (uploadModal && uploadModal.style.display === "flex") {
+    if (uploadModal && uploadModal.classList.contains("show")) {
       SharedUtils.showSuccess(message, "alertsContainer");
-    } else if (editModal && editModal.style.display === "flex") {
+    } else if (editModal && editModal.classList.contains("show")) {
       SharedUtils.showSuccess(message, "alertsContainerEdit");
     } else {
       SharedUtils.showSuccess(message);
@@ -1064,6 +1174,9 @@ function handlePageLevelDrop(e) {
         // Store the file reference for upload
         fileInput._droppedFile = file;
         console.log("Page-level file stored for upload:", file.name);
+
+        // Enable the upload button since we have a valid file
+        enableUploadButton();
       }
     }, 100);
   }

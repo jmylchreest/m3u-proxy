@@ -42,7 +42,8 @@ CREATE TABLE filters (
     name TEXT NOT NULL,
     starting_channel_number INTEGER NOT NULL DEFAULT 1,
     is_inverse BOOLEAN NOT NULL DEFAULT FALSE,
-    logical_operator TEXT NOT NULL DEFAULT 'and' CHECK (logical_operator IN ('and', 'or')),
+    logical_operator TEXT NOT NULL DEFAULT 'all' CHECK (logical_operator IN ('and', 'or', 'all', 'any')),
+    condition_tree TEXT, -- JSON tree structure for nested conditions (NULL = use legacy flat structure)
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -112,7 +113,7 @@ CREATE TABLE data_mapping_conditions (
     field_name TEXT NOT NULL,
     operator TEXT NOT NULL CHECK (operator IN ('matches', 'equals', 'contains', 'starts_with', 'ends_with', 'not_matches', 'not_equals', 'not_contains')),
     value TEXT NOT NULL,
-    logical_operator TEXT CHECK (logical_operator IN ('and', 'or')),
+    logical_operator TEXT CHECK (logical_operator IN ('and', 'or', 'all', 'any')),
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

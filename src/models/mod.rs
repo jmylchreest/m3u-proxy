@@ -60,6 +60,7 @@ pub struct Filter {
     pub starting_channel_number: i32,
     pub is_inverse: bool,
     pub logical_operator: LogicalOperator,
+    pub condition_tree: Option<String>, // JSON tree structure for nested conditions
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -226,6 +227,7 @@ pub struct FilterCreateRequest {
     pub logical_operator: LogicalOperator,
     pub starting_channel_number: i32,
     pub is_inverse: bool,
+    pub condition_tree: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,6 +237,7 @@ pub struct FilterUpdateRequest {
     pub logical_operator: LogicalOperator,
     pub starting_channel_number: i32,
     pub is_inverse: bool,
+    pub condition_tree: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,6 +261,7 @@ pub struct FilterTestRequest {
     pub conditions: Vec<FilterConditionRequest>,
     pub logical_operator: LogicalOperator,
     pub is_inverse: bool,
+    pub condition_tree: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,6 +313,32 @@ pub enum LogicalOperator {
     And,
     #[serde(rename = "or")]
     Or,
+    #[serde(rename = "all")]
+    All,
+    #[serde(rename = "any")]
+    Any,
+}
+
+impl LogicalOperator {
+    /// Checks if this is an AND-like operator (And or All)
+    pub fn is_and_like(&self) -> bool {
+        matches!(self, LogicalOperator::And | LogicalOperator::All)
+    }
+
+    /// Checks if this is an OR-like operator (Or or Any)
+    pub fn is_or_like(&self) -> bool {
+        matches!(self, LogicalOperator::Or | LogicalOperator::Any)
+    }
+
+    /// Converts old format to new format for consistency
+    pub fn normalize(&self) -> LogicalOperator {
+        match self {
+            LogicalOperator::And => LogicalOperator::All,
+            LogicalOperator::Or => LogicalOperator::Any,
+            LogicalOperator::All => LogicalOperator::All,
+            LogicalOperator::Any => LogicalOperator::Any,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,6 +351,52 @@ pub struct FilterGroup {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdvancedFilter {
     pub root_group: FilterGroup,
+}
+
+// New tree-based condition structures for nested expressions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ConditionNode {
+    #[serde(rename = "condition")]
+    Condition {
+        field: String,
+        operator: FilterOperator,
+        value: String,
+        #[serde(default)]
+        case_sensitive: bool,
+        #[serde(default)]
+        negate: bool,
+    },
+    #[serde(rename = "group")]
+    Group {
+        operator: LogicalOperator,
+        children: Vec<ConditionNode>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConditionTree {
+    pub root: ConditionNode,
+}
+
+impl Filter {
+    /// Check if this filter uses the new tree-based condition structure
+    pub fn uses_condition_tree(&self) -> bool {
+        self.condition_tree.is_some()
+    }
+
+    /// Parse the condition tree from JSON if present
+    pub fn get_condition_tree(&self) -> Option<ConditionTree> {
+        self.condition_tree
+            .as_ref()
+            .and_then(|json| serde_json::from_str(json).ok())
+    }
+
+    /// Set the condition tree by serializing to JSON
+    pub fn set_condition_tree(&mut self, tree: &ConditionTree) -> Result<(), serde_json::Error> {
+        self.condition_tree = Some(serde_json::to_string(tree)?);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

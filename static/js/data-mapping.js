@@ -42,6 +42,11 @@ const ACTION_TYPES = [
 function initializeDataMappingPage() {
   console.log("Initializing data mapping page..."); // Debug log
   loadRules();
+
+  // Setup standard modal close handlers
+  SharedUtils.setupStandardModalCloseHandlers("ruleModal");
+  SharedUtils.setupStandardModalCloseHandlers("logoPickerModal");
+  SharedUtils.setupStandardModalCloseHandlers("sourceModal");
 }
 
 // Check if DOM is already loaded, if so initialize immediately
@@ -328,10 +333,8 @@ function createRule() {
   resetRuleForm();
   document.getElementById("ruleModalTitle").textContent =
     "Create Data Mapping Rule";
-  const modal = document.getElementById("ruleModal");
-  modal.style.display = "flex";
-  modal.style.alignItems = "center";
-  modal.style.justifyContent = "center";
+  loadSourcesForTesting();
+  SharedUtils.showStandardModal("ruleModal");
 }
 
 // Edit existing rule
@@ -343,10 +346,8 @@ function editRule(ruleId) {
   populateRuleForm(rule);
   document.getElementById("ruleModalTitle").textContent =
     "Edit Data Mapping Rule";
-  const modal = document.getElementById("ruleModal");
-  modal.style.display = "flex";
-  modal.style.alignItems = "center";
-  modal.style.justifyContent = "center";
+  loadSourcesForTesting();
+  SharedUtils.showStandardModal("ruleModal");
 }
 
 // Reset rule form
@@ -356,6 +357,7 @@ function resetRuleForm() {
   document.getElementById("conditionsContainer").innerHTML = "";
   document.getElementById("actionsContainer").innerHTML = "";
   document.getElementById("testResults").style.display = "none";
+  document.getElementById("runTestBtn").disabled = true;
   conditionCounter = 0;
   actionCounter = 0;
 
@@ -547,7 +549,7 @@ function renderActionValueInput(actionId, actionData = null) {
   } else {
     return `
             <input type="text" name="action_value_${actionId}" placeholder="Value"
-                   value="${actionData?.value || ""}" ${actionType === "set_logo" ? 'style="display:none"' : ""}>
+                   value="${actionData?.value || ""}" ${actionType === "set_logo" ? 'style="display:none"' : ""} />
         `;
   }
 }
@@ -579,10 +581,7 @@ function openLogoPicker(actionId) {
 
   // Load logos
   loadLogosForPicker();
-  const modal = document.getElementById("logoPickerModal");
-  modal.style.display = "flex";
-  modal.style.alignItems = "center";
-  modal.style.justifyContent = "center";
+  SharedUtils.showStandardModal("logoPickerModal");
 }
 
 // Load logos for picker
@@ -672,7 +671,7 @@ function selectLogo() {
 
 // Close logo picker
 function closeLogoPicker() {
-  document.getElementById("logoPickerModal").style.display = "none";
+  SharedUtils.hideStandardModal("logoPickerModal");
   currentLogoAction = null;
   selectedLogoId = null;
 }
@@ -691,7 +690,66 @@ async function testRule() {
   showSourceSelector();
 }
 
-// Show source selector for testing
+// Load sources for testing in rule modal
+async function loadSourcesForTesting() {
+  try {
+    const response = await fetch("/api/sources");
+    if (!response.ok) throw new Error("Failed to load sources");
+
+    const sources = await response.json();
+    populateTestSourceSelect(sources);
+  } catch (error) {
+    console.error("Error loading sources:", error);
+    showError("Failed to load sources for testing");
+  }
+}
+
+// Populate test source selector
+function populateTestSourceSelect(sources) {
+  const select = document.getElementById("testSourceSelect");
+
+  // Clear existing options except the first one
+  select.innerHTML =
+    '<option value="">Select a source to test against...</option>';
+
+  sources.forEach((source) => {
+    const option = document.createElement("option");
+    option.value = source.id;
+    option.textContent = `${source.name} (${source.channel_count} channels)`;
+    select.appendChild(option);
+  });
+
+  // Enable test button when source is selected
+  select.addEventListener("change", () => {
+    document.getElementById("runTestBtn").disabled = !select.value;
+  });
+}
+
+// Run rule test
+async function runRuleTest() {
+  const sourceId = document.getElementById("testSourceSelect").value;
+  if (!sourceId) {
+    showError("Please select a source to test");
+    return;
+  }
+
+  const testBtn = document.getElementById("runTestBtn");
+  const originalText = testBtn.textContent;
+  testBtn.textContent = "🔄 Testing...";
+  testBtn.disabled = true;
+
+  try {
+    await testRuleWithSource(sourceId);
+  } catch (error) {
+    console.error("Test failed:", error);
+    showError("Failed to run test");
+  } finally {
+    testBtn.textContent = originalText;
+    testBtn.disabled = false;
+  }
+}
+
+// Show source selector for testing (legacy function for backward compatibility)
 async function showSourceSelector() {
   try {
     const response = await fetch("/api/sources");
@@ -699,10 +757,7 @@ async function showSourceSelector() {
 
     const sources = await response.json();
     renderSourceSelector(sources);
-    const modal = document.getElementById("sourceModal");
-    modal.style.display = "flex";
-    modal.style.alignItems = "center";
-    modal.style.justifyContent = "center";
+    SharedUtils.showStandardModal("sourceModal");
   } catch (error) {
     console.error("Error loading sources:", error);
     showError("Failed to load sources for testing");
@@ -727,8 +782,8 @@ function renderSourceSelector(sources) {
   sources.forEach((source) => {
     html += `
             <button class="list-group-item list-group-item-action"
-                    onclick="testRuleWithSource('${source.source.id}')">
-                <strong>${escapeHtml(source.source.name)}</strong>
+                    onclick="testRuleWithSource('${source.id}')">
+                <strong>${escapeHtml(source.name)}</strong>
                 <br>
                 <small class="text-muted">${source.channel_count} channels</small>
             </button>
@@ -741,8 +796,6 @@ function renderSourceSelector(sources) {
 
 // Test rule with selected source
 async function testRuleWithSource(sourceId) {
-  closeSourceModal();
-
   // Collect form data
   const formData = collectRuleFormData();
   if (!formData) return;
@@ -836,7 +889,7 @@ function renderTestChanges(original, mapped) {
 
 // Close source modal
 function closeSourceModal() {
-  document.getElementById("sourceModal").style.display = "none";
+  SharedUtils.hideStandardModal("sourceModal");
 }
 
 // Collect form data
@@ -989,7 +1042,7 @@ async function saveRule() {
 
 // Close rule modal
 function closeRuleModal() {
-  document.getElementById("ruleModal").style.display = "none";
+  SharedUtils.hideStandardModal("ruleModal");
   editingRule = null;
 }
 
@@ -1079,4 +1132,334 @@ function showSuccess(message) {
   } else {
     console.log(message);
   }
+}
+
+// Preview data mapping rules
+async function previewRules() {
+  const button = document.querySelector('[onclick="previewRules()"]');
+  const originalText = button.innerHTML;
+
+  try {
+    button.innerHTML = "🔄 Generating Preview...";
+    button.disabled = true;
+
+    const response = await fetch("/api/data-mapping/preview?view=final");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (data.success) {
+      showPreviewModal(data);
+    } else {
+      showAlert("error", `Preview failed: ${data.message || "Unknown error"}`);
+    }
+  } catch (error) {
+    console.error("Error previewing rules:", error);
+    showAlert("error", `Failed to generate preview: ${error.message}`);
+  } finally {
+    button.innerHTML = originalText;
+    button.disabled = false;
+  }
+}
+
+// Show rule preview modal
+function showPreviewModal(data) {
+  // Use final_channels from backend if available, otherwise aggregate manually
+  const finalChannels = data.final_channels || [];
+
+  // Create modal HTML with improved layout
+  const modalHtml = `
+    <div id="previewModal" class="modal">
+      <div class="modal-content standard-modal preview-modal-large">
+        <div class="modal-header">
+          <h3 class="modal-title">Data Mapping Rules Preview</h3>
+        </div>
+        <div class="modal-body preview-modal-body">
+          <div class="preview-summary mb-3">
+            <div class="d-flex justify-content-between align-items-center">
+              <div class="summary-text">
+                <strong>${data.total_rules}</strong> active rules affecting <strong>${finalChannels.length}</strong> channels
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="showPerRuleView">
+                <label class="form-check-label" for="showPerRuleView">
+                  Show per-rule breakdown
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Final Aggregated View (Default) -->
+          <div id="finalView" class="preview-content">
+            <div class="row">
+              <div class="col-md-6">
+                <h5>Rules Summary</h5>
+                <div class="rules-summary-horizontal">
+                  ${data.rules
+                    .map(
+                      (rule) => `
+                    <div class="rule-summary-card">
+                      <div class="rule-card-header">
+                        <div class="rule-name">${escapeHtml(rule.rule_name)}</div>
+                        <div class="rule-stats">${rule.affected_channels_count} ch</div>
+                      </div>
+                      <div class="rule-details">
+                        ${rule.conditions.length}c • ${rule.actions.length}a
+                      </div>
+                    </div>
+                  `,
+                    )
+                    .join("")}
+                </div>
+              </div>
+
+              <div class="col-md-6">
+                <h5>Final Channel Results (${finalChannels.length})</h5>
+                <div class="channels-list">
+                  ${finalChannels
+                    .map((channel) => {
+                      const hasChanges =
+                        channel.channel_name !==
+                          channel.original_channel_name ||
+                        (channel.tvg_id || "") !==
+                          (channel.original_tvg_id || "") ||
+                        (channel.tvg_name || "") !==
+                          (channel.original_tvg_name || "") ||
+                        (channel.tvg_logo || "") !==
+                          (channel.original_tvg_logo || "") ||
+                        (channel.group_title || "") !==
+                          (channel.original_group_title || "");
+
+                      return `
+                        <div class="channel-item">
+                          <div class="channel-header">
+                            <span class="channel-name">${escapeHtml(channel.channel_name)} • ${escapeHtml(channel.source_name)} • ${channel.tvg_id || "No TVG-ID"}</span>
+                          </div>
+                          ${
+                            hasChanges
+                              ? `
+                            <div class="channel-changes">
+                              ${
+                                channel.channel_name !==
+                                channel.original_channel_name
+                                  ? `
+                                <div class="change-item">
+                                  <span class="field-name">name:</span>
+                                  <span class="change-arrow">→</span>
+                                  <span class="new-value">${escapeHtml(channel.channel_name)}</span>
+                                </div>
+                              `
+                                  : ""
+                              }
+                              ${
+                                (channel.tvg_id || "") !==
+                                (channel.original_tvg_id || "")
+                                  ? `
+                                <div class="change-item">
+                                  <span class="field-name">tvg-id:</span>
+                                  <span class="change-arrow">→</span>
+                                  <span class="new-value">${escapeHtml(channel.tvg_id || "")}</span>
+                                </div>
+                              `
+                                  : ""
+                              }
+                              ${
+                                (channel.tvg_name || "") !==
+                                (channel.original_tvg_name || "")
+                                  ? `
+                                <div class="change-item">
+                                  <span class="field-name">tvg-name:</span>
+                                  <span class="change-arrow">→</span>
+                                  <span class="new-value">${escapeHtml(channel.tvg_name || "")}</span>
+                                </div>
+                              `
+                                  : ""
+                              }
+                              ${
+                                (channel.tvg_logo || "") !==
+                                (channel.original_tvg_logo || "")
+                                  ? `
+                                <div class="change-item">
+                                  <span class="field-name">tvg-logo:</span>
+                                  <span class="change-arrow">→</span>
+                                  <span class="new-value">${escapeHtml(channel.tvg_logo || "")}</span>
+                                </div>
+                              `
+                                  : ""
+                              }
+                              ${
+                                (channel.group_title || "") !==
+                                (channel.original_group_title || "")
+                                  ? `
+                                <div class="change-item">
+                                  <span class="field-name">group:</span>
+                                  <span class="change-arrow">→</span>
+                                  <span class="new-value">${escapeHtml(channel.group_title || "")}</span>
+                                </div>
+                              `
+                                  : ""
+                              }
+                            </div>
+                          `
+                              : `
+                            <div class="text-muted" style="font-size: 0.75rem;">No changes</div>
+                          `
+                          }
+                          <div class="applied-rules">
+                            Rules: ${Array.isArray(channel.applied_rules) ? channel.applied_rules.join(", ") : "None"}
+                          </div>
+                        </div>
+                      `;
+                    })
+                    .join("")}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Per-Rule View (Hidden by default) -->
+          <div id="perRuleView" class="preview-content" style="display: none;">
+            ${data.rules
+              .map(
+                (rule) => `
+              <div class="card mb-3">
+                <div class="card-header">
+                  <h5>${escapeHtml(rule.rule_name)}</h5>
+                  <small class="text-muted">Affects ${rule.affected_channels_count} channels</small>
+                </div>
+                <div class="card-body">
+                  ${rule.rule_description ? `<p class="text-muted">${escapeHtml(rule.rule_description)}</p>` : ""}
+
+                  <div class="row">
+                    <div class="col-md-6">
+                      <h6>Conditions:</h6>
+                      <ul class="list-unstyled">
+                        ${rule.conditions
+                          .map(
+                            (condition) => `
+                          <li class="mb-1">
+                            <code>${condition.field_name}</code>
+                            <span class="badge badge-secondary">${condition.operator}</span>
+                            <code>"${escapeHtml(condition.value)}"</code>
+                          </li>
+                        `,
+                          )
+                          .join("")}
+                      </ul>
+
+                      <h6>Actions:</h6>
+                      <ul class="list-unstyled">
+                        ${rule.actions
+                          .map(
+                            (action) => `
+                          <li class="mb-1">
+                            <span class="badge badge-primary">${action.action_type}</span>
+                            <code>${action.target_field}</code>
+                            ${action.value ? `= "${escapeHtml(action.value)}"` : ""}
+                            ${action.logo_asset_id ? `= Custom Logo` : ""}
+                          </li>
+                        `,
+                          )
+                          .join("")}
+                      </ul>
+                    </div>
+
+                    <div class="col-md-6">
+                      ${
+                        rule.affected_channels_count > 0
+                          ? `
+                        <h6>Affected Channels (${rule.affected_channels_count})</h6>
+                        <div class="channels-list">
+                          ${rule.affected_channels
+                            .map(
+                              (channel) => `
+                            <div class="channel-item">
+                              <div class="channel-header">
+                                <span class="channel-name">${escapeHtml(channel.channel_name)} • ${escapeHtml(channel.source_name)} • ${channel.tvg_id || "No TVG-ID"}</span>
+                              </div>
+                              <div class="channel-changes">
+                                ${channel.actions_preview
+                                  .filter((a) => a.will_change)
+                                  .map(
+                                    (action) => `
+                                  <div class="change-item">
+                                    <span class="field-name">${action.target_field}:</span>
+                                    <span class="change-arrow">→</span>
+                                    <span class="new-value">${escapeHtml(action.new_value || "null")}</span>
+                                  </div>
+                                `,
+                                  )
+                                  .join("")}
+                              </div>
+                            </div>
+                          `,
+                            )
+                            .join("")}
+                        </div>
+                      `
+                          : `<p class="text-muted">No channels match this rule's conditions.</p>`
+                      }
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `,
+              )
+              .join("")}
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="previewModalCloseBtn">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Add modal to DOM
+  document.body.insertAdjacentHTML("beforeend", modalHtml);
+
+  // Add event listener for the toggle
+  document
+    .getElementById("showPerRuleView")
+    .addEventListener("change", function () {
+      const finalView = document.getElementById("finalView");
+      const perRuleView = document.getElementById("perRuleView");
+
+      if (this.checked) {
+        finalView.style.display = "none";
+        perRuleView.style.display = "block";
+      } else {
+        finalView.style.display = "block";
+        perRuleView.style.display = "none";
+      }
+    });
+
+  // Setup close handlers and show modal
+  SharedUtils.setupStandardModalCloseHandlers("previewModal");
+
+  // Add close button functionality to footer
+  document
+    .getElementById("previewModalCloseBtn")
+    .addEventListener("click", () => {
+      closePreviewModal();
+    });
+
+  // Show the modal
+  SharedUtils.showStandardModal("previewModal");
+}
+
+// Close preview modal
+function closePreviewModal() {
+  SharedUtils.hideStandardModal("previewModal");
+  // Remove modal from DOM after hiding
+  setTimeout(() => {
+    const modal = document.getElementById("previewModal");
+    if (modal) {
+      modal.remove();
+    }
+  }, 300);
 }

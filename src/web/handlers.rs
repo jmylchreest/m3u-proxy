@@ -4,28 +4,107 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
+use tracing::{error, info, warn};
 
 use super::AppState;
 use crate::assets::StaticAssets;
+use crate::models::StreamProxy;
+use crate::proxy::ProxyService;
 
+/// Serve proxy M3U files with on-demand generation
+/// This applies the complete pipeline: original data -> data mapping -> filtering -> M3U generation
 pub async fn serve_proxy_m3u(
     Path(ulid): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Response<String>, StatusCode> {
-    // Construct path to M3U file using configured storage path
-    let filename = format!("{}.m3u8", ulid);
-    let file_path = state.config.storage.m3u_path.join(filename);
+    info!("Serving proxy M3U for ULID: {}", ulid);
 
-    // Try to read the M3U file
-    match std::fs::read_to_string(&file_path) {
-        Ok(content) => Ok(Response::builder()
-            .header("content-type", "application/vnd.apple.mpegurl")
-            .header("cache-control", "no-cache")
-            .body(content)
-            .unwrap()),
+    // Find the proxy by ULID
+    let proxy = match state.database.get_proxy_by_ulid(&ulid).await {
+        Ok(proxy) => proxy,
         Err(_) => {
-            // Return 404 if file doesn't exist
-            Err(StatusCode::NOT_FOUND)
+            warn!("Proxy not found for ULID: {}", ulid);
+            return Err(StatusCode::NOT_FOUND);
+        }
+    };
+
+    if !proxy.is_active {
+        warn!("Proxy '{}' is inactive", proxy.name);
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    info!("Found proxy '{}' for ULID: {}", proxy.name, ulid);
+
+    // Check if we have a cached M3U file first
+    let filename = format!("{}.m3u8", ulid);
+    let file_path = state.config.storage.m3u_path.join(&filename);
+
+    // Try to read cached file (if it exists and is recent)
+    if let Ok(content) = std::fs::read_to_string(&file_path) {
+        if let Ok(metadata) = std::fs::metadata(&file_path) {
+            if let Ok(modified) = metadata.modified() {
+                // Check if file is less than 5 minutes old
+                if let Ok(elapsed) = modified.elapsed() {
+                    if elapsed.as_secs() < 300 {
+                        info!("Serving cached M3U for proxy '{}'", proxy.name);
+                        return Ok(Response::builder()
+                            .header("content-type", "application/vnd.apple.mpegurl")
+                            .header("cache-control", "no-cache")
+                            .body(content)
+                            .unwrap());
+                    }
+                }
+            }
+        }
+    }
+
+    // Generate M3U on-demand with full pipeline
+    info!("Generating M3U on-demand for proxy '{}'", proxy.name);
+
+    let proxy_service = ProxyService::new(state.config.storage.clone());
+
+    match proxy_service
+        .generate_proxy(
+            &proxy,
+            &state.database,
+            &state.data_mapping_service,
+            &state.logo_asset_service,
+            &state.config.web.base_url,
+        )
+        .await
+    {
+        Ok(generation) => {
+            info!(
+                "Successfully generated M3U for proxy '{}': {} channels",
+                proxy.name, generation.channel_count
+            );
+
+            // Save to cache for future requests
+            if let Err(e) = proxy_service
+                .save_m3u_file(proxy.id, &generation.m3u_content)
+                .await
+            {
+                warn!("Failed to cache M3U file for proxy '{}': {}", proxy.name, e);
+            }
+
+            // Clean up old versions
+            if let Err(e) = proxy_service.cleanup_old_versions(proxy.id).await {
+                warn!(
+                    "Failed to cleanup old versions for proxy '{}': {}",
+                    proxy.name, e
+                );
+            }
+
+            // Return the generated content
+            Ok(Response::builder()
+                .header("content-type", "application/vnd.apple.mpegurl")
+                .header("cache-control", "no-cache")
+                .body(generation.m3u_content)
+                .unwrap())
+        }
+        Err(e) => {
+            error!("Failed to generate M3U for proxy '{}': {}", proxy.name, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }
@@ -95,6 +174,10 @@ pub async fn logo_assets_page() -> impl IntoResponse {
 
 pub async fn relay_page() -> impl IntoResponse {
     serve_embedded_asset("static/html/relay.html").await
+}
+
+pub async fn epg_sources_page() -> impl IntoResponse {
+    serve_embedded_asset("static/html/epg-sources.html").await
 }
 
 pub async fn serve_static_asset(Path(path): Path<String>) -> impl IntoResponse {

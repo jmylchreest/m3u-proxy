@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use super::AppState;
 use crate::models::*;
+use crate::proxy::generator::ProxyGenerator;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -319,6 +320,66 @@ pub async fn delete_proxy(
     Err(StatusCode::NOT_IMPLEMENTED)
 }
 
+pub async fn regenerate_proxy(
+    Path(proxy_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    info!("Regenerating proxy {}", proxy_id);
+
+    // Get the proxy
+    let proxy = match state.database.get_stream_proxy(proxy_id).await {
+        Ok(Some(proxy)) => proxy,
+        Ok(None) => {
+            error!("Proxy {} not found", proxy_id);
+            return Err(StatusCode::NOT_FOUND);
+        }
+        Err(e) => {
+            error!("Failed to get proxy {}: {}", proxy_id, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    // Use the existing proxy generator to regenerate with current data mapping rules
+    let proxy_generator = ProxyGenerator::new(state.config.storage.clone());
+    
+    match proxy_generator
+        .generate(
+            &proxy,
+            &state.database,
+            &state.data_mapping_service,
+            &state.logo_asset_service,
+            &state.config.web.base_url,
+        )
+        .await
+    {
+        Ok(generation) => {
+            // Save the new M3U file
+            match proxy_generator.save_m3u_file(proxy.id, &generation.m3u_content).await {
+                Ok(_) => {
+                    info!(
+                        "Successfully regenerated proxy '{}' with {} channels",
+                        proxy.name, generation.channel_count
+                    );
+                    Ok(Json(serde_json::json!({
+                        "success": true,
+                        "message": format!("Proxy '{}' regenerated successfully", proxy.name),
+                        "channel_count": generation.channel_count,
+                        "regenerated_at": generation.created_at
+                    })))
+                }
+                Err(e) => {
+                    error!("Failed to save regenerated M3U for proxy {}: {}", proxy_id, e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to regenerate proxy {}: {}", proxy_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 // Filters API
 pub async fn list_filters(
     State(state): State<AppState>,
@@ -573,7 +634,13 @@ pub async fn test_data_mapping_rule(
     }
 
     let mut engine = DataMappingEngine::new();
-    match engine.test_mapping_rule(channels, conditions, actions, logo_assets) {
+    match engine.test_mapping_rule(
+        channels,
+        conditions,
+        actions,
+        logo_assets,
+        &state.config.web.base_url,
+    ) {
         Ok(mapped_channels) => {
             let test_channels: Vec<crate::models::data_mapping::DataMappingTestChannel> =
                 mapped_channels
@@ -636,12 +703,334 @@ pub async fn test_data_mapping_rule(
     }
 }
 
+pub async fn preview_data_mapping(
+    State(state): State<AppState>,
+    Path(source_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    info!("Previewing data mapping for source {}", source_id);
+
+    let source_uuid = match uuid::Uuid::parse_str(&source_id) {
+        Ok(uuid) => uuid,
+        Err(_) => {
+            error!("Invalid source ID format: {}", source_id);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    // Get source
+    let source = match state.database.get_stream_source(source_uuid).await {
+        Ok(Some(source)) => source,
+        Ok(None) => {
+            error!("Source {} not found", source_uuid);
+            return Err(StatusCode::NOT_FOUND);
+        }
+        Err(e) => {
+            error!("Failed to get source {}: {}", source_uuid, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    // Get original channels
+    let channels = match state.database.get_source_channels(source_uuid).await {
+        Ok(channels) => channels,
+        Err(e) => {
+            error!("Failed to get channels for source {}: {}", source_uuid, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    if channels.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "No channels found for preview",
+            "original_count": 0,
+            "mapped_count": 0,
+            "preview_channels": []
+        })));
+    }
+
+    // Apply data mapping for preview (doesn't save to database)
+    let mapped_channels = match state
+        .data_mapping_service
+        .apply_mapping_for_proxy(
+            channels.clone(),
+            source_uuid,
+            &state.logo_asset_service,
+            &state.config.web.base_url,
+        )
+        .await
+    {
+        Ok(mapped) => mapped,
+        Err(e) => {
+            error!("Data mapping failed for source '{}': {}", source.name, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    // Return preview data
+    let preview_channels: Vec<_> = mapped_channels.iter().take(10).collect();
+
+    let result = serde_json::json!({
+        "success": true,
+        "message": "Data mapping preview completed",
+        "source_name": source.name,
+        "original_count": channels.len(),
+        "mapped_count": mapped_channels.len(),
+        "preview_channels": preview_channels
+    });
+
+    info!(
+        "Data mapping preview completed for source '{}': {} original -> {} mapped channels",
+        source.name,
+        channels.len(),
+        mapped_channels.len()
+    );
+
+    Ok(Json(result))
+}
+
+pub async fn preview_data_mapping_rules(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    info!("Generating data mapping rule preview");
+
+    let view_type = params.get("view").map(|s| s.as_str()).unwrap_or("final");
+
+    // Get all active rules
+    let rules = match state.data_mapping_service.get_all_rules().await {
+        Ok(rules) => rules,
+        Err(e) => {
+            error!("Failed to load data mapping rules for preview: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let active_rules: Vec<_> = rules
+        .into_iter()
+        .filter(|rule| rule.rule.is_active)
+        .collect();
+
+    if active_rules.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "No active data mapping rules found",
+            "rules": [],
+            "total_rules": 0,
+            "total_affected_channels": 0,
+            "final_channels": []
+        })));
+    }
+
+    // Get all sources and their channels
+    let sources = match state.database.list_stream_sources().await {
+        Ok(sources) => sources,
+        Err(e) => {
+            error!("Failed to list sources for preview: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let mut rule_previews = Vec::new();
+    let mut total_affected_channels = 0;
+    let mut final_channel_map: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+
+    for rule_with_details in active_rules {
+        let mut rule_affected_channels = 0;
+        let mut affected_channels = Vec::new();
+
+        for source in &sources {
+            if !source.is_active {
+                continue;
+            }
+
+            // Get channels for this source
+            let channels = match state.database.get_source_channels(source.id).await {
+                Ok(channels) => channels,
+                Err(e) => {
+                    error!(
+                        "Failed to get channels for source {} during preview: {}",
+                        source.id, e
+                    );
+                    continue;
+                }
+            };
+
+            // Test each channel against this rule's conditions
+            for channel in channels {
+                let mut engine = crate::data_mapping::DataMappingEngine::new();
+
+                if let Ok(matches) =
+                    engine.evaluate_rule_conditions(&channel, &rule_with_details.conditions)
+                {
+                    if matches {
+                        rule_affected_channels += 1;
+
+                        // Preview what actions would be applied
+                        let mut action_previews = Vec::new();
+                        let mut final_values = std::collections::HashMap::new();
+
+                        // Initialize with current values
+                        final_values
+                            .insert("channel_name".to_string(), channel.channel_name.clone());
+                        final_values.insert(
+                            "tvg_id".to_string(),
+                            channel.tvg_id.clone().unwrap_or_default(),
+                        );
+                        final_values.insert(
+                            "tvg_name".to_string(),
+                            channel.tvg_name.clone().unwrap_or_default(),
+                        );
+                        final_values.insert(
+                            "tvg_logo".to_string(),
+                            channel.tvg_logo.clone().unwrap_or_default(),
+                        );
+                        final_values.insert(
+                            "group_title".to_string(),
+                            channel.group_title.clone().unwrap_or_default(),
+                        );
+
+                        for action in &rule_with_details.actions {
+                            let current_value = match action.target_field.as_str() {
+                                "channel_name" => Some(channel.channel_name.clone()),
+                                "tvg_id" => channel.tvg_id.clone(),
+                                "tvg_name" => channel.tvg_name.clone(),
+                                "tvg_logo" => channel.tvg_logo.clone(),
+                                "group_title" => channel.group_title.clone(),
+                                _ => None,
+                            };
+
+                            let new_value = match &action.action_type {
+                                crate::models::data_mapping::DataMappingActionType::SetValue => {
+                                    action.value.clone()
+                                },
+                                crate::models::data_mapping::DataMappingActionType::SetDefaultIfEmpty => {
+                                    if current_value.is_none() || current_value.as_ref().map_or(true, |s| s.is_empty()) {
+                                        action.value.clone()
+                                    } else {
+                                        current_value.clone()
+                                    }
+                                },
+                                crate::models::data_mapping::DataMappingActionType::SetLogo => {
+                                    if let Some(logo_id) = action.logo_asset_id {
+                                        Some(crate::utils::generate_logo_url(&state.config.web.base_url, logo_id))
+                                    } else {
+                                        current_value.clone()
+                                    }
+                                },
+                                _ => current_value.clone(),
+                            };
+
+                            // Update final values for aggregated view
+                            if let Some(ref new_val) = new_value {
+                                final_values.insert(action.target_field.clone(), new_val.clone());
+                            }
+
+                            action_previews.push(serde_json::json!({
+                                "action_type": action.action_type,
+                                "target_field": action.target_field,
+                                "current_value": current_value,
+                                "new_value": new_value,
+                                "will_change": current_value != new_value
+                            }));
+                        }
+
+                        // Update final channel map for aggregated view
+                        let channel_key = format!("{}:{}", source.id, channel.id);
+                        if let Some(existing) = final_channel_map.get_mut(&channel_key) {
+                            // Update with new values and add rule
+                            let existing_obj = existing.as_object_mut().unwrap();
+                            for (field, value) in &final_values {
+                                existing_obj.insert(
+                                    field.clone(),
+                                    serde_json::Value::String(value.clone()),
+                                );
+                            }
+                            if let Some(rules_array) = existing_obj.get_mut("applied_rules") {
+                                rules_array.as_array_mut().unwrap().push(
+                                    serde_json::Value::String(rule_with_details.rule.name.clone()),
+                                );
+                            }
+                        } else {
+                            final_channel_map.insert(channel_key, serde_json::json!({
+                                "channel_id": channel.id,
+                                "channel_name": final_values.get("channel_name").unwrap_or(&channel.channel_name),
+                                "tvg_id": final_values.get("tvg_id").unwrap_or(&"".to_string()),
+                                "tvg_name": final_values.get("tvg_name").unwrap_or(&"".to_string()),
+                                "tvg_logo": final_values.get("tvg_logo").unwrap_or(&"".to_string()),
+                                "group_title": final_values.get("group_title").unwrap_or(&"".to_string()),
+                                "source_id": source.id,
+                                "source_name": source.name,
+                                "applied_rules": vec![rule_with_details.rule.name.clone()],
+                                "original_channel_name": channel.channel_name,
+                                "original_tvg_id": channel.tvg_id,
+                                "original_tvg_name": channel.tvg_name,
+                                "original_tvg_logo": channel.tvg_logo,
+                                "original_group_title": channel.group_title
+                            }));
+                        }
+
+                        affected_channels.push(serde_json::json!({
+                            "channel_id": channel.id,
+                            "channel_name": channel.channel_name,
+                            "tvg_id": channel.tvg_id,
+                            "tvg_name": channel.tvg_name,
+                            "source_id": source.id,
+                            "source_name": source.name,
+                            "actions_preview": action_previews
+                        }));
+                    }
+                }
+            }
+        }
+
+        total_affected_channels += rule_affected_channels;
+
+        rule_previews.push(serde_json::json!({
+            "rule_id": rule_with_details.rule.id,
+            "rule_name": rule_with_details.rule.name,
+            "rule_description": rule_with_details.rule.description,
+            "affected_channels_count": rule_affected_channels,
+            "affected_channels": affected_channels,
+            "conditions": rule_with_details.conditions,
+            "actions": rule_with_details.actions
+        }));
+    }
+
+    // Convert final channel map to array
+    let final_channels: Vec<_> = final_channel_map.into_values().collect();
+
+    let result = serde_json::json!({
+        "success": true,
+        "message": "Data mapping rules preview generated",
+        "rules": rule_previews,
+        "total_rules": rule_previews.len(),
+        "total_affected_channels": total_affected_channels,
+        "final_channels": final_channels,
+        "view_type": view_type
+    });
+
+    info!(
+        "Data mapping preview completed: {} rules, {} total affected channels, {} final channels",
+        rule_previews.len(),
+        total_affected_channels,
+        final_channels.len()
+    );
+
+    Ok(Json(result))
+}
+
 // Logo Assets API
 pub async fn list_logo_assets(
     Query(params): Query<crate::models::logo_asset::LogoAssetListRequest>,
     State(state): State<AppState>,
 ) -> Result<Json<crate::models::logo_asset::LogoAssetListResponse>, StatusCode> {
-    match state.logo_asset_service.list_assets(params).await {
+    match state
+        .logo_asset_service
+        .list_assets(params, &state.config.web.base_url)
+        .await
+    {
         Ok(response) => Ok(Json(response)),
         Err(e) => {
             error!("Failed to list logo assets: {}", e);
@@ -732,32 +1121,101 @@ pub async fn upload_logo_asset(
 
 pub async fn get_logo_asset(
     Path(id): Path<Uuid>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> Result<(axum::http::HeaderMap, Vec<u8>), StatusCode> {
-    match state.logo_asset_service.get_asset(id).await {
-        Ok(asset) => match state.logo_asset_storage.get_file(&asset.file_path).await {
-            Ok(file_data) => {
-                let mut headers = axum::http::HeaderMap::new();
-                headers.insert(
-                    axum::http::header::CONTENT_TYPE,
-                    asset
-                        .mime_type
-                        .parse()
-                        .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
-                );
-                headers.insert(
-                    axum::http::header::CACHE_CONTROL,
-                    "public, max-age=86400".parse().unwrap(),
-                );
-                Ok((headers, file_data))
-            }
-            Err(e) => {
-                error!("Failed to read logo file {}: {}", asset.file_path, e);
-                Err(StatusCode::NOT_FOUND)
-            }
-        },
+    let requested_format = params.get("format").map(|s| s.as_str());
+
+    // Get the main asset first
+    let main_asset = match state.logo_asset_service.get_asset(id).await {
+        Ok(asset) => asset,
         Err(e) => {
             error!("Failed to get logo asset {}: {}", id, e);
+            return Err(StatusCode::NOT_FOUND);
+        }
+    };
+
+    // If a specific format is requested, try to find that format
+    if let Some(format) = requested_format {
+        // First check if the main asset matches the requested format
+        if asset_matches_format(&main_asset, format) {
+            return serve_asset(&state, main_asset).await;
+        }
+
+        // Look for linked assets with the requested format
+        if let Ok(linked_assets) = state.logo_asset_service.get_linked_assets(id).await {
+            for linked_asset in linked_assets {
+                if asset_matches_format(&linked_asset, format) {
+                    return serve_asset(&state, linked_asset).await;
+                }
+            }
+        }
+
+        // Requested format not found
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    // No specific format requested - use preference order: png > svg > webp > original
+    let preference_order = ["png", "svg", "webp"];
+
+    // Get all assets (main + linked)
+    let mut all_assets = vec![main_asset.clone()];
+    if let Ok(linked_assets) = state.logo_asset_service.get_linked_assets(id).await {
+        for linked_asset in linked_assets {
+            all_assets.push(linked_asset);
+        }
+    }
+
+    // Try preferred formats in order
+    for preferred_format in preference_order {
+        for asset in &all_assets {
+            if asset_matches_format(asset, preferred_format) {
+                return serve_asset(&state, asset.clone()).await;
+            }
+        }
+    }
+
+    // Fall back to original asset
+    serve_asset(&state, main_asset).await
+}
+
+fn asset_matches_format(asset: &crate::models::logo_asset::LogoAsset, format: &str) -> bool {
+    match format.to_lowercase().as_str() {
+        "png" => asset.mime_type.contains("png") || asset.file_name.ends_with(".png"),
+        "jpg" | "jpeg" => {
+            asset.mime_type.contains("jpeg")
+                || asset.file_name.ends_with(".jpg")
+                || asset.file_name.ends_with(".jpeg")
+        }
+        "svg" => asset.mime_type.contains("svg") || asset.file_name.ends_with(".svg"),
+        "webp" => asset.mime_type.contains("webp") || asset.file_name.ends_with(".webp"),
+        "gif" => asset.mime_type.contains("gif") || asset.file_name.ends_with(".gif"),
+        _ => false,
+    }
+}
+
+async fn serve_asset(
+    state: &AppState,
+    asset: crate::models::logo_asset::LogoAsset,
+) -> Result<(axum::http::HeaderMap, Vec<u8>), StatusCode> {
+    match state.logo_asset_storage.get_file(&asset.file_path).await {
+        Ok(file_data) => {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                asset
+                    .mime_type
+                    .parse()
+                    .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
+            );
+            headers.insert(
+                axum::http::header::CACHE_CONTROL,
+                "public, max-age=86400".parse().unwrap(),
+            );
+            Ok((headers, file_data))
+        }
+        Err(e) => {
+            error!("Failed to read logo file {}: {}", asset.file_path, e);
             Err(StatusCode::NOT_FOUND)
         }
     }
@@ -839,7 +1297,11 @@ pub async fn search_logo_assets(
     Query(params): Query<crate::models::logo_asset::LogoAssetSearchRequest>,
     State(state): State<AppState>,
 ) -> Result<Json<crate::models::logo_asset::LogoAssetSearchResult>, StatusCode> {
-    match state.logo_asset_service.search_assets(params).await {
+    match state
+        .logo_asset_service
+        .search_assets(params, &state.config.web.base_url)
+        .await
+    {
         Ok(result) => Ok(Json(result)),
         Err(e) => {
             error!("Failed to search logo assets: {}", e);

@@ -1,22 +1,21 @@
 // Shared Utilities for M3U Proxy
 class SharedUtils {
-  
   // DOM Utilities
   static escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
+    if (!text) return "";
+    const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
   }
 
   // File System Utilities
   static formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    if (!bytes) return '';
+    if (bytes === 0) return "0 Bytes";
+    if (!bytes) return "";
     const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   }
 
   // Date/Time Utilities
@@ -44,6 +43,55 @@ class SharedUtils {
     if (diffHours > 0) return `in ${diffHours}h`;
     if (diffMins > 5) return `in ${diffMins}m`;
     return "Soon";
+  }
+
+  // Modal Utilities
+  static showStandardModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) {
+      modal.style.display = "flex";
+      modal.classList.add("show");
+      document.body.style.overflow = "hidden"; // Prevent background scrolling
+    }
+  }
+
+  static hideStandardModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) {
+      modal.classList.remove("show");
+      // Use timeout to allow fade animation
+      setTimeout(() => {
+        modal.style.display = "none";
+        document.body.style.overflow = ""; // Restore background scrolling
+      }, 300);
+    }
+  }
+
+  static setupStandardModalCloseHandlers(modalId) {
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+
+    // Close on backdrop click
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) {
+        SharedUtils.hideStandardModal(modalId);
+      }
+    });
+
+    // Close on Escape key
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && modal.classList.contains("show")) {
+        SharedUtils.hideStandardModal(modalId);
+      }
+    });
+
+    // Setup close button handlers
+    const closeButtons = modal.querySelectorAll(".modal-close");
+    closeButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        SharedUtils.hideStandardModal(modalId);
+      });
+    });
   }
 
   static parseDateTime(dateStr) {
@@ -106,7 +154,7 @@ class SharedUtils {
     if (loadingElement) {
       loadingElement.style.display = "block";
     }
-    
+
     if (tableId) {
       const tableElement = document.getElementById(tableId);
       if (tableElement) {
@@ -120,7 +168,7 @@ class SharedUtils {
     if (loadingElement) {
       loadingElement.style.display = "none";
     }
-    
+
     if (tableId) {
       const tableElement = document.getElementById(tableId);
       if (tableElement) {
@@ -157,7 +205,7 @@ class SharedUtils {
   }
 
   static createCacheBustingUrl(url) {
-    const separator = url.includes('?') ? '&' : '?';
+    const separator = url.includes("?") ? "&" : "?";
     return `${url}${separator}_t=${new Date().getTime()}`;
   }
 

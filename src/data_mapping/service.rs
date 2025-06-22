@@ -1,13 +1,16 @@
-use crate::models::data_mapping::*;
-use crate::models::{Channel, logo_asset::{LogoAsset, LogoAssetListRequest}};
 use crate::data_mapping::engine::DataMappingEngine;
 use crate::logo_assets::LogoAssetService;
+use crate::models::data_mapping::*;
+use crate::models::{
+    logo_asset::{LogoAsset, LogoAssetListRequest},
+    Channel,
+};
 use crate::utils;
-use sqlx::{Pool, Sqlite, Row};
-use uuid::Uuid;
 use chrono::Utc;
+use sqlx::{Pool, Row, Sqlite};
 use std::collections::HashMap;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct DataMappingService {
@@ -19,12 +22,15 @@ impl DataMappingService {
         Self { pool }
     }
 
-    pub async fn create_rule(&self, request: DataMappingRuleCreateRequest) -> Result<DataMappingRuleWithDetails, sqlx::Error> {
+    pub async fn create_rule(
+        &self,
+        request: DataMappingRuleCreateRequest,
+    ) -> Result<DataMappingRuleWithDetails, sqlx::Error> {
         let rule_id = Uuid::new_v4();
         let now = Utc::now();
 
         let mut tx = self.pool.begin().await?;
-        
+
         // Insert rule
         sqlx::query(
             r#"
@@ -44,8 +50,11 @@ impl DataMappingService {
         for (index, condition) in request.conditions.iter().enumerate() {
             let condition_id = Uuid::new_v4();
             let operator_str = format!("{:?}", condition.operator).to_lowercase();
-            let logical_operator_str = condition.logical_operator.as_ref().map(|op| format!("{:?}", op).to_lowercase());
-            
+            let logical_operator_str = condition
+                .logical_operator
+                .as_ref()
+                .map(|op| format!("{:?}", op).to_lowercase());
+
             sqlx::query(
                 r#"
                 INSERT INTO data_mapping_conditions (id, rule_id, field_name, operator, value, logical_operator, sort_order, created_at)
@@ -69,12 +78,12 @@ impl DataMappingService {
             let action_id = Uuid::new_v4();
             let action_type_str = match action.action_type {
                 DataMappingActionType::SetValue => "set_value",
-                DataMappingActionType::SetDefaultIfEmpty => "set_default_if_empty", 
+                DataMappingActionType::SetDefaultIfEmpty => "set_default_if_empty",
                 DataMappingActionType::SetLogo => "set_logo",
                 DataMappingActionType::SetLabel => "set_label",
                 DataMappingActionType::TransformValue => "transform_value",
             };
-            
+
             sqlx::query(
                 r#"
                 INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, label_key, label_value, sort_order, created_at)
@@ -100,16 +109,20 @@ impl DataMappingService {
         self.get_rule_with_details(rule_id).await
     }
 
-    pub async fn update_rule(&self, rule_id: Uuid, request: DataMappingRuleUpdateRequest) -> Result<DataMappingRuleWithDetails, sqlx::Error> {
+    pub async fn update_rule(
+        &self,
+        rule_id: Uuid,
+        request: DataMappingRuleUpdateRequest,
+    ) -> Result<DataMappingRuleWithDetails, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
         // Update rule
         sqlx::query(
             r#"
-            UPDATE data_mapping_rules 
+            UPDATE data_mapping_rules
             SET name = ?, description = ?, is_active = ?, updated_at = ?
             WHERE id = ?
-            "#
+            "#,
         )
         .bind(&request.name)
         .bind(&request.description)
@@ -136,8 +149,11 @@ impl DataMappingService {
         for (index, condition) in request.conditions.iter().enumerate() {
             let condition_id = Uuid::new_v4();
             let operator_str = format!("{:?}", condition.operator).to_lowercase();
-            let logical_operator_str = condition.logical_operator.as_ref().map(|op| format!("{:?}", op).to_lowercase());
-            
+            let logical_operator_str = condition
+                .logical_operator
+                .as_ref()
+                .map(|op| format!("{:?}", op).to_lowercase());
+
             sqlx::query(
                 r#"
                 INSERT INTO data_mapping_conditions (id, rule_id, field_name, operator, value, logical_operator, sort_order, created_at)
@@ -161,12 +177,12 @@ impl DataMappingService {
             let action_id = Uuid::new_v4();
             let action_type_str = match action.action_type {
                 DataMappingActionType::SetValue => "set_value",
-                DataMappingActionType::SetDefaultIfEmpty => "set_default_if_empty", 
+                DataMappingActionType::SetDefaultIfEmpty => "set_default_if_empty",
                 DataMappingActionType::SetLogo => "set_logo",
                 DataMappingActionType::SetLabel => "set_label",
                 DataMappingActionType::TransformValue => "transform_value",
             };
-            
+
             sqlx::query(
                 r#"
                 INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, label_key, label_value, sort_order, created_at)
@@ -198,7 +214,7 @@ impl DataMappingService {
             SELECT id, name, description, sort_order, is_active, created_at, updated_at
             FROM data_mapping_rules
             ORDER BY sort_order
-            "#
+            "#,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -206,11 +222,11 @@ impl DataMappingService {
         let mut rules_with_details = Vec::new();
         for row in rows {
             let rule_id_str: String = row.get("id");
-            let rule_id = Uuid::parse_str(&rule_id_str).map_err(|e| sqlx::Error::ColumnDecode { 
-                index: "id".to_string(), 
-                source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)) 
+            let rule_id = Uuid::parse_str(&rule_id_str).map_err(|e| sqlx::Error::ColumnDecode {
+                index: "id".to_string(),
+                source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             })?;
-            
+
             let rule = DataMappingRule {
                 id: rule_id,
                 name: row.get("name"),
@@ -234,7 +250,10 @@ impl DataMappingService {
         Ok(rules_with_details)
     }
 
-    pub async fn get_rule_with_details(&self, rule_id: Uuid) -> Result<DataMappingRuleWithDetails, sqlx::Error> {
+    pub async fn get_rule_with_details(
+        &self,
+        rule_id: Uuid,
+    ) -> Result<DataMappingRuleWithDetails, sqlx::Error> {
         let row = sqlx::query(
             "SELECT id, name, description, sort_order, is_active, created_at, updated_at FROM data_mapping_rules WHERE id = ?"
         )
@@ -262,7 +281,10 @@ impl DataMappingService {
         })
     }
 
-    pub async fn get_rule_conditions(&self, rule_id: Uuid) -> Result<Vec<DataMappingCondition>, sqlx::Error> {
+    pub async fn get_rule_conditions(
+        &self,
+        rule_id: Uuid,
+    ) -> Result<Vec<DataMappingCondition>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT id, rule_id, field_name, operator, value, logical_operator, sort_order, created_at
@@ -289,17 +311,20 @@ impl DataMappingService {
                 _ => crate::models::FilterOperator::Equals,
             };
 
-            let logical_operator = row.get::<Option<String>, _>("logical_operator").map(|op| match op.as_str() {
-                "and" => crate::models::LogicalOperator::And,
-                "or" => crate::models::LogicalOperator::Or,
-                _ => crate::models::LogicalOperator::And,
-            });
+            let logical_operator =
+                row.get::<Option<String>, _>("logical_operator")
+                    .map(|op| match op.as_str() {
+                        "and" => crate::models::LogicalOperator::And,
+                        "or" => crate::models::LogicalOperator::Or,
+                        _ => crate::models::LogicalOperator::And,
+                    });
 
             let condition_id_str: String = row.get("id");
-            let condition_id = Uuid::parse_str(&condition_id_str).map_err(|e| sqlx::Error::ColumnDecode { 
-                index: "id".to_string(), 
-                source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)) 
-            })?;
+            let condition_id =
+                Uuid::parse_str(&condition_id_str).map_err(|e| sqlx::Error::ColumnDecode {
+                    index: "id".to_string(),
+                    source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                })?;
 
             conditions.push(DataMappingCondition {
                 id: condition_id,
@@ -316,7 +341,10 @@ impl DataMappingService {
         Ok(conditions)
     }
 
-    pub async fn get_rule_actions(&self, rule_id: Uuid) -> Result<Vec<DataMappingAction>, sqlx::Error> {
+    pub async fn get_rule_actions(
+        &self,
+        rule_id: Uuid,
+    ) -> Result<Vec<DataMappingAction>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT id, rule_id, action_type, target_field, value, logo_asset_id, label_key, label_value, sort_order, created_at
@@ -340,19 +368,21 @@ impl DataMappingService {
                 _ => DataMappingActionType::SetValue,
             };
 
-            let logo_asset_id = row.get::<Option<String>, _>("logo_asset_id")
+            let logo_asset_id = row
+                .get::<Option<String>, _>("logo_asset_id")
                 .map(|id| Uuid::parse_str(&id))
                 .transpose()
-                .map_err(|e| sqlx::Error::ColumnDecode { 
-                    index: "logo_asset_id".to_string(), 
-                    source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)) 
+                .map_err(|e| sqlx::Error::ColumnDecode {
+                    index: "logo_asset_id".to_string(),
+                    source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
                 })?;
 
             let action_id_str: String = row.get("id");
-            let action_id = Uuid::parse_str(&action_id_str).map_err(|e| sqlx::Error::ColumnDecode { 
-                index: "id".to_string(), 
-                source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)) 
-            })?;
+            let action_id =
+                Uuid::parse_str(&action_id_str).map_err(|e| sqlx::Error::ColumnDecode {
+                    index: "id".to_string(),
+                    source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                })?;
 
             actions.push(DataMappingAction {
                 id: action_id,
@@ -371,7 +401,6 @@ impl DataMappingService {
         Ok(actions)
     }
 
-
     pub async fn delete_rule(&self, rule_id: Uuid) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM data_mapping_rules WHERE id = ?")
             .bind(rule_id.to_string())
@@ -386,7 +415,7 @@ impl DataMappingService {
 
         for (rule_id, sort_order) in rule_orders {
             sqlx::query(
-                "UPDATE data_mapping_rules SET sort_order = ?, updated_at = ? WHERE id = ?"
+                "UPDATE data_mapping_rules SET sort_order = ?, updated_at = ? WHERE id = ?",
             )
             .bind(sort_order)
             .bind(Utc::now().to_rfc3339())
@@ -399,21 +428,30 @@ impl DataMappingService {
         Ok(())
     }
 
-    /// Apply data mapping rules to channels during ingestion pipeline
-    pub async fn apply_mapping_to_channels(
+    /// Apply data mapping rules to channels for proxy generation.
+    /// This method creates transformed channels without modifying the original data stored in the database.
+    /// The original ingested data remains unchanged, and transformations are only applied during proxy generation.
+    pub async fn apply_mapping_for_proxy(
         &self,
         channels: Vec<Channel>,
         source_id: Uuid,
         logo_service: &LogoAssetService,
-    ) -> Result<Vec<Channel>, Box<dyn std::error::Error>> {
-        info!("Starting data mapping for source {} with {} channels", source_id, channels.len());
-        
+        base_url: &str,
+    ) -> Result<Vec<Channel>, anyhow::Error> {
+        info!(
+            "Applying data mapping for proxy generation - source {} with {} channels",
+            source_id,
+            channels.len()
+        );
+
         // Get all active rules ordered by sort_order
         let rules = match self.get_all_rules().await {
             Ok(rules) => rules,
             Err(e) => {
                 error!("Failed to load data mapping rules: {}", e);
-                warn!("Skipping data mapping due to rule loading error, returning original channels");
+                warn!(
+                    "Skipping data mapping due to rule loading error, returning original channels"
+                );
                 return Ok(channels);
             }
         };
@@ -424,22 +462,29 @@ impl DataMappingService {
         }
 
         // Load logo assets
-        let logo_assets = match self.load_logo_assets(logo_service).await {
+        let logo_assets = match self.load_logo_assets(logo_service, base_url).await {
             Ok(assets) => assets,
             Err(e) => {
-                warn!("Failed to load logo assets: {}, continuing without logos", e);
+                warn!(
+                    "Failed to load logo assets: {}, continuing without logos",
+                    e
+                );
                 HashMap::new()
             }
         };
 
-        // Apply mapping rules
+        // Apply mapping rules - this creates transformed channels without affecting originals
         let mut engine = DataMappingEngine::new();
-        match engine.apply_mapping_rules(channels.clone(), rules, logo_assets, source_id) {
+        match engine.apply_mapping_rules(channels.clone(), rules, logo_assets, source_id, base_url)
+        {
             Ok(mapped_channels) => {
                 let result_channels = DataMappingEngine::mapped_to_channels(mapped_channels);
-                info!("Data mapping completed successfully for source {}", source_id);
+                info!(
+                    "Data mapping for proxy generation completed successfully for source {}",
+                    source_id
+                );
                 Ok(result_channels)
-            },
+            }
             Err(e) => {
                 error!("Data mapping failed for source {}: {}", source_id, e);
                 warn!("Returning original channels due to mapping error");
@@ -453,13 +498,19 @@ impl DataMappingService {
     async fn load_logo_assets(
         &self,
         logo_service: &LogoAssetService,
-    ) -> Result<HashMap<Uuid, LogoAsset>, Box<dyn std::error::Error>> {
-        let logo_list = logo_service.list_assets(LogoAssetListRequest {
-            search: None,
-            asset_type: None,
-            page: Some(1),
-            limit: Some(1000), // Get a reasonable number of logos
-        }).await?;
+        base_url: &str,
+    ) -> Result<HashMap<Uuid, LogoAsset>, anyhow::Error> {
+        let logo_list = logo_service
+            .list_assets(
+                LogoAssetListRequest {
+                    search: None,
+                    asset_type: None,
+                    page: Some(1),
+                    limit: Some(1000), // Get a reasonable number of logos
+                },
+                base_url,
+            )
+            .await?;
 
         let mut logo_map = HashMap::new();
         for logo_with_url in logo_list.assets {

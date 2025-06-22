@@ -55,7 +55,7 @@ impl super::Database {
     }
     pub async fn list_filters(&self) -> Result<Vec<Filter>> {
         let rows = sqlx::query(
-            "SELECT id, name, starting_channel_number, is_inverse, logical_operator, created_at, updated_at
+            "SELECT id, name, starting_channel_number, is_inverse, logical_operator, condition_tree, created_at, updated_at
              FROM filters
              ORDER BY name",
         )
@@ -70,6 +70,7 @@ impl super::Database {
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
                 logical_operator: row.try_get("logical_operator")?,
+                condition_tree: row.try_get("condition_tree")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
             };
@@ -86,14 +87,15 @@ impl super::Database {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "INSERT INTO filters (id, name, starting_channel_number, is_inverse, logical_operator)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO filters (id, name, starting_channel_number, is_inverse, logical_operator, condition_tree)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&request.name)
         .bind(request.starting_channel_number)
         .bind(request.is_inverse)
         .bind(&request.logical_operator)
+        .bind(&request.condition_tree)
         .execute(&mut *tx)
         .await?;
 
@@ -123,7 +125,7 @@ impl super::Database {
 
     pub async fn get_filter(&self, id: Uuid) -> Result<Option<Filter>> {
         let row = sqlx::query(
-            "SELECT id, name, starting_channel_number, is_inverse, logical_operator, created_at, updated_at
+            "SELECT id, name, starting_channel_number, is_inverse, logical_operator, condition_tree, created_at, updated_at
              FROM filters
              WHERE id = ?",
         )
@@ -138,6 +140,7 @@ impl super::Database {
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
                 logical_operator: row.try_get("logical_operator")?,
+                condition_tree: row.try_get("condition_tree")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
             };
@@ -156,13 +159,14 @@ impl super::Database {
 
         let result = sqlx::query(
             "UPDATE filters
-             SET name = ?, starting_channel_number = ?, is_inverse = ?, logical_operator = ?
+             SET name = ?, starting_channel_number = ?, is_inverse = ?, logical_operator = ?, condition_tree = ?
              WHERE id = ?",
         )
         .bind(&request.name)
         .bind(request.starting_channel_number)
         .bind(request.is_inverse)
         .bind(&request.logical_operator)
+        .bind(&request.condition_tree)
         .bind(id.to_string())
         .execute(&mut *tx)
         .await?;
@@ -210,11 +214,11 @@ impl super::Database {
 
     pub async fn get_filters_with_usage(&self) -> Result<Vec<FilterWithUsage>> {
         let filters = sqlx::query(
-            "SELECT f.id, f.name, f.starting_channel_number, f.is_inverse, f.logical_operator,
+            "SELECT f.id, f.name, f.starting_channel_number, f.is_inverse, f.logical_operator, f.condition_tree,
              f.created_at, f.updated_at, COUNT(pf.filter_id) as usage_count
              FROM filters f
              LEFT JOIN proxy_filters pf ON f.id = pf.filter_id AND pf.is_active = 1
-             GROUP BY f.id, f.name, f.starting_channel_number, f.is_inverse, f.logical_operator,
+             GROUP BY f.id, f.name, f.starting_channel_number, f.is_inverse, f.logical_operator, f.condition_tree,
              f.created_at, f.updated_at
              ORDER BY f.name",
         )
@@ -230,6 +234,7 @@ impl super::Database {
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
                 logical_operator: row.try_get("logical_operator")?,
+                condition_tree: row.try_get("condition_tree")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
             };
@@ -283,6 +288,7 @@ impl super::Database {
             starting_channel_number: 1,
             is_inverse: request.is_inverse,
             logical_operator: request.logical_operator.clone(),
+            condition_tree: request.condition_tree.clone(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -382,7 +388,7 @@ impl super::Database {
     pub async fn get_proxy_filters(&self, proxy_id: Uuid) -> Result<Vec<ProxyFilterWithDetails>> {
         let filters = sqlx::query(
             "SELECT pf.proxy_id, pf.filter_id, pf.sort_order, pf.is_active, pf.created_at,
-                    f.name, f.starting_channel_number, f.is_inverse, f.logical_operator, f.updated_at as filter_updated_at
+                    f.name, f.starting_channel_number, f.is_inverse, f.logical_operator, f.condition_tree, f.updated_at as filter_updated_at
              FROM proxy_filters pf
              JOIN filters f ON pf.filter_id = f.id
              WHERE pf.proxy_id = ?
@@ -408,6 +414,7 @@ impl super::Database {
                 starting_channel_number: row.get("starting_channel_number"),
                 is_inverse: row.get("is_inverse"),
                 logical_operator: row.get("logical_operator"),
+                condition_tree: row.get("condition_tree"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("filter_updated_at"),
             };
@@ -488,5 +495,33 @@ impl super::Database {
         .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_filter_conditions(&self, filter_id: Uuid) -> Result<Vec<FilterCondition>> {
+        let rows = sqlx::query(
+            "SELECT id, filter_id, field_name, operator, value, sort_order, created_at
+             FROM filter_conditions
+             WHERE filter_id = ?
+             ORDER BY sort_order",
+        )
+        .bind(filter_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut conditions = Vec::new();
+        for row in rows {
+            let condition = FilterCondition {
+                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                filter_id: Uuid::parse_str(&row.get::<String, _>("filter_id"))?,
+                field_name: row.get("field_name"),
+                operator: row.get("operator"),
+                value: row.get("value"),
+                sort_order: row.get("sort_order"),
+                created_at: row.get("created_at"),
+            };
+            conditions.push(condition);
+        }
+
+        Ok(conditions)
     }
 }

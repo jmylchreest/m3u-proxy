@@ -14,12 +14,28 @@
 
             <div id="alertsContainer"></div>
 
+            <!-- Data Mapping Header -->
+            <div class="dashboard-header">
+                <h1>🗃️ Data Mapping</h1>
+                <p class="text-muted">
+                    Transform and enrich channel data with custom rules
+                </p>
+            </div>
+
             <div class="card">
                 <div class="card-header">
                     <h2 class="card-title">Data Mapping Rules</h2>
-                    <button class="btn btn-primary" onclick="createRule()">
-                        ➕ Add Rule
-                    </button>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="createRule()">
+                            ➕ Add Rule
+                        </button>
+                        <button
+                            class="btn btn-success"
+                            onclick="previewRules()"
+                        >
+                            👁️ Preview Rules
+                        </button>
+                    </div>
                 </div>
                 <div class="card-body">
                     <p class="text-muted mb-3">
@@ -41,7 +57,7 @@
 
         <!-- Rule Editor Modal -->
         <div id="ruleModal" class="modal" style="display: none">
-            <div class="modal-content">
+            <div class="modal-content standard-modal">
                 <div class="modal-header">
                     <h3 class="modal-title" id="ruleModalTitle">
                         Create Data Mapping Rule
@@ -118,6 +134,31 @@
                             ➕ Add Action
                         </button>
 
+                        <hr />
+
+                        <h4>Test Rule</h4>
+                        <p class="text-muted small">
+                            Test this rule against actual channel data
+                        </p>
+
+                        <div class="form-group">
+                            <label for="testSourceSelect">Source</label>
+                            <select id="testSourceSelect" class="form-control">
+                                <option value="">
+                                    Select a source to test against...
+                                </option>
+                            </select>
+                            <button
+                                type="button"
+                                class="btn btn-outline-primary btn-sm mt-2"
+                                onclick="runRuleTest()"
+                                id="runTestBtn"
+                                disabled
+                            >
+                                🧪 Run Test
+                            </button>
+                        </div>
+
                         <div
                             id="testResults"
                             class="test-results"
@@ -131,10 +172,10 @@
                 <div class="modal-footer">
                     <button
                         type="button"
-                        class="btn btn-outline-secondary"
-                        onclick="testRule()"
+                        class="btn btn-primary"
+                        onclick="saveRule()"
                     >
-                        🧪 Test Rule
+                        Save Rule
                     </button>
                     <button
                         type="button"
@@ -143,20 +184,13 @@
                     >
                         Cancel
                     </button>
-                    <button
-                        type="button"
-                        class="btn btn-primary"
-                        onclick="saveRule()"
-                    >
-                        💾 Save Rule
-                    </button>
                 </div>
             </div>
         </div>
 
         <!-- Logo Picker Modal -->
         <div id="logoPickerModal" class="modal" style="display: none">
-            <div class="modal-content">
+            <div class="modal-content standard-modal">
                 <div class="modal-header">
                     <h3 class="modal-title">Choose Logo</h3>
                 </div>
@@ -176,17 +210,17 @@
                 <div class="modal-footer">
                     <button
                         type="button"
-                        class="btn btn-secondary"
-                        onclick="closeLogoPicker()"
-                    >
-                        Cancel
-                    </button>
-                    <button
-                        type="button"
                         class="btn btn-primary"
                         onclick="selectLogo()"
                     >
                         Select Logo
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        onclick="closeLogoPicker()"
+                    >
+                        Cancel
                     </button>
                 </div>
             </div>
@@ -194,7 +228,7 @@
 
         <!-- Source Selector Modal -->
         <div id="sourceModal" class="modal" style="display: none">
-            <div class="modal-content">
+            <div class="modal-content standard-modal">
                 <div class="modal-header">
                     <h3 class="modal-title">Choose Source for Testing</h3>
                 </div>
@@ -209,7 +243,7 @@
                         class="btn btn-secondary"
                         onclick="closeSourceModal()"
                     >
-                        Cancel
+                        Close
                     </button>
                 </div>
             </div>

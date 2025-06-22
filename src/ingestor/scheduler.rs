@@ -10,10 +10,11 @@ use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use super::{IngestionStateManager, IngestorService};
-use crate::database::Database;
+use crate::config::Config;
 use crate::data_mapping::DataMappingService;
-use crate::logo_assets::LogoAssetService;
+use crate::database::Database;
 use crate::ingestor::state_manager::ProcessingTrigger;
+use crate::logo_assets::LogoAssetService;
 use crate::models::*;
 
 pub type CacheInvalidationSender = broadcast::Sender<()>;
@@ -35,6 +36,7 @@ pub struct SchedulerService {
     database: Database,
     data_mapping_service: DataMappingService,
     logo_asset_service: LogoAssetService,
+    config: Config,
     run_missed_immediately: bool,
     cached_sources: Arc<RwLock<HashMap<Uuid, CachedSource>>>,
     last_cache_refresh: Arc<RwLock<DateTime<Utc>>>,
@@ -47,6 +49,7 @@ impl SchedulerService {
         database: Database,
         data_mapping_service: DataMappingService,
         logo_asset_service: LogoAssetService,
+        config: Config,
         run_missed_immediately: bool,
         cache_invalidation_rx: Option<CacheInvalidationReceiver>,
     ) -> Self {
@@ -56,6 +59,7 @@ impl SchedulerService {
             database,
             data_mapping_service,
             logo_asset_service,
+            config,
             run_missed_immediately,
             cached_sources: Arc::new(RwLock::new(HashMap::new())),
             last_cache_refresh: Arc::new(RwLock::new(Utc::now())),
@@ -260,28 +264,20 @@ impl SchedulerService {
                     channels.len()
                 );
 
-                // Apply data mapping rules
-                let mapped_channels = match self
-                    .data_mapping_service
-                    .apply_mapping_to_channels(channels.clone(), source.id, &self.logo_asset_service)
-                    .await
-                {
-                    Ok(mapped) => mapped,
-                    Err(e) => {
-                        error!(
-                            "Data mapping failed for source '{}': {}, proceeding with original channels",
-                            source.name, e
-                        );
-                        channels
-                    }
-                };
+                // Store original channels without data mapping
+                // Data mapping will be applied during proxy generation
+                info!(
+                    "Storing {} original channels for source '{}' (data mapping will be applied during proxy generation)",
+                    channels.len(),
+                    source.name
+                );
 
                 // Update the channels in database
                 match self
                     .database
                     .update_source_channels(
                         source.id,
-                        &mapped_channels,
+                        &channels,
                         Some(self.ingestor.get_state_manager()),
                     )
                     .await
@@ -315,7 +311,7 @@ impl SchedulerService {
                         // Mark ingestion as completed with final channel count
                         self.ingestor
                             .get_state_manager()
-                            .complete_ingestion(source.id, mapped_channels.len())
+                            .complete_ingestion(source.id, channels.len())
                             .await;
 
                         // Calculate next update time

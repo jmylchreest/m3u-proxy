@@ -77,7 +77,13 @@ impl FilterEngine {
         let mut matches = Vec::new();
 
         for channel in channels {
-            let channel_matches = self.evaluate_filter_conditions(channel, filter, conditions)?;
+            let channel_matches = if filter.uses_condition_tree() {
+                // Use new tree-based evaluation
+                self.evaluate_filter_tree(channel, filter)?
+            } else {
+                // Use legacy flat condition evaluation
+                self.evaluate_filter_conditions(channel, filter, conditions)?
+            };
 
             if channel_matches {
                 matches.push(channel.clone());
@@ -88,13 +94,20 @@ impl FilterEngine {
     }
 
     #[allow(dead_code)]
-    fn get_or_compile_regex(&mut self, pattern: &str) -> Result<&Regex> {
-        if !self.regex_cache.contains_key(pattern) {
-            let regex = Regex::new(pattern)?;
-            self.regex_cache.insert(pattern.to_string(), regex);
+    fn get_or_compile_regex(&mut self, pattern: &str, case_sensitive: bool) -> Result<&Regex> {
+        let cache_key = format!("{}:{}", pattern, case_sensitive);
+        if !self.regex_cache.contains_key(&cache_key) {
+            let regex = if case_sensitive {
+                Regex::new(pattern)?
+            } else {
+                regex::RegexBuilder::new(pattern)
+                    .case_insensitive(true)
+                    .build()?
+            };
+            self.regex_cache.insert(cache_key.clone(), regex);
         }
 
-        Ok(self.regex_cache.get(pattern).unwrap())
+        Ok(self.regex_cache.get(&cache_key).unwrap())
     }
 
     #[allow(dead_code)]
@@ -116,10 +129,11 @@ impl FilterEngine {
             condition_results.push(result);
         }
 
-        // Apply logical operator
-        match filter.logical_operator {
-            LogicalOperator::And => Ok(condition_results.iter().all(|&x| x)),
-            LogicalOperator::Or => Ok(condition_results.iter().any(|&x| x)),
+        // Apply logical operator - supports both old (and/or) and new (all/any) formats
+        if filter.logical_operator.is_and_like() {
+            Ok(condition_results.iter().all(|&x| x))
+        } else {
+            Ok(condition_results.iter().any(|&x| x))
         }
     }
 
@@ -144,7 +158,7 @@ impl FilterEngine {
                 .to_lowercase()
                 .ends_with(&condition.value.to_lowercase())),
             FilterOperator::Matches => {
-                let regex = self.get_or_compile_regex(&condition.value)?;
+                let regex = self.get_or_compile_regex(&condition.value, false)?; // case_insensitive by default
                 Ok(regex.is_match(&field_value))
             }
             FilterOperator::NotContains => Ok(!field_value
@@ -152,7 +166,7 @@ impl FilterEngine {
                 .contains(&condition.value.to_lowercase())),
             FilterOperator::NotEquals => Ok(field_value != condition.value),
             FilterOperator::NotMatches => {
-                let regex = self.get_or_compile_regex(&condition.value)?;
+                let regex = self.get_or_compile_regex(&condition.value, false)?; // case_insensitive by default
                 Ok(!regex.is_match(&field_value))
             }
         }
@@ -172,5 +186,123 @@ impl FilterEngine {
             // For unknown fields, return empty string (graceful handling of schema changes)
             _ => String::new(),
         }
+    }
+
+    // New tree-based filter evaluation methods
+
+    #[allow(dead_code)]
+    fn evaluate_filter_tree(&mut self, channel: &Channel, filter: &Filter) -> Result<bool> {
+        match filter.get_condition_tree() {
+            Some(tree) => self.evaluate_condition_node(channel, &tree.root),
+            None => Ok(true), // If no tree, default to true (shouldn't happen)
+        }
+    }
+
+    #[allow(dead_code)]
+    fn evaluate_condition_node(&mut self, channel: &Channel, node: &ConditionNode) -> Result<bool> {
+        match node {
+            ConditionNode::Condition {
+                field,
+                operator,
+                value,
+                case_sensitive,
+                negate,
+            } => self.evaluate_tree_condition(
+                channel,
+                field,
+                operator,
+                value,
+                *case_sensitive,
+                *negate,
+            ),
+            ConditionNode::Group { operator, children } => {
+                if children.is_empty() {
+                    return Ok(true);
+                }
+
+                let results: Result<Vec<bool>> = children
+                    .iter()
+                    .map(|child| self.evaluate_condition_node(channel, child))
+                    .collect();
+
+                let results = results?;
+
+                match operator {
+                    LogicalOperator::All | LogicalOperator::And => Ok(results.iter().all(|&x| x)),
+                    LogicalOperator::Any | LogicalOperator::Or => Ok(results.iter().any(|&x| x)),
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn evaluate_tree_condition(
+        &mut self,
+        channel: &Channel,
+        field: &str,
+        operator: &FilterOperator,
+        value: &str,
+        case_sensitive: bool,
+        negate: bool,
+    ) -> Result<bool> {
+        let field_value = self.get_channel_field_value(channel, field);
+
+        let result = match operator {
+            FilterOperator::Contains => {
+                if case_sensitive {
+                    field_value.contains(value)
+                } else {
+                    field_value.to_lowercase().contains(&value.to_lowercase())
+                }
+            }
+            FilterOperator::Equals => {
+                if case_sensitive {
+                    field_value == *value
+                } else {
+                    field_value.to_lowercase() == value.to_lowercase()
+                }
+            }
+            FilterOperator::StartsWith => {
+                if case_sensitive {
+                    field_value.starts_with(value)
+                } else {
+                    field_value
+                        .to_lowercase()
+                        .starts_with(&value.to_lowercase())
+                }
+            }
+            FilterOperator::EndsWith => {
+                if case_sensitive {
+                    field_value.ends_with(value)
+                } else {
+                    field_value.to_lowercase().ends_with(&value.to_lowercase())
+                }
+            }
+            FilterOperator::Matches => {
+                let regex = self.get_or_compile_regex(value, case_sensitive)?;
+                regex.is_match(&field_value)
+            }
+            FilterOperator::NotContains => {
+                if case_sensitive {
+                    !field_value.contains(value)
+                } else {
+                    !field_value.to_lowercase().contains(&value.to_lowercase())
+                }
+            }
+            FilterOperator::NotEquals => {
+                if case_sensitive {
+                    field_value != *value
+                } else {
+                    field_value.to_lowercase() != value.to_lowercase()
+                }
+            }
+            FilterOperator::NotMatches => {
+                let regex = self.get_or_compile_regex(value, case_sensitive)?;
+                !regex.is_match(&field_value)
+            }
+        };
+
+        // Apply negation if specified
+        Ok(if negate { !result } else { result })
     }
 }

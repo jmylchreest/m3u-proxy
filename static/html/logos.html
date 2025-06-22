@@ -12,6 +12,16 @@
         <div class="container">
             <div id="navContainer"></div>
 
+            <div id="alertsContainer"></div>
+
+            <!-- Logos Header -->
+            <div class="dashboard-header">
+                <h1>🎨 Logo Management</h1>
+                <p class="text-muted">
+                    Upload and manage channel logos for your streams
+                </p>
+            </div>
+
             <div class="card">
                 <div class="card-header">
                     <h2 class="card-title">Logo Management</h2>
@@ -95,7 +105,7 @@
 
         <!-- Upload Modal -->
         <div id="uploadModal" class="modal" style="display: none">
-            <div class="modal-content">
+            <div class="modal-content standard-modal">
                 <!-- Alerts Container for Upload Modal -->
                 <div id="alertsContainer"></div>
 
@@ -185,18 +195,18 @@
                 <div class="modal-footer">
                     <button
                         type="button"
+                        class="btn btn-primary"
+                        onclick="uploadLogo()"
+                        disabled
+                    >
+                        Upload Logo
+                    </button>
+                    <button
+                        type="button"
                         class="btn btn-secondary"
                         onclick="closeUploadModal()"
                     >
                         Cancel
-                    </button>
-                    <button
-                        type="button"
-                        class="btn btn-primary"
-                        onclick="performUpload()"
-                        id="uploadButton"
-                    >
-                        📤 Upload Logo
                     </button>
                 </div>
             </div>
@@ -204,7 +214,7 @@
 
         <!-- Edit Modal -->
         <div id="editModal" class="modal" style="display: none">
-            <div class="modal-content">
+            <div class="modal-content standard-modal">
                 <!-- Alerts Container for Edit Modal -->
                 <div id="alertsContainerEdit"></div>
 
@@ -260,17 +270,17 @@
                     </button>
                     <button
                         type="button"
+                        class="btn btn-primary"
+                        onclick="updateLogo()"
+                    >
+                        Update Logo
+                    </button>
+                    <button
+                        type="button"
                         class="btn btn-secondary"
                         onclick="closeEditModal()"
                     >
                         Cancel
-                    </button>
-                    <button
-                        type="button"
-                        class="btn btn-primary"
-                        onclick="saveLogoEdit()"
-                    >
-                        💾 Save Changes
                     </button>
                 </div>
             </div>

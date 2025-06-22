@@ -69,6 +69,7 @@ impl WebServer {
                     .put(api::update_proxy)
                     .delete(api::delete_proxy),
             )
+            .route("/api/proxies/:id/regenerate", post(api::regenerate_proxy))
             .route(
                 "/api/filters",
                 get(api::list_filters).post(api::create_filter),
@@ -97,6 +98,14 @@ impl WebServer {
                 post(api::reorder_data_mapping_rules),
             )
             .route("/api/data-mapping/test", post(api::test_data_mapping_rule))
+            .route(
+                "/api/data-mapping/preview/:source_id",
+                get(api::preview_data_mapping),
+            )
+            .route(
+                "/api/data-mapping/preview",
+                get(api::preview_data_mapping_rules),
+            )
             // Logo Assets API
             .route("/api/logos", get(api::list_logo_assets))
             .route("/api/logos/upload", post(api::upload_logo_asset))
@@ -122,6 +131,7 @@ impl WebServer {
             .route("/data-mapping", get(handlers::data_mapping_page))
             .route("/logos", get(handlers::logo_assets_page))
             .route("/relay", get(handlers::relay_page))
+            .route("/epg-sources", get(handlers::epg_sources_page))
             // Static files (embedded)
             .route("/static/*path", get(handlers::serve_static_asset))
             // Middleware

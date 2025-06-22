@@ -12,50 +12,185 @@
         <div class="container">
             <div id="navContainer"></div>
 
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">Welcome to M3U Proxy</h2>
-                </div>
-                <p>
-                    A modern M3U proxy service with filtering and source
-                    management.
-                </p>
-                <p>
-                    Use the navigation above to manage your stream sources,
-                    proxies, and filters.
-                </p>
+            <div id="alertsContainer"></div>
 
-                <div style="margin-top: 2rem">
-                    <h3>Quick Start</h3>
-                    <ul style="list-style: none; margin-top: 1rem">
-                        <li class="mb-2">
-                            <strong>1. Add Stream Sources:</strong>
-                            <a
-                                href="/sources"
-                                class="btn btn-outline-primary"
-                                style="margin-left: 0.5rem"
-                                >Manage Sources</a
-                            >
-                        </li>
-                        <li class="mb-2">
-                            <strong>2. Create Filters:</strong>
-                            <a
-                                href="/filters"
-                                class="btn btn-outline-primary"
-                                style="margin-left: 0.5rem"
-                                >Manage Filters</a
-                            >
-                        </li>
-                        <li class="mb-2">
-                            <strong>3. Set up Proxies:</strong>
-                            <a
-                                href="/proxies"
-                                class="btn btn-outline-primary"
-                                style="margin-left: 0.5rem"
-                                >Manage Proxies</a
-                            >
-                        </li>
-                    </ul>
+            <!-- Dashboard Header -->
+            <div class="dashboard-header">
+                <h1>📊 Analytics Dashboard</h1>
+                <p class="text-muted">Real-time insights into your M3U proxy performance</p>
+            </div>
+
+            <!-- Key Metrics Cards -->
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-icon">📺</div>
+                    <div class="metric-content">
+                        <h3 class="metric-value" id="totalChannels">2,847</h3>
+                        <p class="metric-label">Total Channels</p>
+                        <span class="metric-change positive">+127 this week</span>
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-icon">🎥</div>
+                    <div class="metric-content">
+                        <h3 class="metric-value" id="activeStreams">156</h3>
+                        <p class="metric-label">Active Streams</p>
+                        <span class="metric-change positive">+12 from yesterday</span>
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-icon">👥</div>
+                    <div class="metric-content">
+                        <h3 class="metric-value" id="activeClients">43</h3>
+                        <p class="metric-label">Active Clients</p>
+                        <span class="metric-change positive">+8 from last hour</span>
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-icon">⚡</div>
+                    <div class="metric-content">
+                        <h3 class="metric-value" id="uptime">99.7%</h3>
+                        <p class="metric-label">Uptime</p>
+                        <span class="metric-change neutral">30 days</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="charts-grid">
+                <!-- Stream Usage Chart -->
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3>📈 Stream Usage (24h)</h3>
+                        <div class="chart-legend">
+                            <span class="legend-item streams">Streams</span>
+                            <span class="legend-item clients">Clients</span>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="usageChart" class="mock-chart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Top Channels -->
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3>🏆 Most Played Channels</h3>
+                    </div>
+                    <div class="top-channels-list">
+                        <div class="channel-item">
+                            <span class="channel-rank">1</span>
+                            <span class="channel-name">CNN HD</span>
+                            <span class="channel-views">1,247 views</span>
+                        </div>
+                        <div class="channel-item">
+                            <span class="channel-rank">2</span>
+                            <span class="channel-name">BBC One HD</span>
+                            <span class="channel-views">892 views</span>
+                        </div>
+                        <div class="channel-item">
+                            <span class="channel-rank">3</span>
+                            <span class="channel-name">ESPN HD</span>
+                            <span class="channel-views">756 views</span>
+                        </div>
+                        <div class="channel-item">
+                            <span class="channel-rank">4</span>
+                            <span class="channel-name">Discovery HD</span>
+                            <span class="channel-views">623 views</span>
+                        </div>
+                        <div class="channel-item">
+                            <span class="channel-rank">5</span>
+                            <span class="channel-name">Fox News HD</span>
+                            <span class="channel-views">547 views</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Status and Recent Activity -->
+            <div class="status-grid">
+                <!-- System Status -->
+                <div class="status-card">
+                    <div class="card-header">
+                        <h3>🔧 System Status</h3>
+                    </div>
+                    <div class="status-list">
+                        <div class="status-item">
+                            <span class="status-indicator success"></span>
+                            <span class="status-label">Ingestor Service</span>
+                            <span class="status-value">Running</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-indicator success"></span>
+                            <span class="status-label">Proxy Generator</span>
+                            <span class="status-value">Healthy</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-indicator warning"></span>
+                            <span class="status-label">Data Mapping</span>
+                            <span class="status-value">3 rules pending</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-indicator success"></span>
+                            <span class="status-label">Database</span>
+                            <span class="status-value">Connected</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity -->
+                <div class="activity-card">
+                    <div class="card-header">
+                        <h3>🕒 Recent Activity</h3>
+                    </div>
+                    <div class="activity-list">
+                        <div class="activity-item">
+                            <span class="activity-time">2 min ago</span>
+                            <span class="activity-text">New client connected from 192.168.1.105</span>
+                        </div>
+                        <div class="activity-item">
+                            <span class="activity-time">5 min ago</span>
+                            <span class="activity-text">Proxy "Sports Channels" regenerated (247 channels)</span>
+                        </div>
+                        <div class="activity-item">
+                            <span class="activity-time">12 min ago</span>
+                            <span class="activity-text">Source "Provider A" ingestion completed</span>
+                        </div>
+                        <div class="activity-item">
+                            <span class="activity-time">18 min ago</span>
+                            <span class="activity-text">Data mapping rule "Clean Names" activated</span>
+                        </div>
+                        <div class="activity-item">
+                            <span class="activity-time">25 min ago</span>
+                            <span class="activity-text">Filter "Remove Test Channels" applied</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="quick-actions">
+                <h3>🚀 Quick Actions</h3>
+                <div class="action-buttons">
+                    <a href="/sources" class="action-btn primary">
+                        <span class="action-icon">📡</span>
+                        <span class="action-text">Manage Sources</span>
+                    </a>
+                    <a href="/data-mapping" class="action-btn success">
+                        <span class="action-icon">🔄</span>
+                        <span class="action-text">Data Mapping</span>
+                    </a>
+                    <a href="/proxies" class="action-btn info">
+                        <span class="action-icon">📺</span>
+                        <span class="action-text">Stream Proxies</span>
+                    </a>
+                    <a href="/filters" class="action-btn warning">
+                        <span class="action-icon">🔍</span>
+                        <span class="action-text">Filters</span>
+                    </a>
                 </div>
             </div>
         </div>

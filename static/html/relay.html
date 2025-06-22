@@ -12,6 +12,16 @@
         <div class="container">
             <div id="navContainer"></div>
 
+            <div id="alertsContainer"></div>
+
+            <!-- Relay Header -->
+            <div class="dashboard-header">
+                <h1>🎛️ Stream Relay</h1>
+                <p class="text-muted">
+                    Optimize stream delivery with FFmpeg-powered relay services
+                </p>
+            </div>
+
             <!-- Main Content -->
             <main>
                 <!-- Concept Explanation -->
@@ -314,15 +324,9 @@
 
         <!-- Create Profile Modal (Placeholder) -->
         <div id="createProfileModal" class="modal">
-            <div class="modal-content">
+            <div class="modal-content standard-modal">
                 <div class="modal-header">
                     <h3>Create Relay Profile</h3>
-                    <button
-                        class="modal-close"
-                        onclick="hideCreateProfileModal()"
-                    >
-                        &times;
-                    </button>
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
@@ -372,13 +376,18 @@
                 </div>
                 <div class="modal-footer">
                     <button
+                        type="button"
+                        class="btn btn-primary"
+                        onclick="createProfile()"
+                    >
+                        Create Profile
+                    </button>
+                    <button
+                        type="button"
                         class="btn btn-secondary"
                         onclick="hideCreateProfileModal()"
                     >
                         Cancel
-                    </button>
-                    <button class="btn btn-success" onclick="createProfile()">
-                        Create Profile
                     </button>
                 </div>
             </div>

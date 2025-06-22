@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>EPG Sources - M3U Proxy</title>
+        <link rel="stylesheet" href="/static/css/main.css" />
+    </head>
+    <body>
+        <div id="headerContainer"></div>
+
+        <div class="container">
+            <div id="navContainer"></div>
+
+            <div id="alertsContainer"></div>
+
+            <!-- EPG Sources Header -->
+            <div class="dashboard-header">
+                <h1>📅 EPG Sources</h1>
+                <p class="text-muted">Configure Electronic Program Guide data sources for your channels</p>
+            </div>
+
+            <!-- Feature Description -->
+            <div class="info-card">
+                <div class="info-header">
+                    <h3>🔍 About EPG Sources</h3>
+                </div>
+                <div class="info-content">
+                    <p>EPG (Electronic Program Guide) Sources allow you to configure where to obtain program schedule data for your channels. This data is used by the proxy generator to create XMLTV format EPG files that can be consumed by media players and PVR applications.</p>
+                    
+                    <h4>How it works:</h4>
+                    <ul>
+                        <li><strong>Source Configuration:</strong> Define EPG data sources (URLs, APIs, files) that provide program information</li>
+                        <li><strong>Channel Matching:</strong> Map EPG channels to your filtered Stream Sources using various matching criteria</li>
+                        <li><strong>XMLTV Generation:</strong> The proxy generator automatically creates XMLTV format EPG files using the Rust <code>xmltv</code> crate</li>
+                        <li><strong>Integration:</strong> Generated EPG data is served alongside your M3U playlists for seamless integration</li>
+                    </ul>
+
+                    <h4>Supported EPG Source Types:</h4>
+                    <ul>
+                        <li>XMLTV files (local or remote URLs)</li>
+                        <li>JSON APIs with program data</li>
+                        <li>Third-party EPG services</li>
+                        <li>Custom scrapers and importers</li>
+                    </ul>
+
+                    <p><strong>Technical Implementation:</strong> Uses the <code>xmltv</code> Rust crate for efficient parsing and generation of XMLTV data, with support for large files through streaming processing to minimize memory usage.</p>
+                </div>
+            </div>
+
+            <!-- Placeholder Content -->
+            <div class="placeholder-card">
+                <div class="placeholder-icon">🚧</div>
+                <h3>Coming Soon</h3>
+                <p>EPG Sources management interface is currently under development. This feature will allow you to:</p>
+                <ul>
+                    <li>Add and configure EPG data sources</li>
+                    <li>Set up automatic refresh schedules</li>
+                    <li>Map EPG channels to your stream channels</li>
+                    <li>Monitor EPG data quality and coverage</li>
+                    <li>Generate and serve XMLTV files</li>
+                </ul>
+                <p class="text-muted">Check back soon for full EPG management capabilities!</p>
+            </div>
+
+            <!-- Future Features Preview -->
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">📡</div>
+                    <h4>Source Management</h4>
+                    <p>Add multiple EPG sources with different formats and update schedules</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🔗</div>
+                    <h4>Channel Matching</h4>
+                    <p>Intelligent matching of EPG channels to your stream channels by name, ID, or custom rules</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h4>Real-time Updates</h4>
+                    <p>Automatic EPG data refresh with configurable intervals and change detection</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h4>Coverage Analytics</h4>
+                    <p>Monitor EPG coverage across your channels and identify gaps in program data</p>
+                </div>
+            </div>
+        </div>
+
+        <script src="/static/js/shared-loader.js"></script>
+    </body>
+</html>

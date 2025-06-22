@@ -34,10 +34,7 @@ class SourcesManager {
       this.showSourceModal();
     });
 
-    // Modal close
-    document.getElementById("closeModal").addEventListener("click", () => {
-      this.hideSourceModal();
-    });
+    // Modal close functionality handled by standard modal utilities
 
     // Modal cancel
     document.getElementById("cancelSource").addEventListener("click", () => {
@@ -63,9 +60,11 @@ class SourcesManager {
     try {
       this.showLoading();
       const response = await fetch("/api/sources");
-      
+
       if (!response.ok) {
-        throw new Error(`Failed to load sources: ${response.status} ${response.statusText}`);
+        throw new Error(
+          `Failed to load sources: ${response.status} ${response.statusText}`,
+        );
       }
 
       const data = await response.json();
@@ -84,7 +83,7 @@ class SourcesManager {
 
   renderSources() {
     const tbody = document.getElementById("sourcesTableBody");
-    
+
     if (!tbody) {
       console.error("sourcesTableBody element not found!");
       return;
@@ -249,7 +248,6 @@ class SourcesManager {
 
   showSourceModal(source = null) {
     this.editingSource = source;
-    const modal = document.getElementById("sourceModal");
     const title = document.getElementById("modalTitle");
     const form = document.getElementById("sourceForm");
 
@@ -278,11 +276,11 @@ class SourcesManager {
     }
 
     this.toggleSourceTypeFields(document.getElementById("sourceType").value);
-    modal.classList.add("show");
+    SharedUtils.showStandardModal("sourceModal");
   }
 
   hideSourceModal() {
-    document.getElementById("sourceModal").classList.remove("show");
+    SharedUtils.hideStandardModal("sourceModal");
     this.editingSource = null;
   }
 
@@ -714,4 +712,7 @@ let sourcesManager;
 document.addEventListener("DOMContentLoaded", () => {
   sourcesManager = new SourcesManager();
   window.sourcesManager = sourcesManager;
+
+  // Setup standard modal close handlers
+  SharedUtils.setupStandardModalCloseHandlers("sourceModal");
 });

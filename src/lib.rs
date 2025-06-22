@@ -2,6 +2,7 @@ pub mod assets;
 pub mod config;
 pub mod data_mapping;
 pub mod database;
+pub mod filter_parser;
 pub mod ingestor;
 pub mod logo_assets;
 pub mod models;

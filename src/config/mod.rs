@@ -20,6 +20,7 @@ pub struct DatabaseConfig {
 pub struct WebConfig {
     pub host: String,
     pub port: u16,
+    pub base_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +47,7 @@ impl Default for Config {
             web: WebConfig {
                 host: "0.0.0.0".to_string(),
                 port: 8080,
+                base_url: "http://localhost:8080".to_string(),
             },
             storage: StorageConfig {
                 m3u_path: PathBuf::from("./data/m3u"),

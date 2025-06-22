@@ -5,13 +5,6 @@ class FiltersManager {
     this.sources = [];
     this.isEditing = false;
     this.currentFilter = null;
-    this.filterType = "visual"; // 'visual' or 'advanced'
-    this.rootGroup = {
-      conditions: [],
-      groups: [],
-      logical_operator: "and",
-    };
-    this.conditionCounter = 0;
     this.availableFields = [];
   }
 
@@ -33,10 +26,14 @@ class FiltersManager {
     document.getElementById("cancelFilter").addEventListener("click", () => {
       this.hideFilterModal();
     });
-    
-    document.getElementById("closeFilterModal").addEventListener("click", () => {
-      this.hideFilterModal();
-    });
+
+    // Optional close button (may not exist after removing visual builder)
+    const closeButton = document.getElementById("closeFilterModal");
+    if (closeButton) {
+      closeButton.addEventListener("click", () => {
+        this.hideFilterModal();
+      });
+    }
 
     // Save filter button
     document.getElementById("saveFilter").addEventListener("click", () => {
@@ -48,9 +45,6 @@ class FiltersManager {
       this.testPattern();
     });
 
-    // Filter type switching
-    this.setupFilterBuilder();
-
     // Test source change
     document.getElementById("testSource").addEventListener("change", (e) => {
       this.updateTestButton();
@@ -60,7 +54,6 @@ class FiltersManager {
     document.getElementById("filterPattern").addEventListener("input", () => {
       this.updateTestButton();
       this.updateFilterPreview();
-      this.syncAdvancedToVisual();
       this.validatePattern();
     });
 
@@ -69,7 +62,6 @@ class FiltersManager {
       setTimeout(() => {
         this.updateTestButton();
         this.updateFilterPreview();
-        this.syncAdvancedToVisual();
         this.validatePattern();
       }, 10);
     });
@@ -172,7 +164,12 @@ class FiltersManager {
       }
       const data = await response.json();
       console.log("Filters data:", data); // Debug log
-      console.log("Filters data type:", typeof data, "Array?", Array.isArray(data)); // Debug log
+      console.log(
+        "Filters data type:",
+        typeof data,
+        "Array?",
+        Array.isArray(data),
+      ); // Debug log
       this.filters = Array.isArray(data) ? data : [];
       console.log("Processed filters count:", this.filters.length); // Debug log
       this.renderFilters();
@@ -210,14 +207,21 @@ class FiltersManager {
 
     tbody.innerHTML = sortedFilters
       .map((filterData, index) => {
-        // Generate filter preview from conditions
+        // Generate filter preview from condition_tree or conditions
         let filterPreview = "No conditions";
         try {
-          if (filterData.conditions && filterData.conditions.length > 0) {
+          if (filterData.condition_tree) {
+            const tree = JSON.parse(filterData.condition_tree);
+            filterPreview = this.convertTreeToPattern(tree);
+          } else if (
+            filterData.conditions &&
+            filterData.conditions.length > 0
+          ) {
             filterPreview = this.generateFilterPreview(filterData);
           }
         } catch (e) {
           console.warn("Failed to parse filter for preview:", e);
+          filterPreview = "Invalid filter pattern";
         }
 
         return `
@@ -280,13 +284,7 @@ class FiltersManager {
     // Reset form
     form.reset();
 
-    // Reset filter builder state
-    this.rootGroup = {
-      conditions: [],
-      groups: [],
-      logical_operator: "and",
-    };
-    this.conditionCounter = 0;
+    // Filter builder state removed - only pattern mode remains
 
     if (filter) {
       document.getElementById("filterName").value = filter.name;
@@ -294,22 +292,16 @@ class FiltersManager {
       document.getElementById("startingChannelNumber").value =
         filter.starting_channel_number;
 
-      // Always use visual mode since all filters are stored as conditions
-      this.switchFilterType("visual");
-      this.loadConditionsIntoBuilder(filter);
-
-      // Also populate the advanced tab with text representation
+      // Populate the pattern field with text representation from conditions
       this.populateAdvancedTabFromConditions(filter);
     } else {
       document.getElementById("startingChannelNumber").value = 1;
       // Clear the pattern field and ensure placeholder is visible
       document.getElementById("filterPattern").value = "";
-      this.switchFilterType("visual");
     }
 
-    // Render conditions and update UI after everything is set up
+    // Update UI after everything is set up
     setTimeout(() => {
-      this.renderConditions();
       this.updateFilterPreview();
       this.updateTestButton();
     }, 0);
@@ -375,10 +367,7 @@ class FiltersManager {
   }
 
   getFormData() {
-    const advancedFilter =
-      this.filterType === "advanced"
-        ? this.convertPatternToAdvancedFilter()
-        : this.buildAdvancedFilter();
+    const advancedFilter = this.convertPatternToAdvancedFilter();
 
     // Extract conditions and logical operator from the advanced filter structure
     let conditions = [];
@@ -422,33 +411,12 @@ class FiltersManager {
       return false;
     }
 
-    // Validate filter conditions
-    if (this.filterType === "advanced") {
-      const pattern = document.getElementById("filterPattern").value.trim();
-      if (!pattern) {
-        this.showAlert("Filter pattern is required", "danger");
-        document.getElementById("filterPattern").focus();
-        return false;
-      }
-      // Test regex validity
-      try {
-        new RegExp(pattern);
-      } catch (e) {
-        this.showAlert(`Invalid regular expression: ${e.message}`, "danger");
-        document.getElementById("filterPattern").focus();
-        return false;
-      }
-    } else {
-      if (this.rootGroup.conditions.length === 0) {
-        this.showAlert("At least one filter condition is required", "danger");
-        return false;
-      }
-      for (const condition of this.rootGroup.conditions) {
-        if (!condition.value.trim()) {
-          this.showAlert("All filter conditions must have values", "danger");
-          return false;
-        }
-      }
+    // Validate filter pattern
+    const pattern = document.getElementById("filterPattern").value.trim();
+    if (!pattern) {
+      this.showAlert("Filter pattern is required", "danger");
+      document.getElementById("filterPattern").focus();
+      return false;
     }
 
     return true;
@@ -514,28 +482,15 @@ class FiltersManager {
     const sourceId = document.getElementById("testSource").value;
     const isInverse = document.getElementById("isInverse").checked;
 
-    const advancedFilter =
-      this.filterType === "advanced"
-        ? this.convertPatternToAdvancedFilter()
-        : this.buildAdvancedFilter();
+    const advancedFilter = this.convertPatternToAdvancedFilter();
 
-    if (this.filterType === "advanced") {
-      const pattern = document.getElementById("filterPattern").value.trim();
-      if (!sourceId || !pattern) {
-        this.showAlert(
-          "Please select a source and enter a pattern to test",
-          "danger",
-        );
-        return;
-      }
-    } else {
-      if (!sourceId || this.rootGroup.conditions.length === 0) {
-        this.showAlert(
-          "Please select a source and add filter conditions to test",
-          "danger",
-        );
-        return;
-      }
+    const pattern = document.getElementById("filterPattern").value.trim();
+    if (!sourceId || !pattern) {
+      this.showAlert(
+        "Please select a source and enter a pattern to test",
+        "warning",
+      );
+      return;
     }
 
     // Extract conditions and logical operator from the advanced filter structure
@@ -694,7 +649,7 @@ class FiltersManager {
   generateFilterPreview(filterData) {
     const conditions = filterData.conditions || [];
     const operator = (filterData.logical_operator || "AND").toLowerCase();
-    const operatorText = operator === "and" ? "ALL" : "ANY";
+    const operatorText = operator === "and" ? "AND" : "OR";
 
     if (conditions.length === 0) {
       return "No conditions";
@@ -824,193 +779,7 @@ class FiltersManager {
     }
   }
 
-  // Filter Builder Methods
-  setupFilterBuilder() {
-    // Enable/disable test button based on filter type and content
-    this.updateTestButton();
-  }
-
-  switchFilterType(type) {
-    this.filterType = type;
-
-    // Update tab appearance
-    document
-      .getElementById("visualFilterTab")
-      .classList.toggle("active", type === "visual");
-    document
-      .getElementById("advancedFilterTab")
-      .classList.toggle("active", type === "advanced");
-
-    // Update panel visibility
-    document
-      .getElementById("visualFilterPanel")
-      .classList.toggle("active", type === "visual");
-    document
-      .getElementById("advancedFilterPanel")
-      .classList.toggle("active", type === "advanced");
-
-    // If switching to visual mode and no conditions exist, add a default one
-    if (type === "visual" && this.rootGroup.conditions.length === 0) {
-      this.addCondition();
-    }
-
-    // If switching to advanced mode, validate the current pattern
-    if (type === "advanced") {
-      this.validatePattern();
-    }
-
-    this.updateTestButton();
-    this.updateFilterPreview();
-  }
-
-  addCondition() {
-    const conditionId = ++this.conditionCounter;
-    const defaultField =
-      this.availableFields.length > 0
-        ? this.availableFields[0].name
-        : "channel_name";
-    const condition = {
-      id: conditionId,
-      field: defaultField,
-      operator: "contains",
-      value: "",
-    };
-
-    this.rootGroup.conditions.push(condition);
-    this.renderConditions();
-    this.updateFilterPreview();
-    this.updateTestButton();
-    this.updateAdvancedTab();
-
-    // Focus on the newly added condition's value input
-    setTimeout(() => {
-      const newCondition = document.querySelector(
-        `[data-condition-id="${conditionId}"] input[type="text"]`,
-      );
-      if (newCondition) {
-        newCondition.focus();
-      }
-    }, 100);
-  }
-
-  removeCondition(conditionId) {
-    this.rootGroup.conditions = this.rootGroup.conditions.filter(
-      (c) => c.id !== conditionId,
-    );
-    this.renderConditions();
-    this.updateFilterPreview();
-    this.updateTestButton();
-  }
-
-  updateCondition(conditionId, field, value) {
-    const condition = this.rootGroup.conditions.find(
-      (c) => c.id === conditionId,
-    );
-    if (condition) {
-      condition[field] = value;
-      this.updateFilterPreview();
-      this.updateTestButton();
-      this.updateAdvancedTab();
-    }
-  }
-
-  toggleLogicalOperator() {
-    this.rootGroup.logical_operator =
-      this.rootGroup.logical_operator === "and" ? "or" : "and";
-    this.renderConditions();
-    this.updateFilterPreview();
-    this.updateTestButton();
-  }
-
-  renderConditions() {
-    const container = document.getElementById("conditionsContainer");
-    if (!container) {
-      console.warn("filterConditions element not found");
-      return;
-    }
-
-    if (this.rootGroup.conditions.length === 0) {
-      container.innerHTML = `
-        <div class="empty-conditions" onclick="filtersManager.addCondition()">
-          <p>No conditions added yet.</p>
-          <p>Click here or "Add Condition" to start building your filter.</p>
-          <button type="button" class="btn btn-sm btn-primary" onclick="event.stopPropagation(); filtersManager.addCondition()">
-            + Add Your First Condition
-          </button>
-        </div>
-      `;
-      return;
-    }
-
-    // Render logical operator selector if there are multiple conditions
-    let logicalOperatorSelector = "";
-    if (this.rootGroup.conditions.length > 1) {
-      logicalOperatorSelector = `
-        <div class="logical-operator-selector">
-          <label>All conditions must be:</label>
-          <div class="operator-buttons">
-            <button type="button" class="btn btn-sm ${this.rootGroup.logical_operator === "and" ? "btn-primary" : "btn-outline-primary"}" onclick="filtersManager.setLogicalOperator('and')">
-              ALL TRUE (AND)
-            </button>
-            <button type="button" class="btn btn-sm ${this.rootGroup.logical_operator === "or" ? "btn-primary" : "btn-outline-primary"}" onclick="filtersManager.setLogicalOperator('or')">
-              ANY TRUE (OR)
-            </button>
-          </div>
-          <small class="text-muted">
-            ${this.rootGroup.logical_operator === "and" ? "All conditions must match for a channel to be included." : "Any condition can match for a channel to be included."}
-          </small>
-        </div>
-      `;
-    }
-
-    const conditionsHtml = this.rootGroup.conditions
-      .map((condition, index) => {
-        const fieldSelectOptions = this.availableFields
-          .map(
-            (field) =>
-              `<option value="${field.name}" ${condition.field === field.name ? "selected" : ""}>${field.display_name}</option>`,
-          )
-          .join("");
-
-        return `
-        <div class="filter-condition" data-condition-id="${condition.id}">
-          <div class="condition-number">${index + 1}.</div>
-          <div class="filter-condition-field">
-            <select onchange="filtersManager.updateCondition(${condition.id}, 'field', this.value)">
-              ${fieldSelectOptions}
-            </select>
-
-            <select onchange="filtersManager.updateCondition(${condition.id}, 'operator', this.value)">
-              <option value="contains" ${condition.operator === "contains" ? "selected" : ""}>contains</option>
-              <option value="equals" ${condition.operator === "equals" ? "selected" : ""}>equals</option>
-              <option value="matches" ${condition.operator === "matches" ? "selected" : ""}>matches (regex)</option>
-              <option value="starts_with" ${condition.operator === "starts_with" ? "selected" : ""}>starts with</option>
-              <option value="ends_with" ${condition.operator === "ends_with" ? "selected" : ""}>ends with</option>
-              <option value="not_contains" ${condition.operator === "not_contains" ? "selected" : ""}>does not contain</option>
-              <option value="not_equals" ${condition.operator === "not_equals" ? "selected" : ""}>does not equal</option>
-              <option value="not_matches" ${condition.operator === "not_matches" ? "selected" : ""}>does not match (regex)</option>
-            </select>
-
-            <input
-              type="text"
-              placeholder="Enter value..."
-              value="${this.escapeHtml(condition.value)}"
-              onchange="filtersManager.updateCondition(${condition.id}, 'value', this.value)"
-            />
-          </div>
-
-          <div class="filter-condition-actions">
-            <button type="button" class="btn btn-sm btn-outline-danger" onclick="filtersManager.removeCondition(${condition.id})">
-              ✕
-            </button>
-          </div>
-        </div>
-      `;
-      })
-      .join("");
-
-    container.innerHTML = logicalOperatorSelector + conditionsHtml;
-  }
+  // Visual builder methods removed - only text pattern mode remains
 
   updateFilterPreview() {
     const preview = document.getElementById("filterPreview");
@@ -1024,31 +793,11 @@ class FiltersManager {
       preview.classList.add("filter-preview-text");
     }
 
-    if (this.filterType === "advanced") {
-      const patternInput = document.getElementById("filterPattern");
-      const pattern = patternInput ? patternInput.value.trim() : "";
-      preview.textContent =
-        pattern || "Enter a regex pattern above (e.g., (?i)(sport|news|live))";
-      return;
-    }
-
-    if (this.rootGroup.conditions.length === 0) {
-      preview.textContent = "Add conditions above to see the generated filter";
-      return;
-    }
-
-    // Build filter data object in the format expected by generateFilterPreview
-    const filterData = {
-      conditions: this.rootGroup.conditions.map((condition) => ({
-        field_name: condition.field,
-        operator: condition.operator,
-        value: condition.value,
-      })),
-      logical_operator: this.rootGroup.logical_operator,
-    };
-
-    // Use the generateFilterPreview method for consistent formatting and truncation
-    preview.textContent = this.generateFilterPreview(filterData);
+    const patternInput = document.getElementById("filterPattern");
+    const pattern = patternInput ? patternInput.value.trim() : "";
+    preview.textContent =
+      pattern ||
+      'Enter a filter pattern above (e.g., channel_name contains "sport")';
   }
 
   updateTestButton() {
@@ -1057,36 +806,10 @@ class FiltersManager {
 
     let hasValidFilter = false;
 
-    if (this.filterType === "advanced") {
-      const pattern = document.getElementById("filterPattern").value.trim();
-      hasValidFilter = pattern.length > 0;
-    } else {
-      hasValidFilter =
-        this.rootGroup.conditions.length > 0 &&
-        this.rootGroup.conditions.every((c) => c.value.trim().length > 0);
-    }
+    const pattern = document.getElementById("filterPattern").value.trim();
+    hasValidFilter = pattern.length > 0;
 
     testBtn.disabled = !hasValidFilter || !sourceSelect.value;
-  }
-
-  buildAdvancedFilter() {
-    if (this.rootGroup.conditions.length === 0) {
-      return null;
-    }
-
-    const filterConditions = this.rootGroup.conditions.map((condition) => ({
-      field: condition.field,
-      operator: condition.operator,
-      value: condition.value,
-    }));
-
-    return {
-      root_group: {
-        conditions: filterConditions,
-        groups: this.rootGroup.groups,
-        logical_operator: this.rootGroup.logical_operator,
-      },
-    };
   }
 
   convertPatternToAdvancedFilter() {
@@ -1227,7 +950,7 @@ class FiltersManager {
       "ends_with",
       "not_contains",
       "not_equals",
-      "not_matches",
+      "not matches",
     ];
     if (!validOperators.includes(operator)) {
       console.warn("Invalid operator:", operator);
@@ -1242,57 +965,10 @@ class FiltersManager {
   }
 
   convertCurrentFilterToAdvanced() {
-    if (this.filterType === "advanced") {
-      return this.convertPatternToAdvancedFilter();
-    } else {
-      return {
-        root_group: this.rootGroup,
-      };
-    }
+    return this.convertPatternToAdvancedFilter();
   }
 
-  loadAdvancedFilter(advancedFilter) {
-    if (typeof advancedFilter === "string") {
-      try {
-        advancedFilter = JSON.parse(advancedFilter);
-      } catch (e) {
-        console.error("Failed to parse advanced filter JSON:", e);
-        return;
-      }
-    }
-
-    if (!advancedFilter || !advancedFilter.root_group) {
-      // If no advanced filter, start with empty conditions
-      this.rootGroup = {
-        conditions: [],
-        groups: [],
-        logical_operator: "and",
-      };
-      this.conditionCounter = 0;
-      return;
-    }
-
-    this.rootGroup = {
-      conditions: [],
-      groups: advancedFilter.root_group.groups || [],
-      logical_operator: advancedFilter.root_group.logical_operator || "and",
-    };
-    this.conditionCounter = 0;
-
-    const conditions = advancedFilter.root_group.conditions || [];
-    conditions.forEach((condition) => {
-      const conditionId = ++this.conditionCounter;
-      this.rootGroup.conditions.push({
-        id: conditionId,
-        field: condition.field,
-        operator: condition.operator,
-        value: condition.value,
-      });
-    });
-
-    this.renderConditions();
-    this.updateFilterPreview();
-  }
+  // loadAdvancedFilter method removed - no longer needed without visual builder
 
   // Populate the advanced tab with text representation of the filter
   populateAdvancedTab(advancedFilter) {
@@ -1305,24 +981,26 @@ class FiltersManager {
     this.validatePattern();
   }
 
-  // Load conditions from backend into the visual builder
-  loadConditionsIntoBuilder(filter) {
-    if (filter.conditions && filter.conditions.length > 0) {
-      this.rootGroup.logical_operator = filter.logical_operator || "AND";
-      this.rootGroup.conditions = filter.conditions.map((condition) => ({
-        id: ++this.conditionCounter,
-        field: condition.field_name,
-        operator: condition.operator,
-        value: condition.value,
-      }));
-    }
-  }
+  // Visual builder methods removed - only text pattern mode remains
 
-  // Populate advanced tab from conditions array
+  // Populate pattern from conditions array or condition_tree
   populateAdvancedTabFromConditions(filter) {
-    if (filter.conditions && filter.conditions.length > 0) {
-      const operator = filter.logical_operator === "OR" ? " OR " : " AND ";
-      const textPattern = filter.conditions
+    let textPattern = "";
+
+    // Try to parse condition_tree first (current format)
+    if (filter.condition_tree) {
+      try {
+        const tree = JSON.parse(filter.condition_tree);
+        textPattern = this.convertTreeToPattern(tree);
+      } catch (e) {
+        console.error("Failed to parse condition_tree:", e);
+        textPattern = "// Complex filter - edit in JSON format if needed";
+      }
+    }
+    // Fall back to conditions array (legacy format)
+    else if (filter.conditions && filter.conditions.length > 0) {
+      const operator = filter.logical_operator === "any" ? " OR " : " AND ";
+      textPattern = filter.conditions
         .map((condition) => {
           const field = this.availableFields.find(
             (f) => f.name === condition.field_name,
@@ -1331,59 +1009,66 @@ class FiltersManager {
           return `${fieldName} ${condition.operator.replace("_", " ")} "${condition.value}"`;
         })
         .join(operator);
-      document.getElementById("filterPattern").value = textPattern;
-      this.validatePattern();
-    } else {
-      document.getElementById("filterPattern").value = "";
     }
+
+    document.getElementById("filterPattern").value = textPattern;
+    this.validatePattern();
   }
 
-  setLogicalOperator(operator) {
-    this.rootGroup.logical_operator = operator;
-    this.renderConditions();
-    this.updateFilterPreview();
-    this.updateTestButton();
+  // Convert condition tree to natural language pattern
+  convertTreeToPattern(tree) {
+    if (!tree) return "";
 
-    // Update advanced tab when visual conditions change
-    this.updateAdvancedTab();
-  }
+    if (tree.type === "condition") {
+      const fieldName = tree.field || "field";
+      let operator = tree.operator || "equals";
+      const value = tree.value || "";
 
-  // Update the advanced tab with current visual conditions
-  updateAdvancedTab() {
-    if (this.filterType === "visual") {
-      const advancedFilter = this.buildAdvancedFilter();
-      if (advancedFilter) {
-        const textPattern = this.convertAdvancedFilterToText(advancedFilter);
-        document.getElementById("filterPattern").value = textPattern;
-        this.validatePattern();
-      }
+      // Convert database operators to natural language
+      const operatorMap = {
+        matches: "matches",
+        not_matches: "not matches",
+        equals: "equals",
+        not_equals: "not equals",
+        contains: "contains",
+        not_contains: "not contains",
+        starts_with: "starts_with",
+        ends_with: "ends_with",
+      };
+
+      const mappedOperator = operatorMap[operator] || operator;
+
+      return `${fieldName} ${mappedOperator} "${value}"`;
     }
+
+    if (tree.type === "group" && tree.children) {
+      const logicalOp = tree.operator === "any" ? " OR " : " AND ";
+      const childPatterns = tree.children
+        .map((child) => this.convertTreeToPattern(child))
+        .filter((pattern) => pattern.length > 0);
+
+      if (childPatterns.length === 0) return "";
+      if (childPatterns.length === 1) return childPatterns[0];
+
+      // Wrap in parentheses if multiple conditions
+      return `(${childPatterns.join(logicalOp)})`;
+    }
+
+    return "";
   }
 
-  // Sync changes from advanced tab back to visual tab
-  syncAdvancedToVisual() {
-    if (this.filterType === "advanced") {
-      const pattern = document.getElementById("filterPattern").value.trim();
-      const parsedFilter = this.parseTextPattern(pattern);
-      if (parsedFilter) {
-        // Update the visual representation
-        this.rootGroup = parsedFilter.root_group;
-        this.renderConditions();
-        this.updateFilterPreview();
-      }
-    }
-  }
+  // Visual builder methods removed - only text pattern mode remains
 
   // Comprehensive pattern validation
   validatePattern() {
     const textarea = document.getElementById("filterPattern");
     const validationContainer = document.getElementById("patternValidation");
-    
+
     if (!textarea) {
       console.warn("filterPattern element not found, skipping validation");
       return;
     }
-    
+
     const pattern = textarea.value.trim();
 
     // Show validation container if there's content and the container exists
@@ -1473,15 +1158,86 @@ class FiltersManager {
       result.messages.push("Unmatched double quotes");
     }
 
-    // Basic structure validation using regex
-    const conditionPattern =
-      /^\s*\w+\s+\w+(?:_\w+)*\s+["'][^"']*["']\s*(?:(?:AND|OR)\s+\w+\s+\w+(?:_\w+)*\s+["'][^"']*["']\s*)*$/i;
-
-    if (!conditionPattern.test(pattern)) {
+    // Check for balanced parentheses
+    let parenCount = 0;
+    for (let i = 0; i < pattern.length; i++) {
+      if (pattern[i] === "(") parenCount++;
+      if (pattern[i] === ")") parenCount--;
+      if (parenCount < 0) {
+        result.valid = false;
+        result.messages.push("Unmatched closing parenthesis");
+        break;
+      }
+    }
+    if (parenCount > 0) {
       result.valid = false;
-      result.messages.push(
-        'Invalid syntax structure. Expected: field operator "value" [AND|OR field operator "value"]',
-      );
+      result.messages.push("Unmatched opening parenthesis");
+    }
+
+    // If basic checks failed, don't proceed with further validation
+    if (!result.valid) {
+      return result;
+    }
+
+    // Improved validation for patterns with parentheses
+    if (pattern.includes("(") && pattern.includes(")")) {
+      // Remove parentheses ONLY outside of quoted strings to preserve regex patterns
+      let withoutParens = pattern;
+      let inQuotes = false;
+      let quoteChar = "";
+      let result_str = "";
+
+      for (let i = 0; i < pattern.length; i++) {
+        const char = pattern[i];
+        if (!inQuotes && (char === '"' || char === "'")) {
+          inQuotes = true;
+          quoteChar = char;
+          result_str += char;
+        } else if (inQuotes && char === quoteChar) {
+          inQuotes = false;
+          quoteChar = "";
+          result_str += char;
+        } else if (inQuotes) {
+          // Preserve all characters inside quotes, including parentheses
+          result_str += char;
+        } else if (char === "(" || char === ")") {
+          // Replace parentheses outside of quotes with spaces
+          result_str += " ";
+        } else {
+          result_str += char;
+        }
+      }
+      withoutParens = result_str.trim();
+
+      // Check that we have valid field operator "value" patterns with optional modifiers
+      const basicConditionPattern =
+        /(?:(?:not|case_sensitive)\s+)*\w+\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["'][^"']*["']/g;
+      const conditions = withoutParens.match(basicConditionPattern);
+
+      if (!conditions || conditions.length === 0) {
+        result.valid = false;
+        result.messages.push("No valid conditions found in pattern");
+      } else {
+        // Validate that logical operators are used correctly
+        const logicalOps = withoutParens.match(/\b(?:AND|OR)\b/gi);
+        // For complex patterns, be more lenient - just check that we have conditions
+        // The backend will handle the actual parsing
+        if (conditions.length === 0) {
+          result.valid = false;
+          result.messages.push("No valid conditions found in pattern");
+        }
+      }
+    } else {
+      // For simple patterns without parentheses, use strict validation
+      const conditionPattern =
+        /^\s*(?:(?:not|case_sensitive)\s+)*\w+\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["'][^"']*["']\s*(?:\s+(?:AND|OR)\s+(?:(?:not|case_sensitive)\s+)*\w+\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["'][^"']*["']\s*)*$/i;
+
+      if (!conditionPattern.test(pattern)) {
+        result.valid = false;
+        result.messages.push(
+          'Invalid syntax structure. Expected: [not] [case_sensitive] field_name operator "value" [AND|OR [not] [case_sensitive] field_name operator "value"]. Example: channel_name contains "sport" AND group_title not contains "adult"',
+        );
+      }
     }
 
     if (result.valid) {
@@ -1502,28 +1258,48 @@ class FiltersManager {
       "stream_url",
     ];
 
-    // Extract field names from pattern
-    const fieldMatches = pattern.match(/\b(\w+)\s+\w+(?:_\w+)*\s+["']/g);
+    // Improved regex to handle modifiers properly (modifiers can come before or after field name)
+    const fieldMatches = pattern.match(
+      /(?:(?:not|case_sensitive)\s+)*\b(\w+)\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["']/g,
+    );
     const foundFields = new Set();
     const invalidFields = [];
 
     if (fieldMatches) {
       fieldMatches.forEach((match) => {
-        const field = match.split(/\s+/)[0];
-        foundFields.add(field);
-        if (!validFields.includes(field)) {
-          invalidFields.push(field);
+        // Extract field name, accounting for modifiers that might come before it
+        const parts = match.split(/\s+/);
+        let field = null;
+
+        // Find the field name (first word that's not a modifier)
+        for (const part of parts) {
+          if (
+            part !== "not" &&
+            part !== "case_sensitive" &&
+            !part.match(/^(?:contains|equals|matches|starts_with|ends_with)$/)
+          ) {
+            field = part;
+            break;
+          }
+        }
+
+        if (field) {
+          foundFields.add(field);
+          if (!validFields.includes(field)) {
+            invalidFields.push(field);
+          }
         }
       });
     }
 
     if (invalidFields.length > 0) {
       result.valid = false;
-      result.messages.push(`Invalid fields: ${invalidFields.join(", ")}`);
-      result.messages.push(`Valid fields: ${validFields.join(", ")}`);
+      result.messages.push(
+        `Invalid field(s): ${invalidFields.join(", ")}. Valid fields are: ${validFields.join(", ")}`,
+      );
     } else if (foundFields.size > 0) {
       result.messages.push(
-        `Using fields: ${Array.from(foundFields).join(", ")}`,
+        `Using valid field(s): ${Array.from(foundFields).join(", ")}`,
       );
     }
 
@@ -1533,39 +1309,55 @@ class FiltersManager {
   // Validate operators
   validateOperators(pattern) {
     const result = { valid: true, messages: [] };
-    const validOperators = [
+    const baseOperators = [
       "contains",
       "equals",
       "matches",
       "starts_with",
       "ends_with",
-      "not_contains",
-      "not_equals",
-      "not_matches",
     ];
+    const modifiers = ["not", "case_sensitive"];
 
-    // Extract operators from pattern
-    const operatorMatches = pattern.match(/\w+\s+(\w+(?:_\w+)*)\s+["']/g);
+    // Extract operators from pattern using more flexible regex
+    const operatorMatches = pattern.match(
+      /\w+\s+((?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with))\s+["']/g,
+    );
     const foundOperators = new Set();
     const invalidOperators = [];
 
     if (operatorMatches) {
       operatorMatches.forEach((match) => {
-        const operator = match.split(/\s+/)[1];
-        foundOperators.add(operator);
-        if (!validOperators.includes(operator)) {
-          invalidOperators.push(operator);
+        // Extract the operator part (everything between field and value)
+        const parts = match.split(/\s+/);
+        const operatorPart = parts.slice(1, -1).join(" "); // Remove field and quoted value
+        foundOperators.add(operatorPart);
+
+        // Validate the operator part
+        const operatorWords = operatorPart.split(/\s+/);
+        const baseOp = operatorWords[operatorWords.length - 1]; // Last word should be base operator
+        const mods = operatorWords.slice(0, -1); // Everything before should be modifiers
+
+        let isValid = baseOperators.includes(baseOp);
+        if (isValid) {
+          // Check all modifiers are valid
+          for (const mod of mods) {
+            if (!modifiers.includes(mod)) {
+              isValid = false;
+              break;
+            }
+          }
+        }
+
+        if (!isValid) {
+          invalidOperators.push(operatorPart);
         }
       });
     }
 
     if (invalidOperators.length > 0) {
       result.valid = false;
-      result.messages.push(`Invalid operators: ${invalidOperators.join(", ")}`);
-      result.messages.push(`Valid operators: ${validOperators.join(", ")}`);
-    } else if (foundOperators.size > 0) {
       result.messages.push(
-        `Using operators: ${Array.from(foundOperators).join(", ")}`,
+        `Invalid operator(s): ${invalidOperators.join(", ")}. Valid operators: ${baseOperators.join(", ")}. You can add 'not' or 'case_sensitive' before operators (e.g., "not contains", "case_sensitive equals")`,
       );
     }
 
@@ -1578,9 +1370,9 @@ class FiltersManager {
 
     // Find all conditions with 'matches' operator
     const matchesConditions = pattern.match(
-      /\w+\s+(?:not_)?matches\s+["']([^"']+)["']/gi,
+      /\w+\s+(?:(?:not|case_sensitive)\s+)*matches\s+["']([^"']+)["']/gi,
     );
-    const invalidRegex = [];
+    const warningRegex = [];
     let regexCount = 0;
 
     if (matchesConditions) {
@@ -1589,23 +1381,47 @@ class FiltersManager {
         if (regexMatch) {
           const regexPattern = regexMatch[1];
           regexCount++;
-          try {
-            new RegExp(regexPattern);
-          } catch (error) {
-            invalidRegex.push(`"${regexPattern}": ${error.message}`);
+
+          // Check for unsupported regex features
+          if (regexPattern.includes("(?i)")) {
+            result.valid = false;
+            result.messages.push(
+              `"${regexPattern}": (?i) flag is not supported. The 'matches' operator is case-insensitive by default.`,
+            );
+          } else if (regexPattern.includes("(?")) {
+            result.valid = false;
+            result.messages.push(
+              `"${regexPattern}": Advanced regex flags are not supported by the server's regex engine.`,
+            );
+          } else {
+            // Test with Rust-compatible regex features only
+            try {
+              // Basic validation - don't try to emulate Rust regex exactly,
+              // just catch obvious syntax errors
+              new RegExp(regexPattern);
+              // Additional validation for common regex patterns that are valid in Rust
+              // Allow patterns with alternation (|), quantifiers (?*+), and character classes
+              // These are supported by the Rust regex engine
+            } catch (error) {
+              // Only mark as invalid for genuine syntax errors
+              // Don't fail on advanced regex features that might work in Rust
+              if (error.message.includes("Invalid regular expression")) {
+                result.valid = false;
+                result.messages.push(`"${regexPattern}": ${error.message}`);
+              } else {
+                // For other errors, show as warning but allow submission
+                result.messages.push(
+                  `"${regexPattern}": Warning - ${error.message}. Pattern will be validated by server.`,
+                );
+              }
+            }
           }
         }
       });
     }
 
-    if (invalidRegex.length > 0) {
-      result.valid = false;
-      result.messages.push("Invalid regex patterns:");
-      result.messages = result.messages.concat(invalidRegex);
-    } else if (regexCount > 0) {
-      result.messages.push(
-        `${regexCount} regex pattern(s) validated successfully`,
-      );
+    if (regexCount > 0 && result.valid) {
+      result.messages.push(`${regexCount} valid regex pattern(s) found`);
     }
 
     return result;
@@ -1624,19 +1440,39 @@ class FiltersManager {
     if (textarea) {
       textarea.classList.remove("valid", "invalid", "warning");
       textarea.classList.add(validation.overall);
+
+      // Add precise highlighting only for specific field/operator errors
+      // Don't highlight for general syntax issues
+      if (
+        validation.overall === "invalid" &&
+        (!validation.fields.valid ||
+          !validation.operators.valid ||
+          !validation.regex.valid)
+      ) {
+        this.addPreciseHighlighting(textarea, validation);
+      } else {
+        this.removePreciseHighlighting(textarea);
+      }
     }
 
-    // Update validation icons
-    this.updateValidationIcon(syntaxIcon, validation.syntax, "Syntax");
-    this.updateValidationIcon(fieldsIcon, validation.fields, "Fields");
-    this.updateValidationIcon(operatorsIcon, validation.operators, "Operators");
-    this.updateValidationIcon(regexIcon, validation.regex, "Regex");
+    // Update validation icons (only if they exist)
+    if (syntaxIcon || fieldsIcon || operatorsIcon || regexIcon) {
+      this.updateValidationIcon(syntaxIcon, validation.syntax, "Syntax");
+      this.updateValidationIcon(fieldsIcon, validation.fields, "Fields");
+      this.updateValidationIcon(
+        operatorsIcon,
+        validation.operators,
+        "Operators",
+      );
+      this.updateValidationIcon(regexIcon, validation.regex, "Regex");
+    }
 
-    // Update messages
+    // Update messages (only if container exists)
     if (!messagesContainer) {
-      console.warn("validationMessages container not found, skipping message updates");
+      // Silently skip if validation messages container doesn't exist
       return;
     }
+
     messagesContainer.innerHTML = "";
 
     const allMessages = [
@@ -1678,7 +1514,7 @@ class FiltersManager {
   // Update individual validation icon
   updateValidationIcon(icon, validation, label) {
     if (!icon) return; // Skip if element doesn't exist
-    
+
     icon.classList.remove("valid", "invalid", "warning");
     icon.textContent = label;
 
@@ -1690,6 +1526,269 @@ class FiltersManager {
       icon.title = `${label}: ${validation.messages[0] || "Invalid"}`;
     }
   }
+
+  // Add precise highlighting for validation errors
+  addPreciseHighlighting(textarea, validation) {
+    this.removePreciseHighlighting(textarea);
+
+    const pattern = textarea.value;
+    const invalidRanges = this.findInvalidRanges(pattern, validation);
+
+    if (invalidRanges.length === 0) {
+      // No specific errors found, don't highlight anything
+      return;
+    }
+
+    // Create wrapper if it doesn't exist
+    let wrapper = textarea.parentNode;
+    if (!wrapper.classList.contains("validation-wrapper")) {
+      const newWrapper = document.createElement("div");
+      newWrapper.className = "validation-wrapper";
+      newWrapper.style.position = "relative";
+      textarea.parentNode.insertBefore(newWrapper, textarea);
+      newWrapper.appendChild(textarea);
+      wrapper = newWrapper;
+    }
+
+    // Create overlay for highlighting
+    const overlay = document.createElement("div");
+    overlay.className = "validation-overlay";
+    overlay.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      font-family: ${getComputedStyle(textarea).fontFamily};
+      font-size: ${getComputedStyle(textarea).fontSize};
+      line-height: ${getComputedStyle(textarea).lineHeight};
+      padding: ${getComputedStyle(textarea).padding};
+      border: ${getComputedStyle(textarea).borderWidth} solid transparent;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      overflow: hidden;
+      color: transparent;
+      z-index: 1;
+      background: transparent;
+    `;
+
+    // Build highlighted content
+    let highlightedContent = "";
+    let lastIndex = 0;
+
+    for (const range of invalidRanges) {
+      // Add normal text before error (with pointer-events: none)
+      highlightedContent += `<span style="pointer-events: none;">${this.escapeHtml(
+        pattern.substring(lastIndex, range.start),
+      )}</span>`;
+
+      // Add highlighted error text with tooltip
+      highlightedContent += `<span class="error-highlight" title="${this.escapeHtml(range.message)}" style="cursor: help; position: relative; pointer-events: auto;" data-tooltip="${this.escapeHtml(range.message)}">${this.escapeHtml(pattern.substring(range.start, range.end))}</span>`;
+
+      lastIndex = range.end;
+    }
+
+    // Add remaining text (with pointer-events: none)
+    highlightedContent += `<span style="pointer-events: none;">${this.escapeHtml(pattern.substring(lastIndex))}</span>`;
+
+    overlay.innerHTML = highlightedContent;
+    wrapper.appendChild(overlay);
+
+    // Add hover and click events for tooltips
+    overlay.addEventListener("mouseover", (e) => {
+      if (e.target.classList.contains("error-highlight")) {
+        const message = e.target.getAttribute("data-tooltip");
+        if (message) {
+          this.showTooltip(e.target, message);
+        }
+      }
+    });
+
+    overlay.addEventListener("mouseout", (e) => {
+      if (e.target.classList.contains("error-highlight")) {
+        this.hideTooltip();
+      }
+    });
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target.classList.contains("error-highlight")) {
+        e.preventDefault();
+        e.stopPropagation();
+        const message = e.target.getAttribute("data-tooltip");
+        if (message) {
+          this.showTooltip(e.target, message, true); // persistent tooltip
+        }
+      }
+    });
+  }
+
+  // Remove precise highlighting
+  removePreciseHighlighting(textarea) {
+    textarea.classList.remove("invalid-syntax-blue");
+
+    const wrapper = textarea.parentNode;
+    if (wrapper && wrapper.classList.contains("validation-wrapper")) {
+      const overlay = wrapper.querySelector(".validation-overlay");
+      if (overlay) {
+        overlay.remove();
+      }
+    }
+  }
+
+  // Find invalid text ranges for highlighting
+  findInvalidRanges(pattern, validation) {
+    const ranges = [];
+
+    // Only find ranges if there are actual validation errors
+    // Don't highlight anything if it's just a syntax structure issue with parentheses
+    if (validation.syntax.valid) {
+      // Find invalid operators
+      if (!validation.operators.valid) {
+        const baseOperators = [
+          "contains",
+          "equals",
+          "matches",
+          "starts_with",
+          "ends_with",
+        ];
+        const modifiers = ["not", "case_sensitive"];
+
+        const operatorRegex =
+          /(?:(?:not|case_sensitive)\s+)*\b(\w+)\s+((?:(?:not|case_sensitive)\s+)*(\w+(?:_\w+)*))\s+["'][^"']*["']/g;
+        let match;
+
+        while ((match = operatorRegex.exec(pattern)) !== null) {
+          const operatorPart = match[2];
+          const operatorWords = operatorPart.split(/\s+/);
+          const baseOp = operatorWords[operatorWords.length - 1];
+          const mods = operatorWords.slice(0, -1);
+
+          let isValid = baseOperators.includes(baseOp);
+          if (isValid) {
+            for (const mod of mods) {
+              if (!modifiers.includes(mod)) {
+                isValid = false;
+                break;
+              }
+            }
+          }
+
+          if (!isValid) {
+            const operatorStart = match.index + match[1].length + 1;
+            ranges.push({
+              start: operatorStart,
+              end: operatorStart + operatorPart.length,
+              message: `Invalid operator: "${operatorPart}". Valid operators: contains, equals, matches, starts_with, ends_with. You can prefix with 'not' or 'case_sensitive' (e.g., "not contains", "case_sensitive equals")`,
+            });
+          }
+        }
+      }
+
+      // Find invalid fields
+      if (!validation.fields.valid) {
+        const validFields = [
+          "channel_name",
+          "group_title",
+          "tvg_id",
+          "tvg_name",
+          "stream_url",
+        ];
+        const fieldRegex =
+          /(?:(?:not|case_sensitive)\s+)*(\w+)\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["']/g;
+        let match;
+
+        while ((match = fieldRegex.exec(pattern)) !== null) {
+          const fullMatch = match[0];
+          const field = match[1];
+
+          if (!validFields.includes(field)) {
+            // Find the actual position of the field name within the match
+            const fieldStartInMatch = fullMatch.indexOf(field);
+            const fieldStart = match.index + fieldStartInMatch;
+
+            ranges.push({
+              start: fieldStart,
+              end: fieldStart + field.length,
+              message: `Invalid field: "${field}". Valid fields are: ${validFields.join(", ")}`,
+            });
+          }
+        }
+      }
+    }
+
+    // Sort ranges by start position
+    ranges.sort((a, b) => a.start - b.start);
+    return ranges;
+  }
+
+  // Show a temporary tooltip for better mobile/accessibility support
+  showTooltip(element, message, persistent = false) {
+    // Remove any existing tooltips
+    this.hideTooltip();
+
+    // Create tooltip element
+    const tooltip = document.createElement("div");
+    tooltip.className = "validation-tooltip";
+    tooltip.textContent = message;
+    tooltip.style.cssText = `
+      position: absolute;
+      background: #333;
+      color: white;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      z-index: 1000;
+      pointer-events: none;
+      max-width: 300px;
+      word-wrap: break-word;
+      white-space: normal;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      opacity: 0;
+      transition: opacity 0.2s ease-in;
+    `;
+
+    // Position tooltip
+    document.body.appendChild(tooltip);
+    const rect = element.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+
+    tooltip.style.left =
+      Math.max(10, rect.left + rect.width / 2 - tooltipRect.width / 2) + "px";
+    tooltip.style.top = rect.top - tooltipRect.height - 8 + "px";
+
+    // Fade in
+    requestAnimationFrame(() => {
+      tooltip.style.opacity = "1";
+    });
+
+    // Store reference for cleanup
+    this.currentTooltip = tooltip;
+
+    // Auto-remove tooltip after delay (unless persistent)
+    if (!persistent) {
+      this.tooltipTimeout = setTimeout(() => {
+        this.hideTooltip();
+      }, 3000);
+    }
+  }
+
+  // Hide tooltip
+  hideTooltip() {
+    if (this.currentTooltip) {
+      this.currentTooltip.style.opacity = "0";
+      setTimeout(() => {
+        if (this.currentTooltip && this.currentTooltip.parentNode) {
+          this.currentTooltip.remove();
+        }
+        this.currentTooltip = null;
+      }, 200);
+    }
+    if (this.tooltipTimeout) {
+      clearTimeout(this.tooltipTimeout);
+      this.tooltipTimeout = null;
+    }
+  }
 }
 
 // Initialize the filters manager when the page loads
@@ -1699,6 +1798,10 @@ async function initializeFiltersManager() {
   console.log("Initializing FiltersManager..."); // Debug log
   filtersManager = new FiltersManager();
   await filtersManager.init();
+
+  // Setup standard modal close handlers
+  SharedUtils.setupStandardModalCloseHandlers("filterModal");
+  SharedUtils.setupStandardModalCloseHandlers("examplesModal");
 }
 
 // Check if DOM is already loaded, if so initialize immediately

@@ -17,14 +17,12 @@ class ChannelsViewer {
   }
 
   setupEventListeners() {
-    // Close buttons
-    document.getElementById("channelsModalCloseBtn").addEventListener("click", () => {
-      this.hideModal();
-    });
-
-    document.getElementById("channelsModalCloseFooterBtn").addEventListener("click", () => {
-      this.hideModal();
-    });
+    // Close button
+    document
+      .getElementById("channelsModalCloseFooterBtn")
+      .addEventListener("click", () => {
+        this.hideModal();
+      });
 
     // Search filter with debouncing
     const filterInput = document.getElementById("channelsFilter");
@@ -49,7 +47,7 @@ class ChannelsViewer {
       loading.style.display = "block";
       content.style.display = "none";
       filterInput.value = "";
-      modal.classList.add("show");
+      SharedUtils.showStandardModal("channelsModal");
 
       // Reset state
       this.currentFilter = "";
@@ -79,7 +77,6 @@ class ChannelsViewer {
 
       loading.style.display = "none";
       content.style.display = "block";
-
     } catch (error) {
       console.error("Error loading channels:", error);
       this.hideModal();
@@ -91,15 +88,17 @@ class ChannelsViewer {
     let allChannels = [];
     let page = 1;
     let totalPages = 1;
-    
+
     // Load all pages of channels
     do {
-      const response = await fetch(`/api/sources/${sourceId}/channels?page=${page}&limit=10000`);
+      const response = await fetch(
+        `/api/sources/${sourceId}/channels?page=${page}&limit=10000`,
+      );
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
-      
+
       // Handle both paginated response and direct array response
       if (data.channels) {
         allChannels = allChannels.concat(data.channels);
@@ -108,12 +107,14 @@ class ChannelsViewer {
         allChannels = data;
         totalPages = 1; // No pagination
       }
-      
+
       page++;
     } while (page <= totalPages);
-    
+
     this.currentChannels = allChannels;
-    console.log(`Loaded ${allChannels.length} channels from ${totalPages} pages`);
+    console.log(
+      `Loaded ${allChannels.length} channels from ${totalPages} pages`,
+    );
   }
 
   setupScrollContainer() {
@@ -135,10 +136,16 @@ class ChannelsViewer {
   setupProgressiveScrolling() {
     if (this.scrollContainer) {
       // Remove existing listener if any
-      this.scrollContainer.removeEventListener("scroll", this.handleScroll.bind(this));
+      this.scrollContainer.removeEventListener(
+        "scroll",
+        this.handleScroll.bind(this),
+      );
 
       // Add scroll listener
-      this.scrollContainer.addEventListener("scroll", this.handleScroll.bind(this));
+      this.scrollContainer.addEventListener(
+        "scroll",
+        this.handleScroll.bind(this),
+      );
     }
   }
 
@@ -157,18 +164,22 @@ class ChannelsViewer {
   }
 
   renderAllChannels() {
-    console.log("Rendering all channels, filtered count:", this.filteredChannels.length);
+    console.log(
+      "Rendering all channels, filtered count:",
+      this.filteredChannels.length,
+    );
     const tbody = document.getElementById("channelsTableBody");
-    
+
     if (this.filteredChannels.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No channels found</td></tr>';
+      tbody.innerHTML =
+        '<tr><td colspan="3" class="text-center text-muted">No channels found</td></tr>';
       return;
     }
-    
+
     // Render all channels at once
     const fragment = document.createDocumentFragment();
-    
-    this.filteredChannels.forEach(channel => {
+
+    this.filteredChannels.forEach((channel) => {
       const row = document.createElement("tr");
       row.innerHTML = `
         <td>
@@ -184,7 +195,7 @@ class ChannelsViewer {
       `;
       fragment.appendChild(row);
     });
-    
+
     tbody.innerHTML = "";
     tbody.appendChild(fragment);
     console.log("Rendered", this.filteredChannels.length, "channels");
@@ -194,7 +205,10 @@ class ChannelsViewer {
     if (this.isLoading) return;
 
     const startIndex = this.renderedChannels;
-    const endIndex = Math.min(startIndex + this.batchSize, this.filteredChannels.length);
+    const endIndex = Math.min(
+      startIndex + this.batchSize,
+      this.filteredChannels.length,
+    );
 
     if (startIndex >= this.filteredChannels.length) {
       return; // No more channels to load
@@ -263,34 +277,53 @@ class ChannelsViewer {
 
     if (!searchTerm) {
       this.filteredChannels = [...this.currentChannels];
-      console.log("Filter cleared, showing all channels:", this.filteredChannels.length);
+      console.log(
+        "Filter cleared, showing all channels:",
+        this.filteredChannels.length,
+      );
     } else {
       // Split search terms for multi-word search
-      const searchTerms = searchTerm.split(/\s+/).filter(term => term.length > 0);
+      const searchTerms = searchTerm
+        .split(/\s+/)
+        .filter((term) => term.length > 0);
       console.log("Filtering with terms:", searchTerms);
 
-      this.filteredChannels = this.currentChannels.filter(channel => {
+      this.filteredChannels = this.currentChannels.filter((channel) => {
         const searchableText = [
           channel.channel_name || "",
           channel.tvg_name || "",
           channel.group_title || "",
-          channel.tvg_id || ""
-        ].join(" ").toLowerCase();
+          channel.tvg_id || "",
+        ]
+          .join(" ")
+          .toLowerCase();
 
         // All search terms must match (AND logic)
-        const matches = searchTerms.every(term => {
+        const matches = searchTerms.every((term) => {
           const result = searchableText.includes(term); // Simple contains match for now
           return result;
         });
-        
+
         // Debug first few matches
         if (this.filteredChannels.length < 5) {
-          console.log("Channel:", channel.channel_name, "Searchable:", searchableText.substring(0, 50), "Matches:", matches);
+          console.log(
+            "Channel:",
+            channel.channel_name,
+            "Searchable:",
+            searchableText.substring(0, 50),
+            "Matches:",
+            matches,
+          );
         }
-        
+
         return matches;
       });
-      console.log("Filtered channels:", this.filteredChannels.length, "out of", this.currentChannels.length);
+      console.log(
+        "Filtered channels:",
+        this.filteredChannels.length,
+        "out of",
+        this.currentChannels.length,
+      );
     }
 
     this.renderAllChannels();
@@ -305,13 +338,15 @@ class ChannelsViewer {
 
     // Allow for some typos by checking if term is within edit distance
     const words = text.split(/\s+/);
-    return words.some(word => {
+    return words.some((word) => {
       if (word.includes(term) || term.includes(word)) {
         return true;
       }
       // Simple edit distance check for short terms
       if (term.length >= 3 && word.length >= 3) {
-        return this.levenshteinDistance(word, term) <= Math.floor(term.length / 3);
+        return (
+          this.levenshteinDistance(word, term) <= Math.floor(term.length / 3)
+        );
       }
       return false;
     });
@@ -333,7 +368,7 @@ class ChannelsViewer {
           matrix[i][j] = Math.min(
             matrix[i - 1][j - 1] + 1,
             matrix[i][j - 1] + 1,
-            matrix[i - 1][j] + 1
+            matrix[i - 1][j] + 1,
           );
         }
       }
@@ -354,12 +389,14 @@ class ChannelsViewer {
   }
 
   hideModal() {
-    const modal = document.getElementById("channelsModal");
-    modal.classList.remove("show");
+    SharedUtils.hideStandardModal("channelsModal");
 
     // Clean up
     if (this.scrollContainer) {
-      this.scrollContainer.removeEventListener("scroll", this.handleScroll.bind(this));
+      this.scrollContainer.removeEventListener(
+        "scroll",
+        this.handleScroll.bind(this),
+      );
       this.scrollContainer = null;
     }
 
@@ -395,7 +432,14 @@ window.channelsViewer = channelsViewer;
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => {
     channelsViewer.init();
+    SharedUtils.setupStandardModalCloseHandlers("channelsModal");
   });
 } else {
   channelsViewer.init();
+  SharedUtils.setupStandardModalCloseHandlers("channelsModal");
+}
+
+// Global function for onclick handlers
+function hideChannelsModal() {
+  channelsViewer.hideModal();
 }

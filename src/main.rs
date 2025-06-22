@@ -113,6 +113,7 @@ async fn main() -> Result<()> {
         database.clone(),
         data_mapping_service.clone(),
         logo_asset_service.clone(),
+        config.clone(),
         config.ingestion.run_missed_immediately,
         Some(cache_invalidation_rx),
     );

@@ -54,7 +54,18 @@ async function loadPageTemplates() {
 
 // Auto-load templates when DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', loadPageTemplates);
+    document.addEventListener('DOMContentLoaded', async () => {
+        await loadPageTemplates();
+        // Load theme toggle after templates are loaded
+        const themeScript = document.createElement('script');
+        themeScript.src = '/static/js/theme-toggle.js';
+        document.head.appendChild(themeScript);
+    });
 } else {
-    loadPageTemplates();
+    loadPageTemplates().then(() => {
+        // Load theme toggle after templates are loaded
+        const themeScript = document.createElement('script');
+        themeScript.src = '/static/js/theme-toggle.js';
+        document.head.appendChild(themeScript);
+    });
 }

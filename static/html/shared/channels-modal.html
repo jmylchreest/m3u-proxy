@@ -1,50 +1,40 @@
 <!-- Shared Channels Modal -->
 <div id="channelsModal" class="modal channels-modal">
-    <div class="modal-content channels-modal-content">
+    <div class="modal-content standard-modal channels-modal-content">
         <div class="modal-header">
-            <h3 id="channelsModalTitle" class="modal-title">
-                Channels
-            </h3>
-            <button
-                id="channelsModalCloseBtn"
-                class="modal-close"
-                title="Close"
-                aria-label="Close channels modal"
-            >
-                ✕
-            </button>
+            <h3 id="channelsModalTitle" class="modal-title">Channels</h3>
         </div>
         <div class="modal-body">
-            <div
-                id="channelsLoading"
-                class="text-center"
-                style="display: none"
-            >
+            <div id="channelsLoading" class="text-center" style="display: none">
                 <span class="loading"></span> Loading channels...
             </div>
 
             <div id="channelsContent" style="display: none">
-                <div class="mb-3">
-                    <input
-                        type="text"
-                        id="channelsFilter"
-                        class="form-control"
-                        placeholder="Search channels... (supports partial matches, multiple words, typos)"
-                    />
-                    <small class="text-muted">
-                        💡 Tip: Type multiple words to find channels
-                        matching all terms. Works with partial matches
-                        and handles typos!
-                    </small>
+                <!-- Fixed search bar at top -->
+                <div class="channels-search-fixed">
+                    <div class="mb-3">
+                        <input
+                            type="text"
+                            id="channelsFilter"
+                            class="form-control"
+                            placeholder="Search channels... (supports partial matches, multiple words, typos)"
+                        />
+                        <small class="text-muted">
+                            💡 Tip: Type multiple words to find channels
+                            matching all terms. Works with partial matches and
+                            handles typos!
+                        </small>
+                    </div>
+
+                    <div class="mb-3">
+                        <span id="channelsCount" class="text-muted"
+                            >0 channels</span
+                        >
+                    </div>
                 </div>
 
-                <div class="mb-3">
-                    <span id="channelsCount" class="text-muted"
-                        >0 channels</span
-                    >
-                </div>
-
-                <div class="table-responsive channels-table-container">
+                <!-- Fixed table headers -->
+                <div class="channels-headers-fixed">
                     <table class="table table-striped">
                         <thead>
                             <tr>
@@ -54,17 +44,27 @@
                                 <th>Logo</th>
                             </tr>
                         </thead>
-                        <tbody id="channelsTableBody">
-                            <!-- Channels will be loaded here -->
-                        </tbody>
                     </table>
+                </div>
+
+                <!-- Scrollable channels list -->
+                <div class="channels-list-scrollable">
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <tbody id="channelsTableBody">
+                                <!-- Channels will be loaded here -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
         <div class="modal-footer">
             <button
                 id="channelsModalCloseFooterBtn"
-                class="btn btn-secondary"
+                class="btn btn-secondary ml-auto"
+                onclick="hideChannelsModal()"
+                type="button"
             >
                 Close
             </button>

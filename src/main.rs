@@ -56,7 +56,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging with specified level
-    let log_filter = format!("m3u_proxy={},tower_http=trace", cli.log_level);
+    let log_filter = if cli.log_level == "trace" {
+        format!("m3u_proxy={},tower_http=trace", cli.log_level)
+    } else {
+        format!("m3u_proxy={}", cli.log_level)
+    };
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -111,9 +115,6 @@ async fn main() -> Result<()> {
     let scheduler = SchedulerService::new(
         state_manager.clone(),
         database.clone(),
-        data_mapping_service.clone(),
-        logo_asset_service.clone(),
-        config.clone(),
         config.ingestion.run_missed_immediately,
         Some(cache_invalidation_rx),
     );

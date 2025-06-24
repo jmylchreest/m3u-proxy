@@ -175,6 +175,100 @@ CREATE INDEX idx_logo_assets_id ON logo_assets(id);
 CREATE INDEX idx_logo_assets_parent ON logo_assets(parent_asset_id);
 CREATE INDEX idx_logo_assets_format_type ON logo_assets(format_type);
 
+-- EPG Sources Table
+CREATE TABLE epg_sources (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    source_type TEXT NOT NULL CHECK (source_type IN ('xmltv', 'xtream')),
+    url TEXT NOT NULL,
+    update_cron TEXT NOT NULL DEFAULT '0 0 */12 * * * *', -- Every 12 hours
+    username TEXT, -- For Xtream Codes
+    password TEXT, -- For Xtream Codes
+    timezone TEXT DEFAULT 'UTC',
+    timezone_detected BOOLEAN DEFAULT FALSE, -- Whether timezone was auto-detected
+    time_offset TEXT DEFAULT '0', -- Time offset like '+1h30m', '-45m', '+5s'
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_ingested_at TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+-- EPG Programs Table (parsed XMLTV data)
+CREATE TABLE epg_programs (
+    id TEXT PRIMARY KEY NOT NULL,
+    source_id TEXT NOT NULL REFERENCES epg_sources(id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL, -- Channel identifier from EPG source
+    channel_name TEXT NOT NULL,
+    program_title TEXT NOT NULL,
+    program_description TEXT,
+    program_category TEXT,
+    start_time TEXT NOT NULL, -- ISO 8601 datetime
+    end_time TEXT NOT NULL,   -- ISO 8601 datetime
+    episode_num TEXT,
+    season_num TEXT,
+    rating TEXT,
+    language TEXT,
+    subtitles TEXT,
+    aspect_ratio TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- EPG Channels Table (channel metadata from EPG sources)
+CREATE TABLE epg_channels (
+    id TEXT PRIMARY KEY NOT NULL,
+    source_id TEXT NOT NULL REFERENCES epg_sources(id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL, -- Original channel ID from EPG source
+    channel_name TEXT NOT NULL,
+    channel_logo TEXT,
+    channel_group TEXT,
+    language TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source_id, channel_id)
+);
+
+-- Junction table for mapping stream channels to EPG channels
+CREATE TABLE channel_epg_mapping (
+    id TEXT PRIMARY KEY NOT NULL,
+    stream_channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    epg_channel_id TEXT NOT NULL REFERENCES epg_channels(id) ON DELETE CASCADE,
+    mapping_type TEXT NOT NULL DEFAULT 'manual' CHECK (mapping_type IN ('manual', 'auto_name', 'auto_tvg_id')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(stream_channel_id, epg_channel_id)
+);
+
+-- EPG Indexes for performance
+CREATE INDEX idx_epg_sources_active ON epg_sources(is_active);
+CREATE INDEX idx_epg_sources_type ON epg_sources(source_type);
+CREATE INDEX idx_epg_programs_source_id ON epg_programs(source_id);
+CREATE INDEX idx_epg_programs_channel_id ON epg_programs(source_id, channel_id);
+CREATE INDEX idx_epg_programs_time_range ON epg_programs(start_time, end_time);
+CREATE INDEX idx_epg_programs_start_time ON epg_programs(start_time);
+CREATE INDEX idx_epg_channels_source_id ON epg_channels(source_id);
+CREATE INDEX idx_epg_channels_channel_id ON epg_channels(source_id, channel_id);
+CREATE INDEX idx_channel_epg_mapping_stream ON channel_epg_mapping(stream_channel_id);
+CREATE INDEX idx_channel_epg_mapping_epg ON channel_epg_mapping(epg_channel_id);
+
+-- Linked Xtream Sources Table (for coordinating stream + EPG sources)
+CREATE TABLE linked_xtream_sources (
+    id TEXT PRIMARY KEY NOT NULL,
+    link_id TEXT UNIQUE NOT NULL, -- UUID to link stream and EPG sources together
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    username TEXT NOT NULL,
+    password TEXT NOT NULL,
+    stream_source_id TEXT REFERENCES stream_sources(id) ON DELETE SET NULL,
+    epg_source_id TEXT REFERENCES epg_sources(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Indexes for linked sources
+CREATE INDEX idx_linked_xtream_sources_link_id ON linked_xtream_sources(link_id);
+CREATE INDEX idx_linked_xtream_sources_stream ON linked_xtream_sources(stream_source_id);
+CREATE INDEX idx_linked_xtream_sources_epg ON linked_xtream_sources(epg_source_id);
+
 -- Triggers to update 'updated_at' timestamps
 CREATE TRIGGER stream_sources_updated_at
     AFTER UPDATE ON stream_sources
@@ -210,4 +304,28 @@ CREATE TRIGGER logo_assets_updated_at
     AFTER UPDATE ON logo_assets
 BEGIN
     UPDATE logo_assets SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER epg_sources_updated_at
+    AFTER UPDATE ON epg_sources
+BEGIN
+    UPDATE epg_sources SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER epg_programs_updated_at
+    AFTER UPDATE ON epg_programs
+BEGIN
+    UPDATE epg_programs SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER epg_channels_updated_at
+    AFTER UPDATE ON epg_channels
+BEGIN
+    UPDATE epg_channels SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER linked_xtream_sources_updated_at
+    AFTER UPDATE ON linked_xtream_sources
+BEGIN
+    UPDATE linked_xtream_sources SET updated_at = datetime('now') WHERE id = NEW.id;
 END;

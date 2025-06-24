@@ -53,6 +53,7 @@ impl super::Database {
 
         Ok(fields)
     }
+    #[allow(dead_code)]
     pub async fn list_filters(&self) -> Result<Vec<Filter>> {
         let rows = sqlx::query(
             "SELECT id, name, starting_channel_number, is_inverse, logical_operator, condition_tree, created_at, updated_at
@@ -385,6 +386,7 @@ impl super::Database {
         })
     }
 
+    #[allow(dead_code)]
     pub async fn get_proxy_filters(&self, proxy_id: Uuid) -> Result<Vec<ProxyFilterWithDetails>> {
         let filters = sqlx::query(
             "SELECT pf.proxy_id, pf.filter_id, pf.sort_order, pf.is_active, pf.created_at,
@@ -428,6 +430,7 @@ impl super::Database {
         Ok(result)
     }
 
+    #[allow(dead_code)]
     pub async fn add_filter_to_proxy(
         &self,
         proxy_id: Uuid,
@@ -447,6 +450,7 @@ impl super::Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn remove_filter_from_proxy(&self, proxy_id: Uuid, filter_id: Uuid) -> Result<bool> {
         let result = sqlx::query("DELETE FROM proxy_filters WHERE proxy_id = ? AND filter_id = ?")
             .bind(proxy_id.to_string())
@@ -457,6 +461,7 @@ impl super::Database {
         Ok(result.rows_affected() > 0)
     }
 
+    #[allow(dead_code)]
     pub async fn update_proxy_filter_order(
         &self,
         proxy_id: Uuid,
@@ -479,6 +484,7 @@ impl super::Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn toggle_proxy_filter(
         &self,
         proxy_id: Uuid,

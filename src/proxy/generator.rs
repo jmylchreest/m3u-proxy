@@ -221,11 +221,13 @@ impl ProxyGenerator {
     }
 
     /// Get the storage path for M3U files
+    #[allow(dead_code)]
     pub fn get_m3u_storage_path(&self) -> &PathBuf {
         &self.storage_config.m3u_path
     }
 
     /// Get the storage path for logos
+    #[allow(dead_code)]
     pub fn get_logo_storage_path(&self) -> &PathBuf {
         &self.storage_config.cached_logo_path
     }

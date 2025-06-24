@@ -1,10 +1,10 @@
 use anyhow::Result;
 use axum::{
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use std::net::SocketAddr;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::cors::CorsLayer;
 
 use crate::{
     config::Config,
@@ -121,6 +121,52 @@ impl WebServer {
             )
             .route("/api/logos/search", get(api::search_logo_assets))
             .route("/api/logos/stats", get(api::get_logo_cache_stats))
+            // EPG Sources API
+            .route(
+                "/api/epg-sources",
+                get(api::list_epg_sources).post(api::create_epg_source),
+            )
+            .route(
+                "/api/epg-sources/:id",
+                get(api::get_epg_source)
+                    .put(api::update_epg_source)
+                    .delete(api::delete_epg_source),
+            )
+            .route(
+                "/api/epg-sources/:id/refresh",
+                post(api::refresh_epg_source),
+            )
+            .route(
+                "/api/epg-sources/:id/channels",
+                get(api::get_epg_source_channels),
+            )
+            .route("/api/epg/viewer", get(api::get_epg_viewer_data))
+            .route("/api/epg/dlq", get(api::get_epg_dlq_entries))
+            .route("/api/epg/dlq/resolve", post(api::resolve_epg_dlq_conflicts))
+            // Channel Mapping API
+            .route(
+                "/api/channel-mappings",
+                get(api::list_channel_mappings).post(api::create_channel_mapping),
+            )
+            .route(
+                "/api/channel-mappings/:id",
+                delete(api::delete_channel_mapping),
+            )
+            .route(
+                "/api/channel-mappings/auto-map",
+                post(api::auto_map_channels),
+            )
+            // Linked Xtream Sources API
+            .route(
+                "/api/linked-xtream-sources",
+                get(api::list_linked_xtream_sources).post(api::create_linked_xtream_source),
+            )
+            .route(
+                "/api/linked-xtream-sources/:link_id",
+                get(api::get_linked_xtream_source)
+                    .put(api::update_linked_xtream_source)
+                    .delete(api::delete_linked_xtream_source),
+            )
             // Health check endpoint
             .route("/health", get(api::health_check))
             // Web interface
@@ -136,7 +182,6 @@ impl WebServer {
             .route("/static/*path", get(handlers::serve_static_asset))
             // Middleware
             .layer(CorsLayer::permissive())
-            .layer(TraceLayer::new_for_http())
             // Shared state
             .with_state(AppState {
                 database,

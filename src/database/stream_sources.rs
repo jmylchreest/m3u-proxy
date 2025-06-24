@@ -1,13 +1,111 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use cron::Schedule;
+use reqwest::Client;
 use sqlx::Row;
 use std::str::FromStr;
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::Database;
 use crate::models::*;
+use crate::utils::normalize_url_scheme;
+
+// Helper function to check if an Xtream server provides EPG data
+async fn check_xtream_epg_availability(base_url: &str, username: &str, password: &str) -> bool {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    // Ensure the base URL has a proper scheme
+    let normalized_base_url = normalize_url_scheme(base_url);
+
+    let epg_url = format!(
+        "{}/xmltv.php?username={}&password={}",
+        normalized_base_url, username, password
+    );
+
+    match client.head(&epg_url).send().await {
+        Ok(response) => {
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            // If HEAD request is successful, try a small GET request to verify XMLTV content
+            if status.is_success() {
+                info!(
+                    "EPG probe HEAD request successful for '{}' - Status: {}, Content-Type: '{}'",
+                    base_url, status, content_type
+                );
+
+                // Some servers don't return proper content-type in HEAD requests
+                // Try a GET request with a small range to check for XMLTV content
+                match client
+                    .get(&epg_url)
+                    .header("Range", "bytes=0-512") // Only get first 512 bytes
+                    .send()
+                    .await
+                {
+                    Ok(get_response) => {
+                        let get_status = get_response.status();
+                        let get_content_type = get_response
+                            .headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("")
+                            .to_string(); // Convert to owned String
+
+                        if let Ok(content) = get_response.text().await {
+                            let content_preview = if content.len() > 200 {
+                                format!("{}...", &content[..200])
+                            } else {
+                                content.clone()
+                            };
+
+                            let has_xml_declaration = content.contains("<?xml");
+                            let has_tv_elements = content.contains("<tv")
+                                || content.contains("<programme")
+                                || content.contains("<channel");
+                            let is_xmltv = has_xml_declaration && has_tv_elements;
+
+                            info!("EPG probe GET request for '{}' - Status: {}, Content-Type: '{}', Length: {} bytes",
+                                  base_url, get_status, get_content_type, content.len());
+                            info!("EPG content preview: {}", content_preview);
+                            info!("EPG content analysis - XML declaration: {}, TV elements: {}, Valid XMLTV: {}",
+                                  has_xml_declaration, has_tv_elements, is_xmltv);
+
+                            is_xmltv
+                        } else {
+                            info!("EPG probe GET request for '{}' succeeded but failed to read content - falling back to content-type check", base_url);
+                            // Fallback to content-type check
+                            content_type.contains("xml") || content_type.contains("text")
+                        }
+                    }
+                    Err(e) => {
+                        info!("EPG probe GET request failed for '{}': {} - falling back to HEAD content-type check", base_url, e);
+                        // If GET fails, fallback to content-type check from HEAD
+                        content_type.contains("xml") || content_type.contains("text")
+                    }
+                }
+            } else {
+                info!(
+                    "EPG probe HEAD request failed for '{}' - Status: {}, Content-Type: '{}'",
+                    base_url, status, content_type
+                );
+                false
+            }
+        }
+        Err(e) => {
+            info!("Failed to check EPG availability for {}: {}", epg_url, e);
+            false
+        }
+    }
+}
 
 // Helper function to parse datetime from either RFC3339 or SQLite format
 fn parse_datetime(s: &str) -> Result<DateTime<Utc>> {
@@ -175,7 +273,8 @@ impl Database {
         }))
     }
 
-    pub async fn create_stream_source(
+    // Internal method that creates a stream source without auto-linking
+    pub(crate) async fn create_stream_source_internal(
         &self,
         source: &StreamSourceCreateRequest,
     ) -> Result<StreamSource> {
@@ -236,6 +335,91 @@ impl Database {
             last_ingested_at: None,
             is_active: true,
         })
+    }
+
+    pub async fn create_stream_source(
+        &self,
+        source: &StreamSourceCreateRequest,
+    ) -> Result<StreamSource> {
+        // Create the stream source first
+        let stream_source = self.create_stream_source_internal(source).await?;
+
+        // If this is an Xtream source with credentials, check if it provides EPG data
+        if source.source_type == StreamSourceType::Xtream {
+            if let (Some(username), Some(password)) = (&source.username, &source.password) {
+                info!(
+                    "Checking if Xtream source '{}' provides EPG data",
+                    source.name
+                );
+
+                let has_epg = check_xtream_epg_availability(&source.url, username, password).await;
+
+                if has_epg {
+                    info!(
+                        "Xtream source '{}' provides EPG data - automatically creating EPG source",
+                        source.name
+                    );
+
+                    let epg_source_request = EpgSourceCreateRequest {
+                        name: format!("{} EPG", source.name),
+                        source_type: EpgSourceType::Xtream,
+                        url: source.url.clone(),
+                        update_cron: source.update_cron.clone(),
+                        username: Some(username.clone()),
+                        password: Some(password.clone()),
+                        timezone: None,    // Will use default UTC
+                        time_offset: None, // Will use default 0
+                    };
+
+                    match self.create_epg_source_internal(&epg_source_request).await {
+                        Ok(epg_source) => {
+                            info!("Successfully created linked EPG source '{}' ({}) for stream source '{}'",
+                                  epg_source.name, epg_source.id, source.name);
+
+                            // Create a linked entry to track the relationship
+                            let link_id = Uuid::new_v4();
+                            let linked_id = Uuid::new_v4();
+                            let link_result = sqlx::query(
+                                "INSERT INTO linked_xtream_sources (id, stream_source_id, epg_source_id, link_id, name, url, username, password, created_at, updated_at)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                            )
+                            .bind(linked_id.to_string())
+                            .bind(stream_source.id.to_string())
+                            .bind(epg_source.id.to_string())
+                            .bind(link_id.to_string())
+                            .bind(format!("{} (Linked)", source.name))
+                            .bind(&source.url)
+                            .bind(&source.username)
+                            .bind(&source.password)
+                            .bind(stream_source.created_at.to_rfc3339())
+                            .bind(stream_source.created_at.to_rfc3339())
+                            .execute(&self.pool)
+                            .await;
+
+                            match link_result {
+                                Ok(_) => info!("Successfully linked stream source '{}' with EPG source '{}'", source.name, epg_source.name),
+                                Err(e) => warn!("Failed to create link between stream source '{}' and EPG source '{}': {}", source.name, epg_source.name, e),
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to create EPG source for Xtream stream source '{}': {}",
+                                source.name, e
+                            );
+                        }
+                    }
+                } else {
+                    info!("Xtream source '{}' does not provide EPG data - skipping EPG source creation", source.name);
+                }
+            } else {
+                info!(
+                    "Xtream source '{}' has no credentials - cannot check for EPG availability",
+                    source.name
+                );
+            }
+        }
+
+        Ok(stream_source)
     }
 
     pub async fn update_stream_source(

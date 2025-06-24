@@ -16,67 +16,6 @@ impl LogoAssetService {
         Self { pool }
     }
 
-    pub async fn create_asset(
-        &self,
-        name: String,
-        description: Option<String>,
-        file_name: String,
-        file_path: String,
-        file_size: i64,
-        mime_type: String,
-        asset_type: LogoAssetType,
-        source_url: Option<String>,
-        width: Option<i32>,
-        height: Option<i32>,
-    ) -> Result<LogoAsset, sqlx::Error> {
-        let asset_id = Uuid::new_v4();
-        let now = Utc::now();
-
-        let asset = LogoAsset {
-            id: asset_id,
-            name,
-            description,
-            file_name,
-            file_path,
-            file_size,
-            mime_type,
-            asset_type,
-            source_url,
-            width,
-            height,
-            parent_asset_id: None,
-            format_type: crate::models::logo_asset::LogoFormatType::Original,
-            created_at: now,
-            updated_at: now,
-        };
-
-        let asset_type_str = format!("{:?}", asset.asset_type).to_lowercase();
-
-        sqlx::query(
-            r#"
-            INSERT INTO logo_assets (id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#
-        )
-        .bind(asset.id.to_string())
-        .bind(&asset.name)
-        .bind(&asset.description)
-        .bind(&asset.file_name)
-        .bind(&asset.file_path)
-        .bind(asset.file_size)
-        .bind(&asset.mime_type)
-        .bind(asset_type_str)
-        .bind(&asset.source_url)
-        .bind(asset.width)
-        .bind(asset.height)
-        .bind(asset.created_at.to_rfc3339())
-        .bind(asset.updated_at.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
-
-        Ok(asset)
-    }
-
     pub async fn create_asset_with_id(
         &self,
         asset_id: Uuid,
@@ -414,66 +353,6 @@ impl LogoAssetService {
                 .unwrap_or(0),
             cache_hit_rate: None,
         })
-    }
-
-    pub async fn create_asset_from_upload(
-        &self,
-        request: LogoAssetCreateRequest,
-        file_data: &[u8],
-        _content_type: &str,
-    ) -> Result<LogoAsset, Box<dyn std::error::Error + Send + Sync>> {
-        use crate::logo_assets::LogoAssetStorage;
-
-        // Generate UUID for this asset
-        let asset_id = Uuid::new_v4();
-
-        // Detect file extension
-        let file_extension = if file_data.starts_with(b"<svg") || file_data.starts_with(b"<?xml") {
-            "svg"
-        } else {
-            let format = Self::detect_image_format(file_data)?;
-            match format {
-                ImageFormat::Png => "png",
-                ImageFormat::Jpeg => "jpg",
-                ImageFormat::Gif => "gif",
-                ImageFormat::WebP => "webp",
-                _ => "png",
-            }
-        };
-
-        // Save file to storage
-        let storage = LogoAssetStorage::new(
-            std::path::PathBuf::from("./data/logos/uploaded"),
-            std::path::PathBuf::from("./data/logos/cached"),
-        );
-        let (file_name, file_path, file_size, mime_type, dimensions) = storage
-            .save_uploaded_file(file_data.to_vec(), asset_id, file_extension)
-            .await
-            .map_err(|e| format!("Failed to save file: {}", e))?;
-
-        // Extract dimensions if available
-        let (width, height) = dimensions
-            .map(|(w, h)| (Some(w as i32), Some(h as i32)))
-            .unwrap_or((None, None));
-
-        // Create database record with the pre-generated UUID
-        let asset = self
-            .create_asset_with_id(
-                asset_id,
-                request.name,
-                request.description,
-                file_name,
-                file_path,
-                file_size,
-                mime_type,
-                LogoAssetType::Uploaded,
-                None, // source_url
-                width,
-                height,
-            )
-            .await?;
-
-        Ok(asset)
     }
 
     /// Convert image data to PNG format if it's not already PNG

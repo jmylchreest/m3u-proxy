@@ -7,7 +7,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing;
 use uuid::Uuid;
+pub mod channel_mapping;
+pub mod epg_sources;
 pub mod filters;
+pub mod linked_xtream;
 pub mod stream_sources;
 
 #[derive(Clone)]

@@ -394,14 +394,4 @@ impl DataMappingEngine {
         Ok(mapped_channels)
     }
 
-    pub fn get_available_fields() -> Vec<String> {
-        vec![
-            "channel_name".to_string(),
-            "tvg_id".to_string(),
-            "tvg_name".to_string(),
-            "tvg_logo".to_string(),
-            "group_title".to_string(),
-            "stream_url".to_string(),
-        ]
-    }
 }

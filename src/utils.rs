@@ -2,6 +2,22 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx;
 use uuid::Uuid;
 
+pub mod channel_similarity;
+pub mod time;
+
+/// Normalize a URL by ensuring it has a proper scheme (http:// or https://)
+/// If the URL already has a scheme, it returns it unchanged.
+/// If the URL lacks a scheme, it prepends "http://"
+pub fn normalize_url_scheme(url: &str) -> String {
+    let trimmed_url = url.trim_end_matches('/');
+
+    if trimmed_url.starts_with("http://") || trimmed_url.starts_with("https://") {
+        trimmed_url.to_string()
+    } else {
+        format!("http://{}", trimmed_url)
+    }
+}
+
 /// Parse datetime from SQLite format or RFC3339 format
 pub fn parse_datetime(datetime_str: &str) -> Result<DateTime<Utc>, sqlx::Error> {
     // Try parsing as RFC3339 first (with timezone info)
@@ -39,12 +55,6 @@ pub fn sanitize_base_url(base_url: &str) -> String {
 
 /// Generate a full logo URL using the base URL and logo asset ID
 pub fn generate_logo_url(base_url: &str, logo_id: Uuid) -> String {
-    let sanitized_base = sanitize_base_url(base_url);
-    format!("{}/api/logos/{}", sanitized_base, logo_id)
-}
-
-/// Generate a full logo URL using the base URL and logo asset ID as string
-pub fn generate_logo_url_str(base_url: &str, logo_id: &str) -> String {
     let sanitized_base = sanitize_base_url(base_url);
     format!("{}/api/logos/{}", sanitized_base, logo_id)
 }
@@ -92,17 +102,6 @@ mod tests {
         assert_eq!(
             generate_logo_url("https://example.com", logo_id),
             "https://example.com/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
-        );
-    }
-
-    #[test]
-    fn test_generate_logo_url_str() {
-        assert_eq!(
-            generate_logo_url_str(
-                "http://localhost:8080",
-                "c63d556e-7b3c-4a85-accd-214c32663482"
-            ),
-            "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
     }
 }

@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 
 use super::AppState;
 use crate::assets::StaticAssets;
-use crate::models::StreamProxy;
+
 use crate::proxy::ProxyService;
 
 /// Serve proxy M3U files with on-demand generation

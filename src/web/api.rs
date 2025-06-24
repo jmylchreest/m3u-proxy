@@ -3,11 +3,14 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
+use chrono::{DateTime, Utc};
+
 use serde_json::json;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use super::AppState;
+
 use crate::models::*;
 use crate::proxy::generator::ProxyGenerator;
 use serde::Deserialize;
@@ -44,6 +47,68 @@ pub async fn create_source(
         Ok(source) => {
             // Invalidate scheduler cache since we added a new source
             let _ = state.cache_invalidation_tx.send(());
+
+            // Trigger immediate refresh of the new stream source to populate data right away
+            info!(
+                "Triggering immediate refresh for new stream source: {} ({})",
+                source.name, source.id
+            );
+
+            tokio::spawn({
+                let database = state.database.clone();
+                let state_manager = state.state_manager.clone();
+                let source_id = source.id;
+                let source_name = source.name.clone();
+                async move {
+                    use crate::ingestor::IngestorService;
+
+                    // Small delay to ensure the response is sent first
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+                    let ingestor = IngestorService::new(state_manager.clone());
+
+                    if let Ok(Some(stream_source)) = database.get_stream_source(source_id).await {
+                        match ingestor.ingest_source(&stream_source).await {
+                            Ok(channels) => {
+                                info!(
+                                    "Initial stream ingestion completed for '{}': {} channels",
+                                    source_name,
+                                    channels.len()
+                                );
+
+                                // Update the channels in database
+                                if let Err(e) = database
+                                    .update_source_channels(
+                                        source_id,
+                                        &channels,
+                                        Some(&state_manager),
+                                    )
+                                    .await
+                                {
+                                    error!(
+                                        "Failed to save initial stream data for source '{}': {}",
+                                        source_name, e
+                                    );
+                                } else {
+                                    // Update last_ingested_at timestamp
+                                    if let Err(e) =
+                                        database.update_source_last_ingested(source_id).await
+                                    {
+                                        error!("Failed to update last_ingested_at for stream source '{}': {}", source_name, e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to perform initial refresh of stream source '{}': {}",
+                                    source_name, e
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+
             Ok(Json(source))
         }
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -217,43 +282,40 @@ pub async fn cancel_source_ingestion(
 ) -> Result<Json<RefreshResponse>, StatusCode> {
     use tracing::{info, warn};
 
-    // Check if source exists
-    match state.database.get_stream_source(id).await {
-        Ok(Some(source)) => {
-            info!(
-                "Attempting to cancel ingestion for source '{}' ({})",
-                source.name, source.id
-            );
+    // Check if source exists (try both stream and EPG sources)
+    let source_name = if let Ok(Some(source)) = state.database.get_stream_source(id).await {
+        source.name
+    } else if let Ok(Some(source)) = state.database.get_epg_source(id).await {
+        source.name
+    } else {
+        warn!("Source ({}) not found for cancellation", id);
+        return Err(StatusCode::NOT_FOUND);
+    };
 
-            let cancelled = state.state_manager.cancel_ingestion(id).await;
+    info!(
+        "Attempting to cancel ingestion for source '{}' ({})",
+        source_name, id
+    );
 
-            if cancelled {
-                info!(
-                    "Successfully cancelled ingestion for source '{}'",
-                    source.name
-                );
-                Ok(Json(RefreshResponse {
-                    success: true,
-                    message: "Ingestion cancelled successfully".to_string(),
-                    channel_count: 0,
-                }))
-            } else {
-                warn!("No active ingestion found for source '{}'", source.name);
-                Ok(Json(RefreshResponse {
-                    success: false,
-                    message: "No active ingestion to cancel".to_string(),
-                    channel_count: 0,
-                }))
-            }
-        }
-        Ok(None) => {
-            warn!("Source ({}) not found for cancellation", id);
-            Err(StatusCode::NOT_FOUND)
-        }
-        Err(e) => {
-            error!("Database error getting source ({}): {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+    let cancelled = state.state_manager.cancel_ingestion(id).await;
+
+    if cancelled {
+        info!(
+            "Successfully cancelled ingestion for source '{}'",
+            source_name
+        );
+        Ok(Json(RefreshResponse {
+            success: true,
+            message: "Ingestion cancelled successfully".to_string(),
+            channel_count: 0,
+        }))
+    } else {
+        warn!("No active ingestion found for source '{}'", source_name);
+        Ok(Json(RefreshResponse {
+            success: false,
+            message: "No active ingestion to cancel".to_string(),
+            channel_count: 0,
+        }))
     }
 }
 
@@ -341,7 +403,7 @@ pub async fn regenerate_proxy(
 
     // Use the existing proxy generator to regenerate with current data mapping rules
     let proxy_generator = ProxyGenerator::new(state.config.storage.clone());
-    
+
     match proxy_generator
         .generate(
             &proxy,
@@ -354,7 +416,10 @@ pub async fn regenerate_proxy(
     {
         Ok(generation) => {
             // Save the new M3U file
-            match proxy_generator.save_m3u_file(proxy.id, &generation.m3u_content).await {
+            match proxy_generator
+                .save_m3u_file(proxy.id, &generation.m3u_content)
+                .await
+            {
                 Ok(_) => {
                     info!(
                         "Successfully regenerated proxy '{}' with {} channels",
@@ -368,7 +433,10 @@ pub async fn regenerate_proxy(
                     })))
                 }
                 Err(e) => {
-                    error!("Failed to save regenerated M3U for proxy {}: {}", proxy_id, e);
+                    error!(
+                        "Failed to save regenerated M3U for proxy {}: {}",
+                        proxy_id, e
+                    );
                     Err(StatusCode::INTERNAL_SERVER_ERROR)
                 }
             }
@@ -1369,6 +1437,774 @@ pub async fn get_logo_cache_stats(
         Ok(stats) => Ok(Json(stats)),
         Err(e) => {
             error!("Failed to get logo cache stats: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// EPG Sources API
+pub async fn list_epg_sources(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<EpgSourceWithStats>>, StatusCode> {
+    match state.database.list_epg_sources_with_stats().await {
+        Ok(sources) => Ok(Json(sources)),
+        Err(e) => {
+            error!("Failed to list EPG sources: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn create_epg_source(
+    State(state): State<AppState>,
+    Json(payload): Json<EpgSourceCreateRequest>,
+) -> Result<Json<EpgSource>, StatusCode> {
+    match state.database.create_epg_source(&payload).await {
+        Ok(source) => {
+            // Invalidate scheduler cache since we added a new EPG source
+            let _ = state.cache_invalidation_tx.send(());
+
+            // Trigger immediate refresh of the new EPG source to populate data right away
+            info!(
+                "Triggering immediate refresh for new EPG source: {} ({})",
+                source.name, source.id
+            );
+
+            tokio::spawn({
+                let database = state.database.clone();
+                let state_manager = state.state_manager.clone();
+                let source_id = source.id;
+                let source_name = source.name.clone();
+                async move {
+                    use crate::ingestor::ingest_epg::EpgIngestor;
+
+                    // Small delay to ensure the response is sent first
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+                    let epg_ingestor = EpgIngestor::new_with_state_manager(
+                        database.clone(),
+                        state_manager.clone(),
+                    );
+
+                    if let Ok(Some(epg_source)) = database.get_epg_source(source_id).await {
+                        match epg_ingestor
+                            .ingest_epg_source_with_trigger(
+                                &epg_source,
+                                crate::ingestor::state_manager::ProcessingTrigger::Manual,
+                            )
+                            .await
+                        {
+                            Ok((channels, programs, _detected_timezone)) => {
+                                info!(
+                                    "Initial EPG ingestion completed for '{}': {} channels, {} programs",
+                                    source_name, channels.len(), programs.len()
+                                );
+
+                                // Update the EPG data in database
+                                if let Err(e) = database
+                                    .update_epg_source_data(source_id, channels, programs)
+                                    .await
+                                {
+                                    error!(
+                                        "Failed to save initial EPG data for source '{}': {}",
+                                        source_name, e
+                                    );
+                                } else {
+                                    // Update last_ingested_at timestamp
+                                    if let Err(e) =
+                                        database.update_epg_source_last_ingested(source_id).await
+                                    {
+                                        error!("Failed to update last_ingested_at for EPG source '{}': {}", source_name, e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to perform initial refresh of EPG source '{}': {}",
+                                    source_name, e
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+
+            Ok(Json(source))
+        }
+        Err(e) => {
+            error!("Failed to create EPG source: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_epg_source(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<EpgSource>, StatusCode> {
+    match state.database.get_epg_source(id).await {
+        Ok(Some(source)) => Ok(Json(source)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to get EPG source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn update_epg_source(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(payload): Json<EpgSourceUpdateRequest>,
+) -> Result<Json<EpgSource>, StatusCode> {
+    // Check if source is currently being processed before allowing edit
+    if let Some(processing_info) = state.state_manager.get_processing_info(id).await {
+        // If currently processing (no retry time set), reject the edit
+        if processing_info.next_retry_after.is_none() {
+            warn!(
+                "Attempted to edit EPG source {} while processing is active (started at {})",
+                id, processing_info.started_at
+            );
+            return Err(StatusCode::CONFLICT); // 409 Conflict
+        }
+    }
+
+    // Check if there's an active ingestion in progress
+    if let Some(progress) = state.state_manager.get_progress(id).await {
+        match progress.state {
+            crate::models::IngestionState::Connecting
+            | crate::models::IngestionState::Downloading
+            | crate::models::IngestionState::Parsing => {
+                warn!(
+                    "Attempted to edit EPG source {} while ingestion is in progress (state: {:?})",
+                    id, progress.state
+                );
+                return Err(StatusCode::CONFLICT); // 409 Conflict
+            }
+            _ => {
+                // Completed, error, or other final states - allow edit
+            }
+        }
+    }
+
+    // Update the source
+    match state.database.update_epg_source(id, &payload).await {
+        Ok(true) => {
+            // Get the updated source to return
+            match state.database.get_epg_source(id).await {
+                Ok(Some(source)) => {
+                    // Invalidate scheduler cache since source was updated
+                    let _ = state.cache_invalidation_tx.send(());
+                    info!(
+                        "Successfully updated EPG source {} after processing state check",
+                        id
+                    );
+                    Ok(Json(source))
+                }
+                Ok(None) => Err(StatusCode::NOT_FOUND),
+                Err(e) => {
+                    error!("Failed to get updated EPG source {}: {}", id, e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        }
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to update EPG source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn delete_epg_source(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    match state.database.delete_epg_source(id).await {
+        Ok(true) => {
+            // Invalidate scheduler cache since source was deleted
+            let _ = state.cache_invalidation_tx.send(());
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to delete EPG source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn refresh_epg_source(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<EpgRefreshResponse>, StatusCode> {
+    use crate::ingestor::ingest_epg::EpgIngestor;
+
+    // Get the source first
+    let source = match state.database.get_epg_source(id).await {
+        Ok(Some(source)) => source,
+        Ok(None) => {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        Err(e) => {
+            error!("Failed to get EPG source {}: {}", id, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    info!("EPG source refresh requested for: {} ({})", source.name, id);
+
+    // Create EPG ingestor with state manager for progress tracking
+    let ingestor =
+        EpgIngestor::new_with_state_manager(state.database.clone(), state.state_manager.clone());
+
+    match ingestor
+        .ingest_epg_source_with_trigger(
+            &source,
+            crate::ingestor::state_manager::ProcessingTrigger::Manual,
+        )
+        .await
+    {
+        Ok((channels, mut programs, detected_timezone)) => {
+            // Update channel names in programs
+            ingestor.update_channel_names(&channels, &mut programs);
+
+            // Update detected timezone if found
+            if let Some(ref detected_tz) = detected_timezone {
+                if detected_tz != &source.timezone && !source.timezone_detected {
+                    info!(
+                        "Updating EPG source '{}' timezone from '{}' to detected '{}'",
+                        source.name, source.timezone, detected_tz
+                    );
+                    let _ = state
+                        .database
+                        .update_epg_source_detected_timezone(source.id, detected_tz)
+                        .await;
+                }
+            }
+
+            // Save to database using cancellation-aware method
+            match ingestor
+                .save_epg_data_with_cancellation(source.id, channels, programs)
+                .await
+            {
+                Ok((channel_count, program_count)) => {
+                    // Update last ingested timestamp
+                    let _ = state
+                        .database
+                        .update_epg_source_last_ingested(source.id)
+                        .await;
+
+                    let message = if detected_timezone.is_some() && !source.timezone_detected {
+                        format!(
+                            "EPG source '{}' refreshed successfully (timezone auto-detected: {})",
+                            source.name,
+                            detected_timezone.as_ref().unwrap()
+                        )
+                    } else {
+                        format!("EPG source '{}' refreshed successfully", source.name)
+                    };
+
+                    info!(
+                        "Successfully refreshed EPG source '{}': {} channels, {} programs",
+                        source.name, channel_count, program_count
+                    );
+
+                    Ok(Json(EpgRefreshResponse {
+                        success: true,
+                        message,
+                        channel_count,
+                        program_count,
+                    }))
+                }
+                Err(e) => {
+                    error!("Failed to save EPG data for source {}: {}", id, e);
+                    Ok(Json(EpgRefreshResponse {
+                        success: false,
+                        message: format!("Failed to save EPG data: {}", e),
+                        channel_count: 0,
+                        program_count: 0,
+                    }))
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to ingest EPG source {}: {}", id, e);
+            Ok(Json(EpgRefreshResponse {
+                success: false,
+                message: format!("Failed to fetch EPG data: {}", e),
+                channel_count: 0,
+                program_count: 0,
+            }))
+        }
+    }
+}
+
+pub async fn get_epg_source_channels(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<EpgChannel>>, StatusCode> {
+    match state.database.get_epg_source_channels(id).await {
+        Ok(channels) => Ok(Json(channels)),
+        Err(e) => {
+            error!("Failed to get channels for EPG source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_epg_viewer_data(
+    Query(request): Query<EpgViewerRequest>,
+    State(state): State<AppState>,
+) -> Result<Json<EpgViewerResponse>, StatusCode> {
+    // Parse datetime strings
+    let start_time = match DateTime::parse_from_rfc3339(&request.start_time) {
+        Ok(dt) => dt.with_timezone(&Utc),
+        Err(_) => {
+            error!("Invalid start_time format: {}", request.start_time);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    let end_time = match DateTime::parse_from_rfc3339(&request.end_time) {
+        Ok(dt) => dt.with_timezone(&Utc),
+        Err(_) => {
+            error!("Invalid end_time format: {}", request.end_time);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    let parsed_request = EpgViewerRequestParsed {
+        start_time,
+        end_time,
+        channel_filter: request.channel_filter,
+        source_ids: request.source_ids,
+    };
+
+    match state
+        .database
+        .get_epg_data_for_viewer(&parsed_request)
+        .await
+    {
+        Ok(response) => Ok(Json(response)),
+        Err(e) => {
+            error!("Failed to get EPG viewer data: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// Linked Xtream Sources API
+pub async fn list_linked_xtream_sources(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<LinkedXtreamSources>>, StatusCode> {
+    match state.database.list_linked_xtream_sources().await {
+        Ok(sources) => Ok(Json(sources)),
+        Err(e) => {
+            error!("Failed to list linked Xtream sources: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn create_linked_xtream_source(
+    State(state): State<AppState>,
+    Json(payload): Json<XtreamCodesCreateRequest>,
+) -> Result<Json<XtreamCodesCreateResponse>, StatusCode> {
+    match state.database.create_linked_xtream_sources(&payload).await {
+        Ok(response) => {
+            if response.success {
+                // Invalidate scheduler cache since we may have added new sources
+                let _ = state.cache_invalidation_tx.send(());
+            }
+            Ok(Json(response))
+        }
+        Err(e) => {
+            error!("Failed to create linked Xtream source: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_linked_xtream_source(
+    Path(link_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<LinkedXtreamSources>, StatusCode> {
+    match state.database.get_linked_xtream_source(&link_id).await {
+        Ok(Some(sources)) => Ok(Json(sources)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to get linked Xtream source {}: {}", link_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn update_linked_xtream_source(
+    Path(link_id): Path<String>,
+    State(state): State<AppState>,
+    Json(payload): Json<XtreamCodesUpdateRequest>,
+) -> Result<StatusCode, StatusCode> {
+    match state
+        .database
+        .update_linked_xtream_sources(&link_id, &payload)
+        .await
+    {
+        Ok(true) => {
+            // Invalidate scheduler cache since sources were updated
+            let _ = state.cache_invalidation_tx.send(());
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to update linked Xtream source {}: {}", link_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn delete_linked_xtream_source(
+    Path(link_id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    let _delete_sources = params
+        .get("delete_sources")
+        .map(|s| s == "true")
+        .unwrap_or(false);
+
+    match state.database.delete_linked_xtream_sources(&link_id).await {
+        Ok(true) => {
+            // Invalidate scheduler cache since sources may have been deleted
+            let _ = state.cache_invalidation_tx.send(());
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to delete linked Xtream source {}: {}", link_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// EPG DLQ (Dead Letter Queue) API endpoints
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct EpgDlqResponse {
+    pub entries: Vec<crate::models::EpgDlq>,
+    pub statistics: crate::models::EpgDlqStatistics,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct EpgDlqResolution {
+    pub channel_id: String,
+    pub new_mapping: String,
+    pub action: String, // "remap" or "ignore"
+}
+
+pub async fn get_epg_dlq_entries(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Result<Json<EpgDlqResponse>, StatusCode> {
+    let source_id = params
+        .get("source_id")
+        .and_then(|id| Uuid::parse_str(id).ok());
+    let resolved = params.get("resolved").and_then(|r| r.parse::<bool>().ok());
+
+    // Get entries first
+    match state
+        .database
+        .get_epg_dlq_entries(source_id, resolved)
+        .await
+    {
+        Ok(entries) => {
+            // Get statistics
+            match state.database.get_epg_dlq_statistics(source_id).await {
+                Ok(statistics) => Ok(Json(EpgDlqResponse {
+                    entries,
+                    statistics,
+                })),
+                Err(e) => {
+                    error!("Failed to get EPG DLQ statistics: {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to get EPG DLQ entries: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn resolve_epg_dlq_conflicts(
+    State(state): State<AppState>,
+    Json(resolutions): Json<Vec<EpgDlqResolution>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mut resolved_count = 0;
+    let mut errors = Vec::new();
+
+    for resolution in resolutions {
+        match resolution.action.as_str() {
+            "remap" => {
+                // Find the DLQ entry to get source information
+                match state.database.get_epg_dlq_entries(None, Some(false)).await {
+                    Ok(dlq_entries) => {
+                        if let Some(entry) = dlq_entries
+                            .iter()
+                            .find(|e| e.original_channel_id == resolution.channel_id)
+                        {
+                            // Parse the channel data
+                            match serde_json::from_str::<serde_json::Value>(&entry.channel_data) {
+                                Ok(mut channel_data) => {
+                                    // Update the channel_id in the stored data
+                                    channel_data["channel_id"] =
+                                        serde_json::Value::String(resolution.new_mapping.clone());
+
+                                    // Create a new channel with the remapped ID
+                                    if let Ok(_updated_channel_data) =
+                                        serde_json::to_string(&channel_data)
+                                    {
+                                        // Mark the original DLQ entry as resolved
+                                        match state
+                                            .database
+                                            .resolve_epg_dlq_entry(
+                                                entry.source_id,
+                                                &entry.original_channel_id,
+                                                true,
+                                                Some(format!(
+                                                    "Remapped to {}",
+                                                    resolution.new_mapping
+                                                )),
+                                            )
+                                            .await
+                                        {
+                                            Ok(true) => {
+                                                info!(
+                                                    "Successfully resolved DLQ entry: {} -> {}",
+                                                    resolution.channel_id, resolution.new_mapping
+                                                );
+                                                resolved_count += 1;
+                                            }
+                                            Ok(false) => {
+                                                errors.push(format!(
+                                                    "DLQ entry not found: {}",
+                                                    resolution.channel_id
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                errors.push(format!(
+                                                    "Failed to resolve DLQ entry {}: {}",
+                                                    resolution.channel_id, e
+                                                ));
+                                            }
+                                        }
+                                    } else {
+                                        errors.push(format!(
+                                            "Failed to serialize updated channel data for {}",
+                                            resolution.channel_id
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    errors.push(format!(
+                                        "Failed to parse channel data for {}: {}",
+                                        resolution.channel_id, e
+                                    ));
+                                }
+                            }
+                        } else {
+                            errors.push(format!("DLQ entry not found: {}", resolution.channel_id));
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(format!("Failed to fetch DLQ entries: {}", e));
+                    }
+                }
+            }
+            "ignore" => {
+                // Find the DLQ entry to get source information for marking as resolved
+                match state.database.get_epg_dlq_entries(None, Some(false)).await {
+                    Ok(dlq_entries) => {
+                        if let Some(entry) = dlq_entries
+                            .iter()
+                            .find(|e| e.original_channel_id == resolution.channel_id)
+                        {
+                            match state
+                                .database
+                                .resolve_epg_dlq_entry(
+                                    entry.source_id,
+                                    &entry.original_channel_id,
+                                    true,
+                                    Some("Ignored by user".to_string()),
+                                )
+                                .await
+                            {
+                                Ok(true) => {
+                                    info!(
+                                        "Successfully ignored DLQ entry: {}",
+                                        resolution.channel_id
+                                    );
+                                    resolved_count += 1;
+                                }
+                                Ok(false) => {
+                                    errors.push(format!(
+                                        "DLQ entry not found: {}",
+                                        resolution.channel_id
+                                    ));
+                                }
+                                Err(e) => {
+                                    errors.push(format!(
+                                        "Failed to ignore DLQ entry {}: {}",
+                                        resolution.channel_id, e
+                                    ));
+                                }
+                            }
+                        } else {
+                            errors.push(format!("DLQ entry not found: {}", resolution.channel_id));
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(format!("Failed to fetch DLQ entries: {}", e));
+                    }
+                }
+            }
+            _ => {
+                errors.push(format!("Unknown action: {}", resolution.action));
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "resolved_count": resolved_count,
+        "errors": errors
+    })))
+}
+
+// Channel Mapping API Endpoints
+#[derive(Deserialize)]
+pub struct CreateChannelMappingRequest {
+    pub stream_channel_id: Uuid,
+    pub epg_channel_id: Uuid,
+    pub mapping_type: String,
+}
+
+#[derive(Deserialize)]
+pub struct ChannelMappingQueryParams {
+    pub stream_channel_id: Option<Uuid>,
+    pub epg_channel_id: Option<Uuid>,
+    pub mapping_type: Option<String>,
+}
+
+pub async fn list_channel_mappings(
+    Query(params): Query<ChannelMappingQueryParams>,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ChannelEpgMapping>>, StatusCode> {
+    match state
+        .database
+        .get_channel_mappings(
+            params.stream_channel_id,
+            params.epg_channel_id,
+            params.mapping_type.as_deref(),
+        )
+        .await
+    {
+        Ok(mappings) => Ok(Json(mappings)),
+        Err(e) => {
+            error!("Failed to get channel mappings: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn create_channel_mapping(
+    State(state): State<AppState>,
+    Json(request): Json<CreateChannelMappingRequest>,
+) -> Result<Json<ChannelEpgMapping>, StatusCode> {
+    let mapping_type = match request.mapping_type.as_str() {
+        "manual" => EpgMappingType::Manual,
+        "auto_name" => EpgMappingType::AutoName,
+        "auto_tvg_id" => EpgMappingType::AutoTvgId,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    match state
+        .database
+        .create_channel_mapping(
+            request.stream_channel_id,
+            request.epg_channel_id,
+            mapping_type,
+        )
+        .await
+    {
+        Ok(mapping) => {
+            info!(
+                "Created channel mapping: {} -> {}",
+                request.stream_channel_id, request.epg_channel_id
+            );
+            Ok(Json(mapping))
+        }
+        Err(e) => {
+            error!("Failed to create channel mapping: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn delete_channel_mapping(
+    Path(mapping_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    match state.database.delete_channel_mapping(mapping_id).await {
+        Ok(true) => {
+            info!("Deleted channel mapping: {}", mapping_id);
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to delete channel mapping: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AutoMapChannelsRequest {
+    pub source_id: Option<Uuid>,
+    pub mapping_type: String,
+    pub dry_run: Option<bool>,
+}
+
+pub async fn auto_map_channels(
+    State(state): State<AppState>,
+    Json(request): Json<AutoMapChannelsRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mapping_type = match request.mapping_type.as_str() {
+        "name" => EpgMappingType::AutoName,
+        "tvg_id" => EpgMappingType::AutoTvgId,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let dry_run = request.dry_run.unwrap_or(false);
+
+    match state
+        .database
+        .auto_map_channels(request.source_id, mapping_type, dry_run)
+        .await
+    {
+        Ok(result) => {
+            info!(
+                "Auto-mapped channels: {} matches found, {} created",
+                result.potential_matches, result.mappings_created
+            );
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "potential_matches": result.potential_matches,
+                "mappings_created": result.mappings_created,
+                "dry_run": dry_run
+            })))
+        }
+        Err(e) => {
+            error!("Failed to auto-map channels: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

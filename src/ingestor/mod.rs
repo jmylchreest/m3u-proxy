@@ -2,10 +2,11 @@ use crate::models::*;
 use anyhow::Result;
 use async_trait::async_trait;
 
-pub mod m3u_parser;
+pub mod ingest_epg;
+pub mod ingest_m3u;
+pub mod ingest_xtream;
 pub mod scheduler;
 pub mod state_manager;
-pub mod xtream_parser;
 
 pub use state_manager::{IngestionStateManager, ProcessingTrigger};
 
@@ -53,11 +54,11 @@ impl IngestorService {
 
         let result = match source.source_type {
             StreamSourceType::M3u => {
-                let parser = m3u_parser::M3uIngestor::new();
+                let parser = ingest_m3u::M3uIngestor::new();
                 parser.ingest(source, &self.state_manager).await
             }
             StreamSourceType::Xtream => {
-                let parser = xtream_parser::XtreamIngestor::new();
+                let parser = ingest_xtream::XtreamIngestor::new();
                 parser.ingest(source, &self.state_manager).await
             }
         };

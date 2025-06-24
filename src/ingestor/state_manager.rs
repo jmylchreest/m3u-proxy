@@ -53,30 +53,35 @@ impl IngestionStateManager {
     /// false if already processing or in backoff period.
     pub async fn try_start_processing(&self, source_id: Uuid, trigger: ProcessingTrigger) -> bool {
         let mut processing = self.processing_info.write().await;
+        let now = Utc::now();
 
         // Check if already processing
-        if processing.contains_key(&source_id) {
-            return false;
-        }
-
-        // Check if we have existing failure info and are in backoff
-        if let Some(info) = processing.get(&source_id) {
-            if let Some(retry_after) = info.next_retry_after {
-                if Utc::now() < retry_after {
+        if let Some(existing_info) = processing.get(&source_id) {
+            // Check if we're still in a processing state (no next_retry_after set or in backoff)
+            if existing_info.next_retry_after.is_none() {
+                // Still actively processing
+                return false;
+            }
+            
+            // Check if we're in backoff period
+            if let Some(retry_after) = existing_info.next_retry_after {
+                if now < retry_after {
                     return false; // Still in backoff period
                 }
             }
         }
 
-        // Start processing
+        // Start processing - preserve failure count from any existing entry
+        let failure_count = processing
+            .get(&source_id)
+            .map(|i| i.failure_count)
+            .unwrap_or(0);
+
         let info = ProcessingInfo {
-            started_at: Utc::now(),
+            started_at: now,
             triggered_by: trigger,
-            failure_count: processing
-                .get(&source_id)
-                .map(|i| i.failure_count)
-                .unwrap_or(0),
-            next_retry_after: None,
+            failure_count,
+            next_retry_after: None, // Clear retry time when starting new processing
         };
 
         processing.insert(source_id, info);

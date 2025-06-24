@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 pub mod channel;
 pub mod data_mapping;
+pub mod epg_source;
 pub mod filter;
+pub mod linked_xtream;
 pub mod logo_asset;
 pub mod stream_proxy;
 pub mod stream_source;
@@ -27,7 +29,7 @@ pub struct StreamSource {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "stream_source_type", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum StreamSourceType {
@@ -324,21 +326,6 @@ impl LogicalOperator {
     pub fn is_and_like(&self) -> bool {
         matches!(self, LogicalOperator::And | LogicalOperator::All)
     }
-
-    /// Checks if this is an OR-like operator (Or or Any)
-    pub fn is_or_like(&self) -> bool {
-        matches!(self, LogicalOperator::Or | LogicalOperator::Any)
-    }
-
-    /// Converts old format to new format for consistency
-    pub fn normalize(&self) -> LogicalOperator {
-        match self {
-            LogicalOperator::And => LogicalOperator::All,
-            LogicalOperator::Or => LogicalOperator::Any,
-            LogicalOperator::All => LogicalOperator::All,
-            LogicalOperator::Any => LogicalOperator::Any,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,12 +378,6 @@ impl Filter {
             .as_ref()
             .and_then(|json| serde_json::from_str(json).ok())
     }
-
-    /// Set the condition tree by serializing to JSON
-    pub fn set_condition_tree(&mut self, tree: &ConditionTree) -> Result<(), serde_json::Error> {
-        self.condition_tree = Some(serde_json::to_string(tree)?);
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -412,4 +393,249 @@ pub struct ProxyFilterWithDetails {
     #[serde(flatten)]
     pub proxy_filter: ProxyFilter,
     pub filter: Filter,
+}
+
+// EPG Source Models
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct EpgSource {
+    pub id: Uuid,
+    pub name: String,
+    pub source_type: EpgSourceType,
+    pub url: String,
+    pub update_cron: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub timezone: String,
+    pub timezone_detected: bool,
+    pub time_offset: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_ingested_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "epg_source_type", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum EpgSourceType {
+    Xmltv,
+    Xtream,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct EpgProgram {
+    pub id: Uuid,
+    pub source_id: Uuid,
+    pub channel_id: String,
+    pub channel_name: String,
+    pub program_title: String,
+    pub program_description: Option<String>,
+    pub program_category: Option<String>,
+    pub start_time: DateTime<Utc>,
+    pub end_time: DateTime<Utc>,
+    pub episode_num: Option<String>,
+    pub season_num: Option<String>,
+    pub rating: Option<String>,
+    pub language: Option<String>,
+    pub subtitles: Option<String>,
+    pub aspect_ratio: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct EpgChannel {
+    pub id: Uuid,
+    pub source_id: Uuid,
+    pub channel_id: String,
+    pub channel_name: String,
+    pub channel_logo: Option<String>,
+    pub channel_group: Option<String>,
+    pub language: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ChannelEpgMapping {
+    pub id: Uuid,
+    pub stream_channel_id: Uuid,
+    pub epg_channel_id: Uuid,
+    pub mapping_type: EpgMappingType,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "epg_mapping_type", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum EpgMappingType {
+    Manual,
+    AutoName,
+    AutoTvgId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgSourceCreateRequest {
+    pub name: String,
+    pub source_type: EpgSourceType,
+    pub url: String,
+    pub update_cron: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub timezone: Option<String>,
+    pub time_offset: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgSourceUpdateRequest {
+    pub name: String,
+    pub source_type: EpgSourceType,
+    pub url: String,
+    pub update_cron: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub timezone: Option<String>,
+    pub time_offset: Option<String>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgSourceWithStats {
+    #[serde(flatten)]
+    pub source: EpgSource,
+    pub channel_count: i64,
+    pub program_count: i64,
+    pub next_scheduled_update: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgViewerRequest {
+    pub start_time: String, // ISO 8601 string for URL query parsing
+    pub end_time: String,   // ISO 8601 string for URL query parsing
+    pub channel_filter: Option<String>,
+    pub source_ids: Option<Vec<Uuid>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgViewerRequestParsed {
+    pub start_time: DateTime<Utc>,
+    pub end_time: DateTime<Utc>,
+    pub channel_filter: Option<String>,
+    pub source_ids: Option<Vec<Uuid>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgViewerResponse {
+    pub channels: Vec<EpgChannelWithPrograms>,
+    pub start_time: DateTime<Utc>,
+    pub end_time: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgChannelWithPrograms {
+    #[serde(flatten)]
+    pub channel: EpgChannel,
+    pub programs: Vec<EpgProgram>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgRefreshResponse {
+    pub success: bool,
+    pub message: String,
+    pub channel_count: usize,
+    pub program_count: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EpgDlq {
+    pub id: Uuid,
+    pub source_id: Uuid,
+    pub original_channel_id: String,
+    pub conflict_type: EpgConflictType,
+    pub channel_data: String,         // JSON blob
+    pub program_data: Option<String>, // JSON blob
+    pub conflict_details: String,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub occurrence_count: i32,
+    pub resolved: bool,
+    pub resolution_notes: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum EpgConflictType {
+    #[serde(rename = "duplicate_identical")]
+    DuplicateIdentical,
+    #[serde(rename = "duplicate_conflicting")]
+    DuplicateConflicting,
+}
+
+impl std::fmt::Display for EpgConflictType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EpgConflictType::DuplicateIdentical => write!(f, "duplicate_identical"),
+            EpgConflictType::DuplicateConflicting => write!(f, "duplicate_conflicting"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EpgDlqStatistics {
+    pub total_conflicts: usize,
+    pub by_source: std::collections::HashMap<String, usize>,
+    pub by_conflict_type: std::collections::HashMap<String, usize>,
+    pub common_patterns: Vec<EpgDlqPattern>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EpgDlqPattern {
+    pub pattern: String,
+    pub count: usize,
+    pub examples: Vec<String>,
+}
+
+// Xtream Codes Integration Models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XtreamCodesCreateRequest {
+    pub name: String,
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    pub max_concurrent_streams: i32,
+    pub update_cron: String,
+    pub timezone: Option<String>,
+    pub time_offset: Option<String>,
+    pub create_stream_source: bool,
+    pub create_epg_source: bool,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XtreamCodesCreateResponse {
+    pub success: bool,
+    pub message: String,
+    pub stream_source: Option<StreamSource>,
+    pub epg_source: Option<EpgSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XtreamCodesUpdateRequest {
+    pub name: String,
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    pub max_concurrent_streams: i32,
+    pub update_cron: String,
+    pub timezone: String,
+    pub time_offset: String,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkedXtreamSources {
+    pub stream_source: Option<StreamSource>,
+    pub epg_source: Option<EpgSource>,
+    pub link_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }

@@ -8,6 +8,8 @@ pub struct Config {
     pub web: WebConfig,
     pub storage: StorageConfig,
     pub ingestion: IngestionConfig,
+    pub display: Option<DisplayConfig>,
+    pub channel_similarity: Option<ChannelSimilarityConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +39,23 @@ pub struct IngestionConfig {
     pub run_missed_immediately: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayConfig {
+    pub local_timezone: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelSimilarityConfig {
+    /// Regex patterns to remove when comparing channels (cloned channel patterns)
+    pub clone_patterns: Vec<String>,
+    /// Regex patterns that indicate timeshift channels (e.g., r"\+(\d+)" for +1, +24, etc.)
+    /// Hours shift will be extracted from the first capture group
+    pub timeshift_patterns: Vec<String>,
+    /// Minimum confidence threshold for considering channels as clones (0.0-1.0)
+    /// Channels above this threshold should share the same tvg-id/channel id
+    pub clone_confidence_threshold: f64,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -59,6 +78,26 @@ impl Default for Config {
                 progress_update_interval: 1000,
                 run_missed_immediately: true,
             },
+            display: Some(DisplayConfig {
+                local_timezone: "UTC".to_string(),
+            }),
+            channel_similarity: Some(ChannelSimilarityConfig {
+                clone_patterns: vec![
+                    r"(?i)\b4K\b".to_string(),
+                    r"(?i)\bHD\b".to_string(),
+                    r"(?i)\bSD\b".to_string(),
+                    r"(?i)\bHEVC\b".to_string(),
+                    r"(?i)\b720P?\b".to_string(),
+                    r"(?i)\b1080P?\b".to_string(),
+                    r"(?i)\bUHD\b".to_string(),
+                    r"\[|\]|\(|\)".to_string(),
+                    r"(?i)\(SAT\)".to_string(),
+                    r"(?i)\(CABLE\)".to_string(),
+                    r"(?i)\(IPTV\)".to_string(),
+                ],
+                timeshift_patterns: vec![r"(?i)\+(\d+)".to_string(), r"(?i)\+(\d+)H".to_string()],
+                clone_confidence_threshold: 0.90,
+            }),
         }
     }
 }

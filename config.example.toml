@@ -47,3 +47,39 @@ progress_update_interval = 1000
 # If true, sources that missed their scheduled refresh will run immediately
 # If false, sources will wait for their next scheduled time
 run_missed_immediately = true
+
+# Optional: Display configuration for EPG viewer and channel listings
+[display]
+# Local timezone for displaying times (default: UTC)
+# Use IANA timezone names like "America/New_York", "Europe/London", etc.
+local_timezone = "UTC"
+
+# Optional: Channel similarity analysis configuration for EPG conflict resolution
+[channel_similarity]
+# Regex patterns to remove when comparing channels (these indicate channel variants, not different channels)
+# These patterns help identify clones/variants that should share the same tvg-id
+clone_patterns = [
+    "(?i)\\b4K\\b",           # 4K quality indicator
+    "(?i)\\bHD\\b",           # HD quality indicator
+    "(?i)\\bSD\\b",           # SD quality indicator
+    "(?i)\\bHEVC\\b",         # HEVC codec indicator
+    "(?i)\\b720P?\\b",        # 720p quality
+    "(?i)\\b1080P?\\b",       # 1080p quality
+    "(?i)\\bUHD\\b",          # UHD quality
+    "\\[|\\]|\\(|\\)",        # Remove brackets and parentheses
+    "(?i)\\(SAT\\)",          # Satellite source indicator
+    "(?i)\\(CABLE\\)",        # Cable source indicator
+    "(?i)\\(IPTV\\)",         # IPTV source indicator
+]
+
+# Patterns that indicate timeshift channels (e.g., +1, +24 hour variants)
+# Hours shift will be extracted from the first capture group (\d+)
+timeshift_patterns = [
+    "(?i)\\+(\\d+)",          # Matches +1, +24, etc.
+    "(?i)\\+(\\d+)H",         # Matches +1H, +24H, etc.
+]
+
+# Minimum confidence threshold for considering channels as clones (0.0-1.0)
+# Channels above this threshold should share the same tvg-id/channel id
+# Higher values = more strict matching, lower values = more permissive
+clone_confidence_threshold = 0.90

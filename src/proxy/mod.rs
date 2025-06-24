@@ -40,6 +40,7 @@ impl ProxyService {
     }
 
     /// Apply filters to a list of channels (utility method)
+    #[allow(dead_code)]
     pub async fn apply_filters(
         &self,
         channels: Vec<Channel>,

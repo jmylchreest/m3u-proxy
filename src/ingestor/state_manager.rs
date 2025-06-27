@@ -139,6 +139,8 @@ impl IngestionStateManager {
                 downloaded_bytes: None,
                 channels_parsed: None,
                 channels_saved: None,
+                programs_parsed: None,
+                programs_saved: None,
                 percentage: Some(0.0),
             },
             started_at: Utc::now(),
@@ -219,15 +221,26 @@ impl IngestionStateManager {
     }
 
     pub async fn complete_ingestion(&self, source_id: Uuid, channels_saved: usize) {
+        self.complete_ingestion_with_programs(source_id, channels_saved, None).await;
+    }
+
+    pub async fn complete_ingestion_with_programs(&self, source_id: Uuid, channels_saved: usize, programs_saved: Option<usize>) {
+        let current_step = match programs_saved {
+            Some(programs) => format!("Completed - {} channels and {} programs saved", channels_saved, programs),
+            None => format!("Completed - {} channels saved", channels_saved),
+        };
+
         self.update_progress(
             source_id,
             IngestionState::Completed,
             ProgressInfo {
-                current_step: format!("Completed - {} channels saved", channels_saved),
+                current_step,
                 total_bytes: None,
                 downloaded_bytes: None,
                 channels_parsed: Some(channels_saved),
                 channels_saved: Some(channels_saved),
+                programs_parsed: programs_saved,
+                programs_saved,
                 percentage: Some(100.0),
             },
         )

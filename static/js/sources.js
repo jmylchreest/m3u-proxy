@@ -93,7 +93,7 @@ class SourcesManager {
       tbody.innerHTML = `
                 <tr>
                     <td colspan="5" class="text-center text-muted">
-                        No stream sources configured. Click "Add Source" to get started.
+                        No stream sources configured. Click "Add Stream Source" to get started.
                     </td>
                 </tr>
             `;
@@ -108,11 +108,13 @@ class SourcesManager {
 
         const typeIndicator =
           sourceWithStats.source_type === "m3u" ? "M3U" : "XC";
+        const typeColor = "#007bff"; // Blue color to match STREAM color in data mapping
+        const rowOpacity = sourceWithStats.is_active ? "1" : "0.6";
 
         return `
-                <tr>
+                <tr style="opacity: ${rowOpacity}">
                     <td>
-                        <strong>${this.escapeHtml(sourceWithStats.name)}<sup class="text-muted" style="font-size: 0.7em; margin-left: 3px;">${typeIndicator}</sup></strong>
+                        <strong>${this.escapeHtml(sourceWithStats.name)}<sup style="color: ${typeColor}; font-size: 0.7em; margin-left: 3px;">${typeIndicator}</sup></strong>
                         <br>
                         <small class="text-muted">${this.escapeHtml(sourceWithStats.url)}</small>
                     </td>

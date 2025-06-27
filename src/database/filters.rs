@@ -46,6 +46,7 @@ impl super::Database {
                     "unknown".to_string()
                 },
                 nullable: row.get::<i32, _>("notnull") == 0,
+                source_type: FilterSourceType::Stream,
             };
 
             fields.push(field_info);
@@ -68,6 +69,7 @@ impl super::Database {
             let filter = Filter {
                 id: row.try_get::<String, _>("id")?.parse()?,
                 name: row.try_get("name")?,
+                source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
                 logical_operator: row.try_get("logical_operator")?,
@@ -138,6 +140,7 @@ impl super::Database {
             let filter = Filter {
                 id: row.try_get::<String, _>("id")?.parse()?,
                 name: row.try_get("name")?,
+                source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
                 logical_operator: row.try_get("logical_operator")?,
@@ -232,6 +235,7 @@ impl super::Database {
             let filter = Filter {
                 id: filter_id,
                 name: row.try_get("name")?,
+                source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
                 logical_operator: row.try_get("logical_operator")?,
@@ -286,6 +290,7 @@ impl super::Database {
         let temp_filter = Filter {
             id: Uuid::new_v4(),
             name: "Test Filter".to_string(),
+            source_type: request.source_type.clone(),
             starting_channel_number: 1,
             is_inverse: request.is_inverse,
             logical_operator: request.logical_operator.clone(),
@@ -312,7 +317,7 @@ impl super::Database {
 
         // Get all channels for the source - using manual row mapping to handle UUID strings
         let rows = sqlx::query(
-            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
              FROM channels
              WHERE source_id = ?
              ORDER BY channel_name"
@@ -335,6 +340,7 @@ impl super::Database {
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
                 tvg_logo: row.get("tvg_logo"),
+                tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
@@ -413,6 +419,7 @@ impl super::Database {
             let filter = Filter {
                 id: proxy_filter.filter_id,
                 name: row.get("name"),
+                source_type: FilterSourceType::Stream,
                 starting_channel_number: row.get("starting_channel_number"),
                 is_inverse: row.get("is_inverse"),
                 logical_operator: row.get("logical_operator"),

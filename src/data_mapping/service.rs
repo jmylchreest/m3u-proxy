@@ -80,13 +80,14 @@ impl DataMappingService {
                 DataMappingActionType::SetValue => "set_value",
                 DataMappingActionType::SetDefaultIfEmpty => "set_default_if_empty",
                 DataMappingActionType::SetLogo => "set_logo",
-                DataMappingActionType::SetLabel => "set_label",
-                DataMappingActionType::TransformValue => "transform_value",
+                DataMappingActionType::DeduplicateClonedChannel => "deduplicate_cloned_channel",
+                DataMappingActionType::TimeshiftEpg => "timeshift_epg",
+                DataMappingActionType::DeduplicateStreamUrls => "deduplicate_stream_urls",
             };
 
             sqlx::query(
                 r#"
-                INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, label_key, label_value, sort_order, created_at)
+                INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, timeshift_minutes, similarity_threshold, sort_order, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#
             )
@@ -96,8 +97,8 @@ impl DataMappingService {
             .bind(&action.target_field)
             .bind(&action.value)
             .bind(action.logo_asset_id.map(|id| id.to_string()))
-            .bind(&action.label_key)
-            .bind(&action.label_value)
+            .bind(action.timeshift_minutes)
+            .bind(action.similarity_threshold)
             .bind(index as i32)
             .bind(now.to_rfc3339())
             .execute(&mut *tx)
@@ -179,13 +180,14 @@ impl DataMappingService {
                 DataMappingActionType::SetValue => "set_value",
                 DataMappingActionType::SetDefaultIfEmpty => "set_default_if_empty",
                 DataMappingActionType::SetLogo => "set_logo",
-                DataMappingActionType::SetLabel => "set_label",
-                DataMappingActionType::TransformValue => "transform_value",
+                DataMappingActionType::DeduplicateClonedChannel => "deduplicate_cloned_channel",
+                DataMappingActionType::TimeshiftEpg => "timeshift_epg",
+                DataMappingActionType::DeduplicateStreamUrls => "deduplicate_stream_urls",
             };
 
             sqlx::query(
                 r#"
-                INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, label_key, label_value, sort_order, created_at)
+                INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, timeshift_minutes, similarity_threshold, sort_order, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#
             )
@@ -195,8 +197,8 @@ impl DataMappingService {
             .bind(&action.target_field)
             .bind(&action.value)
             .bind(action.logo_asset_id.map(|id| id.to_string()))
-            .bind(&action.label_key)
-            .bind(&action.label_value)
+            .bind(action.timeshift_minutes)
+            .bind(action.similarity_threshold)
             .bind(index as i32)
             .bind(now.to_rfc3339())
             .execute(&mut *tx)
@@ -231,6 +233,8 @@ impl DataMappingService {
                 id: rule_id,
                 name: row.get("name"),
                 description: row.get("description"),
+                source_type: DataMappingSourceType::Stream,
+                scope: DataMappingRuleScope::Individual,
                 sort_order: row.get("sort_order"),
                 is_active: row.get("is_active"),
                 created_at: utils::parse_datetime(&row.get::<String, _>("created_at"))?,
@@ -265,6 +269,8 @@ impl DataMappingService {
             id: rule_id,
             name: row.get("name"),
             description: row.get("description"),
+            source_type: DataMappingSourceType::Stream,
+            scope: DataMappingRuleScope::Individual,
             sort_order: row.get("sort_order"),
             is_active: row.get("is_active"),
             created_at: utils::parse_datetime(&row.get::<String, _>("created_at"))?,
@@ -347,7 +353,7 @@ impl DataMappingService {
     ) -> Result<Vec<DataMappingAction>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, rule_id, action_type, target_field, value, logo_asset_id, label_key, label_value, sort_order, created_at
+            SELECT id, rule_id, action_type, target_field, value, logo_asset_id, timeshift_minutes, similarity_threshold, sort_order, created_at
             FROM data_mapping_actions
             WHERE rule_id = ?
             ORDER BY sort_order
@@ -363,8 +369,8 @@ impl DataMappingService {
                 "set_value" => DataMappingActionType::SetValue,
                 "set_default_if_empty" => DataMappingActionType::SetDefaultIfEmpty,
                 "set_logo" => DataMappingActionType::SetLogo,
-                "set_label" => DataMappingActionType::SetLabel,
-                "transform_value" => DataMappingActionType::TransformValue,
+                "deduplicate_cloned_channel" => DataMappingActionType::DeduplicateClonedChannel,
+                "timeshift_epg" => DataMappingActionType::TimeshiftEpg,
                 _ => DataMappingActionType::SetValue,
             };
 
@@ -391,8 +397,8 @@ impl DataMappingService {
                 target_field: row.get("target_field"),
                 value: row.get("value"),
                 logo_asset_id,
-                label_key: row.get("label_key"),
-                label_value: row.get("label_value"),
+                timeshift_minutes: row.get("timeshift_minutes"),
+                similarity_threshold: row.get("similarity_threshold"),
                 sort_order: row.get("sort_order"),
                 created_at: utils::parse_datetime(&row.get::<String, _>("created_at"))?,
             });

@@ -59,12 +59,21 @@ pub struct ProxySource {
 pub struct Filter {
     pub id: Uuid,
     pub name: String,
+    pub source_type: FilterSourceType,
     pub starting_channel_number: i32,
     pub is_inverse: bool,
     pub logical_operator: LogicalOperator,
     pub condition_tree: Option<String>, // JSON tree structure for nested conditions
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "filter_source_type", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum FilterSourceType {
+    Stream,
+    Epg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +103,7 @@ pub struct Channel {
     pub tvg_id: Option<String>,
     pub tvg_name: Option<String>,
     pub tvg_logo: Option<String>,
+    pub tvg_shift: Option<String>, // Timeshift offset for M3U (e.g., "+1", "+24")
     pub group_title: Option<String>,
     pub channel_name: String,
     pub stream_url: String,
@@ -203,6 +213,8 @@ pub struct ProgressInfo {
     pub downloaded_bytes: Option<u64>,
     pub channels_parsed: Option<usize>,
     pub channels_saved: Option<usize>,
+    pub programs_parsed: Option<usize>,
+    pub programs_saved: Option<usize>,
     pub percentage: Option<f64>,
 }
 
@@ -225,6 +237,7 @@ pub struct ChannelListResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterCreateRequest {
     pub name: String,
+    pub source_type: FilterSourceType,
     pub conditions: Vec<FilterConditionRequest>,
     pub logical_operator: LogicalOperator,
     pub starting_channel_number: i32,
@@ -235,6 +248,7 @@ pub struct FilterCreateRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterUpdateRequest {
     pub name: String,
+    pub source_type: FilterSourceType,
     pub conditions: Vec<FilterConditionRequest>,
     pub logical_operator: LogicalOperator,
     pub starting_channel_number: i32,
@@ -260,6 +274,7 @@ pub struct FilterWithUsage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterTestRequest {
     pub source_id: Uuid,
+    pub source_type: FilterSourceType,
     pub conditions: Vec<FilterConditionRequest>,
     pub logical_operator: LogicalOperator,
     pub is_inverse: bool,
@@ -288,7 +303,7 @@ pub struct FilterField {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text", rename_all = "lowercase")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
 pub enum FilterOperator {
     #[serde(rename = "matches")]
     Matches, // Regex match
@@ -386,6 +401,124 @@ pub struct FilterFieldInfo {
     pub display_name: String,
     pub field_type: String,
     pub nullable: bool,
+    pub source_type: FilterSourceType,
+}
+
+impl FilterFieldInfo {
+    /// Get available fields for a specific filter source type
+    pub fn available_for_source_type(source_type: &FilterSourceType) -> Vec<FilterFieldInfo> {
+        match source_type {
+            FilterSourceType::Stream => vec![
+                FilterFieldInfo {
+                    name: "channel_name".to_string(),
+                    display_name: "Channel Name".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: false,
+                    source_type: FilterSourceType::Stream,
+                },
+                FilterFieldInfo {
+                    name: "tvg_id".to_string(),
+                    display_name: "TVG ID".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: FilterSourceType::Stream,
+                },
+                FilterFieldInfo {
+                    name: "tvg_name".to_string(),
+                    display_name: "TVG Name".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: FilterSourceType::Stream,
+                },
+                FilterFieldInfo {
+                    name: "tvg_logo".to_string(),
+                    display_name: "TVG Logo".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: FilterSourceType::Stream,
+                },
+                FilterFieldInfo {
+                    name: "group_title".to_string(),
+                    display_name: "Group Title".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: FilterSourceType::Stream,
+                },
+                FilterFieldInfo {
+                    name: "stream_url".to_string(),
+                    display_name: "Stream URL".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: false,
+                    source_type: FilterSourceType::Stream,
+                },
+            ],
+            FilterSourceType::Epg => vec![
+                FilterFieldInfo {
+                    name: "channel_id".to_string(),
+                    display_name: "EPG Channel ID".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: false,
+                    source_type: FilterSourceType::Epg,
+                },
+                FilterFieldInfo {
+                    name: "channel_name".to_string(),
+                    display_name: "EPG Channel Name".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: false,
+                    source_type: FilterSourceType::Epg,
+                },
+                FilterFieldInfo {
+                    name: "channel_logo".to_string(),
+                    display_name: "EPG Channel Logo".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: FilterSourceType::Epg,
+                },
+                FilterFieldInfo {
+                    name: "channel_group".to_string(),
+                    display_name: "EPG Channel Group".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: FilterSourceType::Epg,
+                },
+                FilterFieldInfo {
+                    name: "language".to_string(),
+                    display_name: "EPG Language".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: FilterSourceType::Epg,
+                },
+                FilterFieldInfo {
+                    name: "program_title".to_string(),
+                    display_name: "Program Title".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: false,
+                    source_type: FilterSourceType::Epg,
+                },
+                FilterFieldInfo {
+                    name: "program_category".to_string(),
+                    display_name: "Program Category".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: FilterSourceType::Epg,
+                },
+                FilterFieldInfo {
+                    name: "program_description".to_string(),
+                    display_name: "Program Description".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: FilterSourceType::Epg,
+                },
+            ],
+        }
+    }
+
+    /// Validate if a field is valid for a filter source type
+    pub fn is_valid_field_for_source_type(field_name: &str, source_type: &FilterSourceType) -> bool {
+        Self::available_for_source_type(source_type)
+            .iter()
+            .any(|field| field.name == field_name)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

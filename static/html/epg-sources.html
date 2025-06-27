@@ -28,11 +28,8 @@
                 <div class="card-header">
                     <h2 class="card-title">EPG Sources</h2>
                     <div class="btn-group">
-                        <button id="viewEpgBtn" class="btn btn-outline-primary">
+                        <button id="viewEpgBtn" class="btn btn-primary">
                             📺 View EPG
-                        </button>
-                        <button id="viewDlqBtn" class="btn btn-outline-warning">
-                            ⚠️ View Conflicts
                         </button>
                         <button id="addEpgSourceBtn" class="btn btn-primary">
                             Add EPG Source
@@ -312,103 +309,26 @@
             </div>
         </div>
 
-        <!-- DLQ Modal -->
-        <div id="dlqModal" class="modal channels-modal">
-            <div class="modal-content standard-modal channels-modal-content">
-                <div class="modal-header">
-                    <h3 id="dlqModalTitle" class="modal-title">
-                        EPG Conflicts (DLQ)
-                    </h3>
-                </div>
-                <div class="modal-body">
-                    <div
-                        id="dlqLoading"
-                        class="text-center"
-                        style="display: none"
-                    >
-                        <span class="loading"></span> Loading conflicts...
-                    </div>
-
-                    <div id="dlqContent" style="display: none">
-                        <!-- Statistics -->
-                        <div id="dlqStatistics" class="mb-4"></div>
-
-                        <!-- Fixed search bar at top -->
-                        <div class="channels-search-fixed">
-                            <div class="mb-3">
-                                <input
-                                    type="text"
-                                    id="dlqFilter"
-                                    class="form-control"
-                                    placeholder="Search conflicts..."
-                                />
-                            </div>
-
-                            <div class="mb-3">
-                                <span id="dlqCount" class="text-muted"
-                                    >0 conflicts</span
-                                >
-                            </div>
-                        </div>
-
-                        <!-- Fixed table headers -->
-                        <div class="channels-headers-fixed">
-                            <table class="table table-striped">
-                                <thead>
-                                    <tr>
-                                        <th>Channel</th>
-                                        <th>Conflict Type</th>
-                                        <th>Count</th>
-                                        <th>First Seen</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                            </table>
-                        </div>
-
-                        <!-- Scrollable DLQ list -->
-                        <div class="channels-list-scrollable">
-                            <div class="table-responsive">
-                                <table class="table table-striped">
-                                    <tbody id="dlqTableBody">
-                                        <!-- DLQ entries will be loaded here -->
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button
-                        id="dlqModalCloseBtn"
-                        class="btn btn-secondary ml-auto"
-                        onclick="epgSourcesManager.hideDlqModal()"
-                        type="button"
-                    >
-                        Close
-                    </button>
-                </div>
-            </div>
-        </div>
 
         <!-- EPG Viewer Modal -->
         <div id="epgViewerModal" class="modal epg-viewer-modal">
             <div class="modal-content standard-modal">
                 <div class="modal-header">
                     <h3 class="modal-title">📺 EPG Viewer</h3>
-                    <button
-                        type="button"
-                        class="btn-close"
-                        onclick="epgSourcesManager.hideEpgViewerModal()"
-                        aria-label="Close"
-                    >
-                        &times;
-                    </button>
                 </div>
                 <div class="modal-body">
                     <div id="epgViewerContainer">
                         <!-- EPG viewer content will be loaded here -->
                     </div>
+                </div>
+                <div class="modal-footer">
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        onclick="epgSourcesManager.hideEpgViewerModal()"
+                    >
+                        Close
+                    </button>
                 </div>
             </div>
         </div>
@@ -461,49 +381,6 @@
                 display: flex;
                 justify-content: flex-end;
                 gap: 0.5rem;
-            }
-
-            .dlq-stats-grid {
-                display: grid;
-                grid-template-columns: 1fr 2fr;
-                gap: 1rem;
-                margin-bottom: 1rem;
-            }
-
-            .stat-card {
-                background: #f8f9fa;
-                padding: 1rem;
-                border-radius: 0.375rem;
-                border: 1px solid #dee2e6;
-            }
-
-            .stat-card h5 {
-                margin: 0 0 0.5rem 0;
-                font-size: 0.875rem;
-                color: #6c757d;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-            }
-
-            .stat-number {
-                font-size: 1.5rem;
-                font-weight: bold;
-                color: #495057;
-            }
-
-            .pattern-list {
-                display: flex;
-                flex-direction: column;
-                gap: 0.25rem;
-            }
-
-            .pattern-item {
-                font-size: 0.875rem;
-                padding: 0.25rem 0;
-            }
-
-            .pattern-item strong {
-                color: #495057;
             }
 
             .epg-viewer-modal {

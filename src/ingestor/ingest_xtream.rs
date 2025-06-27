@@ -334,6 +334,8 @@ impl SourceIngestor for XtreamIngestor {
                     downloaded_bytes: None,
                     channels_parsed: None,
                     channels_saved: None,
+                    programs_parsed: None,
+                    programs_saved: None,
                     percentage: Some(10.0),
                 },
             )
@@ -361,6 +363,8 @@ impl SourceIngestor for XtreamIngestor {
                     downloaded_bytes: None,
                     channels_parsed: None,
                     channels_saved: None,
+                    programs_parsed: None,
+                    programs_saved: None,
                     percentage: Some(30.0),
                 },
             )
@@ -457,6 +461,8 @@ impl SourceIngestor for XtreamIngestor {
                     downloaded_bytes: None,
                     channels_parsed: Some(0),
                     channels_saved: None,
+                    programs_parsed: None,
+                    programs_saved: None,
                     percentage: Some(60.0),
                 },
             )
@@ -490,6 +496,7 @@ impl SourceIngestor for XtreamIngestor {
                 tvg_id: xtream_channel.epg_channel_id,
                 tvg_name: Some(xtream_channel.name.clone()),
                 tvg_logo: xtream_channel.stream_icon,
+                tvg_shift: None,
                 group_title: xtream_channel.category_name,
                 channel_name: xtream_channel.name,
                 stream_url,
@@ -520,6 +527,8 @@ impl SourceIngestor for XtreamIngestor {
                             downloaded_bytes: None,
                             channels_parsed: Some(processed),
                             channels_saved: None,
+                            programs_parsed: None,
+                            programs_saved: None,
                             percentage: Some(percentage),
                         },
                     )
@@ -545,6 +554,8 @@ impl SourceIngestor for XtreamIngestor {
                     downloaded_bytes: None,
                     channels_parsed: Some(result.len()),
                     channels_saved: None,
+                    programs_parsed: None,
+                    programs_saved: None,
                     percentage: Some(80.0),
                 },
             )

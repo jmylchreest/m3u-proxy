@@ -45,6 +45,8 @@ impl SourceIngestor for M3uIngestor {
                     downloaded_bytes: None,
                     channels_parsed: None,
                     channels_saved: None,
+                    programs_parsed: None,
+                    programs_saved: None,
                     percentage: Some(10.0),
                 },
             )
@@ -74,6 +76,8 @@ impl SourceIngestor for M3uIngestor {
                     downloaded_bytes: Some(0),
                     channels_parsed: None,
                     channels_saved: None,
+                    programs_parsed: None,
+                    programs_saved: None,
                     percentage: Some(20.0),
                 },
             )
@@ -121,6 +125,8 @@ impl SourceIngestor for M3uIngestor {
                             downloaded_bytes: Some(downloaded),
                             channels_parsed: None,
                             channels_saved: None,
+                            programs_parsed: None,
+                            programs_saved: None,
                             percentage: Some(percentage),
                         },
                     )
@@ -150,6 +156,8 @@ impl SourceIngestor for M3uIngestor {
                     downloaded_bytes: Some(downloaded),
                     channels_parsed: Some(0),
                     channels_saved: None,
+                    programs_parsed: None,
+                    programs_saved: None,
                     percentage: Some(60.0),
                 },
             )
@@ -206,6 +214,8 @@ impl M3uIngestor {
                                     downloaded_bytes: None,
                                     channels_parsed: Some(channels.len()),
                                     channels_saved: None,
+                                    programs_parsed: None,
+                                    programs_saved: None,
                                     percentage: Some(percentage),
                                 },
                             )
@@ -235,6 +245,8 @@ impl M3uIngestor {
                     downloaded_bytes: None,
                     channels_parsed: Some(channels.len()),
                     channels_saved: None,
+                    programs_parsed: None,
+                    programs_saved: None,
                     percentage: Some(80.0),
                 },
             )
@@ -288,6 +300,7 @@ impl M3uIngestor {
             tvg_id,
             tvg_name,
             tvg_logo,
+            tvg_shift: None,
             group_title,
             channel_name,
             stream_url: url,

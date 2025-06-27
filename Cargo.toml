@@ -81,8 +81,10 @@ fastrand = "2.0"
 url = "2.4"
 
 
-# M3U parsing (will search for a good crate)
+# M3U and XMLTV parsing
 m3u8-rs = "5.0"
+xmltv = "0.9.8"
+quick-xml = { version = "0.36", features = ["serialize"] }
 
 # Image processing for logo caching
 image = "0.24"

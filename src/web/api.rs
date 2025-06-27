@@ -684,8 +684,8 @@ pub async fn test_data_mapping_rule(
             target_field: a.target_field,
             value: a.value,
             logo_asset_id: a.logo_asset_id,
-            label_key: a.label_key,
-            label_value: a.label_value,
+            timeshift_minutes: a.timeshift_minutes,
+            similarity_threshold: a.similarity_threshold,
             sort_order: i as i32,
             created_at: chrono::Utc::now(),
         })
@@ -864,8 +864,9 @@ pub async fn preview_data_mapping_rules(
     info!("Generating data mapping rule preview");
 
     let view_type = params.get("view").map(|s| s.as_str()).unwrap_or("final");
+    let source_type = params.get("source_type").map(|s| s.as_str()).unwrap_or("stream");
 
-    // Get all active rules
+    // Get all active rules filtered by source type
     let rules = match state.data_mapping_service.get_all_rules().await {
         Ok(rules) => rules,
         Err(e) => {
@@ -876,13 +877,19 @@ pub async fn preview_data_mapping_rules(
 
     let active_rules: Vec<_> = rules
         .into_iter()
-        .filter(|rule| rule.rule.is_active)
+        .filter(|rule| {
+            rule.rule.is_active && 
+            match source_type {
+                "epg" => rule.rule.source_type == crate::models::data_mapping::DataMappingSourceType::Epg,
+                _ => rule.rule.source_type == crate::models::data_mapping::DataMappingSourceType::Stream,
+            }
+        })
         .collect();
 
     if active_rules.is_empty() {
         return Ok(Json(serde_json::json!({
             "success": true,
-            "message": "No active data mapping rules found",
+            "message": format!("No active {} data mapping rules found", source_type),
             "rules": [],
             "total_rules": 0,
             "total_affected_channels": 0,
@@ -890,7 +897,19 @@ pub async fn preview_data_mapping_rules(
         })));
     }
 
-    // Get all sources and their channels
+    // For now, only support stream source preview since EPG preview needs more work
+    if source_type == "epg" {
+        return Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "EPG rule preview not yet implemented",
+            "rules": [],
+            "total_rules": 0,
+            "total_affected_channels": 0,
+            "final_channels": []
+        })));
+    }
+
+    // Get all stream sources
     let sources = match state.database.list_stream_sources().await {
         Ok(sources) => sources,
         Err(e) => {
@@ -929,7 +948,7 @@ pub async fn preview_data_mapping_rules(
             for channel in channels {
                 let mut engine = crate::data_mapping::DataMappingEngine::new();
 
-                if let Ok(matches) =
+                if let Ok((matches, _captures)) =
                     engine.evaluate_rule_conditions(&channel, &rule_with_details.conditions)
                 {
                     if matches {
@@ -955,6 +974,10 @@ pub async fn preview_data_mapping_rules(
                             channel.tvg_logo.clone().unwrap_or_default(),
                         );
                         final_values.insert(
+                            "tvg_shift".to_string(),
+                            channel.tvg_shift.clone().unwrap_or_default(),
+                        );
+                        final_values.insert(
                             "group_title".to_string(),
                             channel.group_title.clone().unwrap_or_default(),
                         );
@@ -965,6 +988,7 @@ pub async fn preview_data_mapping_rules(
                                 "tvg_id" => channel.tvg_id.clone(),
                                 "tvg_name" => channel.tvg_name.clone(),
                                 "tvg_logo" => channel.tvg_logo.clone(),
+                                "tvg_shift" => channel.tvg_shift.clone(),
                                 "group_title" => channel.group_title.clone(),
                                 _ => None,
                             };

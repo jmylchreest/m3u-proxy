@@ -48,13 +48,6 @@ class EpgSourcesManager {
       });
     }
 
-    // View DLQ button
-    const viewDlqBtn = document.getElementById("viewDlqBtn");
-    if (viewDlqBtn) {
-      viewDlqBtn.addEventListener("click", () => {
-        this.showDlqModal();
-      });
-    }
 
     // Channels filter
     const channelsFilter = document.getElementById("channelsFilter");
@@ -64,13 +57,6 @@ class EpgSourcesManager {
       });
     }
 
-    // DLQ filter
-    const dlqFilter = document.getElementById("dlqFilter");
-    if (dlqFilter) {
-      dlqFilter.addEventListener("input", (e) => {
-        this.filterDlqEntries(e.target.value);
-      });
-    }
   }
 
   async loadSources() {
@@ -109,6 +95,7 @@ class EpgSourcesManager {
 
     this.sources.forEach((source) => {
       const row = document.createElement("tr");
+      row.style.opacity = source.is_active ? "1" : "0.6";
 
       // Name and URL column
       const nameCell = document.createElement("td");
@@ -881,210 +868,6 @@ class EpgSourcesManager {
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
-  }
-
-  // DLQ Management Methods
-  async showDlqModal() {
-    try {
-      const modal = document.getElementById("dlqModal");
-      if (!modal) {
-        console.error("DLQ modal not found");
-        return;
-      }
-
-      // Show loading
-      document.getElementById("dlqLoading").style.display = "block";
-      document.getElementById("dlqContent").style.display = "none";
-      modal.classList.add("show");
-
-      // Load DLQ data
-      const response = await fetch("/api/epg/dlq");
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      this.dlqData = await response.json();
-      this.renderDlqEntries();
-
-      // Hide loading and show content
-      document.getElementById("dlqLoading").style.display = "none";
-      document.getElementById("dlqContent").style.display = "block";
-    } catch (error) {
-      console.error("Error loading DLQ data:", error);
-      this.showAlert("Failed to load DLQ data", "error");
-      this.hideDlqModal();
-    }
-  }
-
-  hideDlqModal() {
-    const modal = document.getElementById("dlqModal");
-    if (modal) {
-      modal.classList.remove("show");
-    }
-  }
-
-  renderDlqEntries() {
-    if (!this.dlqData) return;
-
-    const tbody = document.getElementById("dlqTableBody");
-    const statisticsDiv = document.getElementById("dlqStatistics");
-    const countSpan = document.getElementById("dlqCount");
-
-    // Update count
-    countSpan.textContent = `${this.dlqData.entries.length} conflicts`;
-
-    // Render statistics
-    statisticsDiv.innerHTML = `
-      <div class="dlq-stats-grid">
-        <div class="stat-card">
-          <h5>Total Conflicts</h5>
-          <span class="stat-number">${this.dlqData.statistics.total_conflicts}</span>
-        </div>
-        <div class="stat-card">
-          <h5>Common Patterns</h5>
-          <div class="pattern-list">
-            ${this.dlqData.statistics.common_patterns
-              .slice(0, 3)
-              .map(
-                (pattern) =>
-                  `<div class="pattern-item">
-                <strong>${this.escapeHtml(pattern.pattern)}</strong> (${pattern.count} variants)
-              </div>`,
-              )
-              .join("")}
-          </div>
-        </div>
-      </div>
-    `;
-
-    // Render entries
-    tbody.innerHTML = "";
-    this.filteredDlqEntries = this.dlqData.entries;
-
-    this.filteredDlqEntries.forEach((entry) => {
-      const channelData = JSON.parse(entry.channel_data);
-      const row = document.createElement("tr");
-
-      row.innerHTML = `
-        <td>
-          <div class="channel-info">
-            <div class="channel-name">${this.escapeHtml(channelData.display_name || "Unknown")}</div>
-            <div class="channel-id text-muted">${this.escapeHtml(entry.original_channel_id)}</div>
-          </div>
-        </td>
-        <td>
-          <span class="badge ${entry.conflict_type === "duplicate_identical" ? "badge-warning" : "badge-danger"}">
-            ${entry.conflict_type.replace("_", " ").toUpperCase()}
-          </span>
-        </td>
-        <td>${entry.occurrence_count}</td>
-        <td>
-          <small class="text-muted">${new Date(entry.first_seen_at).toLocaleDateString()}</small>
-        </td>
-        <td>
-          <div class="btn-group">
-            <button class="btn btn-sm btn-outline-primary" onclick="epgSourcesManager.suggestMapping('${entry.original_channel_id}')">
-              Suggest Mapping
-            </button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="epgSourcesManager.ignoreDlqEntry('${entry.original_channel_id}')">
-              Ignore
-            </button>
-          </div>
-        </td>
-      `;
-
-      tbody.appendChild(row);
-    });
-  }
-
-  filterDlqEntries(filterText) {
-    if (!this.dlqData) return;
-
-    const filter = filterText.toLowerCase();
-    this.filteredDlqEntries = this.dlqData.entries.filter((entry) => {
-      const channelData = JSON.parse(entry.channel_data);
-      const channelName = (channelData.display_name || "").toLowerCase();
-      const channelId = entry.original_channel_id.toLowerCase();
-      return channelName.includes(filter) || channelId.includes(filter);
-    });
-
-    this.renderDlqEntries();
-  }
-
-  async suggestMapping(channelId) {
-    const entry = this.dlqData.entries.find(
-      (e) => e.original_channel_id === channelId,
-    );
-    if (!entry) return;
-
-    const channelData = JSON.parse(entry.channel_data);
-    const channelName = channelData.display_name || channelId;
-
-    // Generate suggested mapping
-    let suggestedMapping = channelId;
-    if (channelName.includes("HD")) {
-      suggestedMapping = channelId.replace(/\./, "_HD.");
-    } else if (channelName.includes("SD")) {
-      suggestedMapping = channelId.replace(/\./, "_SD.");
-    }
-
-    const newMapping = prompt(
-      `Suggest new mapping for "${channelName}"`,
-      suggestedMapping,
-    );
-    if (newMapping && newMapping !== channelId) {
-      try {
-        const response = await fetch("/api/epg/dlq/resolve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify([
-            {
-              channel_id: channelId,
-              new_mapping: newMapping,
-              action: "remap",
-            },
-          ]),
-        });
-
-        if (response.ok) {
-          this.showAlert(`Mapped ${channelName} to ${newMapping}`, "success");
-          this.showDlqModal(); // Refresh
-        } else {
-          throw new Error("Failed to apply mapping");
-        }
-      } catch (error) {
-        console.error("Error applying mapping:", error);
-        this.showAlert("Failed to apply mapping", "error");
-      }
-    }
-  }
-
-  async ignoreDlqEntry(channelId) {
-    if (!confirm("Are you sure you want to ignore this conflict?")) return;
-
-    try {
-      const response = await fetch("/api/epg/dlq/resolve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify([
-          {
-            channel_id: channelId,
-            new_mapping: "",
-            action: "ignore",
-          },
-        ]),
-      });
-
-      if (response.ok) {
-        this.showAlert("Conflict ignored", "success");
-        this.showDlqModal(); // Refresh
-      } else {
-        throw new Error("Failed to ignore conflict");
-      }
-    } catch (error) {
-      console.error("Error ignoring conflict:", error);
-      this.showAlert("Failed to ignore conflict", "error");
-    }
   }
 
   // EPG Viewer Modal Methods

@@ -308,7 +308,7 @@ impl crate::database::Database {
                     info!("Xtream EPG source '{}' provides stream data - automatically creating stream source", source.name);
 
                     let stream_source_request = StreamSourceCreateRequest {
-                        name: format!("{} Streams", source.name.replace(" EPG", "")),
+                        name: format!("{} (Stream)", source.name),
                         source_type: StreamSourceType::Xtream,
                         url: source.url.clone(),
                         max_concurrent_streams: 10, // Default value
@@ -441,6 +441,26 @@ impl crate::database::Database {
         programs: Vec<EpgProgram>,
         mut cancellation_rx: Option<tokio::sync::broadcast::Receiver<()>>,
     ) -> Result<(usize, usize)> {
+        self.update_epg_source_data_with_cancellation_and_progress(
+            source_id,
+            channels,
+            programs,
+            cancellation_rx,
+            None::<fn(usize, usize)>,
+        ).await
+    }
+
+    pub async fn update_epg_source_data_with_cancellation_and_progress<F>(
+        &self,
+        source_id: Uuid,
+        channels: Vec<EpgChannel>,
+        programs: Vec<EpgProgram>,
+        mut cancellation_rx: Option<tokio::sync::broadcast::Receiver<()>>,
+        progress_callback: Option<F>,
+    ) -> Result<(usize, usize)>
+    where
+        F: Fn(usize, usize) + Send + Sync,
+    {
         // Use a timeout for the entire transaction to prevent indefinite blocking
         let timeout_duration = std::time::Duration::from_secs(600); // 10 minutes max
         
@@ -486,74 +506,92 @@ impl crate::database::Database {
                 }
             }
 
-            // Insert channels in batches with cancellation checks
-            const CHANNEL_BATCH_SIZE: usize = 100;
-            for (batch_idx, chunk) in channels.chunks(CHANNEL_BATCH_SIZE).enumerate() {
-                for channel in chunk {
-                    sqlx::query(
-                        "INSERT INTO epg_channels (id, source_id, channel_id, channel_name, channel_logo, channel_group, language, created_at, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    )
-                    .bind(channel.id.to_string())
-                    .bind(source_id.to_string())
-                    .bind(&channel.channel_id)
-                    .bind(&channel.channel_name)
-                    .bind(&channel.channel_logo)
-                    .bind(&channel.channel_group)
-                    .bind(&channel.language)
-                    .bind(channel.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .bind(channel.updated_at.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .execute(&mut *tx)
-                    .await?;
+            // Insert channels using bulk inserts for better performance
+            // SQLite 3.32.0+ supports up to 32,766 variables per query, channels have 9 fields each
+            let channel_batch_size = self.batch_config.safe_epg_channel_batch_size();
+            for chunk in channels.chunks(channel_batch_size) {
+                if !chunk.is_empty() {
+                    // Prepare bulk insert statement
+                    let mut query_builder = sqlx::QueryBuilder::new(
+                        "INSERT INTO epg_channels (id, source_id, channel_id, channel_name, channel_logo, channel_group, language, created_at, updated_at) "
+                    );
+
+                    query_builder.push_values(chunk, |mut b, channel| {
+                        b.push_bind(channel.id.to_string())
+                            .push_bind(source_id.to_string())
+                            .push_bind(&channel.channel_id)
+                            .push_bind(&channel.channel_name)
+                            .push_bind(&channel.channel_logo)
+                            .push_bind(&channel.channel_group)
+                            .push_bind(&channel.language)
+                            .push_bind(channel.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .push_bind(channel.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
+                    });
+
+                    // Execute bulk insert
+                    let query = query_builder.build();
+                    query.execute(&mut *tx).await?;
                 }
 
-                // Check for cancellation every batch
-                if batch_idx % 10 == 0 {
-                    if let Some(ref mut rx) = cancellation_rx {
-                        if rx.try_recv().is_ok() {
-                            tx.rollback().await?;
-                            return Err(anyhow::anyhow!("Operation cancelled during channel insertion"));
-                        }
+                // Check for cancellation after each batch
+                if let Some(ref mut rx) = cancellation_rx {
+                    if rx.try_recv().is_ok() {
+                        tx.rollback().await?;
+                        return Err(anyhow::anyhow!("Operation cancelled during channel insertion"));
                     }
                 }
             }
 
-            // Insert programs in chunks with cancellation checks
-            const PROGRAM_CHUNK_SIZE: usize = 500; // Reduced for more frequent cancellation checks
-            for (chunk_idx, chunk) in programs.chunks(PROGRAM_CHUNK_SIZE).enumerate() {
-                for program in chunk {
-                    sqlx::query(
-                        "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, created_at, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    )
-                    .bind(program.id.to_string())
-                    .bind(source_id.to_string())
-                    .bind(&program.channel_id)
-                    .bind(&program.channel_name)
-                    .bind(&program.program_title)
-                    .bind(&program.program_description)
-                    .bind(&program.program_category)
-                    .bind(program.start_time.to_rfc3339())
-                    .bind(program.end_time.to_rfc3339())
-                    .bind(&program.episode_num)
-                    .bind(&program.season_num)
-                    .bind(&program.rating)
-                    .bind(&program.language)
-                    .bind(&program.subtitles)
-                    .bind(&program.aspect_ratio)
-                    .bind(program.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .bind(program.updated_at.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .execute(&mut *tx)
-                    .await?;
+            // Insert programs using bulk inserts with progress tracking
+            // SQLite 3.32.0+ supports up to 32,766 variables per query, programs have 17 fields each  
+            let program_batch_size = self.batch_config.safe_epg_program_batch_size();
+            let total_programs = programs.len();
+            let mut programs_saved = 0;
+            
+            for chunk in programs.chunks(program_batch_size) {
+                if !chunk.is_empty() {
+                    // Prepare bulk insert statement
+                    let mut query_builder = sqlx::QueryBuilder::new(
+                        "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, created_at, updated_at) "
+                    );
+
+                    query_builder.push_values(chunk, |mut b, program| {
+                        b.push_bind(program.id.to_string())
+                            .push_bind(source_id.to_string())
+                            .push_bind(&program.channel_id)
+                            .push_bind(&program.channel_name)
+                            .push_bind(&program.program_title)
+                            .push_bind(&program.program_description)
+                            .push_bind(&program.program_category)
+                            .push_bind(program.start_time.to_rfc3339())
+                            .push_bind(program.end_time.to_rfc3339())
+                            .push_bind(&program.episode_num)
+                            .push_bind(&program.season_num)
+                            .push_bind(&program.rating)
+                            .push_bind(&program.language)
+                            .push_bind(&program.subtitles)
+                            .push_bind(&program.aspect_ratio)
+                            .push_bind(program.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .push_bind(program.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
+                    });
+
+                    // Execute bulk insert
+                    let query = query_builder.build();
+                    query.execute(&mut *tx).await?;
                 }
 
-                // Check for cancellation every 5 chunks (2500 programs)
-                if chunk_idx % 5 == 0 {
-                    if let Some(ref mut rx) = cancellation_rx {
-                        if rx.try_recv().is_ok() {
-                            tx.rollback().await?;
-                            return Err(anyhow::anyhow!("Operation cancelled during program insertion"));
-                        }
+                programs_saved += chunk.len();
+                
+                // Report progress if callback is provided
+                if let Some(ref callback) = progress_callback {
+                    callback(programs_saved, total_programs);
+                }
+
+                // Check for cancellation after each batch
+                if let Some(ref mut rx) = cancellation_rx {
+                    if rx.try_recv().is_ok() {
+                        tx.rollback().await?;
+                        return Err(anyhow::anyhow!("Operation cancelled during program insertion"));
                     }
                 }
             }

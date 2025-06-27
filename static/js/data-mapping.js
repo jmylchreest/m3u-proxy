@@ -7,14 +7,23 @@ let selectedLogoId = null;
 let conditionCounter = 0;
 let actionCounter = 0;
 
-// Available field options
-const FIELD_OPTIONS = [
+// Available field options by source type
+const STREAM_FIELD_OPTIONS = [
   { value: "channel_name", label: "Channel Name" },
   { value: "tvg_id", label: "TVG ID" },
   { value: "tvg_name", label: "TVG Name" },
   { value: "tvg_logo", label: "TVG Logo" },
+  { value: "tvg_shift", label: "TVG Shift" },
   { value: "group_title", label: "Group Title" },
   { value: "stream_url", label: "Stream URL" },
+];
+
+const EPG_FIELD_OPTIONS = [
+  { value: "channel_id", label: "Channel ID" },
+  { value: "channel_name", label: "Channel Name" },
+  { value: "channel_logo", label: "Channel Logo" },
+  { value: "channel_group", label: "Channel Group" },
+  { value: "language", label: "Language" },
 ];
 
 // Available operators
@@ -29,14 +38,142 @@ const OPERATOR_OPTIONS = [
   { value: "not_matches", label: "Does Not Match Regex" },
 ];
 
-// Available action types
-const ACTION_TYPES = [
+// Available action types by source type
+const STREAM_ACTION_TYPES = [
   { value: "set_value", label: "Set Value" },
   { value: "set_default_if_empty", label: "Set Default If Empty" },
   { value: "set_logo", label: "Set Logo" },
-  { value: "set_label", label: "Set Label" },
-  { value: "transform_value", label: "Transform Value" },
+  { value: "deduplicate_stream_urls", label: "Deduplicate Stream URLs" },
 ];
+
+const EPG_ACTION_TYPES = [
+  { value: "set_value", label: "Set Value" },
+  { value: "set_default_if_empty", label: "Set Default If Empty" },
+  { value: "set_logo", label: "Set Logo" },
+  { value: "deduplicate_cloned_channel", label: "Deduplicate Cloned Channels" },
+];
+
+// Action argument configurations
+const ACTION_CONFIGS = {
+  // Actions that need target field + value
+  set_value: { needsField: true, needsValue: true, needsLogo: false, isGlobal: false },
+  set_default_if_empty: { needsField: true, needsValue: true, needsLogo: false, isGlobal: false },
+  
+  // Actions that need target field + logo
+  set_logo: { needsField: true, needsValue: false, needsLogo: true, isGlobal: false },
+  
+  // Global actions that don't operate on specific fields
+  deduplicate_stream_urls: { needsField: false, needsValue: false, needsLogo: false, isGlobal: true },
+  deduplicate_cloned_channel: { needsField: false, needsValue: false, needsLogo: false, isGlobal: true },
+  
+  // EPG-specific timeshift action (kept for EPG, removed from streams)
+  timeshift_epg: { needsField: true, needsValue: true, needsLogo: false, isGlobal: false }
+};
+
+// Helper function to get field options based on source type
+function getFieldOptions(sourceType) {
+  return sourceType === 'stream' ? STREAM_FIELD_OPTIONS : EPG_FIELD_OPTIONS;
+}
+
+// Helper function to get action configuration
+function getActionConfig(actionType) {
+  return ACTION_CONFIGS[actionType] || { needsField: true, needsValue: true, needsLogo: false, isGlobal: false };
+}
+
+// Update rule scope options based on source type
+function updateRuleScope() {
+  const sourceType = document.getElementById("ruleSourceType")?.value;
+  const scopeSelect = document.getElementById("ruleScope");
+  
+  if (!sourceType || !scopeSelect) return;
+  
+  // Hide/show scope options based on source type
+  const streamWideOption = scopeSelect.querySelector('option[value="streamwide"]');
+  const epgWideOption = scopeSelect.querySelector('option[value="epgwide"]');
+  
+  if (sourceType === 'stream') {
+    streamWideOption.style.display = '';
+    epgWideOption.style.display = 'none';
+    if (scopeSelect.value === 'epgwide') {
+      scopeSelect.value = '';
+    }
+  } else if (sourceType === 'epg') {
+    streamWideOption.style.display = 'none';
+    epgWideOption.style.display = '';
+    if (scopeSelect.value === 'streamwide') {
+      scopeSelect.value = '';
+    }
+  }
+}
+
+// Helper function to get action types based on source type  
+function getActionTypes(sourceType) {
+  return sourceType === 'stream' ? STREAM_ACTION_TYPES : EPG_ACTION_TYPES;
+}
+
+// Update condition and action dropdowns when source type changes
+function updateFieldsAndActions() {
+  const sourceTypeSelect = document.getElementById("ruleSourceType");
+  const sourceType = sourceTypeSelect.value;
+  
+  if (!sourceType) {
+    // Clear all conditions and actions if no source type selected
+    document.getElementById("conditionsContainer").innerHTML = "";
+    document.getElementById("actionsContainer").innerHTML = "";
+    conditionCounter = 0;
+    actionCounter = 0;
+    return;
+  }
+
+  // Update existing conditions
+  const conditionRows = document.querySelectorAll('.condition-row');
+  const fieldOptions = getFieldOptions(sourceType);
+  
+  conditionRows.forEach(row => {
+    const fieldSelect = row.querySelector('[name^="field_"]');
+    if (fieldSelect) {
+      const currentValue = fieldSelect.value;
+      fieldSelect.innerHTML = `
+        <option value="">Select Field</option>
+        ${fieldOptions.map(option => 
+          `<option value="${option.value}" ${currentValue === option.value ? "selected" : ""}>${option.label}</option>`
+        ).join("")}
+      `;
+    }
+  });
+
+  // Update existing actions
+  const actionRows = document.querySelectorAll('.action-row');
+  const actionTypes = getActionTypes(sourceType);
+  
+  actionRows.forEach(row => {
+    const actionTypeSelect = row.querySelector('[name^="action_type_"]');
+    const targetFieldSelect = row.querySelector('[name^="target_field_"]');
+    
+    if (actionTypeSelect) {
+      const currentValue = actionTypeSelect.value;
+      actionTypeSelect.innerHTML = `
+        <option value="">Select Action Type</option>
+        ${actionTypes.map(option => 
+          `<option value="${option.value}" ${currentValue === option.value ? "selected" : ""}>${option.label}</option>`
+        ).join("")}
+      `;
+    }
+    
+    if (targetFieldSelect) {
+      const currentValue = targetFieldSelect.value;
+      targetFieldSelect.innerHTML = `
+        <option value="">Target Field</option>
+        ${fieldOptions.map(option => 
+          `<option value="${option.value}" ${currentValue === option.value ? "selected" : ""}>${option.label}</option>`
+        ).join("")}
+      `;
+    }
+  });
+  
+  // Update rule scope options
+  updateRuleScope();
+}
 
 // Initialize page
 function initializeDataMappingPage() {
@@ -108,20 +245,23 @@ function renderRules() {
 
     // Provide defaults for missing properties
     const isActive = rule.is_active !== undefined ? rule.is_active : true;
-    const statusClass = isActive ? "active" : "inactive";
-    const statusText = isActive ? "Active" : "Inactive";
+    const sourceType = rule.source_type || "stream";
+    const sourceTypeLabel = sourceType === "stream" ? "STREAM" : "EPG";
+    const sourceTypeColor = sourceType === "stream" ? "#007bff" : "#17a2b8";
     const ruleName = rule.name || "Unnamed Rule";
     const ruleDescription = rule.description || "";
     const conditions = rule.conditions || [];
     const actions = rule.actions || [];
+    
+    // Apply transparency if inactive
+    const cardOpacity = isActive ? "1" : "0.6";
 
     html += `
-            <div class="rule-card" data-rule-id="${rule.id}" draggable="true" style="cursor: move; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 5px; padding: 12px; background: white;">
+            <div class="rule-card" data-rule-id="${rule.id}" draggable="true" style="cursor: move; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 5px; padding: 12px; background: white; opacity: ${cardOpacity};">
                 <div class="rule-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                     <div style="display: flex; align-items: center; gap: 10px;">
                         <span class="drag-handle" style="cursor: move; color: #999; font-size: 16px; user-select: none; background: #f8f9fa; padding: 2px 4px; border-radius: 3px;">⋮</span>
-                        <strong class="rule-title">${escapeHtml(ruleName)}</strong>
-                        <span class="status-badge badge ${isActive ? "badge-success" : "badge-secondary"}" style="font-size: 12px;">${statusText}</span>
+                        <strong class="rule-title">${escapeHtml(ruleName)}<sup style="color: ${sourceTypeColor}; font-size: 0.7em; margin-left: 4px;">${sourceTypeLabel}</sup></strong>
                     </div>
                     <div class="rule-buttons" style="display: flex; gap: 5px;">
                         <button class="btn btn-sm btn-primary" onclick="editRule('${rule.id}')">
@@ -139,11 +279,11 @@ function renderRules() {
                 <div class="rule-content" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 5px;">
                     <div class="conditions-column">
                         <h6 style="margin: 0 0 5px 0; color: #333; font-weight: bold; font-size: 14px;">Conditions (${conditions.length})</h6>
-                        ${renderConditionsSummary(conditions)}
+                        ${renderConditionsSummary(conditions, sourceType)}
                     </div>
                     <div class="actions-column">
                         <h6 style="margin: 0 0 5px 0; color: #333; font-weight: bold; font-size: 14px;">Actions (${actions.length})</h6>
-                        ${renderActionsSummary(actions)}
+                        ${renderActionsSummary(actions, sourceType)}
                     </div>
                 </div>
             </div>
@@ -151,6 +291,16 @@ function renderRules() {
   });
 
   html += "</div>";
+  
+  // Add the "Add Rule" button at the bottom right
+  html += `
+    <div class="d-flex justify-content-end mt-3">
+      <button class="btn btn-primary" onclick="createRule()">
+        ➕ Add Rule
+      </button>
+    </div>
+  `;
+  
   container.innerHTML = html;
 
   // Initialize drag and drop
@@ -158,7 +308,7 @@ function renderRules() {
 }
 
 // Render conditions summary
-function renderConditionsSummary(conditions) {
+function renderConditionsSummary(conditions, sourceType = 'stream') {
   if (conditions.length === 0) {
     return '<div style="color: #999; font-style: italic; font-size: 13px;">Always applies</div>';
   }
@@ -169,8 +319,9 @@ function renderConditionsSummary(conditions) {
       html += `<div style="margin: 3px 0; font-weight: bold; color: #666;">${condition.logical_operator.toUpperCase()}</div>`;
     }
 
+    const fieldOptions = getFieldOptions(sourceType);
     const field =
-      FIELD_OPTIONS.find((f) => f.value === condition.field_name)?.label ||
+      fieldOptions.find((f) => f.value === condition.field_name)?.label ||
       condition.field_name;
     const operator =
       OPERATOR_OPTIONS.find((o) => o.value === condition.operator)?.label ||
@@ -187,18 +338,20 @@ function renderConditionsSummary(conditions) {
 }
 
 // Render actions summary
-function renderActionsSummary(actions) {
+function renderActionsSummary(actions, sourceType = 'stream') {
   if (actions.length === 0) {
     return '<div style="color: #999; font-style: italic; font-size: 13px;">No actions</div>';
   }
 
   let html = '<div style="font-size: 13px; line-height: 1.4;">';
   actions.forEach((action) => {
+    const actionTypes = getActionTypes(sourceType);
+    const fieldOptions = getFieldOptions(sourceType);
     const actionType =
-      ACTION_TYPES.find((a) => a.value === action.action_type)?.label ||
+      actionTypes.find((a) => a.value === action.action_type)?.label ||
       action.action_type;
     const field =
-      FIELD_OPTIONS.find((f) => f.value === action.target_field)?.label ||
+      fieldOptions.find((f) => f.value === action.target_field)?.label ||
       action.target_field;
 
     let valueDisplay = "";
@@ -354,6 +507,7 @@ function editRule(ruleId) {
 function resetRuleForm() {
   document.getElementById("ruleForm").reset();
   document.getElementById("ruleActive").checked = true;
+  document.getElementById("ruleSourceType").value = "";
   document.getElementById("conditionsContainer").innerHTML = "";
   document.getElementById("actionsContainer").innerHTML = "";
   document.getElementById("testResults").style.display = "none";
@@ -374,10 +528,14 @@ function populateRuleForm(ruleData) {
   const nameField = document.getElementById("ruleName");
   const descField = document.getElementById("ruleDescription");
   const activeField = document.getElementById("ruleActive");
+  const sourceTypeField = document.getElementById("ruleSourceType");
+  const scopeField = document.getElementById("ruleScope");
 
   if (nameField) nameField.value = ruleData.name || "";
   if (descField) descField.value = ruleData.description || "";
   if (activeField) activeField.checked = ruleData.is_active;
+  if (sourceTypeField) sourceTypeField.value = ruleData.source_type || "stream";
+  if (scopeField) scopeField.value = ruleData.scope || "individual";
 
   console.log("Populated form fields:", {
     name: ruleData.name,
@@ -393,6 +551,9 @@ function populateRuleForm(ruleData) {
   document.getElementById("actionsContainer").innerHTML = "";
   conditionCounter = 0;
   actionCounter = 0;
+  
+  // Update field and action options based on source type
+  updateFieldsAndActions();
 
   // Populate conditions
   const conditions = ruleData.conditions || [];
@@ -421,6 +582,10 @@ function populateRuleForm(ruleData) {
 function addCondition(conditionData = null) {
   const container = document.getElementById("conditionsContainer");
   const conditionId = ++conditionCounter;
+  
+  // Get current source type
+  const sourceType = document.getElementById("ruleSourceType")?.value || "stream";
+  const fieldOptions = getFieldOptions(sourceType);
 
   const showLogicalOperator = container.children.length > 0;
 
@@ -438,7 +603,7 @@ function addCondition(conditionData = null) {
             }
             <select name="field_${conditionId}" required>
                 <option value="">Select Field</option>
-                ${FIELD_OPTIONS.map(
+                ${fieldOptions.map(
                   (option) =>
                     `<option value="${option.value}" ${conditionData?.field_name === option.value ? "selected" : ""}>${option.label}</option>`,
                 ).join("")}
@@ -486,19 +651,24 @@ function removeCondition(conditionId) {
 function addAction(actionData = null) {
   const container = document.getElementById("actionsContainer");
   const actionId = ++actionCounter;
+  
+  // Get current source type
+  const sourceType = document.getElementById("ruleSourceType")?.value || "stream";
+  const fieldOptions = getFieldOptions(sourceType);
+  const actionTypes = getActionTypes(sourceType);
 
   const html = `
         <div class="action-row" data-action-id="${actionId}">
             <select name="action_type_${actionId}" required onchange="updateActionType(${actionId})">
                 <option value="">Select Action Type</option>
-                ${ACTION_TYPES.map(
+                ${actionTypes.map(
                   (option) =>
                     `<option value="${option.value}" ${actionData?.action_type === option.value ? "selected" : ""}>${option.label}</option>`,
                 ).join("")}
             </select>
-            <select name="target_field_${actionId}" required>
+            <select name="target_field_${actionId}" id="targetField_${actionId}" required>
                 <option value="">Target Field</option>
-                ${FIELD_OPTIONS.map(
+                ${fieldOptions.map(
                   (option) =>
                     `<option value="${option.value}" ${actionData?.target_field === option.value ? "selected" : ""}>${option.label}</option>`,
                 ).join("")}
@@ -514,15 +684,26 @@ function addAction(actionData = null) {
 
   container.insertAdjacentHTML("beforeend", html);
 
-  // Don't call updateActionType here as it will overwrite the data
-  // The renderActionValueInput already handles the existing data
+  // If we have existing action data, update the UI to show/hide fields correctly
+  if (actionData?.action_type) {
+    updateActionType(actionId);
+  }
 }
 
 // Render action value input based on action type
 function renderActionValueInput(actionId, actionData = null) {
   const actionType = actionData?.action_type;
-
-  if (actionType === "set_logo") {
+  const config = getActionConfig(actionType);
+  
+  if (!actionType) {
+    return `<input type="text" name="action_value_${actionId}" placeholder="Value" value="${actionData?.value || ""}" />`;
+  }
+  
+  if (config.isGlobal) {
+    return `<span class="text-muted">This action applies globally - no additional parameters needed</span>`;
+  }
+  
+  if (config.needsLogo) {
     const logoId = actionData?.logo_asset_id;
     return `
             <div class="logo-selector">
@@ -533,24 +714,13 @@ function renderActionValueInput(actionId, actionData = null) {
                 ${logoId ? `<img class="logo-preview-small ml-2" src="/api/logos/${logoId}" alt="Selected logo">` : ""}
             </div>
         `;
-  } else if (actionType === "set_label") {
-    const labelKey = actionData?.label_key || "";
-    const labelValue = actionData?.label_value || "";
-    return `
-            <div class="label-inputs" style="display: flex; gap: 5px; align-items: center;">
-                <input type="text" name="label_key_${actionId}" placeholder="Label Key"
-                       value="${labelKey}" style="flex: 0 0 120px; font-weight: bold;" required>
-                <span style="color: #666;">=</span>
-                <input type="text" name="label_value_${actionId}" placeholder="Label Value"
-                       value="${labelValue}" style="flex: 1;" required>
-                <small style="color: #666; font-size: 11px; margin-left: 5px;">e.g. category=sports</small>
-            </div>
-        `;
-  } else {
+  } else if (config.needsValue) {
     return `
             <input type="text" name="action_value_${actionId}" placeholder="Value"
-                   value="${actionData?.value || ""}" ${actionType === "set_logo" ? 'style="display:none"' : ""} />
+                   value="${actionData?.value || ""}" />
         `;
+  } else {
+    return `<span class="text-muted">No additional parameters needed</span>`;
   }
 }
 
@@ -558,11 +728,28 @@ function renderActionValueInput(actionId, actionData = null) {
 function updateActionType(actionId) {
   const select = document.querySelector(`[name="action_type_${actionId}"]`);
   const container = document.getElementById(`actionValue_${actionId}`);
-
+  const targetFieldSelect = document.getElementById(`targetField_${actionId}`);
+  
   if (select && container) {
+    const actionType = select.value;
+    const config = getActionConfig(actionType);
+    
+    // Update value input
     container.innerHTML = renderActionValueInput(actionId, {
-      action_type: select.value,
+      action_type: actionType,
     });
+    
+    // Show/hide target field based on action config
+    if (targetFieldSelect) {
+      if (config.needsField) {
+        targetFieldSelect.style.display = '';
+        targetFieldSelect.required = true;
+      } else {
+        targetFieldSelect.style.display = 'none';
+        targetFieldSelect.required = false;
+        targetFieldSelect.value = ''; // Clear the value for global actions
+      }
+    }
   }
 }
 
@@ -876,8 +1063,13 @@ function renderTestChanges(original, mapped) {
     const mappedValue = mapped[field];
 
     if (originalValue !== mappedValue) {
-      const fieldLabel =
-        FIELD_OPTIONS.find((f) => f.value === field)?.label || field;
+      // Try to find field in both stream and EPG options
+      const streamOptions = getFieldOptions('stream');
+      const epgOptions = getFieldOptions('epg');
+      const fieldLabel = 
+        streamOptions.find((f) => f.value === field)?.label ||
+        epgOptions.find((f) => f.value === field)?.label ||
+        field;
       changes.push(
         `${fieldLabel}: "${originalValue || ""}" → "${mappedValue || ""}"`,
       );
@@ -907,10 +1099,12 @@ function collectRuleFormData() {
   const nameElement = document.getElementById("ruleName");
   const descriptionElement = document.getElementById("ruleDescription");
   const activeElement = document.getElementById("ruleActive");
+  const sourceTypeElement = document.getElementById("ruleSourceType");
 
   const name = nameElement ? nameElement.value.trim() : "";
   const description = descriptionElement ? descriptionElement.value.trim() : "";
   const isActive = activeElement ? activeElement.checked : true;
+  const sourceType = sourceTypeElement ? sourceTypeElement.value : "";
 
   console.log("Form elements found:", {
     nameElement: !!nameElement,
@@ -926,6 +1120,11 @@ function collectRuleFormData() {
 
   if (!name) {
     showError("Rule name is required");
+    return null;
+  }
+  
+  if (!sourceType) {
+    showError("Source type is required");
     return null;
   }
 
@@ -1002,6 +1201,7 @@ function collectRuleFormData() {
   return {
     name,
     description,
+    source_type: sourceType,
     is_active: isActive,
     conditions,
     actions,
@@ -1073,6 +1273,8 @@ async function toggleRule(ruleId) {
   const updatedRule = {
     name: rule.name,
     description: rule.description,
+    source_type: rule.source_type,
+    scope: rule.scope,
     conditions: rule.conditions.map((c) => ({
       field_name: c.field_name,
       operator: c.operator,
@@ -1084,6 +1286,8 @@ async function toggleRule(ruleId) {
       target_field: a.target_field,
       value: a.value,
       logo_asset_id: a.logo_asset_id,
+      timeshift_minutes: a.timeshift_minutes,
+      similarity_threshold: a.similarity_threshold,
     })),
     is_active: !rule.is_active,
   };
@@ -1135,15 +1339,15 @@ function showSuccess(message) {
 }
 
 // Preview data mapping rules
-async function previewRules() {
-  const button = document.querySelector('[onclick="previewRules()"]');
+async function previewStreamRules() {
+  const button = document.querySelector('[onclick="previewStreamRules()"]');
   const originalText = button.innerHTML;
 
   try {
     button.innerHTML = "🔄 Generating Preview...";
     button.disabled = true;
 
-    const response = await fetch("/api/data-mapping/preview?view=final");
+    const response = await fetch("/api/data-mapping/preview?source_type=stream&view=final");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -1151,21 +1355,62 @@ async function previewRules() {
     const data = await response.json();
 
     if (data.success) {
-      showPreviewModal(data);
+      showPreviewModal(data, "Stream Rules Preview");
     } else {
-      showAlert("error", `Preview failed: ${data.message || "Unknown error"}`);
+      showError(`Stream preview failed: ${data.message || "Unknown error"}`);
     }
   } catch (error) {
-    console.error("Error previewing rules:", error);
-    showAlert("error", `Failed to generate preview: ${error.message}`);
+    console.error("Error previewing stream rules:", error);
+    showError(`Failed to generate stream preview: ${error.message}`);
   } finally {
     button.innerHTML = originalText;
     button.disabled = false;
   }
 }
 
+async function previewEpgRules() {
+  const button = document.querySelector('[onclick="previewEpgRules()"]');
+  const originalText = button.innerHTML;
+
+  try {
+    // Check if there are any active EPG rules first
+    const epgRules = currentRules.filter(rule => rule.rule.source_type === 'epg' && rule.rule.is_active);
+    if (epgRules.length === 0) {
+      showError("No active EPG data mapping rules found. Create some EPG rules first.");
+      return;
+    }
+
+    button.innerHTML = "🔄 Generating Preview...";
+    button.disabled = true;
+
+    const response = await fetch("/api/data-mapping/preview?source_type=epg&view=final");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (data.success) {
+      showPreviewModal(data, "EPG Rules Preview");
+    } else {
+      showError(`EPG preview failed: ${data.message || "Unknown error"}`);
+    }
+  } catch (error) {
+    console.error("Error previewing EPG rules:", error);
+    showError(`Failed to generate EPG preview: ${error.message}`);
+  } finally {
+    button.innerHTML = originalText;
+    button.disabled = false;
+  }
+}
+
+// Legacy preview function for backward compatibility
+async function previewRules() {
+  await previewStreamRules();
+}
+
 // Show rule preview modal
-function showPreviewModal(data) {
+function showPreviewModal(data, title = "Data Mapping Preview") {
   // Use final_channels from backend if available, otherwise aggregate manually
   const finalChannels = data.final_channels || [];
 

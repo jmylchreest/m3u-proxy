@@ -1,253 +1,296 @@
--- Default filters with nested condition trees for complex expressions
+-- Default Data and Rules Migration
+-- Provides default data mapping rules for common use cases
 
--- SD Quality Channels (720p and below)
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
+-- Insert default timeshift rule using regex capture groups (for stream sources)
+INSERT INTO data_mapping_rules (id, name, description, source_type, sort_order, is_active, created_at, updated_at)
+VALUES (
     '550e8400-e29b-41d4-a716-446655440001',
-    'SD Quality Channels',
-    1,
-    FALSE,
-    'all',
-    '{"type":"group","operator":"all","children":[{"type":"condition","field":"channel_name","operator":"matches","value":"(sd|480p|576p|720p)(?![0-9])"},{"type":"condition","field":"channel_name","operator":"not_matches","value":"(hd|1080|4k|uhd|8k)"}]}',
-    datetime('now'),
-    datetime('now')
-);
-
--- HD Quality Channels
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
-    '550e8400-e29b-41d4-a716-446655440002',
-    'HD Quality Channels',
-    1,
-    FALSE,
-    'all',
-    '{"type":"condition","field":"channel_name","operator":"matches","value":"(hd|1080p?|full.?hd)(?![0-9])"}',
-    datetime('now'),
-    datetime('now')
-);
-
--- 4K Quality Channels
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
-    '550e8400-e29b-41d4-a716-446655440003',
-    '4K Quality Channels',
-    1,
-    FALSE,
-    'all',
-    '{"type":"condition","field":"channel_name","operator":"matches","value":"(4k|uhd|ultra.?hd|2160p?)(?![0-9])"}',
-    datetime('now'),
-    datetime('now')
-);
-
--- 8K Quality Channels
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
-    '550e8400-e29b-41d4-a716-446655440004',
-    '8K Quality Channels',
-    1,
-    FALSE,
-    'all',
-    '{"type":"condition","field":"channel_name","operator":"matches","value":"(8k|4320p?)(?![0-9])"}',
-    datetime('now'),
-    datetime('now')
-);
-
--- Adult Content (Inverse Filter - Excludes matching channels)
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
-    '550e8400-e29b-41d4-a716-446655440005',
-    'Adult Content',
+    'Default Timeshift Detection (Regex)',
+    'Automatically detects timeshift channels (+1, +24, etc.) and sets tvg-shift field using regex capture groups.',
+    'stream',
     1,
     TRUE,
-    'any',
-    '{"type":"group","operator":"any","children":[{"type":"condition","field":"group_title","operator":"matches","value":"(adult|xxx|18\\\\+|for.?adults|erotic|porn|sex|mature)"},{"type":"condition","field":"channel_name","operator":"matches","value":"(adult|xxx|18\\\\+|for.?adults|erotic|porn|sex|mature|playboy|hustler|penthouse)"}]}',
     datetime('now'),
     datetime('now')
 );
 
--- Sports Channels with complex nested conditions
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
-    '550e8400-e29b-41d4-a716-446655440006',
-    'Sports Channels',
-    1,
-    FALSE,
-    'any',
-    '{"type":"group","operator":"any","children":[{"type":"condition","field":"group_title","operator":"matches","value":"(sport|football|soccer|basketball|tennis|cricket|racing|athletics|baseball|hockey)"},{"type":"condition","field":"channel_name","operator":"matches","value":"(sport|football|soccer|basketball|tennis|cricket|racing|espn|fox.?sports|sky.?sports|eurosport|nba|nfl|mlb|nhl|f1|formula|premier.?league|champions.?league|athletics|baseball|hockey)"}]}',
-    datetime('now'),
+-- Add condition to match timeshift channels and capture the timeshift value
+INSERT INTO data_mapping_conditions (id, rule_id, field_name, operator, value, logical_operator, sort_order, created_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440002',
+    '550e8400-e29b-41d4-a716-446655440001',
+    'channel_name',
+    'matches',
+    '.*(?:\+([0-9]+)|(-[0-9]+)).*',
+    'and',
+    0,
     datetime('now')
 );
 
--- Movies Channels
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
-    '550e8400-e29b-41d4-a716-446655440007',
-    'Movies Channels',
-    1,
-    FALSE,
-    'any',
-    '{"type":"group","operator":"any","children":[{"type":"condition","field":"group_title","operator":"matches","value":"(movies?|films?|cinema|hollywood|bollywood)"},{"type":"condition","field":"channel_name","operator":"matches","value":"(movies?|films?|cinema|hollywood|bollywood|hbo|showtime|starz|cinemax)"}]}',
-    datetime('now'),
+-- Add set_value action to set tvg-shift field using captured timeshift value
+INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, sort_order, created_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440003',
+    '550e8400-e29b-41d4-a716-446655440001',
+    'set_value',
+    'tvg_shift',
+    '$1$2',
+    0,
     datetime('now')
 );
 
--- News Channels (example of complex nested expression)
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
-    '550e8400-e29b-41d4-a716-446655440008',
-    'News Channels',
-    1,
-    FALSE,
-    'any',
-    '{"type":"group","operator":"any","children":[{"type":"condition","field":"group_title","operator":"matches","value":"(news|noticias|nachrichten|nouvelles|nyheter)"},{"type":"group","operator":"all","children":[{"type":"condition","field":"channel_name","operator":"matches","value":"(news|noticias|nachrichten|nouvelles|nyheter|cnn|bbc|fox.?news|msnbc|sky.?news|euronews|al.?jazeera|reuters|bloomberg)"},{"type":"condition","field":"channel_name","operator":"not_contains","value":"adult"}]}]}',
-    datetime('now'),
-    datetime('now')
-);
+-- Default Filters
+-- These provide common filtering templates that users can enable/modify as needed
 
--- Entertainment Channels
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
-    '550e8400-e29b-41d4-a716-446655440009',
-    'Entertainment Channels',
-    1,
-    FALSE,
-    'any',
-    '{"type":"group","operator":"any","children":[{"type":"condition","field":"group_title","operator":"matches","value":"(entertainment|variety|comedy|drama|reality)"},{"type":"condition","field":"channel_name","operator":"matches","value":"(entertainment|variety|comedy|drama|reality|e!|bravo|tlc|lifetime)"}]}',
-    datetime('now'),
-    datetime('now')
-);
-
--- Kids/Family Channels
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
+-- Hide Adult Content Filter (Exclude channels containing adult content)
+INSERT INTO filters (id, name, source_type, is_inverse, logical_operator, created_at, updated_at)
+VALUES (
     '550e8400-e29b-41d4-a716-446655440010',
-    'Kids/Family Channels',
-    1,
-    FALSE,
-    'any',
-    '{"type":"group","operator":"any","children":[{"type":"condition","field":"group_title","operator":"matches","value":"(kids|children|family|cartoon|anime)"},{"type":"condition","field":"channel_name","operator":"matches","value":"(kids|children|family|cartoon|anime|disney|nickelodeon|cartoon.?network|nick.?jr)"}]}',
+    'Hide Adult Content',
+    'stream',
+    TRUE, -- Exclude filter: removes channels that match conditions
+    'any', -- Exclude if ANY condition matches
     datetime('now'),
     datetime('now')
 );
 
--- Complex example: High-Quality Sports (demonstrates nested AND/OR)
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
+INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order, created_at)
+VALUES (
     '550e8400-e29b-41d4-a716-446655440011',
-    'High-Quality Sports',
+    '550e8400-e29b-41d4-a716-446655440010',
+    'group_title',
+    'contains',
+    'Adult',
+    0,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440012',
+    '550e8400-e29b-41d4-a716-446655440010',
+    'group_title',
+    'contains',
+    'XXX',
     1,
-    FALSE,
-    'all',
-    '{"type":"group","operator":"all","children":[{"type":"group","operator":"any","children":[{"type":"condition","field":"channel_name","operator":"contains","value":"sport"},{"type":"condition","field":"group_title","operator":"contains","value":"sport"},{"type":"condition","field":"channel_name","operator":"matches","value":"(espn|fox.?sports|sky.?sports)"}]},{"type":"group","operator":"any","children":[{"type":"condition","field":"channel_name","operator":"contains","value":"hd"},{"type":"condition","field":"channel_name","operator":"contains","value":"4k"}]}]}',
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440013',
+    '550e8400-e29b-41d4-a716-446655440010',
+    'group_title',
+    'contains',
+    '18+',
+    2,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440014',
+    '550e8400-e29b-41d4-a716-446655440010',
+    'channel_name',
+    'contains',
+    'Adult',
+    3,
+    datetime('now')
+);
+
+-- Sports Channels Only Filter
+INSERT INTO filters (id, name, source_type, created_at, updated_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440020',
+    'Sports Channels Only',
+    'stream',
     datetime('now'),
     datetime('now')
 );
 
--- Example with very complex nesting: Premium Content
-INSERT INTO filters (
-    id,
-    name,
-    starting_channel_number,
-    is_inverse,
-    logical_operator,
-    condition_tree,
-    created_at,
-    updated_at
-) VALUES (
-    '550e8400-e29b-41d4-a716-446655440012',
-    'Premium Content',
+INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order, created_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440021',
+    '550e8400-e29b-41d4-a716-446655440020',
+    'group_title',
+    'contains',
+    'Sport',
+    0,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440022',
+    '550e8400-e29b-41d4-a716-446655440020',
+    'group_title',
+    'contains',
+    'ESPN',
     1,
-    FALSE,
-    'all',
-    '{"type":"group","operator":"all","children":[{"type":"group","operator":"any","children":[{"type":"condition","field":"channel_name","operator":"matches","value":"(hbo|showtime|starz|cinemax|premium)"},{"type":"group","operator":"all","children":[{"type":"condition","field":"group_title","operator":"contains","value":"movies"},{"type":"condition","field":"channel_name","operator":"matches","value":"(hd|4k)"}]}]},{"type":"condition","field":"channel_name","operator":"not_matches","value":"(adult|xxx|18\\\\+)"}]}',
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440023',
+    '550e8400-e29b-41d4-a716-446655440020',
+    'channel_name',
+    'contains',
+    'Sport',
+    2,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440024',
+    '550e8400-e29b-41d4-a716-446655440020',
+    'group_title',
+    'contains',
+    'Football',
+    3,
+    datetime('now')
+);
+
+-- HD Channels Only Filter
+INSERT INTO filters (id, name, source_type, created_at, updated_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440030',
+    'HD Channels Only',
+    'stream',
     datetime('now'),
+    datetime('now')
+);
+
+INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order, created_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440031',
+    '550e8400-e29b-41d4-a716-446655440030',
+    'channel_name',
+    'contains',
+    'HD',
+    0,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440032',
+    '550e8400-e29b-41d4-a716-446655440030',
+    'channel_name',
+    'contains',
+    'FHD',
+    1,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440033',
+    '550e8400-e29b-41d4-a716-446655440030',
+    'channel_name',
+    'contains',
+    '4K',
+    2,
+    datetime('now')
+);
+
+-- English Channels Only Filter
+INSERT INTO filters (id, name, source_type, created_at, updated_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440040',
+    'English Channels Only',
+    'stream',
+    datetime('now'),
+    datetime('now')
+);
+
+INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order, created_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440041',
+    '550e8400-e29b-41d4-a716-446655440040',
+    'group_title',
+    'starts_with',
+    'UK:',
+    0,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440042',
+    '550e8400-e29b-41d4-a716-446655440040',
+    'group_title',
+    'starts_with',
+    'US:',
+    1,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440043',
+    '550e8400-e29b-41d4-a716-446655440040',
+    'group_title',
+    'contains',
+    'English',
+    2,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440044',
+    '550e8400-e29b-41d4-a716-446655440040',
+    'group_title',
+    'not_contains',
+    'Arabic',
+    3,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440045',
+    '550e8400-e29b-41d4-a716-446655440040',
+    'group_title',
+    'not_contains',
+    'German',
+    4,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440046',
+    '550e8400-e29b-41d4-a716-446655440040',
+    'group_title',
+    'not_contains',
+    'French',
+    5,
+    datetime('now')
+);
+
+-- Remove Low Quality Channels Filter (Exclude channels with quality indicators)
+INSERT INTO filters (id, name, source_type, is_inverse, logical_operator, created_at, updated_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440050',
+    'Remove Low Quality Channels',
+    'stream',
+    TRUE, -- Exclude filter: removes channels that match conditions
+    'any', -- Exclude if ANY condition matches
+    datetime('now'),
+    datetime('now')
+);
+
+INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order, created_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440051',
+    '550e8400-e29b-41d4-a716-446655440050',
+    'channel_name',
+    'contains',
+    'SD',
+    0,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440052',
+    '550e8400-e29b-41d4-a716-446655440050',
+    'channel_name',
+    'contains',
+    'LOW',
+    1,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440053',
+    '550e8400-e29b-41d4-a716-446655440050',
+    'channel_name',
+    'contains',
+    '240p',
+    2,
+    datetime('now')
+),
+(
+    '550e8400-e29b-41d4-a716-446655440054',
+    '550e8400-e29b-41d4-a716-446655440050',
+    'channel_name',
+    'contains',
+    '360p',
+    3,
     datetime('now')
 );

@@ -1,5 +1,5 @@
 use crate::assets::MigrationAssets;
-use crate::config::{DatabaseConfig, IngestionConfig};
+use crate::config::{DatabaseConfig, DatabaseBatchConfig, IngestionConfig};
 use crate::models::*;
 use anyhow::Result;
 use sqlx::{migrate::MigrateDatabase, Pool, Row, Sqlite, SqlitePool};
@@ -18,6 +18,7 @@ pub struct Database {
     pool: Pool<Sqlite>,
     channel_update_lock: Arc<Mutex<()>>,
     ingestion_config: IngestionConfig,
+    batch_config: DatabaseBatchConfig,
 }
 
 impl Database {
@@ -33,10 +34,18 @@ impl Database {
 
         let pool = SqlitePool::connect(&config.url).await?;
 
+        let batch_config = config.batch_sizes.clone().unwrap_or_default();
+        
+        // Validate batch configuration
+        if let Err(e) = batch_config.validate() {
+            return Err(anyhow::anyhow!("Invalid database batch configuration: {}", e));
+        }
+
         Ok(Self {
             pool,
             channel_update_lock: Arc::new(Mutex::new(())),
             ingestion_config: ingestion_config.clone(),
+            batch_config,
         })
     }
 
@@ -256,6 +265,7 @@ impl Database {
             let filter = Filter {
                 id: proxy_filter.filter_id,
                 name: row.get("name"),
+                source_type: FilterSourceType::Stream,
                 starting_channel_number: row.get("starting_channel_number"),
                 is_inverse: row.get("is_inverse"),
                 logical_operator: row.get("logical_operator"),

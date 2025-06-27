@@ -1,3 +1,16 @@
+//! EPG Ingestor - Robust XMLTV parsing and ingestion
+//! 
+//! This module handles ingestion of EPG (Electronic Program Guide) data from XMLTV sources.
+//! It uses the xmltv crate for reliable parsing and handles deduplication through the 
+//! data mapping system rather than a DLQ (Dead Letter Queue) approach.
+//!
+//! Key features:
+//! - Robust XMLTV parsing using the xmltv crate with quick-xml
+//! - Cancellation support for long-running operations
+//! - Progress tracking and reporting
+//! - Channel deduplication during ingestion (same source)
+//! - Cross-source deduplication handled by data mapping during proxy generation
+
 use crate::database::Database;
 use crate::models::*;
 use crate::utils::normalize_url_scheme;
@@ -13,6 +26,8 @@ use reqwest::Client;
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+use xmltv::{Channel, Programme, Tv};
+use quick_xml::de::from_str;
 
 pub struct EpgIngestor {
     client: Client,
@@ -103,6 +118,8 @@ impl EpgIngestor {
                         downloaded_bytes: None,
                         channels_parsed: None,
                         channels_saved: None,
+                        programs_parsed: None,
+                        programs_saved: None,
                         percentage: Some(5.0),
                     },
                 )
@@ -151,7 +168,7 @@ impl EpgIngestor {
             match &result {
                 Ok((channels, programs, _)) => {
                     state_manager
-                        .complete_ingestion(source.id, channels.len() + programs.len())
+                        .complete_ingestion_with_programs(source.id, channels.len(), Some(programs.len()))
                         .await;
                 }
                 Err(e) => {
@@ -181,6 +198,8 @@ impl EpgIngestor {
                         downloaded_bytes: None,
                         channels_parsed: None,
                         channels_saved: None,
+                        programs_parsed: None,
+                        programs_saved: None,
                         percentage: Some(15.0),
                     },
                 )
@@ -212,6 +231,8 @@ impl EpgIngestor {
                         downloaded_bytes: Some(content.len() as u64),
                         channels_parsed: None,
                         channels_saved: None,
+                        programs_parsed: None,
+                        programs_saved: None,
                         percentage: Some(30.0),
                     },
                 )
@@ -249,6 +270,8 @@ impl EpgIngestor {
                         downloaded_bytes: None,
                         channels_parsed: None,
                         channels_saved: None,
+                        programs_parsed: None,
+                        programs_saved: None,
                         percentage: Some(15.0),
                     },
                 )
@@ -295,6 +318,8 @@ impl EpgIngestor {
                         downloaded_bytes: Some(content.len() as u64),
                         channels_parsed: None,
                         channels_saved: None,
+                        programs_parsed: None,
+                        programs_saved: None,
                         percentage: Some(30.0),
                     },
                 )
@@ -346,99 +371,75 @@ impl EpgIngestor {
             );
         }
 
-        // Simple XML parsing - this is a basic implementation
-        // In a production system, you'd want to use a proper XML parser like roxmltree or quick-xml
+        // Use the proper XMLTV library for robust parsing
+        info!("Starting XMLTV parsing using xmltv library with quick-xml");
+        
+        // Parse the entire XMLTV document
+        let xmltv_data: Tv = from_str(content)
+            .map_err(|e| anyhow!("Failed to parse XMLTV content with xmltv library: {}", e))?;
+        
         let mut channels = Vec::new();
         let mut programs = Vec::new();
-        let mut channel_map = std::collections::HashMap::new(); // Track channel_id duplicates
+        let mut seen_channel_ids = std::collections::HashSet::new();
 
-        // Parse channels with error handling and cancellation checks
-        info!("Extracting channel sections from XMLTV content");
-        match self.extract_xml_sections(content, "channel") {
-            Some(channels_data) if !channels_data.is_empty() => {
-                info!("Found {} channel sections to parse", channels_data.len());
-                for (i, channel_xml) in channels_data.iter().enumerate() {
-                    // Check for cancellation every 50 channels
-                    if i % 50 == 0 {
-                        if let Some(state_manager) = &self.state_manager {
-                            if let Some(mut cancel_rx) =
-                                state_manager.get_cancellation_receiver(source.id).await
-                            {
-                                if cancel_rx.try_recv().is_ok() {
-                                    return Err(anyhow!(
-                                        "EPG parsing cancelled during channel processing at {}/{}",
-                                        i,
-                                        channels_data.len()
-                                    ));
-                                }
-                            }
+        // Process channels from the parsed XMLTV data
+        info!("Processing {} channels from XMLTV data", xmltv_data.channels.len());
+        
+        for (i, xmltv_channel) in xmltv_data.channels.iter().enumerate() {
+            // Check for cancellation every 50 channels
+            if i % 50 == 0 {
+                if let Some(state_manager) = &self.state_manager {
+                    if let Some(mut cancel_rx) =
+                        state_manager.get_cancellation_receiver(source.id).await
+                    {
+                        if cancel_rx.try_recv().is_ok() {
+                            return Err(anyhow!(
+                                "EPG parsing cancelled during channel processing at {}/{}",
+                                i,
+                                xmltv_data.channels.len()
+                            ));
                         }
-                    }
-
-                    if i % 100 == 0 && i > 0 {
-                        info!("Processed {}/{} channels", i, channels_data.len());
-                        // Update progress for channels
-                        if let Some(state_manager) = &self.state_manager {
-                            let percentage = 40.0 + (i as f64 / channels_data.len() as f64) * 20.0;
-                            state_manager
-                                .update_progress(
-                                    source.id,
-                                    crate::models::IngestionState::Parsing,
-                                    crate::models::ProgressInfo {
-                                        current_step: format!(
-                                            "Parsing channels ({}/{})",
-                                            i,
-                                            channels_data.len()
-                                        ),
-                                        total_bytes: Some(content.len() as u64),
-                                        downloaded_bytes: Some(content.len() as u64),
-                                        channels_parsed: Some(i),
-                                        channels_saved: None,
-                                        percentage: Some(percentage),
-                                    },
-                                )
-                                .await;
-                        }
-                    }
-                    if let Some(channel) = self.parse_channel_xml(&channel_xml, source.id) {
-                        // Check for duplicate channel_id
-                        if let Some(existing_channel) = channel_map.get(&channel.channel_id) {
-                            // Found duplicate - check if data is identical
-                            if self.are_channels_identical(existing_channel, &channel) {
-                                debug!(
-                                    "Duplicate identical channel found: {} for source '{}'",
-                                    channel.channel_id, source.name
-                                );
-                                // Skip this duplicate silently
-                                continue;
-                            } else {
-                                debug!(
-                                    "Duplicate conflicting channel found: {} for source '{}' - sending to DLQ",
-                                    channel.channel_id, source.name
-                                );
-                                // Handle conflicting duplicate
-                                if let Err(e) = self
-                                    .handle_channel_conflict(source, existing_channel, &channel)
-                                    .await
-                                {
-                                    warn!("Failed to save channel conflict to DLQ: {}", e);
-                                }
-                                continue;
-                            }
-                        }
-
-                        // No duplicate, add to map and channels list
-                        channel_map.insert(channel.channel_id.clone(), channel.clone());
-                        channels.push(channel);
                     }
                 }
             }
-            Some(_) => {
-                warn!("Found empty channel sections list");
+
+            if i % 100 == 0 && i > 0 {
+                debug!("Processed {}/{} channels", i, xmltv_data.channels.len());
+                // Update progress for channels
+                if let Some(state_manager) = &self.state_manager {
+                    let percentage = 40.0 + (i as f64 / xmltv_data.channels.len() as f64) * 20.0;
+                    state_manager
+                        .update_progress(
+                            source.id,
+                            crate::models::IngestionState::Parsing,
+                            crate::models::ProgressInfo {
+                                current_step: format!(
+                                    "Parsing channels ({}/{})",
+                                    i,
+                                    xmltv_data.channels.len()
+                                ),
+                                total_bytes: Some(content.len() as u64),
+                                downloaded_bytes: Some(content.len() as u64),
+                                channels_parsed: Some(i),
+                                channels_saved: None,
+                                programs_parsed: None,
+                                programs_saved: None,
+                                percentage: Some(percentage),
+                            },
+                        )
+                        .await;
+                }
             }
-            None => {
-                warn!("Failed to extract channel sections from XMLTV content");
+            
+            // Skip duplicate channel_ids within the same source to respect database constraints
+            // Cross-source duplicates will be handled by data mapping during proxy generation
+            if seen_channel_ids.contains(&xmltv_channel.id) {
+                continue;
             }
+            seen_channel_ids.insert(xmltv_channel.id.clone());
+            
+            let channel = self.convert_xmltv_channel(xmltv_channel, source.id);
+            channels.push(channel);
         }
 
         info!("Parsed {} channels", channels.len());
@@ -452,70 +453,58 @@ impl EpgIngestor {
             }
         }
 
-        // Parse programmes with error handling and cancellation checks
-        info!("Extracting programme sections from XMLTV content");
-        match self.extract_xml_sections(content, "programme") {
-            Some(programmes_data) if !programmes_data.is_empty() => {
-                info!(
-                    "Found {} programme sections to parse",
-                    programmes_data.len()
-                );
-                for (i, programme_xml) in programmes_data.iter().enumerate() {
-                    // Check for cancellation every 500 programs
-                    if i % 500 == 0 {
-                        if let Some(state_manager) = &self.state_manager {
-                            if let Some(mut cancel_rx) =
-                                state_manager.get_cancellation_receiver(source.id).await
-                            {
-                                if cancel_rx.try_recv().is_ok() {
-                                    return Err(anyhow!(
-                                        "EPG parsing cancelled during program processing at {}/{}",
-                                        i,
-                                        programmes_data.len()
-                                    ));
-                                }
-                            }
-                        }
-                    }
-
-                    if i % 1000 == 0 && i > 0 {
-                        info!("Processed {}/{} programmes", i, programmes_data.len());
-                        // Update progress for programmes
-                        if let Some(state_manager) = &self.state_manager {
-                            let percentage =
-                                60.0 + (i as f64 / programmes_data.len() as f64) * 30.0;
-                            state_manager
-                                .update_progress(
-                                    source.id,
-                                    crate::models::IngestionState::Parsing,
-                                    crate::models::ProgressInfo {
-                                        current_step: format!(
-                                            "Parsing programmes ({}/{})",
-                                            i,
-                                            programmes_data.len()
-                                        ),
-                                        total_bytes: Some(content.len() as u64),
-                                        downloaded_bytes: Some(content.len() as u64),
-                                        channels_parsed: Some(channels.len()),
-                                        channels_saved: None,
-                                        percentage: Some(percentage),
-                                    },
-                                )
-                                .await;
-                        }
-                    }
-                    if let Some(program) =
-                        self.parse_programme_xml(&programme_xml, source, &tz, time_offset_seconds)
+        // Process programs from the parsed XMLTV data
+        info!("Processing {} programs from XMLTV data", xmltv_data.programmes.len());
+        
+        for (i, xmltv_program) in xmltv_data.programmes.iter().enumerate() {
+            // Check for cancellation every 500 programs
+            if i % 500 == 0 {
+                if let Some(state_manager) = &self.state_manager {
+                    if let Some(mut cancel_rx) =
+                        state_manager.get_cancellation_receiver(source.id).await
                     {
-                        programs.push(program);
+                        if cancel_rx.try_recv().is_ok() {
+                            return Err(anyhow!(
+                                "EPG parsing cancelled during program processing at {}/{}",
+                                i,
+                                xmltv_data.programmes.len()
+                            ));
+                        }
                     }
                 }
             }
-            Some(_) => {
-                warn!("Found empty programme sections list");
+
+            if i % 1000 == 0 && i > 0 {
+                debug!("Processed {}/{} programmes", i, xmltv_data.programmes.len());
+                // Update progress for programmes
+                if let Some(state_manager) = &self.state_manager {
+                    let percentage =
+                        60.0 + (i as f64 / xmltv_data.programmes.len() as f64) * 30.0;
+                    state_manager
+                        .update_progress(
+                            source.id,
+                            crate::models::IngestionState::Parsing,
+                            crate::models::ProgressInfo {
+                                current_step: format!(
+                                    "Parsing programmes ({}/{})",
+                                    i,
+                                    xmltv_data.programmes.len()
+                                ),
+                                total_bytes: Some(content.len() as u64),
+                                downloaded_bytes: Some(content.len() as u64),
+                                channels_parsed: Some(channels.len()),
+                                channels_saved: None,
+                                programs_parsed: Some(i),
+                                programs_saved: None,
+                                percentage: Some(percentage),
+                            },
+                        )
+                        .await;
+                }
             }
-            None => {
-                warn!("Failed to extract programme sections from XMLTV content");
+            
+            if let Some(program) = self.convert_xmltv_program(xmltv_program, source, &tz, time_offset_seconds) {
+                programs.push(program);
             }
         }
 
@@ -558,141 +547,86 @@ impl EpgIngestor {
         }
     }
 
-    fn extract_xml_sections(&self, content: &str, tag: &str) -> Option<Vec<String>> {
-        info!("Extracting XML sections for tag: {} (no limit)", tag);
 
-        // Use a more efficient regex pattern for large files
-        let pattern = format!(r"<{}\s+[^>]*>.*?</{}>", tag, tag);
-        let re = match Regex::new(&pattern) {
-            Ok(regex) => regex,
-            Err(e) => {
-                warn!("Failed to compile regex for tag '{}': {}", tag, e);
-                return None;
-            }
-        };
+    fn convert_xmltv_channel(&self, xmltv_channel: &Channel, source_id: Uuid) -> EpgChannel {
+        let channel_name = xmltv_channel.display_names
+            .first()
+            .map(|name| name.name.clone())
+            .unwrap_or_else(|| xmltv_channel.id.clone());
 
-        let start_time = std::time::Instant::now();
-        let mut sections = Vec::new();
+        let channel_logo = xmltv_channel.icons
+            .first()
+            .cloned();
 
-        for match_result in re.find_iter(content) {
-            sections.push(match_result.as_str().to_string());
-
-            // Progress logging every 1000 sections
-            if sections.len() % 1000 == 0 {
-                info!("Extracted {} {} sections so far", sections.len(), tag);
-            }
-        }
-
-        let duration = start_time.elapsed();
-
-        info!(
-            "Extracted {} {} sections in {:?}",
-            sections.len(),
-            tag,
-            duration
-        );
-
-        if sections.is_empty() {
-            warn!("No {} sections found in content", tag);
-        }
-
-        Some(sections)
-    }
-
-    fn parse_channel_xml(&self, xml: &str, source_id: Uuid) -> Option<EpgChannel> {
-        // Extract channel ID
-        let id_re = Regex::new(r#"id="([^"]+)""#).ok()?;
-        let channel_id = id_re.captures(xml)?.get(1)?.as_str().to_string();
-
-        // Extract display name
-        let name_re = Regex::new(r"<display-name[^>]*>([^<]+)</display-name>").ok()?;
-        let channel_name = name_re
-            .captures(xml)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| channel_id.clone());
-
-        // Extract icon/logo
-        let icon_re = Regex::new(r#"<icon\s+src="([^"]+)""#).ok()?;
-        let channel_logo = icon_re
-            .captures(xml)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string());
-
-        Some(EpgChannel {
+        EpgChannel {
             id: Uuid::new_v4(),
             source_id,
-            channel_id,
+            channel_id: xmltv_channel.id.clone(),
             channel_name,
             channel_logo,
             channel_group: None, // XMLTV doesn't typically have groups
             language: None,      // Could be extracted from lang attribute if present
             created_at: Utc::now(),
             updated_at: Utc::now(),
-        })
+        }
     }
 
-    fn parse_programme_xml(
+    fn convert_xmltv_program(
         &self,
-        xml: &str,
+        xmltv_program: &Programme,
         source: &EpgSource,
         tz: &chrono_tz::Tz,
         time_offset_seconds: i32,
     ) -> Option<EpgProgram> {
-        // Extract channel ID
-        let channel_re = Regex::new(r#"channel="([^"]+)""#).ok()?;
-        let channel_id = channel_re.captures(xml)?.get(1)?.as_str().to_string();
-
-        // Extract start and stop times
-        let start_re = Regex::new(r#"start="([^"]+)""#).ok()?;
-        let stop_re = Regex::new(r#"stop="([^"]+)""#).ok()?;
-
-        let start_str = start_re.captures(xml)?.get(1)?.as_str();
-        let stop_str = stop_re.captures(xml)?.get(1)?.as_str();
-
-        let start_time = self.parse_xmltv_datetime(start_str, tz)?;
-        let end_time = self.parse_xmltv_datetime(stop_str, tz)?;
+        // Convert start and stop times
+        let start_time = self.parse_xmltv_datetime(&xmltv_program.start, tz)?;
+        let end_time = xmltv_program.stop
+            .as_ref()
+            .and_then(|stop| self.parse_xmltv_datetime(stop, tz))?;
 
         // Apply time offset using utility function
         let start_time = crate::utils::time::apply_time_offset(start_time, time_offset_seconds);
         let end_time = crate::utils::time::apply_time_offset(end_time, time_offset_seconds);
 
         // Extract title
-        let title_re = Regex::new(r"<title[^>]*>([^<]+)</title>").ok()?;
-        let program_title = title_re
-            .captures(xml)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string())
+        let program_title = xmltv_program.titles
+            .first()
+            .map(|title| title.value.clone())
             .unwrap_or_else(|| "Unknown Program".to_string());
 
         // Extract description
-        let desc_re = Regex::new(r"<desc[^>]*>([^<]+)</desc>").ok()?;
-        let program_description = desc_re
-            .captures(xml)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string());
+        let program_description = xmltv_program.descriptions
+            .first()
+            .map(|desc| desc.value.clone());
 
         // Extract category
-        let category_re = Regex::new(r"<category[^>]*>([^<]+)</category>").ok()?;
-        let program_category = category_re
-            .captures(xml)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string());
+        let program_category = xmltv_program.categories
+            .first()
+            .map(|category| category.name.clone());
 
         // Extract episode info
-        let episode_re = Regex::new(r"<episode-num[^>]*>([^<]+)</episode-num>").ok()?;
-        let episode_info = episode_re
-            .captures(xml)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string());
+        let episode_info = xmltv_program.episode_num
+            .first()
+            .map(|ep| ep.value.clone())
+            .unwrap_or_default();
 
-        let (season_num, episode_num) = self.parse_episode_info(&episode_info.unwrap_or_default());
+        let (season_num, episode_num) = self.parse_episode_info(&episode_info);
+
+        // Extract rating
+        let rating = xmltv_program.ratings
+            .first()
+            .map(|rating| rating.value.clone());
+
+        // Extract language
+        let language = xmltv_program.language
+            .as_ref()
+            .map(|lang| lang.value.clone());
 
         Some(EpgProgram {
             id: Uuid::new_v4(),
             source_id: source.id,
-            channel_id: channel_id.clone(),
-            channel_name: channel_id, // We'll update this with actual channel name later
+            channel_id: xmltv_program.channel.clone(),
+            channel_name: xmltv_program.channel.clone(), // We'll update this with actual channel name later
             program_title,
             program_description,
             program_category,
@@ -700,8 +634,8 @@ impl EpgIngestor {
             end_time,
             episode_num,
             season_num,
-            rating: None,       // Could be extracted if present
-            language: None,     // Could be extracted if present
+            rating,
+            language,
             subtitles: None,    // Could be extracted if present
             aspect_ratio: None, // Could be extracted if present
             created_at: Utc::now(),
@@ -808,63 +742,7 @@ impl EpgIngestor {
         }
     }
 
-    // Helper methods for duplicate channel handling
-    fn are_channels_identical(&self, channel1: &EpgChannel, channel2: &EpgChannel) -> bool {
-        channel1.channel_name == channel2.channel_name
-            && channel1.channel_logo == channel2.channel_logo
-            && channel1.channel_group == channel2.channel_group
-            && channel1.language == channel2.language
-    }
 
-    async fn handle_channel_conflict(
-        &self,
-        source: &EpgSource,
-        existing_channel: &EpgChannel,
-        conflicting_channel: &EpgChannel,
-    ) -> Result<()> {
-        // Only save to DLQ if we have a database connection
-        if let Some(database) = &self.database {
-            // Check if DLQ entry already exists
-            let exists = database
-                .check_epg_dlq_exists(source.id, &conflicting_channel.channel_id)
-                .await?;
-
-            if exists {
-                // Just increment occurrence count
-                database
-                    .increment_epg_dlq_occurrence(source.id, &conflicting_channel.channel_id)
-                    .await?;
-            } else {
-                // Create new DLQ entry
-                let dlq_entry = crate::models::EpgDlq {
-                    id: uuid::Uuid::new_v4(),
-                    source_id: source.id,
-                    original_channel_id: conflicting_channel.channel_id.clone(),
-                    conflict_type: crate::models::EpgConflictType::DuplicateConflicting,
-                    channel_data: serde_json::to_string(conflicting_channel)
-                        .unwrap_or_else(|_| "Failed to serialize".to_string()),
-                    program_data: None, // Programs are handled separately
-                    conflict_details: format!(
-                        "Channel '{}' has conflicting data: existing name '{}' vs new name '{}', existing group '{}' vs new group '{}'",
-                        conflicting_channel.channel_id,
-                        existing_channel.channel_name,
-                        conflicting_channel.channel_name,
-                        existing_channel.channel_group.as_deref().unwrap_or("None"),
-                        conflicting_channel.channel_group.as_deref().unwrap_or("None")
-                    ),
-                    first_seen_at: chrono::Utc::now(),
-                    last_seen_at: chrono::Utc::now(),
-                    occurrence_count: 1,
-                    resolved: false,
-                    resolution_notes: None,
-                };
-
-                database.save_epg_dlq_entry(&dlq_entry).await?;
-            }
-        }
-
-        Ok(())
-    }
 
     /// Save EPG data to database with cancellation support
     pub async fn save_epg_data_with_cancellation(
@@ -874,6 +752,29 @@ impl EpgIngestor {
         programs: Vec<EpgProgram>,
     ) -> Result<(usize, usize)> {
         if let Some(database) = &self.database {
+            // Set progress to saving state
+            if let Some(state_manager) = &self.state_manager {
+                use crate::models::IngestionState;
+                use crate::models::ProgressInfo;
+                
+                state_manager
+                    .update_progress(
+                        source_id,
+                        IngestionState::Saving,
+                        ProgressInfo {
+                            current_step: format!("Saving {} channels and {} programs to database", channels.len(), programs.len()),
+                            total_bytes: None,
+                            downloaded_bytes: None,
+                            channels_parsed: Some(channels.len()),
+                            channels_saved: None,
+                            programs_parsed: Some(programs.len()),
+                            programs_saved: None,
+                            percentage: None,
+                        },
+                    )
+                    .await;
+            }
+
             // Get cancellation receiver if state manager is available
             let cancellation_rx = if let Some(state_manager) = &self.state_manager {
                 state_manager.get_cancellation_receiver(source_id).await
@@ -881,15 +782,62 @@ impl EpgIngestor {
                 None
             };
 
-            // Use the cancellation-aware database method
-            database
-                .update_epg_source_data_with_cancellation(
+            // Create progress callback that updates state manager
+            let total_programs = programs.len();
+            let channels_count = channels.len();
+            let state_manager_clone = self.state_manager.clone();
+            let progress_callback = move |programs_saved: usize, total: usize| {
+                if let Some(ref state_manager) = state_manager_clone {
+                    let percentage = if total > 0 { 
+                        90.0 + (programs_saved as f64 / total as f64) * 10.0
+                    } else { 
+                        95.0 
+                    };
+                    
+                    // Use spawn to avoid blocking the database operation
+                    let state_manager_inner = state_manager.clone();
+                    tokio::spawn(async move {
+                        let _ = state_manager_inner
+                            .update_progress(
+                                source_id,
+                                crate::models::IngestionState::Saving,
+                                crate::models::ProgressInfo {
+                                    current_step: format!("Saved {}/{} programs to database", programs_saved, total),
+                                    total_bytes: None,
+                                    downloaded_bytes: None,
+                                    channels_parsed: Some(channels_count),
+                                    channels_saved: Some(channels_count),
+                                    programs_parsed: Some(total),
+                                    programs_saved: Some(programs_saved),
+                                    percentage: Some(percentage),
+                                },
+                            )
+                            .await;
+                    });
+                }
+            };
+
+            // Use the cancellation-aware database method with progress updates
+            let result = database
+                .update_epg_source_data_with_cancellation_and_progress(
                     source_id,
                     channels,
                     programs,
                     cancellation_rx,
+                    Some(progress_callback),
                 )
-                .await
+                .await;
+
+            // After successful database save, mark ingestion as completed
+            if let Ok((channels_saved, programs_saved)) = &result {
+                if let Some(state_manager) = &self.state_manager {
+                    state_manager
+                        .complete_ingestion_with_programs(source_id, *channels_saved, Some(*programs_saved))
+                        .await;
+                }
+            }
+
+            result
         } else {
             Err(anyhow!("No database connection available"))
         }

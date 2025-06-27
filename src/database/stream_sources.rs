@@ -361,7 +361,7 @@ impl Database {
                     );
 
                     let epg_source_request = EpgSourceCreateRequest {
-                        name: format!("{} EPG", source.name),
+                        name: source.name.clone(),
                         source_type: EpgSourceType::Xtream,
                         url: source.url.clone(),
                         update_cron: source.update_cron.clone(),
@@ -524,6 +524,8 @@ impl Database {
                         downloaded_bytes: None,
                         channels_parsed: Some(channels.len()),
                         channels_saved: Some(0),
+                        programs_parsed: None,
+                        programs_saved: None,
                         percentage: Some(0.0),
                     },
                 )
@@ -548,75 +550,75 @@ impl Database {
             source_id
         );
 
-        // For very large channel sets, use chunked transactions
-        const CHUNK_SIZE: usize = 5000;
+        // For very large channel sets, use chunked transactions with bulk inserts
+        let chunk_size = self.batch_config.stream_channels.unwrap_or(1000); // Configurable chunk size for better performance
         let progress_update_interval = self.ingestion_config.progress_update_interval;
         let mut inserted_count = 0;
 
-        if channels.len() > CHUNK_SIZE {
-            info!(
+        if channels.len() > chunk_size {
+            debug!(
                 "Processing {} channels in chunks of {}",
                 channels.len(),
-                CHUNK_SIZE
+                chunk_size
             );
 
             // Commit initial transaction (just the delete)
             tx.commit().await?;
 
-            for (chunk_idx, chunk) in channels.chunks(CHUNK_SIZE).enumerate() {
+            for (chunk_idx, chunk) in channels.chunks(chunk_size).enumerate() {
                 // Start new transaction for each chunk
                 let mut chunk_tx = self.pool.begin().await?;
 
-                for channel in chunk {
-                    sqlx::query(
-                        "INSERT INTO channels
-                         (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                    )
-                    .bind(channel.id.to_string())
-                    .bind(source_id.to_string())
-                    .bind(&channel.tvg_id)
-                    .bind(&channel.tvg_name)
-                    .bind(&channel.tvg_logo)
-                    .bind(&channel.group_title)
-                    .bind(&channel.channel_name)
-                    .bind(&channel.stream_url)
-                    .bind(channel.created_at.to_rfc3339())
-                    .bind(channel.updated_at.to_rfc3339())
-                    .execute(&mut *chunk_tx)
-                    .await
-                    .map_err(|e| {
-                        error!("Failed to insert channel '{}' for source ({}): {}", channel.channel_name, source_id, e);
-                        e
-                    })?;
+                // Prepare bulk insert statement
+                let mut query_builder = sqlx::QueryBuilder::new(
+                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at) "
+                );
 
-                    inserted_count += 1;
+                query_builder.push_values(chunk, |mut b, channel| {
+                    b.push_bind(channel.id.to_string())
+                        .push_bind(source_id.to_string())
+                        .push_bind(&channel.tvg_id)
+                        .push_bind(&channel.tvg_name)
+                        .push_bind(&channel.tvg_logo)
+                        .push_bind(&channel.group_title)
+                        .push_bind(&channel.channel_name)
+                        .push_bind(&channel.stream_url)
+                        .push_bind(channel.created_at.to_rfc3339())
+                        .push_bind(channel.updated_at.to_rfc3339());
+                });
 
-                    // Update progress every progress_update_interval channels
-                    if let Some(state_mgr) = state_manager {
-                        if inserted_count % progress_update_interval == 0 {
-                            let percentage =
-                                (inserted_count as f64 / channels.len() as f64) * 100.0;
-                            state_mgr
-                                .update_progress(
-                                    source_id,
-                                    crate::models::IngestionState::Processing,
-                                    crate::models::ProgressInfo {
-                                        current_step: format!(
-                                            "Processing channels into database ({}/{})",
-                                            inserted_count,
-                                            channels.len()
-                                        ),
-                                        total_bytes: None,
-                                        downloaded_bytes: None,
-                                        channels_parsed: Some(channels.len()),
-                                        channels_saved: Some(inserted_count),
-                                        percentage: Some(percentage),
-                                    },
-                                )
-                                .await;
-                        }
-                    }
+                // Execute bulk insert
+                let query = query_builder.build();
+                query.execute(&mut *chunk_tx).await.map_err(|e| {
+                    error!("Failed to bulk insert {} channels for source ({}): {}", chunk.len(), source_id, e);
+                    e
+                })?;
+
+                inserted_count += chunk.len();
+
+                // Update progress after each chunk
+                if let Some(state_mgr) = state_manager {
+                    let percentage = (inserted_count as f64 / channels.len() as f64) * 100.0;
+                    state_mgr
+                        .update_progress(
+                            source_id,
+                            crate::models::IngestionState::Processing,
+                            crate::models::ProgressInfo {
+                                current_step: format!(
+                                    "Processing channels into database ({}/{})",
+                                    inserted_count,
+                                    channels.len()
+                                ),
+                                total_bytes: None,
+                                downloaded_bytes: None,
+                                channels_parsed: Some(channels.len()),
+                                channels_saved: Some(inserted_count),
+                                programs_parsed: None,
+                                programs_saved: None,
+                                percentage: Some(percentage),
+                            },
+                        )
+                        .await;
                 }
 
                 // Commit chunk
@@ -639,6 +641,8 @@ impl Database {
                                 downloaded_bytes: None,
                                 channels_parsed: Some(channels.len()),
                                 channels_saved: Some(inserted_count),
+                                programs_parsed: None,
+                                programs_saved: None,
                                 percentage: Some(percentage),
                             },
                         )
@@ -646,9 +650,9 @@ impl Database {
                 }
 
                 if chunk_idx % 10 == 0
-                    || chunk_idx == (channels.len() + CHUNK_SIZE - 1) / CHUNK_SIZE - 1
+                    || chunk_idx == (channels.len() + chunk_size - 1) / chunk_size - 1
                 {
-                    info!(
+                    debug!(
                         "Inserted {}/{} channels for source ({})",
                         inserted_count,
                         channels.len(),
@@ -657,57 +661,58 @@ impl Database {
                 }
             }
         } else {
-            // For smaller sets, use single transaction
-            for channel in channels {
-                sqlx::query(
-                    "INSERT INTO channels
-                     (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                )
-                .bind(channel.id.to_string())
-                .bind(source_id.to_string())
-                .bind(&channel.tvg_id)
-                .bind(&channel.tvg_name)
-                .bind(&channel.tvg_logo)
-                .bind(&channel.group_title)
-                .bind(&channel.channel_name)
-                .bind(&channel.stream_url)
-                .bind(channel.created_at.to_rfc3339())
-                .bind(channel.updated_at.to_rfc3339())
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| {
-                    error!("Failed to insert channel '{}' for source ({}): {}", channel.channel_name, source_id, e);
+            // For smaller sets, use single transaction with bulk insert
+            if !channels.is_empty() {
+                // Prepare bulk insert statement for all channels
+                let mut query_builder = sqlx::QueryBuilder::new(
+                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at) "
+                );
+
+                query_builder.push_values(channels, |mut b, channel| {
+                    b.push_bind(channel.id.to_string())
+                        .push_bind(source_id.to_string())
+                        .push_bind(&channel.tvg_id)
+                        .push_bind(&channel.tvg_name)
+                        .push_bind(&channel.tvg_logo)
+                        .push_bind(&channel.group_title)
+                        .push_bind(&channel.channel_name)
+                        .push_bind(&channel.stream_url)
+                        .push_bind(channel.created_at.to_rfc3339())
+                        .push_bind(channel.updated_at.to_rfc3339());
+                });
+
+                // Execute bulk insert
+                let query = query_builder.build();
+                query.execute(&mut *tx).await.map_err(|e| {
+                    error!("Failed to bulk insert {} channels for source ({}): {}", channels.len(), source_id, e);
                     e
                 })?;
 
-                inserted_count += 1;
+                inserted_count = channels.len();
 
-                // Update progress every progress_update_interval channels for small sets too
+                // Update progress for smaller sets
                 if let Some(state_mgr) = state_manager {
-                    if inserted_count % progress_update_interval == 0
-                        || inserted_count == channels.len()
-                    {
-                        let percentage = (inserted_count as f64 / channels.len() as f64) * 100.0;
-                        state_mgr
-                            .update_progress(
-                                source_id,
-                                crate::models::IngestionState::Processing,
-                                crate::models::ProgressInfo {
-                                    current_step: format!(
-                                        "Processing channels into database ({}/{})",
-                                        inserted_count,
-                                        channels.len()
-                                    ),
-                                    total_bytes: None,
-                                    downloaded_bytes: None,
-                                    channels_parsed: Some(channels.len()),
-                                    channels_saved: Some(inserted_count),
-                                    percentage: Some(percentage),
-                                },
-                            )
-                            .await;
-                    }
+                    let percentage = 100.0;
+                    state_mgr
+                        .update_progress(
+                            source_id,
+                            crate::models::IngestionState::Processing,
+                            crate::models::ProgressInfo {
+                                current_step: format!(
+                                    "Processing channels into database ({}/{})",
+                                    inserted_count,
+                                    channels.len()
+                                ),
+                                total_bytes: None,
+                                downloaded_bytes: None,
+                                channels_parsed: Some(channels.len()),
+                                channels_saved: Some(inserted_count),
+                                programs_parsed: None,
+                                programs_saved: None,
+                                percentage: Some(percentage),
+                            },
+                        )
+                        .await;
                 }
             }
 
@@ -755,7 +760,7 @@ impl Database {
     #[allow(dead_code)]
     pub async fn get_source_channels(&self, source_id: Uuid) -> Result<Vec<Channel>> {
         let rows = sqlx::query(
-            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
              FROM channels WHERE source_id = ? ORDER BY channel_name"
         )
         .bind(source_id.to_string())
@@ -773,6 +778,7 @@ impl Database {
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
                 tvg_logo: row.get("tvg_logo"),
+                tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
@@ -861,7 +867,7 @@ impl Database {
 
                 // Get paginated results
                 let select_query = format!(
-                    "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
+                    "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
                      FROM channels {} LIMIT ? OFFSET ?",
                     where_clause
                 );
@@ -889,6 +895,7 @@ impl Database {
                         tvg_id: row.get("tvg_id"),
                         tvg_name: row.get("tvg_name"),
                         tvg_logo: row.get("tvg_logo"),
+                        tvg_shift: row.get("tvg_shift"),
                         group_title: row.get("group_title"),
                         channel_name: row.get("channel_name"),
                         stream_url: row.get("stream_url"),
@@ -917,7 +924,7 @@ impl Database {
                 .await?;
 
         let rows = sqlx::query(
-            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
              FROM channels WHERE source_id = ? ORDER BY channel_name LIMIT ? OFFSET ?"
         )
         .bind(source_id.to_string())
@@ -937,6 +944,7 @@ impl Database {
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
                 tvg_logo: row.get("tvg_logo"),
+                tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
@@ -958,7 +966,7 @@ impl Database {
 
     pub async fn get_channels_for_source(&self, source_id: Uuid) -> Result<Vec<Channel>> {
         let rows = sqlx::query(
-            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
              FROM channels WHERE source_id = ? ORDER BY channel_name"
         )
         .bind(source_id.to_string())
@@ -976,6 +984,7 @@ impl Database {
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
                 tvg_logo: row.get("tvg_logo"),
+                tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),

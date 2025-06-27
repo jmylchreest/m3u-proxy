@@ -31,9 +31,15 @@
                         </button>
                         <button
                             class="btn btn-success"
-                            onclick="previewRules()"
+                            onclick="previewStreamRules()"
                         >
-                            👁️ Preview Rules
+                            👁️ Preview Stream Rules
+                        </button>
+                        <button
+                            class="btn btn-primary"
+                            onclick="previewEpgRules()"
+                        >
+                            👁️ Preview EPG Rules
                         </button>
                     </div>
                 </div>
@@ -86,6 +92,28 @@
                                 rows="2"
                                 placeholder="Describe what this rule does"
                             ></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ruleSourceType">Source Type *</label>
+                            <select id="ruleSourceType" name="source_type" required onchange="updateFieldsAndActions()">
+                                <option value="">Select source type...</option>
+                                <option value="stream">Stream Sources</option>
+                                <option value="epg">EPG Sources</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ruleScope">Rule Scope *</label>
+                            <select id="ruleScope" name="scope" required onchange="updateRuleScope()">
+                                <option value="">Select rule scope...</option>
+                                <option value="individual">Individual Items (per channel/program)</option>
+                                <option value="streamwide">Stream-wide (applies to entire source)</option>
+                                <option value="epgwide">EPG-wide (applies to entire source)</option>
+                            </select>
+                            <small class="form-text text-muted">
+                                Individual rules apply to each item separately. Stream-wide/EPG-wide rules apply globally to all items from a source.
+                            </small>
                         </div>
 
                         <div class="form-group">

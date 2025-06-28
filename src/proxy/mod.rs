@@ -26,6 +26,7 @@ impl ProxyService {
         data_mapping_service: &DataMappingService,
         logo_service: &LogoAssetService,
         base_url: &str,
+        engine_config: Option<crate::config::DataMappingEngineConfig>,
     ) -> Result<ProxyGeneration> {
         let generator = generator::ProxyGenerator::new(self.storage_config.clone());
         generator
@@ -35,6 +36,7 @@ impl ProxyService {
                 data_mapping_service,
                 logo_service,
                 base_url,
+                engine_config,
             )
             .await
     }

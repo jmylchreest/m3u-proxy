@@ -59,7 +59,7 @@ class SourcesManager {
   async loadSources() {
     try {
       this.showLoading();
-      const response = await fetch("/api/sources");
+      const response = await fetch("/api/sources/stream");
 
       if (!response.ok) {
         throw new Error(
@@ -102,25 +102,29 @@ class SourcesManager {
 
     tbody.innerHTML = this.sources
       .map((sourceWithStats) => {
-        const progress = this.getSourceProgress(sourceWithStats.id);
-        const statusCell = this.renderStatusCell(sourceWithStats, progress);
-        const actionsCell = this.renderActionsCell(sourceWithStats, progress);
+        // Handle unified source structure
+        const source = sourceWithStats.source || sourceWithStats;
+        const channelCount = sourceWithStats.channel_count || 0;
+        const nextScheduledUpdate = sourceWithStats.next_scheduled_update;
 
-        const typeIndicator =
-          sourceWithStats.source_type === "m3u" ? "M3U" : "XC";
+        const progress = this.getSourceProgress(source.id);
+        const statusCell = this.renderStatusCell(source, progress);
+        const actionsCell = this.renderActionsCell(source, progress);
+
+        const typeIndicator = source.source_type === "m3u" ? "M3U" : "XC";
         const typeColor = "#007bff"; // Blue color to match STREAM color in data mapping
-        const rowOpacity = sourceWithStats.is_active ? "1" : "0.6";
+        const rowOpacity = source.is_active ? "1" : "0.6";
 
         return `
                 <tr style="opacity: ${rowOpacity}">
                     <td>
-                        <strong>${this.escapeHtml(sourceWithStats.name)}<sup style="color: ${typeColor}; font-size: 0.7em; margin-left: 3px;">${typeIndicator}</sup></strong>
+                        <strong>${this.escapeHtml(source.name)}<sup style="color: ${typeColor}; font-size: 0.7em; margin-left: 3px;">${typeIndicator}</sup></strong>
                         <br>
-                        <small class="text-muted">${this.escapeHtml(sourceWithStats.url)}</small>
+                        <small class="text-muted">${this.escapeHtml(source.url)}</small>
                     </td>
                     <td>
-                        <button class="btn btn-link p-0 text-primary" onclick="sourcesManager.showChannels('${sourceWithStats.id}', '${this.escapeHtml(sourceWithStats.name)}')" title="View channels">
-                            ${sourceWithStats.channel_count.toLocaleString()} ${sourceWithStats.channel_count === 1 ? "channel" : "channels"}
+                        <button class="btn btn-link p-0 text-primary" onclick="sourcesManager.showChannels('${source.id}', '${this.escapeHtml(source.name)}')" title="View channels">
+                            ${channelCount.toLocaleString()} ${channelCount === 1 ? "channel" : "channels"}
                         </button>
                     </td>
                     <td>${statusCell}</td>
@@ -128,10 +132,10 @@ class SourcesManager {
                         <div class="update-badges">
                             <div class="badge badge-secondary badge-sm">
                                 Last: ${
-                                  sourceWithStats.last_ingested_at
+                                  source.last_ingested_at
                                     ? this.formatTimeCompact(
                                         this.parseDateTime(
-                                          sourceWithStats.last_ingested_at,
+                                          source.last_ingested_at,
                                         ),
                                       )
                                     : "Never"
@@ -139,11 +143,9 @@ class SourcesManager {
                             </div>
                             <div class="badge badge-info badge-sm">
                                 Next: ${
-                                  sourceWithStats.next_scheduled_update
+                                  nextScheduledUpdate
                                     ? this.formatTimeCompact(
-                                        this.parseDateTime(
-                                          sourceWithStats.next_scheduled_update,
-                                        ),
+                                        this.parseDateTime(nextScheduledUpdate),
                                       )
                                     : "Not scheduled"
                                 }
@@ -311,7 +313,7 @@ class SourcesManager {
 
       let response;
       if (this.editingSource) {
-        response = await fetch(`/api/sources/${this.editingSource.id}`, {
+        response = await fetch(`/api/sources/stream/${this.editingSource.id}`, {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
@@ -319,7 +321,7 @@ class SourcesManager {
           body: JSON.stringify(formData),
         });
       } else {
-        response = await fetch("/api/sources", {
+        response = await fetch("/api/sources/stream", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -398,11 +400,13 @@ class SourcesManager {
   }
 
   async refreshSource(id) {
-    const source = this.sources.find((s) => s.id === id);
-    if (!source) return;
+    const sourceWithStats = this.sources.find((s) => (s.source || s).id === id);
+    if (!sourceWithStats) return;
+
+    const source = sourceWithStats.source || sourceWithStats;
 
     try {
-      const response = await fetch(`/api/sources/${id}/refresh`, {
+      const response = await fetch(`/api/sources/stream/${id}/refresh`, {
         method: "POST",
       });
 
@@ -425,8 +429,10 @@ class SourcesManager {
   }
 
   async deleteSource(id) {
-    const source = this.sources.find((s) => s.id === id);
-    if (!source) return;
+    const sourceWithStats = this.sources.find((s) => (s.source || s).id === id);
+    if (!sourceWithStats) return;
+
+    const source = sourceWithStats.source || sourceWithStats;
 
     if (
       !confirm(
@@ -437,7 +443,7 @@ class SourcesManager {
     }
 
     try {
-      const response = await fetch(`/api/sources/${id}`, {
+      const response = await fetch(`/api/sources/stream/${id}`, {
         method: "DELETE",
       });
 
@@ -517,32 +523,46 @@ class SourcesManager {
 
   async loadProgress() {
     try {
-      const response = await fetch("/api/progress");
+      const response = await fetch("/api/progress/sources");
       if (!response.ok) return;
 
-      const newProgressData = await response.json();
+      const data = await response.json();
+      const newProgressData = data.progress || {};
 
-      // Check if any sources just completed
-      const justCompleted = Object.keys(newProgressData).filter((sourceId) => {
-        const oldProgress = this.progressData[sourceId];
-        const newProgress = newProgressData[sourceId];
-        return (
-          oldProgress &&
-          [
-            "connecting",
-            "downloading",
-            "parsing",
-            "saving",
-            "processing",
-          ].includes(oldProgress.state) &&
-          newProgress.state === "completed"
-        );
+      // Extract progress and processing info from consolidated response
+      const extractedProgress = {};
+      const extractedProcessingInfo = {};
+
+      Object.entries(newProgressData).forEach(([sourceId, data]) => {
+        if (data.progress) {
+          extractedProgress[sourceId] = data.progress;
+        }
+        if (data.processing_info) {
+          extractedProcessingInfo[sourceId] = data.processing_info;
+        }
       });
 
-      this.progressData = newProgressData;
+      // Check if any sources just completed
+      const justCompleted = Object.keys(extractedProgress).filter(
+        (sourceId) => {
+          const oldProgress = this.progressData[sourceId];
+          const newProgress = extractedProgress[sourceId];
+          return (
+            oldProgress &&
+            [
+              "connecting",
+              "downloading",
+              "parsing",
+              "saving",
+              "processing",
+            ].includes(oldProgress.state) &&
+            newProgress.state === "completed"
+          );
+        },
+      );
 
-      // Also load processing info for backoff states
-      await this.loadProcessingInfo();
+      this.progressData = extractedProgress;
+      this.processingInfo = extractedProcessingInfo;
 
       // Reload sources if any just completed
       if (justCompleted.length > 0) {
@@ -550,7 +570,7 @@ class SourcesManager {
       }
 
       // Only re-render if there's actual progress to show
-      const hasActiveProgress = Object.values(newProgressData).some((p) =>
+      const hasActiveProgress = Object.values(extractedProgress).some((p) =>
         [
           "connecting",
           "downloading",
@@ -575,30 +595,11 @@ class SourcesManager {
   }
 
   async loadProcessingInfo() {
-    try {
-      // Load processing info for all sources to get backoff states
-      const promises = this.sources.map(async (source) => {
-        try {
-          const response = await fetch(`/api/sources/${source.id}/processing`);
-          if (response.ok) {
-            const processingInfo = await response.json();
-            if (processingInfo) {
-              this.processingInfo[source.id] = processingInfo;
-            }
-          }
-        } catch (error) {
-          // Silently ignore individual source errors
-          console.debug(
-            `Failed to load processing info for ${source.id}:`,
-            error,
-          );
-        }
-      });
-
-      await Promise.all(promises);
-    } catch (error) {
-      console.debug("Processing info loading error:", error);
-    }
+    // This method is now handled by loadProgress() which gets consolidated data
+    // Keeping this method for backward compatibility but it's no longer needed
+    console.debug(
+      "loadProcessingInfo() called but processing info is now loaded via consolidated progress endpoint",
+    );
   }
 
   escapeHtml(text) {
@@ -663,12 +664,14 @@ class SourcesManager {
     ].includes(state);
   }
 
-  async cancelSourceIngestion(id) {
-    const source = this.sources.find((s) => s.id === id);
-    if (!source) return false;
+  async cancelIngestion(id) {
+    const sourceWithStats = this.sources.find((s) => (s.source || s).id === id);
+    if (!sourceWithStats) return false;
+
+    const source = sourceWithStats.source || sourceWithStats;
 
     try {
-      const response = await fetch(`/api/sources/${id}/cancel`, {
+      const response = await fetch(`/api/sources/stream/${id}/cancel`, {
         method: "POST",
       });
 

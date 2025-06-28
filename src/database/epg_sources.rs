@@ -431,7 +431,8 @@ impl crate::database::Database {
         channels: Vec<EpgChannel>,
         programs: Vec<EpgProgram>,
     ) -> Result<(usize, usize)> {
-        self.update_epg_source_data_with_cancellation(source_id, channels, programs, None).await
+        self.update_epg_source_data_with_cancellation(source_id, channels, programs, None)
+            .await
     }
 
     pub async fn update_epg_source_data_with_cancellation(
@@ -439,7 +440,7 @@ impl crate::database::Database {
         source_id: Uuid,
         channels: Vec<EpgChannel>,
         programs: Vec<EpgProgram>,
-        mut cancellation_rx: Option<tokio::sync::broadcast::Receiver<()>>,
+        cancellation_rx: Option<tokio::sync::broadcast::Receiver<()>>,
     ) -> Result<(usize, usize)> {
         self.update_epg_source_data_with_cancellation_and_progress(
             source_id,
@@ -447,7 +448,8 @@ impl crate::database::Database {
             programs,
             cancellation_rx,
             None::<fn(usize, usize)>,
-        ).await
+        )
+        .await
     }
 
     pub async fn update_epg_source_data_with_cancellation_and_progress<F>(
@@ -463,7 +465,7 @@ impl crate::database::Database {
     {
         // Use a timeout for the entire transaction to prevent indefinite blocking
         let timeout_duration = std::time::Duration::from_secs(600); // 10 minutes max
-        
+
         let result = tokio::time::timeout(timeout_duration, async {
             let mut tx = self.pool.begin().await?;
 
@@ -543,11 +545,11 @@ impl crate::database::Database {
             }
 
             // Insert programs using bulk inserts with progress tracking
-            // SQLite 3.32.0+ supports up to 32,766 variables per query, programs have 17 fields each  
+            // SQLite 3.32.0+ supports up to 32,766 variables per query, programs have 17 fields each
             let program_batch_size = self.batch_config.safe_epg_program_batch_size();
             let total_programs = programs.len();
             let mut programs_saved = 0;
-            
+
             for chunk in programs.chunks(program_batch_size) {
                 if !chunk.is_empty() {
                     // Prepare bulk insert statement
@@ -581,7 +583,7 @@ impl crate::database::Database {
                 }
 
                 programs_saved += chunk.len();
-                
+
                 // Report progress if callback is provided
                 if let Some(ref callback) = progress_callback {
                     callback(programs_saved, total_programs);
@@ -605,277 +607,17 @@ impl crate::database::Database {
             }
 
             tx.commit().await?;
-            
+
             Ok((channels.len(), programs.len()))
         }).await;
 
         match result {
             Ok(inner_result) => inner_result,
-            Err(_) => Err(anyhow::anyhow!("Database operation timed out after {} seconds", timeout_duration.as_secs())),
+            Err(_) => Err(anyhow::anyhow!(
+                "Database operation timed out after {} seconds",
+                timeout_duration.as_secs()
+            )),
         }
-    }
-
-    // EPG DLQ (Dead Letter Queue) methods for handling duplicate/conflicting data
-    pub async fn save_epg_dlq_entry(&self, dlq_entry: &crate::models::EpgDlq) -> Result<()> {
-        sqlx::query(
-            "INSERT OR REPLACE INTO epg_dlq
-             (id, source_id, original_channel_id, conflict_type, channel_data, program_data,
-              conflict_details, first_seen_at, last_seen_at, occurrence_count, resolved, resolution_notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(dlq_entry.id.to_string())
-        .bind(dlq_entry.source_id.to_string())
-        .bind(&dlq_entry.original_channel_id)
-        .bind(dlq_entry.conflict_type.to_string())
-        .bind(&dlq_entry.channel_data)
-        .bind(&dlq_entry.program_data)
-        .bind(&dlq_entry.conflict_details)
-        .bind(dlq_entry.first_seen_at.format("%Y-%m-%d %H:%M:%S").to_string())
-        .bind(dlq_entry.last_seen_at.format("%Y-%m-%d %H:%M:%S").to_string())
-        .bind(dlq_entry.occurrence_count)
-        .bind(dlq_entry.resolved)
-        .bind(&dlq_entry.resolution_notes)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn increment_epg_dlq_occurrence(
-        &self,
-        source_id: Uuid,
-        channel_id: &str,
-    ) -> Result<()> {
-        sqlx::query(
-            "UPDATE epg_dlq
-             SET occurrence_count = occurrence_count + 1
-             WHERE source_id = ? AND original_channel_id = ?",
-        )
-        .bind(source_id.to_string())
-        .bind(channel_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn get_epg_dlq_entries(
-        &self,
-        source_id: Option<Uuid>,
-        resolved: Option<bool>,
-    ) -> Result<Vec<crate::models::EpgDlq>> {
-        let mut query = "SELECT id, source_id, original_channel_id, conflict_type, channel_data, program_data, conflict_details, first_seen_at, last_seen_at, occurrence_count, resolved, resolution_notes FROM epg_dlq WHERE 1=1".to_string();
-        let mut params = Vec::new();
-
-        if let Some(source_id) = source_id {
-            query.push_str(" AND source_id = ?");
-            params.push(source_id.to_string());
-        }
-
-        if let Some(resolved) = resolved {
-            query.push_str(" AND resolved = ?");
-            params.push(resolved.to_string());
-        }
-
-        query.push_str(" ORDER BY last_seen_at DESC");
-
-        let mut sqlx_query = sqlx::query(&query);
-        for param in params {
-            sqlx_query = sqlx_query.bind(param);
-        }
-
-        let rows = sqlx_query.fetch_all(&self.pool).await?;
-
-        let mut dlq_entries = Vec::new();
-        for row in rows {
-            let conflict_type = match row.get::<&str, _>("conflict_type") {
-                "duplicate_identical" => crate::models::EpgConflictType::DuplicateIdentical,
-                "duplicate_conflicting" => crate::models::EpgConflictType::DuplicateConflicting,
-                _ => crate::models::EpgConflictType::DuplicateConflicting, // Default fallback
-            };
-
-            // Parse timestamps with multiple possible formats
-            let first_seen_str = row.get::<&str, _>("first_seen_at");
-            let first_seen_at = Self::parse_flexible_timestamp(first_seen_str).map_err(|e| {
-                anyhow::anyhow!("Failed to parse first_seen_at '{}': {}", first_seen_str, e)
-            })?;
-
-            let last_seen_str = row.get::<&str, _>("last_seen_at");
-            let last_seen_at = Self::parse_flexible_timestamp(last_seen_str).map_err(|e| {
-                anyhow::anyhow!("Failed to parse last_seen_at '{}': {}", last_seen_str, e)
-            })?;
-
-            dlq_entries.push(crate::models::EpgDlq {
-                id: Uuid::parse_str(row.get("id"))?,
-                source_id: Uuid::parse_str(row.get("source_id"))?,
-                original_channel_id: row.get("original_channel_id"),
-                conflict_type,
-                channel_data: row.get("channel_data"),
-                program_data: row.get("program_data"),
-                conflict_details: row.get("conflict_details"),
-                first_seen_at,
-                last_seen_at,
-                occurrence_count: row.get("occurrence_count"),
-                resolved: row.get("resolved"),
-                resolution_notes: row.get("resolution_notes"),
-            });
-        }
-
-        Ok(dlq_entries)
-    }
-
-    // Helper function for flexible timestamp parsing
-    fn parse_flexible_timestamp(
-        timestamp_str: &str,
-    ) -> Result<chrono::DateTime<chrono::Utc>, chrono::ParseError> {
-        // Try common formats in order of likelihood
-        let formats = [
-            "%Y-%m-%d %H:%M:%S",      // 2025-06-23 16:39:08
-            "%Y-%m-%d %H:%M:%S%.f",   // 2025-06-23 16:39:08.123
-            "%Y-%m-%dT%H:%M:%S",      // 2025-06-23T16:39:08
-            "%Y-%m-%dT%H:%M:%SZ",     // 2025-06-23T16:39:08Z
-            "%Y-%m-%dT%H:%M:%S%.fZ",  // 2025-06-23T16:39:08.123Z
-            "%Y-%m-%dT%H:%M:%S%z",    // 2025-06-23T16:39:08+00:00
-            "%Y-%m-%dT%H:%M:%S%.f%z", // 2025-06-23T16:39:08.123+00:00
-        ];
-
-        // First try parsing as naive datetime and convert to UTC
-        for format in &formats[..2] {
-            if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(timestamp_str, format) {
-                return Ok(naive_dt.and_utc());
-            }
-        }
-
-        // Then try parsing as UTC datetime directly
-        for format in &formats[2..] {
-            if let Ok(dt) = chrono::DateTime::parse_from_str(timestamp_str, format) {
-                return Ok(dt.with_timezone(&chrono::Utc));
-            }
-        }
-
-        // If all fails, return the error from the most likely format
-        chrono::NaiveDateTime::parse_from_str(timestamp_str, "%Y-%m-%d %H:%M:%S")
-            .map(|dt| dt.and_utc())
-    }
-
-    pub async fn check_epg_dlq_exists(&self, source_id: Uuid, channel_id: &str) -> Result<bool> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM epg_dlq WHERE source_id = ? AND original_channel_id = ?",
-        )
-        .bind(source_id.to_string())
-        .bind(channel_id)
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(count > 0)
-    }
-
-    pub async fn resolve_epg_dlq_entry(
-        &self,
-        source_id: Uuid,
-        channel_id: &str,
-        resolved: bool,
-        resolution_notes: Option<String>,
-    ) -> Result<bool> {
-        let rows_affected = sqlx::query(
-            "UPDATE epg_dlq SET resolved = ?, resolution_notes = ? WHERE source_id = ? AND original_channel_id = ?",
-        )
-        .bind(resolved)
-        .bind(&resolution_notes)
-        .bind(source_id.to_string())
-        .bind(channel_id)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
-
-        Ok(rows_affected > 0)
-    }
-
-    pub async fn get_epg_dlq_statistics(
-        &self,
-        source_id: Option<Uuid>,
-    ) -> Result<crate::models::EpgDlqStatistics> {
-        let mut query =
-            "SELECT source_id, conflict_type, channel_data FROM epg_dlq WHERE resolved = FALSE"
-                .to_string();
-        let mut params = Vec::new();
-
-        if let Some(source_id) = source_id {
-            query.push_str(" AND source_id = ?");
-            params.push(source_id.to_string());
-        }
-
-        let mut query_builder = sqlx::query(&query);
-        for param in params {
-            query_builder = query_builder.bind(param);
-        }
-
-        let rows = query_builder.fetch_all(&self.pool).await?;
-
-        let mut by_source = std::collections::HashMap::new();
-        let mut by_conflict_type = std::collections::HashMap::new();
-        let mut channel_patterns = std::collections::HashMap::new();
-
-        for row in rows {
-            let source_id: String = row.get("source_id");
-            let conflict_type: String = row.get("conflict_type");
-            let channel_data: String = row.get("channel_data");
-
-            // Count by source
-            *by_source.entry(source_id).or_insert(0) += 1;
-
-            // Count by conflict type
-            *by_conflict_type.entry(conflict_type).or_insert(0) += 1;
-
-            // Analyze channel patterns
-            if let Ok(channel_json) = serde_json::from_str::<serde_json::Value>(&channel_data) {
-                if let Some(display_name) =
-                    channel_json.get("display_name").and_then(|n| n.as_str())
-                {
-                    let base_pattern = self.extract_base_channel_pattern(display_name);
-                    channel_patterns
-                        .entry(base_pattern)
-                        .or_insert(Vec::new())
-                        .push(display_name.to_string());
-                }
-            }
-        }
-
-        // Convert patterns to common patterns
-        let mut common_patterns = Vec::new();
-        for (pattern, examples) in channel_patterns {
-            if examples.len() > 1 {
-                common_patterns.push(crate::models::EpgDlqPattern {
-                    pattern,
-                    count: examples.len(),
-                    examples: examples.into_iter().take(5).collect(),
-                });
-            }
-        }
-        common_patterns.sort_by(|a, b| b.count.cmp(&a.count));
-
-        Ok(crate::models::EpgDlqStatistics {
-            total_conflicts: by_source.values().sum(),
-            by_source,
-            by_conflict_type,
-            common_patterns,
-        })
-    }
-
-    fn extract_base_channel_pattern(&self, channel_name: &str) -> String {
-        // Remove common suffixes like "HD", "SD", numbers, etc.
-        let pattern = channel_name
-            .replace(" HD", "")
-            .replace(" SD", "")
-            .replace("HD", "")
-            .replace("SD", "")
-            .trim()
-            .to_string();
-
-        // Remove trailing numbers and whitespace
-        pattern
-            .trim_end_matches(|c: char| c.is_numeric() || c.is_whitespace())
-            .to_string()
     }
 
     pub async fn update_epg_source_last_ingested(&self, source_id: Uuid) -> Result<DateTime<Utc>> {

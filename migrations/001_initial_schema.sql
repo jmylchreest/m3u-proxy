@@ -190,12 +190,12 @@ CREATE TABLE data_mapping_conditions (
 CREATE TABLE data_mapping_actions (
     id TEXT PRIMARY KEY NOT NULL,
     rule_id TEXT NOT NULL REFERENCES data_mapping_rules(id) ON DELETE CASCADE,
-    action_type TEXT NOT NULL CHECK (action_type IN ('set_value', 'set_default_if_empty', 'set_logo', 'deduplicate_cloned_channel', 'timeshift_epg', 'deduplicate_stream_urls')),
+    action_type TEXT NOT NULL CHECK (action_type IN ('set_value', 'set_default_if_empty', 'set_logo', 'timeshift_epg', 'deduplicate_stream_urls', 'remove_channel')),
     target_field TEXT NOT NULL,
     value TEXT,
     logo_asset_id TEXT,
     timeshift_minutes INTEGER, -- For timeshift EPG action
-    similarity_threshold REAL, -- For clone channel action (0.0-1.0)
+
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

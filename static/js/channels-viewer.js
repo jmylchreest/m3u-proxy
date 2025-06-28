@@ -92,7 +92,7 @@ class ChannelsViewer {
     // Load all pages of channels
     do {
       const response = await fetch(
-        `/api/sources/${sourceId}/channels?page=${page}&limit=10000`,
+        `/api/sources/stream/${sourceId}/channels?page=${page}&limit=10000`,
       );
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);

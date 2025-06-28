@@ -9,8 +9,7 @@ pub struct Config {
     pub storage: StorageConfig,
     pub ingestion: IngestionConfig,
     pub display: Option<DisplayConfig>,
-    pub channel_similarity: Option<ChannelSimilarityConfig>,
-    pub data_mapping: Option<DataMappingConfig>,
+    pub data_mapping_engine: Option<DataMappingEngineConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +24,7 @@ pub struct DatabaseBatchConfig {
     /// Maximum number of EPG channels to insert in a single batch
     /// Each channel has 9 fields, so batch_size * 9 must be <= SQLite variable limit
     pub epg_channels: Option<usize>,
-    /// Maximum number of EPG programs to insert in a single batch  
+    /// Maximum number of EPG programs to insert in a single batch
     /// Each program has 17 fields, so batch_size * 17 must be <= SQLite variable limit
     pub epg_programs: Option<usize>,
     /// Maximum number of stream channels to process in a single chunk
@@ -59,36 +58,27 @@ pub struct DisplayConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelSimilarityConfig {
-    /// Regex patterns to remove when comparing channels (cloned channel patterns)
-    pub clone_patterns: Vec<String>,
-    /// Regex patterns that indicate timeshift channels (e.g., r"\+(\d+)" for +1, +24, etc.)
-    /// Hours shift will be extracted from the first capture group
-    pub timeshift_patterns: Vec<String>,
-    /// Minimum confidence threshold for considering channels as clones (0.0-1.0)
-    /// Channels above this threshold should share the same tvg-id/channel id
-    pub clone_confidence_threshold: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataMappingConfig {
+pub struct DataMappingEngineConfig {
     /// Special characters used for regex precheck filtering
     /// These characters are considered significant enough to use as first-pass filters
+    /// Default: "+-@#$%&*=<>!~`€£{}[]"
     pub precheck_special_chars: Option<String>,
     /// Minimum length required for literal strings in regex precheck
+    /// Set to 0 to disable literal string precheck entirely
+    /// Default: 2
     pub minimum_literal_length: Option<usize>,
 }
 
 impl DatabaseBatchConfig {
     /// SQLite variable limit (32,766 in 3.32.0+, 999 in older versions)
     const SQLITE_MAX_VARIABLES: usize = 32766;
-    
+
     /// Number of fields per EPG channel record
     const EPG_CHANNEL_FIELDS: usize = 9;
-    
-    /// Number of fields per EPG program record  
+
+    /// Number of fields per EPG program record
     const EPG_PROGRAM_FIELDS: usize = 17;
-    
+
     /// Validate batch sizes to ensure they don't exceed SQLite limits
     pub fn validate(&self) -> Result<(), String> {
         if let Some(epg_channels) = self.epg_channels {
@@ -100,7 +90,7 @@ impl DatabaseBatchConfig {
                 ));
             }
         }
-        
+
         if let Some(epg_programs) = self.epg_programs {
             let variables = epg_programs * Self::EPG_PROGRAM_FIELDS;
             if variables > Self::SQLITE_MAX_VARIABLES {
@@ -110,17 +100,17 @@ impl DatabaseBatchConfig {
                 ));
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get safe batch size for EPG channels (respects SQLite limits)
     pub fn safe_epg_channel_batch_size(&self) -> usize {
         let configured = self.epg_channels.unwrap_or(3600);
         let max_safe = Self::SQLITE_MAX_VARIABLES / Self::EPG_CHANNEL_FIELDS;
         configured.min(max_safe)
     }
-    
+
     /// Get safe batch size for EPG programs (respects SQLite limits)
     pub fn safe_epg_program_batch_size(&self) -> usize {
         let configured = self.epg_programs.unwrap_or(1900);
@@ -135,7 +125,7 @@ impl Default for DatabaseBatchConfig {
             // SQLite 3.32.0+ supports up to 32,766 variables per query
             // EPG channels: 9 fields * 3600 = 32,400 variables (safe margin)
             epg_channels: Some(3600),
-            // EPG programs: 17 fields * 1900 = 32,300 variables (safe margin)  
+            // EPG programs: 17 fields * 1900 = 32,300 variables (safe margin)
             epg_programs: Some(1900),
             // Stream channels: optimized for performance (not variable-limited)
             stream_channels: Some(1000),
@@ -143,29 +133,11 @@ impl Default for DatabaseBatchConfig {
     }
 }
 
-impl Default for DataMappingConfig {
+impl Default for DataMappingEngineConfig {
     fn default() -> Self {
         Self {
             precheck_special_chars: Some("+-@#$%&*=<>!~`€£{}[]".to_string()),
             minimum_literal_length: Some(2),
-        }
-    }
-}
-
-impl Default for ChannelSimilarityConfig {
-    fn default() -> Self {
-        Self {
-            clone_patterns: vec![
-                r"(?i)\s*\+\d+$".to_string(),  // Matches "+1", "+24" etc. at end of channel name
-                r"(?i)\s*\(\+\d+\)$".to_string(), // Matches "(+1)", "(+24)" etc. at end
-                r"(?i)\s*HD$".to_string(),      // Matches "HD" at end
-                r"(?i)\s*FHD$".to_string(),     // Matches "FHD" at end
-                r"(?i)\s*4K$".to_string(),      // Matches "4K" at end
-            ],
-            timeshift_patterns: vec![
-                r"(?i)\+(\d+)".to_string(),     // Extracts hours from "+1", "+24" etc.
-            ],
-            clone_confidence_threshold: 0.8,
         }
     }
 }
@@ -196,24 +168,7 @@ impl Default for Config {
             display: Some(DisplayConfig {
                 local_timezone: "UTC".to_string(),
             }),
-            channel_similarity: Some(ChannelSimilarityConfig {
-                clone_patterns: vec![
-                    r"(?i)\b4K\b".to_string(),
-                    r"(?i)\bHD\b".to_string(),
-                    r"(?i)\bSD\b".to_string(),
-                    r"(?i)\bHEVC\b".to_string(),
-                    r"(?i)\b720P?\b".to_string(),
-                    r"(?i)\b1080P?\b".to_string(),
-                    r"(?i)\bUHD\b".to_string(),
-                    r"\[|\]|\(|\)".to_string(),
-                    r"(?i)\(SAT\)".to_string(),
-                    r"(?i)\(CABLE\)".to_string(),
-                    r"(?i)\(IPTV\)".to_string(),
-                ],
-                timeshift_patterns: vec![r"(?i)\+(\d+)".to_string(), r"(?i)\+(\d+)H".to_string()],
-                clone_confidence_threshold: 0.90,
-            }),
-            data_mapping: Some(DataMappingConfig::default()),
+            data_mapping_engine: Some(DataMappingEngineConfig::default()),
         }
     }
 }
@@ -226,24 +181,24 @@ mod tests {
     fn test_database_batch_config_validation() {
         // Test valid configuration
         let valid_config = DatabaseBatchConfig {
-            epg_channels: Some(3600),    // 3600 * 9 = 32,400 variables
-            epg_programs: Some(1900),    // 1900 * 17 = 32,300 variables  
+            epg_channels: Some(3600), // 3600 * 9 = 32,400 variables
+            epg_programs: Some(1900), // 1900 * 17 = 32,300 variables
             stream_channels: Some(1000),
         };
         assert!(valid_config.validate().is_ok());
 
         // Test EPG channels exceeding limit
         let invalid_channels = DatabaseBatchConfig {
-            epg_channels: Some(4000),    // 4000 * 9 = 36,000 variables (exceeds 32,766)
+            epg_channels: Some(4000), // 4000 * 9 = 36,000 variables (exceeds 32,766)
             epg_programs: Some(1900),
             stream_channels: Some(1000),
         };
         assert!(invalid_channels.validate().is_err());
 
-        // Test EPG programs exceeding limit  
+        // Test EPG programs exceeding limit
         let invalid_programs = DatabaseBatchConfig {
             epg_channels: Some(3600),
-            epg_programs: Some(2000),    // 2000 * 17 = 34,000 variables (exceeds 32,766)
+            epg_programs: Some(2000), // 2000 * 17 = 34,000 variables (exceeds 32,766)
             stream_channels: Some(1000),
         };
         assert!(invalid_programs.validate().is_err());
@@ -252,8 +207,8 @@ mod tests {
     #[test]
     fn test_safe_batch_sizes() {
         let config = DatabaseBatchConfig {
-            epg_channels: Some(5000),    // Too large, should be capped
-            epg_programs: Some(3000),    // Too large, should be capped
+            epg_channels: Some(5000), // Too large, should be capped
+            epg_programs: Some(3000), // Too large, should be capped
             stream_channels: Some(1000),
         };
 
@@ -263,19 +218,19 @@ mod tests {
 
         assert!(safe_channels * 9 <= 32766);
         assert!(safe_programs * 17 <= 32766);
-        
+
         // Should cap to maximum safe values
-        assert_eq!(safe_channels, 32766 / 9);  // 3640
+        assert_eq!(safe_channels, 32766 / 9); // 3640
         assert_eq!(safe_programs, 32766 / 17); // 1927
     }
 
     #[test]
     fn test_default_batch_config() {
         let default_config = DatabaseBatchConfig::default();
-        
+
         // Default values should be valid
         assert!(default_config.validate().is_ok());
-        
+
         // Default values should be within safe limits
         assert_eq!(default_config.epg_channels, Some(3600));
         assert_eq!(default_config.epg_programs, Some(1900));

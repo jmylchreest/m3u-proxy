@@ -1,8 +1,8 @@
+use crate::models::{EpgChannel, EpgProgram};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
-use crate::models::{EpgChannel, EpgProgram};
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct DataMappingRule {
@@ -33,7 +33,7 @@ pub enum DataMappingRuleScope {
     Individual,
     /// Rule applies to all streams within a source (stream-wide)
     StreamWide,
-    /// Rule applies to all EPG data within a source (epg-wide)  
+    /// Rule applies to all EPG data within a source (epg-wide)
     EpgWide,
 }
 
@@ -58,7 +58,6 @@ pub struct DataMappingAction {
     pub value: Option<String>,
     pub logo_asset_id: Option<Uuid>,
     pub timeshift_minutes: Option<i32>, // For timeshift EPG action
-    pub similarity_threshold: Option<f64>, // For clone channel action
     pub sort_order: i32,
     pub created_at: DateTime<Utc>,
 }
@@ -78,9 +77,8 @@ pub enum DataMappingActionType {
     TimeshiftEpg,
     #[serde(rename = "deduplicate_stream_urls")]
     DeduplicateStreamUrls,
-    // EPG-only actions  
-    #[serde(rename = "deduplicate_cloned_channel")]
-    DeduplicateClonedChannel,
+    #[serde(rename = "remove_channel")]
+    RemoveChannel,
 }
 
 impl DataMappingActionType {
@@ -94,29 +92,30 @@ impl DataMappingActionType {
             // Stream-only actions
             (DataMappingActionType::TimeshiftEpg, DataMappingSourceType::Stream) => true,
             (DataMappingActionType::DeduplicateStreamUrls, DataMappingSourceType::Stream) => true,
-            // EPG-only actions
-            (DataMappingActionType::DeduplicateClonedChannel, DataMappingSourceType::Epg) => true,
+            (DataMappingActionType::RemoveChannel, DataMappingSourceType::Stream) => true,
             // Cross-type restrictions
-            (DataMappingActionType::DeduplicateClonedChannel, DataMappingSourceType::Stream) => false,
             (DataMappingActionType::TimeshiftEpg, DataMappingSourceType::Epg) => false,
             (DataMappingActionType::DeduplicateStreamUrls, DataMappingSourceType::Epg) => false,
+            (DataMappingActionType::RemoveChannel, DataMappingSourceType::Epg) => false,
         }
     }
 
     /// Get available action types for a specific source type
-    pub fn available_for_source_type(source_type: &DataMappingSourceType) -> Vec<DataMappingActionType> {
+    pub fn available_for_source_type(
+        source_type: &DataMappingSourceType,
+    ) -> Vec<DataMappingActionType> {
         match source_type {
             DataMappingSourceType::Stream => vec![
                 DataMappingActionType::SetValue,
                 DataMappingActionType::SetDefaultIfEmpty,
                 DataMappingActionType::SetLogo,
                 DataMappingActionType::DeduplicateStreamUrls, // Deduplicates channels with same stream URL
+                DataMappingActionType::RemoveChannel, // Removes channel from output entirely
             ],
             DataMappingSourceType::Epg => vec![
                 DataMappingActionType::SetValue,
                 DataMappingActionType::SetDefaultIfEmpty,
                 DataMappingActionType::SetLogo,
-                DataMappingActionType::DeduplicateClonedChannel,
             ],
         }
     }
@@ -131,7 +130,7 @@ impl StreamMappingFields {
         vec![
             "channel_name",
             "tvg_id",
-            "tvg_name", 
+            "tvg_name",
             "tvg_logo",
             "tvg_shift", // For timeshift channels
             "group_title",
@@ -176,7 +175,9 @@ pub struct DataMappingFieldInfo {
 
 impl DataMappingFieldInfo {
     /// Get available fields for a specific source type
-    pub fn available_for_source_type(source_type: &DataMappingSourceType) -> Vec<DataMappingFieldInfo> {
+    pub fn available_for_source_type(
+        source_type: &DataMappingSourceType,
+    ) -> Vec<DataMappingFieldInfo> {
         match source_type {
             DataMappingSourceType::Stream => vec![
                 DataMappingFieldInfo {
@@ -263,7 +264,10 @@ impl DataMappingFieldInfo {
     }
 
     /// Validate if a field is valid for a source type
-    pub fn is_valid_field_for_source_type(field_name: &str, source_type: &DataMappingSourceType) -> bool {
+    pub fn is_valid_field_for_source_type(
+        field_name: &str,
+        source_type: &DataMappingSourceType,
+    ) -> bool {
         match source_type {
             DataMappingSourceType::Stream => StreamMappingFields::is_valid_field(field_name),
             DataMappingSourceType::Epg => EpgMappingFields::is_valid_field(field_name),
@@ -276,12 +280,13 @@ pub struct MappedChannel {
     #[serde(flatten)]
     pub original: crate::models::Channel,
     pub mapped_tvg_id: Option<String>,
-    pub mapped_tvg_name: Option<String>, 
+    pub mapped_tvg_name: Option<String>,
     pub mapped_tvg_logo: Option<String>,
     pub mapped_tvg_shift: Option<String>,
     pub mapped_group_title: Option<String>,
     pub mapped_channel_name: String,
     pub applied_rules: Vec<Uuid>,
+    pub is_removed: bool, // True if channel should be removed from output
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,8 +300,8 @@ pub struct MappedEpgChannel {
     pub mapped_language: Option<String>,
     pub applied_rules: Vec<Uuid>,
     pub clone_group_id: Option<String>, // For identifying cloned channels
-    pub is_primary_clone: bool, // True for the primary channel in a clone group
-    pub timeshift_offset: Option<i32>, // Timeshift offset in minutes
+    pub is_primary_clone: bool,         // True for the primary channel in a clone group
+    pub timeshift_offset: Option<i32>,  // Timeshift offset in minutes
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,7 +360,6 @@ pub struct DataMappingActionRequest {
     pub value: Option<String>,
     pub logo_asset_id: Option<Uuid>,
     pub timeshift_minutes: Option<i32>, // For timeshift EPG action
-    pub similarity_threshold: Option<f64>, // For clone channel action
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

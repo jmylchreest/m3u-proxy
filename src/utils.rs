@@ -2,7 +2,6 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx;
 use uuid::Uuid;
 
-pub mod channel_similarity;
 pub mod time;
 
 /// Normalize a URL by ensuring it has a proper scheme (http:// or https://)

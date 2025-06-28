@@ -37,28 +37,63 @@ impl WebServer {
             .route("/proxy/:ulid.m3u8", get(handlers::serve_proxy_m3u))
             .route("/logos/:logo_id", get(handlers::serve_logo))
             // API endpoints
+            // Unified Sources API
+            .route("/api/sources", get(api::list_all_sources))
             .route(
-                "/api/sources",
-                get(api::list_sources).post(api::create_source),
+                "/api/sources/stream",
+                get(api::list_stream_sources).post(api::create_stream_source),
             )
             .route(
-                "/api/sources/:id",
-                get(api::get_source)
-                    .put(api::update_source)
-                    .delete(api::delete_source),
+                "/api/sources/epg",
+                get(api::list_epg_sources_unified).post(api::create_epg_source_unified),
             )
-            .route("/api/sources/:id/refresh", post(api::refresh_source))
             .route(
-                "/api/sources/:id/cancel",
-                post(api::cancel_source_ingestion),
+                "/api/sources/stream/:id",
+                get(api::get_stream_source)
+                    .put(api::update_stream_source)
+                    .delete(api::delete_stream_source),
             )
-            .route("/api/sources/:id/progress", get(api::get_source_progress))
             .route(
-                "/api/sources/:id/processing",
-                get(api::get_source_processing_info),
+                "/api/sources/stream/:id/refresh",
+                post(api::refresh_stream_source),
             )
-            .route("/api/sources/:id/channels", get(api::get_source_channels))
+            .route(
+                "/api/sources/stream/:id/cancel",
+                post(api::cancel_stream_source_ingestion),
+            )
+            .route(
+                "/api/sources/stream/:id/progress",
+                get(api::get_stream_source_progress),
+            )
+            .route(
+                "/api/sources/stream/:id/processing",
+                get(api::get_stream_source_processing_info),
+            )
+            .route(
+                "/api/sources/stream/:id/channels",
+                get(api::get_stream_source_channels),
+            )
+            .route(
+                "/api/sources/epg/:id",
+                get(api::get_epg_source_unified)
+                    .put(api::update_epg_source_unified)
+                    .delete(api::delete_epg_source_unified),
+            )
+            .route(
+                "/api/sources/epg/:id/refresh",
+                post(api::refresh_epg_source_unified),
+            )
+            .route(
+                "/api/sources/epg/:id/channels",
+                get(api::get_epg_source_channels_unified),
+            )
+            .route(
+                "/api/sources/epg/:id/progress",
+                get(api::get_epg_source_progress),
+            )
             .route("/api/progress", get(api::get_all_progress))
+            .route("/api/progress/sources", get(api::get_all_source_progress))
+            .route("/api/progress/operations", get(api::get_operation_progress))
             .route(
                 "/api/proxies",
                 get(api::list_proxies).post(api::create_proxy),
@@ -70,18 +105,36 @@ impl WebServer {
                     .delete(api::delete_proxy),
             )
             .route("/api/proxies/:id/regenerate", post(api::regenerate_proxy))
+            // Source-specific filter endpoints
             .route(
-                "/api/filters",
-                get(api::list_filters).post(api::create_filter),
+                "/api/sources/stream/:id/filters",
+                get(api::list_stream_source_filters).post(api::create_stream_source_filter),
             )
-            .route("/api/filters/fields", get(api::get_filter_fields))
+            .route(
+                "/api/sources/epg/:id/filters",
+                get(api::list_epg_source_filters).post(api::create_epg_source_filter),
+            )
+            // Cross-source filter operations
+            .route("/api/filters/stream", get(api::list_stream_filters))
+            .route("/api/filters/epg", get(api::list_epg_filters))
             .route(
                 "/api/filters/:id",
                 get(api::get_filter)
                     .put(api::update_filter)
                     .delete(api::delete_filter),
             )
+            .route(
+                "/api/filters/stream/fields",
+                get(api::get_stream_filter_fields),
+            )
+            .route("/api/filters/epg/fields", get(api::get_epg_filter_fields))
             .route("/api/filters/test", post(api::test_filter))
+            // Legacy filter endpoints (for backward compatibility)
+            .route(
+                "/api/filters",
+                get(api::list_filters).post(api::create_filter),
+            )
+            .route("/api/filters/fields", get(api::get_filter_fields))
             // Data Mapping API
             .route(
                 "/api/data-mapping",
@@ -99,12 +152,16 @@ impl WebServer {
             )
             .route("/api/data-mapping/test", post(api::test_data_mapping_rule))
             .route(
-                "/api/data-mapping/preview/:source_id",
-                get(api::preview_data_mapping),
+                "/api/data-mapping/preview",
+                get(api::apply_data_mapping_rules),
             )
             .route(
-                "/api/data-mapping/preview",
-                get(api::preview_data_mapping_rules),
+                "/api/sources/stream/:id/data-mapping/preview",
+                get(api::apply_stream_source_data_mapping),
+            )
+            .route(
+                "/api/sources/epg/:id/data-mapping/preview",
+                get(api::apply_epg_source_data_mapping),
             )
             // Logo Assets API
             .route("/api/logos", get(api::list_logo_assets))
@@ -121,28 +178,7 @@ impl WebServer {
             )
             .route("/api/logos/search", get(api::search_logo_assets))
             .route("/api/logos/stats", get(api::get_logo_cache_stats))
-            // EPG Sources API
-            .route(
-                "/api/epg-sources",
-                get(api::list_epg_sources).post(api::create_epg_source),
-            )
-            .route(
-                "/api/epg-sources/:id",
-                get(api::get_epg_source)
-                    .put(api::update_epg_source)
-                    .delete(api::delete_epg_source),
-            )
-            .route(
-                "/api/epg-sources/:id/refresh",
-                post(api::refresh_epg_source),
-            )
-            .route(
-                "/api/epg-sources/:id/channels",
-                get(api::get_epg_source_channels),
-            )
             .route("/api/epg/viewer", get(api::get_epg_viewer_data))
-            .route("/api/epg/dlq", get(api::get_epg_dlq_entries))
-            .route("/api/epg/dlq/resolve", post(api::resolve_epg_dlq_conflicts))
             // Channel Mapping API
             .route(
                 "/api/channel-mappings",

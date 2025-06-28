@@ -70,6 +70,7 @@ pub async fn serve_proxy_m3u(
             &state.data_mapping_service,
             &state.logo_asset_service,
             &state.config.web.base_url,
+            state.config.data_mapping_engine.clone(),
         )
         .await
     {

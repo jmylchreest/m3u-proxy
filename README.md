@@ -8,7 +8,6 @@ A modern, high-performance M3U proxy service built in Rust for managing and filt
 - **EPG Integration**: Complete XMLTV EPG support with advanced processing
 - **Advanced Filtering**: Pattern-based filtering with regex support for both streams and EPG data
 - **Data Mapping & Transformation**: Sophisticated channel metadata transformation system
-- **EPG Channel Deduplication**: Automatic detection and merging of duplicate/cloned channels
 - **Timeshift Channel Support**: Automatic EPG time adjustment for +1h, +24h channels
 - **Stream Proxies**: Create filtered channel lists with versioning
 - **Logo Caching**: Automatic caching and serving of channel logos
@@ -208,11 +207,9 @@ graph TD
 2. **Advanced Data Mapping Stage**:
    - **Stream Data Mapping**: Transform channel metadata (names, groups, logos)
    - **EPG Data Mapping**: Advanced EPG processing including:
-     - **Channel Deduplication**: Automatically identify and merge cloned channels (HD/4K variants)
      - **Timeshift Support**: Detect and handle +1h, +24h timeshift channels with automatic program time adjustment
      - **Field Transformation**: Normalize EPG channel names, groups, and metadata
    - **Transient Processing**: Mapped data exists only during proxy generation, not stored
-   - **Clone Group Management**: Channels sharing the same content get unified channel IDs
 
 3. **Dual Filter Application**:
    - **Stream Filters**: Include/exclude channels based on stream metadata
@@ -227,11 +224,9 @@ graph TD
 
 #### EPG-Specific Features
 
-- **Channel Similarity Detection**: Uses configurable patterns to identify cloned channels:
-  - Quality variants: HD, FHD, 4K, UHD, HEVC
+- **Timeshift Channel Support**: Automatic EPG time adjustment for timeshift channels:
   - Timeshift variants: +1, +24, +1h, +24h
-  - Custom patterns: Configurable regex patterns for clone detection
-- **Automatic Deduplication**: Merges duplicate channels while preserving all associated EPG data
+  - Custom patterns: Configurable regex patterns for timeshift detection
 - **Timeshift Processing**: Automatically shifts program times for timeshift channels
 - **Language Support**: EPG language detection and filtering capabilities
 - **Conflict Resolution**: Intelligent handling of overlapping EPG data from multiple sources
@@ -240,7 +235,6 @@ graph TD
 
 - **Unified Processing**: Single system handles both stream and EPG data consistently
 - **Advanced EPG Support**: Sophisticated EPG processing eliminates manual configuration
-- **Clone Management**: Automatic handling of duplicate channels reduces EPG bloat
 - **Timeshift Automation**: No manual EPG time adjustment needed for timeshift channels
 - **Source Independence**: Multiple EPG sources can be combined without conflicts
 - **Performance Optimized**: Transient data mapping reduces database overhead
@@ -275,20 +269,29 @@ The application uses a relational database with the following main tables:
 
 ## API Endpoints
 
-### Stream Sources
-- `GET /api/sources` - List all sources
-- `POST /api/sources` - Create new source
-- `GET /api/sources/{id}` - Get source details
-- `PUT /api/sources/{id}` - Update source
-- `DELETE /api/sources/{id}` - Delete source
+### Sources (Unified API)
+
+- `GET /api/sources` - List all sources (both stream and EPG)
+- `GET /api/sources/stream` - List all stream sources
+- `POST /api/sources/stream` - Create new stream source
+- `GET /api/sources/stream/{id}` - Get stream source details
+- `PUT /api/sources/stream/{id}` - Update stream source
+- `DELETE /api/sources/stream/{id}` - Delete stream source
+- `POST /api/sources/stream/{id}/refresh` - Trigger manual stream source refresh
+- `POST /api/sources/stream/{id}/cancel` - Cancel stream source ingestion
+- `GET /api/sources/stream/{id}/progress` - Get stream source progress
+- `GET /api/sources/stream/{id}/processing` - Get stream source processing info
+- `GET /api/sources/stream/{id}/channels` - Get stream source channels
 
 ### EPG Sources
-- `GET /api/epg-sources` - List all EPG sources
-- `POST /api/epg-sources` - Create new EPG source
-- `GET /api/epg-sources/{id}` - Get EPG source details
-- `PUT /api/epg-sources/{id}` - Update EPG source
-- `DELETE /api/epg-sources/{id}` - Delete EPG source
-- `POST /api/epg-sources/{id}/refresh` - Trigger manual EPG refresh
+
+- `GET /api/sources/epg` - List all EPG sources
+- `POST /api/sources/epg` - Create new EPG source
+- `GET /api/sources/epg/{id}` - Get EPG source details
+- `PUT /api/sources/epg/{id}` - Update EPG source
+- `DELETE /api/sources/epg/{id}` - Delete EPG source
+- `POST /api/sources/epg/{id}/refresh` - Trigger manual EPG refresh
+- `GET /api/sources/epg/{id}/channels` - Get EPG source channels
 
 ### Stream Proxies
 - `GET /api/proxies` - List all proxies
@@ -538,23 +541,22 @@ Rules consist of **source type**, **conditions** (when to apply), and **actions*
 
 ```json
 {
-  "name": "Deduplicate Cloned Channels",
-  "description": "Automatically merge HD/4K variants of the same channel",
-  "source_type": "epg",
+  "name": "Remove Unwanted Channels",
+  "description": "Remove channels matching specific patterns",
+  "source_type": "stream",
   "is_active": true,
   "conditions": [
     {
       "field_name": "channel_name",
       "operator": "matches",
-      "value": ".*(HD|4K|UHD|FHD).*",
+      "value": ".*(Test|Demo|Sample).*",
       "logical_operator": "and"
     }
   ],
   "actions": [
     {
-      "action_type": "deduplicate_cloned_channel",
-      "target_field": "channel_id",
-      "similarity_threshold": 0.8
+      "action_type": "remove_channel",
+      "target_field": "channel_name"
     }
   ]
 }
@@ -629,17 +631,22 @@ Rules consist of **source type**, **conditions** (when to apply), and **actions*
 | `set_default_if_empty` | Set only if field is empty | `target_field`, `value` |
 | `set_logo` | Set logo from uploaded assets | `target_field`, `logo_asset_id` |
 
+#### Stream-Only Actions
+| Action Type | Description | Fields |
+|-------------|-------------|---------|
+| `timeshift_epg` | Set timeshift offset for channels | `timeshift_minutes` |
+| `deduplicate_stream_urls` | Deduplicate channels with same stream URL | None |
+| `remove_channel` | Remove channel from output entirely | `target_field` |
+
 #### EPG-Only Actions
 | Action Type | Description | Fields |
 |-------------|-------------|---------|
-| `deduplicate_cloned_channel` | Identify and merge duplicate channels | `similarity_threshold` |
 | `timeshift_epg` | Adjust EPG times for timeshift channels | `timeshift_minutes` |
 
 ### EPG-Specific Features
 
 #### Channel Deduplication
-- **Automatic Detection**: Uses similarity analysis to identify cloned channels
-- **Clone Patterns**: Recognizes HD, 4K, UHD, FHD, HEVC variants
+- **Timeshift Detection**: Automatically detects timeshift channels (+1, +24 hour variants)
 - **Unified Channel IDs**: Merges duplicates under a single channel ID
 - **Preserves Data**: Keeps all EPG program data from all sources
 
@@ -686,7 +693,6 @@ The preview shows exactly what will appear in your final M3U and XMLTV output.
 #### EPG Processing
 1. **Original EPG Data**: Retrieved from database (channels and programs unchanged)
 2. **EPG Data Mapping**: Applied during proxy generation including:
-   - **Channel deduplication**: Merge cloned channels (HD/4K variants)
    - **Timeshift processing**: Adjust program times for +1h, +24h channels
    - **Field transformation**: Clean up channel names and metadata
 3. **EPG Filtering**: Applied to mapped data (include/exclude EPG data)
@@ -823,7 +829,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ### Completed ✅
 - [x] **Complete EPG Integration**: Full XMLTV support with advanced processing
-- [x] **Channel Deduplication**: Automatic detection and merging of cloned channels
 - [x] **Timeshift Support**: Automatic EPG time adjustment for timeshift channels
 - [x] **Advanced Data Mapping**: Sophisticated transformation system for streams and EPG
 - [x] **Dual Filter System**: Separate filtering for stream and EPG data

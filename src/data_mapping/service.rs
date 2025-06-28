@@ -49,11 +49,18 @@ impl DataMappingService {
         // Insert conditions
         for (index, condition) in request.conditions.iter().enumerate() {
             let condition_id = Uuid::new_v4();
-            let operator_str = format!("{:?}", condition.operator).to_lowercase();
-            let logical_operator_str = condition
-                .logical_operator
-                .as_ref()
-                .map(|op| format!("{:?}", op).to_lowercase());
+            let operator_str = serde_json::to_value(condition.operator.clone())
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            let logical_operator_str = condition.logical_operator.as_ref().map(|op| {
+                serde_json::to_value(op.clone())
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            });
 
             sqlx::query(
                 r#"
@@ -80,15 +87,16 @@ impl DataMappingService {
                 DataMappingActionType::SetValue => "set_value",
                 DataMappingActionType::SetDefaultIfEmpty => "set_default_if_empty",
                 DataMappingActionType::SetLogo => "set_logo",
-                DataMappingActionType::DeduplicateClonedChannel => "deduplicate_cloned_channel",
+
                 DataMappingActionType::TimeshiftEpg => "timeshift_epg",
                 DataMappingActionType::DeduplicateStreamUrls => "deduplicate_stream_urls",
+                DataMappingActionType::RemoveChannel => "remove_channel",
             };
 
             sqlx::query(
                 r#"
-                INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, timeshift_minutes, similarity_threshold, sort_order, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, timeshift_minutes, sort_order, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#
             )
             .bind(action_id.to_string())
@@ -98,7 +106,6 @@ impl DataMappingService {
             .bind(&action.value)
             .bind(action.logo_asset_id.map(|id| id.to_string()))
             .bind(action.timeshift_minutes)
-            .bind(action.similarity_threshold)
             .bind(index as i32)
             .bind(now.to_rfc3339())
             .execute(&mut *tx)
@@ -149,11 +156,18 @@ impl DataMappingService {
         // Insert new conditions
         for (index, condition) in request.conditions.iter().enumerate() {
             let condition_id = Uuid::new_v4();
-            let operator_str = format!("{:?}", condition.operator).to_lowercase();
-            let logical_operator_str = condition
-                .logical_operator
-                .as_ref()
-                .map(|op| format!("{:?}", op).to_lowercase());
+            let operator_str = serde_json::to_value(condition.operator.clone())
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            let logical_operator_str = condition.logical_operator.as_ref().map(|op| {
+                serde_json::to_value(op.clone())
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            });
 
             sqlx::query(
                 r#"
@@ -180,15 +194,16 @@ impl DataMappingService {
                 DataMappingActionType::SetValue => "set_value",
                 DataMappingActionType::SetDefaultIfEmpty => "set_default_if_empty",
                 DataMappingActionType::SetLogo => "set_logo",
-                DataMappingActionType::DeduplicateClonedChannel => "deduplicate_cloned_channel",
+
                 DataMappingActionType::TimeshiftEpg => "timeshift_epg",
                 DataMappingActionType::DeduplicateStreamUrls => "deduplicate_stream_urls",
+                DataMappingActionType::RemoveChannel => "remove_channel",
             };
 
             sqlx::query(
                 r#"
-                INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, timeshift_minutes, similarity_threshold, sort_order, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, logo_asset_id, timeshift_minutes, sort_order, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#
             )
             .bind(action_id.to_string())
@@ -198,7 +213,6 @@ impl DataMappingService {
             .bind(&action.value)
             .bind(action.logo_asset_id.map(|id| id.to_string()))
             .bind(action.timeshift_minutes)
-            .bind(action.similarity_threshold)
             .bind(index as i32)
             .bind(now.to_rfc3339())
             .execute(&mut *tx)
@@ -305,25 +319,17 @@ impl DataMappingService {
 
         let mut conditions = Vec::new();
         for row in rows {
-            let operator = match row.get::<String, _>("operator").as_str() {
-                "matches" => crate::models::FilterOperator::Matches,
-                "equals" => crate::models::FilterOperator::Equals,
-                "contains" => crate::models::FilterOperator::Contains,
-                "starts_with" => crate::models::FilterOperator::StartsWith,
-                "ends_with" => crate::models::FilterOperator::EndsWith,
-                "not_matches" => crate::models::FilterOperator::NotMatches,
-                "not_equals" => crate::models::FilterOperator::NotEquals,
-                "not_contains" => crate::models::FilterOperator::NotContains,
-                _ => crate::models::FilterOperator::Equals,
-            };
+            let operator_str = row.get::<String, _>("operator");
+            let operator = serde_json::from_str::<crate::models::FilterOperator>(&format!(
+                "\"{}\"",
+                operator_str
+            ))
+            .unwrap_or(crate::models::FilterOperator::Equals);
 
-            let logical_operator =
-                row.get::<Option<String>, _>("logical_operator")
-                    .map(|op| match op.as_str() {
-                        "and" => crate::models::LogicalOperator::And,
-                        "or" => crate::models::LogicalOperator::Or,
-                        _ => crate::models::LogicalOperator::And,
-                    });
+            let logical_operator = row.get::<Option<String>, _>("logical_operator").map(|op| {
+                serde_json::from_str::<crate::models::LogicalOperator>(&format!("\"{}\"", op))
+                    .unwrap_or(crate::models::LogicalOperator::And)
+            });
 
             let condition_id_str: String = row.get("id");
             let condition_id =
@@ -353,7 +359,7 @@ impl DataMappingService {
     ) -> Result<Vec<DataMappingAction>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, rule_id, action_type, target_field, value, logo_asset_id, timeshift_minutes, similarity_threshold, sort_order, created_at
+            SELECT id, rule_id, action_type, target_field, value, logo_asset_id, timeshift_minutes, sort_order, created_at
             FROM data_mapping_actions
             WHERE rule_id = ?
             ORDER BY sort_order
@@ -369,8 +375,10 @@ impl DataMappingService {
                 "set_value" => DataMappingActionType::SetValue,
                 "set_default_if_empty" => DataMappingActionType::SetDefaultIfEmpty,
                 "set_logo" => DataMappingActionType::SetLogo,
-                "deduplicate_cloned_channel" => DataMappingActionType::DeduplicateClonedChannel,
+
                 "timeshift_epg" => DataMappingActionType::TimeshiftEpg,
+                "deduplicate_stream_urls" => DataMappingActionType::DeduplicateStreamUrls,
+                "remove_channel" => DataMappingActionType::RemoveChannel,
                 _ => DataMappingActionType::SetValue,
             };
 
@@ -398,7 +406,6 @@ impl DataMappingService {
                 value: row.get("value"),
                 logo_asset_id,
                 timeshift_minutes: row.get("timeshift_minutes"),
-                similarity_threshold: row.get("similarity_threshold"),
                 sort_order: row.get("sort_order"),
                 created_at: utils::parse_datetime(&row.get::<String, _>("created_at"))?,
             });
@@ -434,18 +441,18 @@ impl DataMappingService {
         Ok(())
     }
 
-    /// Apply data mapping rules to channels for proxy generation.
-    /// This method creates transformed channels without modifying the original data stored in the database.
-    /// The original ingested data remains unchanged, and transformations are only applied during proxy generation.
-    pub async fn apply_mapping_for_proxy(
+    /// Apply data mapping rules and return mapped channels with metadata for preview/testing.
+    /// This is the core mapping function that returns full MappedChannel objects.
+    pub async fn apply_mapping_with_metadata(
         &self,
         channels: Vec<Channel>,
         source_id: Uuid,
         logo_service: &LogoAssetService,
         base_url: &str,
-    ) -> Result<Vec<Channel>, anyhow::Error> {
+        engine_config: Option<crate::config::DataMappingEngineConfig>,
+    ) -> Result<Vec<crate::models::data_mapping::MappedChannel>, anyhow::Error> {
         info!(
-            "Applying data mapping for proxy generation - source {} with {} channels",
+            "Applying data mapping with metadata - source {} with {} channels",
             source_id,
             channels.len()
         );
@@ -455,16 +462,27 @@ impl DataMappingService {
             Ok(rules) => rules,
             Err(e) => {
                 error!("Failed to load data mapping rules: {}", e);
-                warn!(
-                    "Skipping data mapping due to rule loading error, returning original channels"
-                );
-                return Ok(channels);
+                return Err(anyhow::anyhow!("Failed to load data mapping rules: {}", e));
             }
         };
 
         if rules.is_empty() {
-            info!("No data mapping rules found, returning original channels");
-            return Ok(channels);
+            info!("No data mapping rules found, returning original channels as mapped");
+            // Convert original channels to MappedChannel format with no modifications
+            return Ok(channels
+                .into_iter()
+                .map(|channel| crate::models::data_mapping::MappedChannel {
+                    mapped_tvg_id: channel.tvg_id.clone(),
+                    mapped_tvg_name: channel.tvg_name.clone(),
+                    mapped_tvg_logo: channel.tvg_logo.clone(),
+                    mapped_tvg_shift: channel.tvg_shift.clone(),
+                    mapped_group_title: channel.group_title.clone(),
+                    mapped_channel_name: channel.channel_name.clone(),
+                    applied_rules: Vec::new(),
+                    is_removed: false,
+                    original: channel,
+                })
+                .collect());
         }
 
         // Load logo assets
@@ -479,25 +497,78 @@ impl DataMappingService {
             }
         };
 
-        // Apply mapping rules - this creates transformed channels without affecting originals
-        let mut engine = DataMappingEngine::new();
+        // Apply mapping rules
+        let mut engine = if let Some(config) = engine_config {
+            DataMappingEngine::with_config(config.into())
+        } else {
+            DataMappingEngine::new()
+        };
+
         match engine.apply_mapping_rules(channels.clone(), rules, logo_assets, source_id, base_url)
         {
             Ok(mapped_channels) => {
-                let result_channels = DataMappingEngine::mapped_to_channels(mapped_channels);
                 info!(
-                    "Data mapping for proxy generation completed successfully for source {}",
+                    "Data mapping with metadata completed successfully for source {}",
                     source_id
                 );
-                Ok(result_channels)
+                Ok(mapped_channels)
             }
             Err(e) => {
                 error!("Data mapping failed for source {}: {}", source_id, e);
-                warn!("Returning original channels due to mapping error");
-                // Return original channels as fallback
-                Ok(channels)
+                Err(anyhow::anyhow!("Data mapping failed: {}", e))
             }
         }
+    }
+
+    /// Apply data mapping rules to channels for proxy generation.
+    /// This method creates transformed channels without modifying the original data stored in the database.
+    /// The original ingested data remains unchanged, and transformations are only applied during proxy generation.
+    pub async fn apply_mapping_for_proxy(
+        &self,
+        channels: Vec<Channel>,
+        source_id: Uuid,
+        logo_service: &LogoAssetService,
+        base_url: &str,
+        engine_config: Option<crate::config::DataMappingEngineConfig>,
+    ) -> Result<Vec<Channel>, anyhow::Error> {
+        // Use the core mapping function and convert to final channels
+        let mapped_channels = self
+            .apply_mapping_with_metadata(
+                channels.clone(),
+                source_id,
+                logo_service,
+                base_url,
+                engine_config,
+            )
+            .await?;
+
+        // Convert to final channels (for proxy generation)
+        let result_channels = DataMappingEngine::mapped_to_channels(mapped_channels);
+        info!(
+            "Data mapping for proxy generation completed successfully for source {}",
+            source_id
+        );
+        Ok(result_channels)
+    }
+
+    /// Filter mapped channels to show only those modified by rules (for preview).
+    pub fn filter_modified_channels(
+        mapped_channels: Vec<crate::models::data_mapping::MappedChannel>,
+    ) -> Vec<crate::models::data_mapping::MappedChannel> {
+        mapped_channels
+            .into_iter()
+            .filter(|channel| !channel.applied_rules.is_empty())
+            .collect()
+    }
+
+    /// Filter mapped channels to show final state (removes deleted channels, keeps all others).
+    pub fn filter_final_channels(
+        mapped_channels: Vec<crate::models::data_mapping::MappedChannel>,
+    ) -> Vec<crate::models::data_mapping::MappedChannel> {
+        mapped_channels
+            .into_iter()
+            .filter(|channel| !channel.is_removed)
+            .collect()
     }
 
     /// Load logo assets for data mapping

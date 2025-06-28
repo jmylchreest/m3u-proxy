@@ -28,6 +28,19 @@ VALUES (
 );
 
 -- Add set_value action to set tvg-shift field using captured timeshift value
+-- Add exclusion condition to avoid matching timestamps
+INSERT INTO data_mapping_conditions (id, rule_id, field_name, operator, value, logical_operator, sort_order, created_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440005',
+    '550e8400-e29b-41d4-a716-446655440001',
+    'channel_name',
+    'not_matches',
+    '.*(?:start:|stop:|\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}).*',
+    'and',
+    1,
+    datetime('now')
+);
+
 INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, sort_order, created_at)
 VALUES (
     '550e8400-e29b-41d4-a716-446655440003',

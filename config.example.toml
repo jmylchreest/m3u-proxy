@@ -54,32 +54,16 @@ run_missed_immediately = true
 # Use IANA timezone names like "America/New_York", "Europe/London", etc.
 local_timezone = "UTC"
 
-# Optional: Channel similarity analysis configuration for EPG conflict resolution
-[channel_similarity]
-# Regex patterns to remove when comparing channels (these indicate channel variants, not different channels)
-# These patterns help identify clones/variants that should share the same tvg-id
-clone_patterns = [
-    "(?i)\\b4K\\b",           # 4K quality indicator
-    "(?i)\\bHD\\b",           # HD quality indicator
-    "(?i)\\bSD\\b",           # SD quality indicator
-    "(?i)\\bHEVC\\b",         # HEVC codec indicator
-    "(?i)\\b720P?\\b",        # 720p quality
-    "(?i)\\b1080P?\\b",       # 1080p quality
-    "(?i)\\bUHD\\b",          # UHD quality
-    "\\[|\\]|\\(|\\)",        # Remove brackets and parentheses
-    "(?i)\\(SAT\\)",          # Satellite source indicator
-    "(?i)\\(CABLE\\)",        # Cable source indicator
-    "(?i)\\(IPTV\\)",         # IPTV source indicator
-]
+# Optional: Data mapping engine optimization configuration
+[data_mapping_engine]
+# Special characters used for regex precheck filtering
+# These characters are considered significant enough to use as first-pass filters
+# Set to empty string "" to disable special character precheck
+# Default: "+-@#$%&*=<>!~`€£{}[]"
+precheck_special_chars = "+-@#$%&*=<>!~`€£{}[]"
 
-# Patterns that indicate timeshift channels (e.g., +1, +24 hour variants)
-# Hours shift will be extracted from the first capture group (\d+)
-timeshift_patterns = [
-    "(?i)\\+(\\d+)",          # Matches +1, +24, etc.
-    "(?i)\\+(\\d+)H",         # Matches +1H, +24H, etc.
-]
-
-# Minimum confidence threshold for considering channels as clones (0.0-1.0)
-# Channels above this threshold should share the same tvg-id/channel id
-# Higher values = more strict matching, lower values = more permissive
-clone_confidence_threshold = 0.90
+# Minimum length required for literal strings in regex precheck
+# Strings shorter than this will not be used for precheck filtering
+# Set to 0 to disable literal string precheck entirely
+# Default: 2
+minimum_literal_length = 2

@@ -48,7 +48,6 @@ class EpgSourcesManager {
       });
     }
 
-
     // Channels filter
     const channelsFilter = document.getElementById("channelsFilter");
     if (channelsFilter) {
@@ -56,13 +55,12 @@ class EpgSourcesManager {
         this.filterChannels(e.target.value);
       });
     }
-
   }
 
   async loadSources() {
     try {
       this.showLoading();
-      const response = await fetch("/api/epg-sources");
+      const response = await fetch("/api/sources/epg");
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -93,14 +91,19 @@ class EpgSourcesManager {
       return;
     }
 
-    this.sources.forEach((source) => {
+    this.sources.forEach((sourceWithStats) => {
+      // Handle unified source structure
+      const source = sourceWithStats.source || sourceWithStats;
+      const channelCount = sourceWithStats.channel_count || 0;
+      const programCount = sourceWithStats.program_count || 0;
+
       const row = document.createElement("tr");
       row.style.opacity = source.is_active ? "1" : "0.6";
 
       // Name and URL column
       const nameCell = document.createElement("td");
       const typeIndicator = source.source_type === "xmltv" ? "XML" : "XC";
-      
+
       nameCell.innerHTML = `
                 <div class="source-info">
                     <div class="source-name">
@@ -130,9 +133,9 @@ class EpgSourcesManager {
       const channelsCell = document.createElement("td");
       channelsCell.innerHTML = `
                 <div class="text-center">
-                    <span class="badge badge-secondary">${source.channel_count}</span>
+                    <span class="badge badge-secondary">${channelCount}</span>
                     ${
-                      source.channel_count > 0
+                      channelCount > 0
                         ? `<br><small><a href="#" onclick="epgSourcesManager.showChannels('${source.id}', '${this.escapeHtml(source.name)}')">View</a></small>`
                         : ""
                     }
@@ -143,7 +146,7 @@ class EpgSourcesManager {
       const programsCell = document.createElement("td");
       programsCell.innerHTML = `
                 <div class="text-center">
-                    <span class="badge badge-info">${source.program_count || 0}</span>
+                    <span class="badge badge-info">${programCount}</span>
                 </div>
             `;
 
@@ -241,6 +244,60 @@ class EpgSourcesManager {
         const current = parseInt(match[1]).toLocaleString();
         const total = parseInt(match[2]).toLocaleString();
         text = `Programs: ${current}/${total}`;
+      }
+    } else if (
+      text.includes("Saved") &&
+      text.includes("programs to database")
+    ) {
+      const match = text.match(/Saved (\d+)\/(\d+) programs/);
+      if (match) {
+        const current = parseInt(match[1]).toLocaleString();
+        const total = parseInt(match[2]).toLocaleString();
+        text = `Saving: ${current}/${total}`;
+      }
+    } else if (
+      text.includes("Saving") &&
+      text.includes("programs to database")
+    ) {
+      // Handle "Saving X channels and Y programs to database" format
+      const channelMatch = text.match(/Saving (\d+) channels/);
+      const programMatch = text.match(/(\d+) programs to database/);
+      if (channelMatch && programMatch) {
+        const channels = parseInt(channelMatch[1]).toLocaleString();
+        const programs = parseInt(programMatch[1]).toLocaleString();
+        text = `Saving: ${channels} channels, ${programs} programs`;
+      }
+    } else if (text.includes("Downloaded") && text.includes("bytes")) {
+      // Handle download progress
+      const match = text.match(/Downloaded (\d+) \/ (\d+) bytes/);
+      if (match) {
+        const current = parseInt(match[1]);
+        const total = parseInt(match[2]);
+        const currentMB = (current / 1024 / 1024).toFixed(1);
+        const totalMB = (total / 1024 / 1024).toFixed(1);
+        text = `Downloading: ${currentMB}/${totalMB} MB`;
+      }
+    } else if (text.includes("Starting EPG ingestion")) {
+      text = "Starting ingestion...";
+    } else if (text.includes("Parsing completed")) {
+      const match = text.match(/(\d+) channels found/);
+      if (match) {
+        const count = parseInt(match[1]).toLocaleString();
+        text = `Found ${count} channels`;
+      } else {
+        text = "Parsing completed";
+      }
+    } else if (text.includes("Completed -")) {
+      // Handle completion messages
+      const channelMatch = text.match(/(\d+) channels/);
+      const programMatch = text.match(/(\d+) programs/);
+      if (channelMatch && programMatch) {
+        const channels = parseInt(channelMatch[1]).toLocaleString();
+        const programs = parseInt(programMatch[1]).toLocaleString();
+        text = `Complete: ${channels} channels, ${programs} programs`;
+      } else if (channelMatch) {
+        const channels = parseInt(channelMatch[1]).toLocaleString();
+        text = `Complete: ${channels} channels`;
       }
     }
 
@@ -393,8 +450,8 @@ class EpgSourcesManager {
 
     try {
       const url = isEditing
-        ? `/api/epg-sources/${this.editingSource.id}`
-        : "/api/epg-sources";
+        ? `/api/sources/epg/${this.editingSource.id}`
+        : "/api/sources/epg";
 
       const method = isEditing ? "PUT" : "POST";
 
@@ -489,7 +546,7 @@ class EpgSourcesManager {
 
   async editSource(sourceId) {
     try {
-      const response = await fetch(`/api/epg-sources/${sourceId}`);
+      const response = await fetch(`/api/sources/epg/${sourceId}`);
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -505,7 +562,7 @@ class EpgSourcesManager {
 
   async refreshSource(sourceId) {
     try {
-      const response = await fetch(`/api/epg-sources/${sourceId}/refresh`, {
+      const response = await fetch(`/api/sources/epg/${sourceId}/refresh`, {
         method: "POST",
       });
 
@@ -543,7 +600,7 @@ class EpgSourcesManager {
 
     for (const source of activeSources) {
       try {
-        const response = await fetch(`/api/epg-sources/${source.id}/refresh`, {
+        const response = await fetch(`/api/sources/epg/${source.id}/refresh`, {
           method: "POST",
         });
 
@@ -587,13 +644,27 @@ class EpgSourcesManager {
   // Progress tracking methods
   async loadProgress() {
     try {
-      const response = await fetch("/api/progress");
+      const response = await fetch("/api/progress/sources");
       if (!response.ok) return;
 
-      const newProgressData = await response.json();
+      const data = await response.json();
+      const newProgressData = data.progress || {};
+
+      // Extract progress and processing info from consolidated response
+      const extractedProgress = {};
+      const extractedProcessingInfo = {};
+
+      Object.entries(newProgressData).forEach(([sourceId, data]) => {
+        if (data.progress) {
+          extractedProgress[sourceId] = data.progress;
+        }
+        if (data.processing_info) {
+          extractedProcessingInfo[sourceId] = data.processing_info;
+        }
+      });
 
       // Check if any sources just completed
-      const hasActiveProgress = Object.values(newProgressData).some((p) =>
+      const hasActiveProgress = Object.values(extractedProgress).some((p) =>
         this.isActivelyProcessing(p.state),
       );
 
@@ -603,10 +674,8 @@ class EpgSourcesManager {
       }
 
       this.lastHadProgress = hasActiveProgress;
-      this.progressData = newProgressData;
-
-      // Also load processing info for backoff states
-      await this.loadProcessingInfo();
+      this.progressData = extractedProgress;
+      this.processingInfo = extractedProcessingInfo;
 
       // Re-render sources to update status display
       this.renderSources();
@@ -616,34 +685,11 @@ class EpgSourcesManager {
   }
 
   async loadProcessingInfo() {
-    try {
-      // Only load processing info for sources that are actively processing or have recent progress
-      const sourcesToCheck = this.sources.filter(source => {
-        const progress = this.progressData[source.id];
-        return progress && (this.isActivelyProcessing(progress.state) || this.isRecentlyProcessed(progress));
-      });
-
-      const promises = sourcesToCheck.map(async (source) => {
-        try {
-          const response = await fetch(`/api/sources/${source.id}/processing`);
-          if (response.ok) {
-            const processingInfo = await response.json();
-            if (processingInfo) {
-              this.processingInfo[source.id] = processingInfo;
-            }
-          }
-        } catch (error) {
-          console.debug(
-            `Failed to load processing info for ${source.id}:`,
-            error,
-          );
-        }
-      });
-
-      await Promise.all(promises);
-    } catch (error) {
-      console.debug("Processing info loading error:", error);
-    }
+    // This method is now handled by loadProgress() which gets consolidated data
+    // Keeping this method for backward compatibility but it's no longer needed
+    console.debug(
+      "loadProcessingInfo() called but processing info is now loaded via consolidated progress endpoint",
+    );
   }
 
   isRecentlyProcessed(progress) {
@@ -694,7 +740,7 @@ class EpgSourcesManager {
     }
 
     try {
-      const response = await fetch(`/api/epg-sources/${sourceId}`, {
+      const response = await fetch(`/api/sources/epg/${sourceId}`, {
         method: "DELETE",
       });
 
@@ -727,7 +773,7 @@ class EpgSourcesManager {
       content.style.display = "none";
 
       // Load channels
-      const response = await fetch(`/api/epg-sources/${sourceId}/channels`);
+      const response = await fetch(`/api/sources/epg/${sourceId}/channels`);
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -881,9 +927,12 @@ class EpgSourcesManager {
       // Load EPG viewer content into modal
       const container = document.getElementById("epgViewerContainer");
       if (container) {
-        console.log("EPG viewer container found, current children:", container.children.length);
+        console.log(
+          "EPG viewer container found, current children:",
+          container.children.length,
+        );
         console.log("Container innerHTML length:", container.innerHTML.length);
-        
+
         // Always load content for now to debug the issue
         console.log("Loading EPG viewer content...");
         await this.loadEpgViewerContent(container);
@@ -996,7 +1045,11 @@ class EpgSourcesManager {
       `;
 
       console.log("EPG viewer HTML structure created");
-      console.log("Container innerHTML after setting:", container.innerHTML.length, "characters");
+      console.log(
+        "Container innerHTML after setting:",
+        container.innerHTML.length,
+        "characters",
+      );
       console.log("Container children count:", container.children.length);
 
       // Initialize modal EPG viewer functionality
@@ -1019,20 +1072,20 @@ class EpgSourcesManager {
 
   initializeModalEpgViewer() {
     console.log("Initializing modal EPG viewer");
-    
+
     // Debug: Check if we can find all the expected elements
     const elementsToCheck = [
-      'dateSelectModal',
-      'startTimeModal', 
-      'timeRangeModal',
-      'channelFilterModal',
-      'refreshEpgModalBtn',
-      'nowModalBtn'
+      "dateSelectModal",
+      "startTimeModal",
+      "timeRangeModal",
+      "channelFilterModal",
+      "refreshEpgModalBtn",
+      "nowModalBtn",
     ];
-    
-    elementsToCheck.forEach(id => {
+
+    elementsToCheck.forEach((id) => {
       const element = document.getElementById(id);
-      console.log(`Element ${id}:`, element ? 'found' : 'NOT FOUND');
+      console.log(`Element ${id}:`, element ? "found" : "NOT FOUND");
     });
 
     // Set default date to today
@@ -1091,18 +1144,27 @@ class EpgSourcesManager {
 
     // Load initial data
     console.log("Loading initial EPG data");
-    
+
     // Debug: Check visibility of key containers
     setTimeout(() => {
-      const epgContainer = document.querySelector('.epg-container');
-      const epgHeader = document.querySelector('.epg-header');
-      const epgGrid = document.querySelector('.epg-grid');
-      
-      console.log('EPG Container visible:', epgContainer ? getComputedStyle(epgContainer).display : 'not found');
-      console.log('EPG Header visible:', epgHeader ? getComputedStyle(epgHeader).display : 'not found');
-      console.log('EPG Grid visible:', epgGrid ? getComputedStyle(epgGrid).display : 'not found');
+      const epgContainer = document.querySelector(".epg-container");
+      const epgHeader = document.querySelector(".epg-header");
+      const epgGrid = document.querySelector(".epg-grid");
+
+      console.log(
+        "EPG Container visible:",
+        epgContainer ? getComputedStyle(epgContainer).display : "not found",
+      );
+      console.log(
+        "EPG Header visible:",
+        epgHeader ? getComputedStyle(epgHeader).display : "not found",
+      );
+      console.log(
+        "EPG Grid visible:",
+        epgGrid ? getComputedStyle(epgGrid).display : "not found",
+      );
     }, 100);
-    
+
     this.loadModalEpgData();
   }
 
@@ -1158,10 +1220,10 @@ class EpgSourcesManager {
       console.log("Making API request to:", apiUrl);
 
       const response = await fetch(apiUrl, {
-        cache: 'no-cache',
+        cache: "no-cache",
         headers: {
-          'Cache-Control': 'no-cache'
-        }
+          "Cache-Control": "no-cache",
+        },
       });
 
       if (!response.ok) {
@@ -1176,12 +1238,15 @@ class EpgSourcesManager {
       console.log("Received EPG data:", data);
 
       // Filter channels first to determine what to show
-      const channelFilterElement = document.getElementById("channelFilterModal");
-      const filterText = channelFilterElement ? channelFilterElement.value.toLowerCase() : '';
-      
+      const channelFilterElement =
+        document.getElementById("channelFilterModal");
+      const filterText = channelFilterElement
+        ? channelFilterElement.value.toLowerCase()
+        : "";
+
       let channelsToShow = data.channels || [];
       if (filterText) {
-        channelsToShow = data.channels.filter(channel => {
+        channelsToShow = data.channels.filter((channel) => {
           const searchFields = [
             channel.channel_name,
             channel.channel_id,
@@ -1189,16 +1254,19 @@ class EpgSourcesManager {
             channel.tvg_name,
             channel.group_title,
             channel.tvg_logo,
-            channel.stream_url
+            channel.stream_url,
           ];
-          
-          return searchFields.some(field => 
-            field && field.toString().toLowerCase().includes(filterText)
+
+          return searchFields.some(
+            (field) =>
+              field && field.toString().toLowerCase().includes(filterText),
           );
         });
       }
 
-      console.log(`Total channels: ${data.channels?.length || 0}, After filtering: ${channelsToShow.length}, Filter: "${filterText}"`);
+      console.log(
+        `Total channels: ${data.channels?.length || 0}, After filtering: ${channelsToShow.length}, Filter: "${filterText}"`,
+      );
 
       if (loadingDiv) {
         loadingDiv.style.display = "none";
@@ -1209,21 +1277,25 @@ class EpgSourcesManager {
       if (channelsToShow.length > 0) {
         if (contentDiv) {
           contentDiv.style.display = "block";
-          console.log("Showing content with", channelsToShow.length, "filtered channels");
+          console.log(
+            "Showing content with",
+            channelsToShow.length,
+            "filtered channels",
+          );
         }
         if (noDataDiv) {
           noDataDiv.style.display = "none";
         }
-        
+
         // Render the filtered data
         this.renderModalEpgData({ ...data, channels: channelsToShow });
       } else {
         // No channels after filtering or no data at all
         if (noDataDiv) {
           noDataDiv.style.display = "flex";
-          
+
           // Update message based on whether we have data but no filter matches
-          const noDataMessage = noDataDiv.querySelector('p');
+          const noDataMessage = noDataDiv.querySelector("p");
           if (noDataMessage) {
             if (filterText && data.channels && data.channels.length > 0) {
               noDataMessage.innerHTML = `
@@ -1264,8 +1336,12 @@ class EpgSourcesManager {
   }
 
   renderModalEpgData(data) {
-    console.log("Rendering modal EPG data for", data.channels?.length || 0, "channels");
-    
+    console.log(
+      "Rendering modal EPG data for",
+      data.channels?.length || 0,
+      "channels",
+    );
+
     // Update channel count
     const channelCount = document.getElementById("channelCountModal");
     if (channelCount && data.channels) {
@@ -1276,7 +1352,7 @@ class EpgSourcesManager {
     const dateInput = document.getElementById("dateSelectModal");
     const timeInput = document.getElementById("startTimeModal");
     const rangeInput = document.getElementById("timeRangeModal");
-    
+
     if (!dateInput || !timeInput || !rangeInput) {
       console.error("Form inputs not found for EPG rendering");
       return;
@@ -1285,64 +1361,77 @@ class EpgSourcesManager {
     const selectedDate = dateInput.value;
     const selectedTime = timeInput.value;
     const timeRange = parseInt(rangeInput.value);
-    
+
     // Generate timeline
     const timelineDiv = document.getElementById("epgTimelineModal");
     const channelsDiv = document.getElementById("epgChannelsModal");
-    
+
     if (timelineDiv && channelsDiv) {
       // Create time slots for the timeline
       const startDateTime = new Date(`${selectedDate}T${selectedTime}`);
       const timeSlots = [];
-      
+
       for (let i = 0; i < timeRange; i++) {
-        const slotTime = new Date(startDateTime.getTime() + (i * 60 * 60 * 1000)); // Add hours
+        const slotTime = new Date(startDateTime.getTime() + i * 60 * 60 * 1000); // Add hours
         timeSlots.push(slotTime);
       }
-      
+
       // Render timeline header
-      timelineDiv.innerHTML = timeSlots.map(time => 
-        `<div class="epg-time-slot">${time.toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'})}</div>`
-      ).join('');
-      
+      timelineDiv.innerHTML = timeSlots
+        .map(
+          (time) =>
+            `<div class="epg-time-slot">${time.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</div>`,
+        )
+        .join("");
+
       // Render channels (filtering is now handled in loadModalEpgData)
       const channelsToShow = data.channels;
-      
-      channelsDiv.innerHTML = channelsToShow.map((channel, index) => `
+
+      channelsDiv.innerHTML = channelsToShow
+        .map(
+          (channel, index) => `
         <div class="epg-channel-row">
           <div class="epg-channel-info">
             <div class="epg-channel-name">${channel.channel_name}</div>
             <div class="epg-channel-id">${channel.channel_id}</div>
-            ${channel.group_title ? `<div class="epg-channel-group">📂 ${channel.group_title}</div>` : ''}
-            ${channel.tvg_id ? `<div class="epg-channel-tvg">🆔 ${channel.tvg_id}</div>` : ''}
+            ${channel.group_title ? `<div class="epg-channel-group">📂 ${channel.group_title}</div>` : ""}
+            ${channel.tvg_id ? `<div class="epg-channel-tvg">🆔 ${channel.tvg_id}</div>` : ""}
           </div>
           <div class="epg-programs">
-            ${timeSlots.map(time => {
-              // Find program for this time slot
-              const program = channel.programs?.find(p => {
-                const start = new Date(p.start_time);
-                const end = new Date(p.end_time);
-                return time >= start && time < end;
-              });
-              
-              if (program) {
-                return `
-                  <div class="epg-program" title="${program.program_description || ''}">
+            ${timeSlots
+              .map((time) => {
+                // Find program for this time slot
+                const program = channel.programs?.find((p) => {
+                  const start = new Date(p.start_time);
+                  const end = new Date(p.end_time);
+                  return time >= start && time < end;
+                });
+
+                if (program) {
+                  return `
+                  <div class="epg-program" title="${program.program_description || ""}">
                     <div class="epg-program-title">${program.program_title}</div>
-                    <div class="epg-program-time">${new Date(program.start_time).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'})}</div>
-                    ${program.program_category ? `<div class="epg-program-category">${program.program_category}</div>` : ''}
+                    <div class="epg-program-time">${new Date(program.start_time).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</div>
+                    ${program.program_category ? `<div class="epg-program-category">${program.program_category}</div>` : ""}
                   </div>
                 `;
-              } else {
-                return '<div class="epg-empty-slot">No Program</div>';
-              }
-            }).join('')}
+                } else {
+                  return '<div class="epg-empty-slot">No Program</div>';
+                }
+              })
+              .join("")}
           </div>
         </div>
-      `).join('');
-      
-      console.log("EPG timeline rendered with", channelsToShow.length, "channels");
-      
+      `,
+        )
+        .join("");
+
+      console.log(
+        "EPG timeline rendered with",
+        channelsToShow.length,
+        "channels",
+      );
+
       // Add scroll debug info
       setTimeout(() => {
         const epgGrid = document.getElementById("epgGridModal");
@@ -1350,7 +1439,7 @@ class EpgSourcesManager {
           console.log("EPG Grid scroll info:", {
             scrollHeight: epgGrid.scrollHeight,
             clientHeight: epgGrid.clientHeight,
-            scrollable: epgGrid.scrollHeight > epgGrid.clientHeight
+            scrollable: epgGrid.scrollHeight > epgGrid.clientHeight,
           });
         }
       }, 100);

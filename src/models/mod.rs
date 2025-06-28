@@ -514,7 +514,10 @@ impl FilterFieldInfo {
     }
 
     /// Validate if a field is valid for a filter source type
-    pub fn is_valid_field_for_source_type(field_name: &str, source_type: &FilterSourceType) -> bool {
+    pub fn is_valid_field_for_source_type(
+        field_name: &str,
+        source_type: &FilterSourceType,
+    ) -> bool {
         Self::available_for_source_type(source_type)
             .iter()
             .any(|field| field.name == field_name)
@@ -679,54 +682,6 @@ pub struct EpgRefreshResponse {
     pub program_count: usize,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct EpgDlq {
-    pub id: Uuid,
-    pub source_id: Uuid,
-    pub original_channel_id: String,
-    pub conflict_type: EpgConflictType,
-    pub channel_data: String,         // JSON blob
-    pub program_data: Option<String>, // JSON blob
-    pub conflict_details: String,
-    pub first_seen_at: DateTime<Utc>,
-    pub last_seen_at: DateTime<Utc>,
-    pub occurrence_count: i32,
-    pub resolved: bool,
-    pub resolution_notes: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum EpgConflictType {
-    #[serde(rename = "duplicate_identical")]
-    DuplicateIdentical,
-    #[serde(rename = "duplicate_conflicting")]
-    DuplicateConflicting,
-}
-
-impl std::fmt::Display for EpgConflictType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EpgConflictType::DuplicateIdentical => write!(f, "duplicate_identical"),
-            EpgConflictType::DuplicateConflicting => write!(f, "duplicate_conflicting"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct EpgDlqStatistics {
-    pub total_conflicts: usize,
-    pub by_source: std::collections::HashMap<String, usize>,
-    pub by_conflict_type: std::collections::HashMap<String, usize>,
-    pub common_patterns: Vec<EpgDlqPattern>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct EpgDlqPattern {
-    pub pattern: String,
-    pub count: usize,
-    pub examples: Vec<String>,
-}
-
 // Xtream Codes Integration Models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XtreamCodesCreateRequest {
@@ -771,4 +726,143 @@ pub struct LinkedXtreamSources {
     pub link_id: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+// Unified Source API Models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "source_kind")]
+pub enum UnifiedSource {
+    #[serde(rename = "stream")]
+    Stream {
+        #[serde(flatten)]
+        source: StreamSource,
+        // Stream-specific fields
+        max_concurrent_streams: i32,
+        field_map: Option<String>,
+    },
+    #[serde(rename = "epg")]
+    Epg {
+        #[serde(flatten)]
+        source: EpgSourceBase,
+        // EPG-specific fields
+        timezone: String,
+        timezone_detected: bool,
+        time_offset: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgSourceBase {
+    pub id: Uuid,
+    pub name: String,
+    pub source_type: EpgSourceType,
+    pub url: String,
+    pub update_cron: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_ingested_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "source_kind")]
+pub enum UnifiedSourceWithStats {
+    #[serde(rename = "stream")]
+    Stream {
+        #[serde(flatten)]
+        source: StreamSource,
+        // Stream-specific fields
+        max_concurrent_streams: i32,
+        field_map: Option<String>,
+        // Stream stats
+        channel_count: i64,
+        next_scheduled_update: Option<DateTime<Utc>>,
+    },
+    #[serde(rename = "epg")]
+    Epg {
+        #[serde(flatten)]
+        source: EpgSourceBase,
+        // EPG-specific fields
+        timezone: String,
+        timezone_detected: bool,
+        time_offset: String,
+        // EPG stats
+        channel_count: i64,
+        program_count: i64,
+        next_scheduled_update: Option<DateTime<Utc>>,
+    },
+}
+
+impl UnifiedSourceWithStats {
+    pub fn from_stream(stream_with_stats: StreamSourceWithStats) -> Self {
+        Self::Stream {
+            max_concurrent_streams: stream_with_stats.source.max_concurrent_streams,
+            field_map: stream_with_stats.source.field_map.clone(),
+            source: StreamSource {
+                id: stream_with_stats.source.id,
+                name: stream_with_stats.source.name,
+                source_type: stream_with_stats.source.source_type,
+                url: stream_with_stats.source.url,
+                max_concurrent_streams: stream_with_stats.source.max_concurrent_streams,
+                update_cron: stream_with_stats.source.update_cron,
+                username: stream_with_stats.source.username,
+                password: stream_with_stats.source.password,
+                field_map: stream_with_stats.source.field_map,
+                created_at: stream_with_stats.source.created_at,
+                updated_at: stream_with_stats.source.updated_at,
+                last_ingested_at: stream_with_stats.source.last_ingested_at,
+                is_active: stream_with_stats.source.is_active,
+            },
+            channel_count: stream_with_stats.channel_count,
+            next_scheduled_update: stream_with_stats.next_scheduled_update,
+        }
+    }
+
+    pub fn from_epg(epg_with_stats: EpgSourceWithStats) -> Self {
+        Self::Epg {
+            timezone: epg_with_stats.source.timezone.clone(),
+            timezone_detected: epg_with_stats.source.timezone_detected,
+            time_offset: epg_with_stats.source.time_offset.clone(),
+            source: EpgSourceBase {
+                id: epg_with_stats.source.id,
+                name: epg_with_stats.source.name,
+                source_type: epg_with_stats.source.source_type,
+                url: epg_with_stats.source.url,
+                update_cron: epg_with_stats.source.update_cron,
+                username: epg_with_stats.source.username,
+                password: epg_with_stats.source.password,
+                created_at: epg_with_stats.source.created_at,
+                updated_at: epg_with_stats.source.updated_at,
+                last_ingested_at: epg_with_stats.source.last_ingested_at,
+                is_active: epg_with_stats.source.is_active,
+            },
+            channel_count: epg_with_stats.channel_count,
+            program_count: epg_with_stats.program_count,
+            next_scheduled_update: epg_with_stats.next_scheduled_update,
+        }
+    }
+
+    pub fn get_id(&self) -> Uuid {
+        match self {
+            Self::Stream { source, .. } => source.id,
+            Self::Epg { source, .. } => source.id,
+        }
+    }
+
+    pub fn get_name(&self) -> &str {
+        match self {
+            Self::Stream { source, .. } => &source.name,
+            Self::Epg { source, .. } => &source.name,
+        }
+    }
+
+    pub fn is_stream(&self) -> bool {
+        matches!(self, Self::Stream { .. })
+    }
+
+    pub fn is_epg(&self) -> bool {
+        matches!(self, Self::Epg { .. })
+    }
 }

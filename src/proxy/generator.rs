@@ -28,6 +28,7 @@ impl ProxyGenerator {
         data_mapping_service: &DataMappingService,
         logo_service: &LogoAssetService,
         base_url: &str,
+        engine_config: Option<crate::config::DataMappingEngineConfig>,
     ) -> Result<ProxyGeneration> {
         info!("Starting proxy generation for '{}'", proxy.name);
 
@@ -85,7 +86,13 @@ impl ProxyGenerator {
             );
 
             let transformed_channels = data_mapping_service
-                .apply_mapping_for_proxy(source_channels, source.id, logo_service, base_url)
+                .apply_mapping_for_proxy(
+                    source_channels,
+                    source.id,
+                    logo_service,
+                    base_url,
+                    engine_config.clone(),
+                )
                 .await?;
 
             info!(

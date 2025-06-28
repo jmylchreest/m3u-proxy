@@ -4,13 +4,15 @@ use axum::{
     response::Json,
 };
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 use serde_json::json;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use super::AppState;
 
+use crate::data_mapping::DataMappingService;
 use crate::models::*;
 use crate::proxy::generator::ProxyGenerator;
 use serde::Deserialize;
@@ -22,323 +24,180 @@ pub struct ChannelQueryParams {
     pub filter: Option<String>,
 }
 
-// Stream Sources API
-pub async fn list_sources(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<StreamSourceWithStats>>, StatusCode> {
-    match state.database.list_stream_sources_with_stats().await {
-        Ok(sources) => Ok(Json(sources)),
-        Err(e) => {
-            error!("Failed to list stream sources: {}", e);
-            error!("Error type: {:?}", e);
-            if let Some(sqlx_error) = e.downcast_ref::<sqlx::Error>() {
-                error!("SQLx error details: {:?}", sqlx_error);
-            }
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-pub async fn create_source(
-    State(state): State<AppState>,
-    Json(payload): Json<StreamSourceCreateRequest>,
-) -> Result<Json<StreamSource>, StatusCode> {
-    match state.database.create_stream_source(&payload).await {
-        Ok(source) => {
-            // Invalidate scheduler cache since we added a new source
-            let _ = state.cache_invalidation_tx.send(());
-
-            // Trigger immediate refresh of the new stream source to populate data right away
-            info!(
-                "Triggering immediate refresh for new stream source: {} ({})",
-                source.name, source.id
-            );
-
-            tokio::spawn({
-                let database = state.database.clone();
-                let state_manager = state.state_manager.clone();
-                let source_id = source.id;
-                let source_name = source.name.clone();
-                async move {
-                    use crate::ingestor::IngestorService;
-
-                    // Small delay to ensure the response is sent first
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                    let ingestor = IngestorService::new(state_manager.clone());
-
-                    if let Ok(Some(stream_source)) = database.get_stream_source(source_id).await {
-                        match ingestor.ingest_source(&stream_source).await {
-                            Ok(channels) => {
-                                info!(
-                                    "Initial stream ingestion completed for '{}': {} channels",
-                                    source_name,
-                                    channels.len()
-                                );
-
-                                // Update the channels in database
-                                if let Err(e) = database
-                                    .update_source_channels(
-                                        source_id,
-                                        &channels,
-                                        Some(&state_manager),
-                                    )
-                                    .await
-                                {
-                                    error!(
-                                        "Failed to save initial stream data for source '{}': {}",
-                                        source_name, e
-                                    );
-                                } else {
-                                    // Update last_ingested_at timestamp
-                                    if let Err(e) =
-                                        database.update_source_last_ingested(source_id).await
-                                    {
-                                        error!("Failed to update last_ingested_at for stream source '{}': {}", source_name, e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to perform initial refresh of stream source '{}': {}",
-                                    source_name, e
-                                );
-                            }
-                        }
-                    }
-                }
-            });
-
-            Ok(Json(source))
-        }
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
-pub async fn get_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<StreamSource>, StatusCode> {
-    match state.database.get_stream_source(id).await {
-        Ok(Some(source)) => Ok(Json(source)),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
-pub async fn update_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-    Json(payload): Json<StreamSourceUpdateRequest>,
-) -> Result<Json<StreamSource>, StatusCode> {
-    match state.database.update_stream_source(id, &payload).await {
-        Ok(Some(source)) => {
-            // Invalidate scheduler cache since source was updated
-            let _ = state.cache_invalidation_tx.send(());
-            Ok(Json(source))
-        }
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
-pub async fn delete_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    match state.database.delete_stream_source(id).await {
-        Ok(true) => {
-            // Invalidate scheduler cache since source was deleted
-            let _ = state.cache_invalidation_tx.send(());
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
-pub async fn refresh_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<RefreshResponse>, StatusCode> {
-    use crate::ingestor::IngestorService;
-    use tracing::{error, info};
-
-    // Get the source first
-    let source = match state.database.get_stream_source(id).await {
-        Ok(Some(source)) => source,
-        Ok(None) => {
-            error!("Stream source ({}) not found for refresh", id);
-            return Err(StatusCode::NOT_FOUND);
-        }
-        Err(e) => {
-            error!("Database error getting source ({}): {}", id, e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
-
-    info!(
-        "Starting manual refresh for source '{}' ({})",
-        source.name, source.id
+// Helper function to convert MappedChannel to test format
+fn mapped_channel_to_test_format(
+    mc: &crate::models::data_mapping::MappedChannel,
+) -> (
+    HashMap<String, Option<String>>,
+    HashMap<String, Option<String>>,
+) {
+    let mut original_values = HashMap::new();
+    original_values.insert(
+        "channel_name".to_string(),
+        Some(mc.original.channel_name.clone()),
     );
+    original_values.insert("tvg_id".to_string(), mc.original.tvg_id.clone());
+    original_values.insert("tvg_name".to_string(), mc.original.tvg_name.clone());
+    original_values.insert("tvg_logo".to_string(), mc.original.tvg_logo.clone());
+    original_values.insert("tvg_shift".to_string(), mc.original.tvg_shift.clone());
+    original_values.insert("group_title".to_string(), mc.original.group_title.clone());
 
-    // Create ingestor with state manager and trigger refresh
-    let ingestor = IngestorService::new(state.state_manager.clone());
+    let mut mapped_values = HashMap::new();
+    mapped_values.insert(
+        "channel_name".to_string(),
+        Some(mc.mapped_channel_name.clone()),
+    );
+    mapped_values.insert("tvg_id".to_string(), mc.mapped_tvg_id.clone());
+    mapped_values.insert("tvg_name".to_string(), mc.mapped_tvg_name.clone());
+    mapped_values.insert("tvg_logo".to_string(), mc.mapped_tvg_logo.clone());
+    mapped_values.insert("tvg_shift".to_string(), mc.mapped_tvg_shift.clone());
+    mapped_values.insert("group_title".to_string(), mc.mapped_group_title.clone());
 
-    match ingestor.ingest_source(&source).await {
-        Ok(channels) => {
-            info!(
-                "Ingestion completed for '{}': {} channels",
-                source.name,
-                channels.len()
-            );
-
-            // Update the channels in database
-            match state
-                .database
-                .update_source_channels(id, &channels, Some(&state.state_manager))
-                .await
-            {
-                Ok(_) => {
-                    // Update last_ingested_at timestamp
-                    match state.database.update_source_last_ingested(id).await {
-                        Ok(_last_ingested_timestamp) => {
-                            // Timestamp updated successfully
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to update last_ingested_at for source '{}': {}",
-                                source.name, e
-                            );
-                        }
-                    }
-
-                    // Mark ingestion as completed with final channel count
-                    state
-                        .state_manager
-                        .complete_ingestion(source.id, channels.len())
-                        .await;
-
-                    // Invalidate scheduler cache since last_ingested_at was updated
-                    let _ = state.cache_invalidation_tx.send(());
-
-                    info!(
-                        "Manual refresh completed for source '{}': {} channels saved",
-                        source.name,
-                        channels.len()
-                    );
-
-                    Ok(Json(RefreshResponse {
-                        success: true,
-                        message: format!("Successfully ingested {} channels", channels.len()),
-                        channel_count: channels.len(),
-                    }))
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to save channels for source '{}': {}",
-                        source.name, e
-                    );
-                    state
-                        .state_manager
-                        .set_error(source.id, format!("Failed to save channels: {}", e))
-                        .await;
-
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-        }
-        Err(err) => {
-            error!("Ingestion failed for source '{}': {}", source.name, err);
-
-            Ok(Json(RefreshResponse {
-                success: false,
-                message: format!("Failed to ingest source: {}", err),
-                channel_count: 0,
-            }))
-        }
-    }
+    (original_values, mapped_values)
 }
+
+// Helper function to transform MappedChannel to frontend-compatible format
+fn mapped_channel_to_frontend_format(
+    mc: &crate::models::data_mapping::MappedChannel,
+) -> serde_json::Value {
+    json!({
+        "id": mc.original.id,
+        "source_id": mc.original.source_id,
+        "channel_name": mc.mapped_channel_name,
+        "tvg_id": mc.mapped_tvg_id.as_ref().or(mc.original.tvg_id.as_ref()),
+        "tvg_name": mc.mapped_tvg_name.as_ref().or(mc.original.tvg_name.as_ref()),
+        "tvg_logo": mc.mapped_tvg_logo.as_ref().or(mc.original.tvg_logo.as_ref()),
+        "tvg_shift": mc.mapped_tvg_shift.as_ref().or(mc.original.tvg_shift.as_ref()),
+        "group_title": mc.mapped_group_title.as_ref().or(mc.original.group_title.as_ref()),
+        "stream_url": mc.original.stream_url,
+        "is_removed": mc.is_removed,
+        "applied_rules": mc.applied_rules,
+        "created_at": mc.original.created_at,
+        "updated_at": mc.original.updated_at,
+        // Original values with original_ prefix
+        "original_channel_name": mc.original.channel_name,
+        "original_tvg_id": mc.original.tvg_id,
+        "original_tvg_name": mc.original.tvg_name,
+        "original_tvg_logo": mc.original.tvg_logo,
+        "original_tvg_shift": mc.original.tvg_shift,
+        "original_group_title": mc.original.group_title,
+        // Mapped values for reference
+        "mapped_channel_name": mc.mapped_channel_name,
+        "mapped_tvg_id": mc.mapped_tvg_id,
+        "mapped_tvg_name": mc.mapped_tvg_name,
+        "mapped_tvg_logo": mc.mapped_tvg_logo,
+        "mapped_tvg_shift": mc.mapped_tvg_shift,
+        "mapped_group_title": mc.mapped_group_title
+    })
+}
+
+// Stream Sources API
 
 // Progress API
-pub async fn get_source_progress(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<Option<IngestionProgress>>, StatusCode> {
-    let progress = state.state_manager.get_progress(id).await;
-    Ok(Json(progress))
-}
 
 pub async fn get_all_progress(
     State(state): State<AppState>,
-) -> Result<Json<std::collections::HashMap<Uuid, IngestionProgress>>, StatusCode> {
-    let progress = state.state_manager.get_all_progress().await;
-    Ok(Json(progress))
-}
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let all_progress = state.state_manager.get_all_progress().await;
 
-pub async fn cancel_source_ingestion(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<RefreshResponse>, StatusCode> {
-    use tracing::{info, warn};
+    // Get processing info for all sources with progress
+    let mut enhanced_progress = std::collections::HashMap::new();
 
-    // Check if source exists (try both stream and EPG sources)
-    let source_name = if let Ok(Some(source)) = state.database.get_stream_source(id).await {
-        source.name
-    } else if let Ok(Some(source)) = state.database.get_epg_source(id).await {
-        source.name
-    } else {
-        warn!("Source ({}) not found for cancellation", id);
-        return Err(StatusCode::NOT_FOUND);
-    };
-
-    info!(
-        "Attempting to cancel ingestion for source '{}' ({})",
-        source_name, id
-    );
-
-    let cancelled = state.state_manager.cancel_ingestion(id).await;
-
-    if cancelled {
-        info!(
-            "Successfully cancelled ingestion for source '{}'",
-            source_name
+    for (source_id, progress) in all_progress.iter() {
+        let processing_info = state.state_manager.get_processing_info(*source_id).await;
+        enhanced_progress.insert(
+            source_id,
+            serde_json::json!({
+                "progress": progress,
+                "processing_info": processing_info
+            }),
         );
-        Ok(Json(RefreshResponse {
-            success: true,
-            message: "Ingestion cancelled successfully".to_string(),
-            channel_count: 0,
-        }))
-    } else {
-        warn!("No active ingestion found for source '{}'", source_name);
-        Ok(Json(RefreshResponse {
-            success: false,
-            message: "No active ingestion to cancel".to_string(),
-            channel_count: 0,
-        }))
     }
+
+    let result = serde_json::json!({
+        "success": true,
+        "message": "All progress retrieved",
+        "progress": enhanced_progress,
+        "total_sources": all_progress.len()
+    });
+
+    Ok(Json(result))
 }
 
-pub async fn get_source_channels(
-    Path(id): Path<Uuid>,
-    Query(params): Query<ChannelQueryParams>,
+pub async fn get_all_source_progress(
     State(state): State<AppState>,
-) -> Result<Json<ChannelListResponse>, StatusCode> {
-    let page = params.page.unwrap_or(1);
-    let limit = params.limit.unwrap_or(10000).min(10000); // Cap at 10k per page
-    let filter = params.filter.as_deref();
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let all_progress = state.state_manager.get_all_progress().await;
 
-    match state
-        .database
-        .get_source_channels_paginated(id, page, limit, filter)
-        .await
-    {
-        Ok(response) => Ok(Json(response)),
-        Err(e) => {
-            error!("Failed to get channels for source ({}): {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+    // Get processing info for all sources with progress
+    let mut enhanced_progress = std::collections::HashMap::new();
+
+    for (source_id, progress) in all_progress.iter() {
+        let processing_info = state.state_manager.get_processing_info(*source_id).await;
+        enhanced_progress.insert(
+            source_id,
+            serde_json::json!({
+                "progress": progress,
+                "processing_info": processing_info
+            }),
+        );
     }
+
+    let result = serde_json::json!({
+        "success": true,
+        "message": "Source progress retrieved",
+        "progress": enhanced_progress,
+        "total_sources": all_progress.len()
+    });
+
+    Ok(Json(result))
+}
+
+pub async fn get_operation_progress(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let all_progress = state.state_manager.get_all_progress().await;
+
+    // Filter to show only active operations (not completed or failed)
+    let active_operations: std::collections::HashMap<Uuid, IngestionProgress> = all_progress
+        .into_iter()
+        .filter(|(_, progress)| {
+            // Include active operations
+            matches!(
+                progress.state,
+                crate::models::IngestionState::Connecting
+                    | crate::models::IngestionState::Downloading
+                    | crate::models::IngestionState::Parsing
+            )
+        })
+        .collect();
+
+    let result = serde_json::json!({
+        "success": true,
+        "message": "Active operation progress retrieved",
+        "progress": active_operations,
+        "total_operations": active_operations.len()
+    });
+
+    Ok(Json(result))
+}
+
+pub async fn get_epg_source_progress(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let progress = state.state_manager.get_progress(id).await;
+    let processing_info = state.state_manager.get_processing_info(id).await;
+
+    let result = serde_json::json!({
+        "success": true,
+        "message": "EPG source progress retrieved",
+        "source_id": id,
+        "progress": progress,
+        "processing_info": processing_info
+    });
+
+    Ok(Json(result))
 }
 
 // Stream Proxies API
@@ -404,6 +263,7 @@ pub async fn regenerate_proxy(
     // Use the existing proxy generator to regenerate with current data mapping rules
     let proxy_generator = ProxyGenerator::new(state.config.storage.clone());
 
+    // Generate the updated proxy
     match proxy_generator
         .generate(
             &proxy,
@@ -411,6 +271,7 @@ pub async fn regenerate_proxy(
             &state.data_mapping_service,
             &state.logo_asset_service,
             &state.config.web.base_url,
+            state.config.data_mapping_engine.clone(),
         )
         .await
     {
@@ -546,12 +407,268 @@ pub async fn test_filter(
     }
 }
 
-pub async fn get_source_processing_info(
-    Path(id): Path<Uuid>,
+// Source-specific filter endpoints
+pub async fn list_stream_source_filters(
+    Path(source_id): Path<Uuid>,
     State(state): State<AppState>,
-) -> Result<Json<Option<crate::ingestor::state_manager::ProcessingInfo>>, StatusCode> {
-    let processing_info = state.state_manager.get_processing_info(id).await;
-    Ok(Json(processing_info))
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify stream source exists
+    match state.database.get_stream_source(source_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to verify stream source {}: {}", source_id, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    // Get filters for this source type
+    match state.database.get_filters_with_usage().await {
+        Ok(filters) => {
+            let stream_filters: Vec<_> = filters
+                .into_iter()
+                .filter(|f| matches!(f.filter.source_type, FilterSourceType::Stream))
+                .collect();
+
+            let result = serde_json::json!({
+                "success": true,
+                "message": "Stream source filters retrieved",
+                "source_id": source_id,
+                "source_type": "stream",
+                "filters": stream_filters,
+                "total_filters": stream_filters.len()
+            });
+
+            Ok(Json(result))
+        }
+        Err(e) => {
+            error!("Failed to list stream source filters: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn create_stream_source_filter(
+    Path(source_id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(mut payload): Json<FilterCreateRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify stream source exists
+    match state.database.get_stream_source(source_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to verify stream source {}: {}", source_id, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    // Ensure source type is set to Stream
+    payload.source_type = FilterSourceType::Stream;
+
+    match state.database.create_filter(&payload).await {
+        Ok(filter) => {
+            let result = serde_json::json!({
+                "success": true,
+                "message": "Stream source filter created",
+                "source_id": source_id,
+                "source_type": "stream",
+                "filter": filter
+            });
+
+            Ok(Json(result))
+        }
+        Err(e) => {
+            error!("Failed to create stream source filter: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn list_epg_source_filters(
+    Path(source_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify EPG source exists
+    match state.database.get_epg_source(source_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to verify EPG source {}: {}", source_id, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    // Get filters for this source type
+    match state.database.get_filters_with_usage().await {
+        Ok(filters) => {
+            let epg_filters: Vec<_> = filters
+                .into_iter()
+                .filter(|f| matches!(f.filter.source_type, FilterSourceType::Epg))
+                .collect();
+
+            let result = serde_json::json!({
+                "success": true,
+                "message": "EPG source filters retrieved",
+                "source_id": source_id,
+                "source_type": "epg",
+                "filters": epg_filters,
+                "total_filters": epg_filters.len()
+            });
+
+            Ok(Json(result))
+        }
+        Err(e) => {
+            error!("Failed to list EPG source filters: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn create_epg_source_filter(
+    Path(source_id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(mut payload): Json<FilterCreateRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify EPG source exists
+    match state.database.get_epg_source(source_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to verify EPG source {}: {}", source_id, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    // Ensure source type is set to EPG
+    payload.source_type = FilterSourceType::Epg;
+
+    match state.database.create_filter(&payload).await {
+        Ok(filter) => {
+            let result = serde_json::json!({
+                "success": true,
+                "message": "EPG source filter created",
+                "source_id": source_id,
+                "source_type": "epg",
+                "filter": filter
+            });
+
+            Ok(Json(result))
+        }
+        Err(e) => {
+            error!("Failed to create EPG source filter: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// Cross-source filter operations
+pub async fn list_stream_filters(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.database.get_filters_with_usage().await {
+        Ok(filters) => {
+            let stream_filters: Vec<_> = filters
+                .into_iter()
+                .filter(|f| matches!(f.filter.source_type, FilterSourceType::Stream))
+                .collect();
+
+            let result = serde_json::json!({
+                "success": true,
+                "message": "All stream filters retrieved",
+                "source_type": "stream",
+                "filters": stream_filters,
+                "total_filters": stream_filters.len()
+            });
+
+            Ok(Json(result))
+        }
+        Err(e) => {
+            error!("Failed to list stream filters: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn list_epg_filters(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.database.get_filters_with_usage().await {
+        Ok(filters) => {
+            let epg_filters: Vec<_> = filters
+                .into_iter()
+                .filter(|f| matches!(f.filter.source_type, FilterSourceType::Epg))
+                .collect();
+
+            let result = serde_json::json!({
+                "success": true,
+                "message": "All EPG filters retrieved",
+                "source_type": "epg",
+                "filters": epg_filters,
+                "total_filters": epg_filters.len()
+            });
+
+            Ok(Json(result))
+        }
+        Err(e) => {
+            error!("Failed to list EPG filters: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_stream_filter_fields(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.database.get_available_filter_fields().await {
+        Ok(fields) => {
+            let stream_fields: Vec<_> = fields
+                .into_iter()
+                .filter(|f| matches!(f.source_type, FilterSourceType::Stream))
+                .collect();
+
+            let result = serde_json::json!({
+                "success": true,
+                "message": "Stream filter fields retrieved",
+                "source_type": "stream",
+                "fields": stream_fields,
+                "total_fields": stream_fields.len()
+            });
+
+            Ok(Json(result))
+        }
+        Err(e) => {
+            error!("Failed to get stream filter fields: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_epg_filter_fields(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.database.get_available_filter_fields().await {
+        Ok(fields) => {
+            let epg_fields: Vec<_> = fields
+                .into_iter()
+                .filter(|f| matches!(f.source_type, FilterSourceType::Epg))
+                .collect();
+
+            let result = serde_json::json!({
+                "success": true,
+                "message": "EPG filter fields retrieved",
+                "source_type": "epg",
+                "fields": epg_fields,
+                "total_fields": epg_fields.len()
+            });
+
+            Ok(Json(result))
+        }
+        Err(e) => {
+            error!("Failed to get EPG filter fields: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 // Data Mapping API
@@ -638,7 +755,6 @@ pub async fn test_data_mapping_rule(
     Json(payload): Json<crate::models::data_mapping::DataMappingTestRequest>,
 ) -> Result<Json<crate::models::data_mapping::DataMappingTestResult>, StatusCode> {
     use crate::data_mapping::DataMappingEngine;
-    use std::collections::HashMap;
 
     // Get channels from the source
     let channels = match state
@@ -685,7 +801,6 @@ pub async fn test_data_mapping_rule(
             value: a.value,
             logo_asset_id: a.logo_asset_id,
             timeshift_minutes: a.timeshift_minutes,
-            similarity_threshold: a.similarity_threshold,
             sort_order: i as i32,
             created_at: chrono::Utc::now(),
         })
@@ -714,29 +829,7 @@ pub async fn test_data_mapping_rule(
                 mapped_channels
                     .into_iter()
                     .map(|mc| {
-                        let mut original_values = HashMap::new();
-                        original_values.insert(
-                            "channel_name".to_string(),
-                            Some(mc.original.channel_name.clone()),
-                        );
-                        original_values.insert("tvg_id".to_string(), mc.original.tvg_id.clone());
-                        original_values
-                            .insert("tvg_name".to_string(), mc.original.tvg_name.clone());
-                        original_values
-                            .insert("tvg_logo".to_string(), mc.original.tvg_logo.clone());
-                        original_values
-                            .insert("group_title".to_string(), mc.original.group_title.clone());
-
-                        let mut mapped_values = HashMap::new();
-                        mapped_values.insert(
-                            "channel_name".to_string(),
-                            Some(mc.mapped_channel_name.clone()),
-                        );
-                        mapped_values.insert("tvg_id".to_string(), mc.mapped_tvg_id.clone());
-                        mapped_values.insert("tvg_name".to_string(), mc.mapped_tvg_name.clone());
-                        mapped_values.insert("tvg_logo".to_string(), mc.mapped_tvg_logo.clone());
-                        mapped_values
-                            .insert("group_title".to_string(), mc.mapped_group_title.clone());
+                        let (original_values, mapped_values) = mapped_channel_to_test_format(&mc);
 
                         crate::models::data_mapping::DataMappingTestChannel {
                             channel_name: mc.original.channel_name,
@@ -771,11 +864,11 @@ pub async fn test_data_mapping_rule(
     }
 }
 
-pub async fn preview_data_mapping(
+pub async fn apply_stream_source_data_mapping(
     State(state): State<AppState>,
     Path(source_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    info!("Previewing data mapping for source {}", source_id);
+    info!("Applying data mapping for stream source {}", source_id);
 
     let source_uuid = match uuid::Uuid::parse_str(&source_id) {
         Ok(uuid) => uuid,
@@ -789,11 +882,11 @@ pub async fn preview_data_mapping(
     let source = match state.database.get_stream_source(source_uuid).await {
         Ok(Some(source)) => source,
         Ok(None) => {
-            error!("Source {} not found", source_uuid);
+            error!("Stream source {} not found", source_uuid);
             return Err(StatusCode::NOT_FOUND);
         }
         Err(e) => {
-            error!("Failed to get source {}: {}", source_uuid, e);
+            error!("Failed to get stream source {}: {}", source_uuid, e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
@@ -817,14 +910,15 @@ pub async fn preview_data_mapping(
         })));
     }
 
-    // Apply data mapping for preview (doesn't save to database)
+    // Apply data mapping and get channels with metadata
     let mapped_channels = match state
         .data_mapping_service
-        .apply_mapping_for_proxy(
+        .apply_mapping_with_metadata(
             channels.clone(),
             source_uuid,
             &state.logo_asset_service,
             &state.config.web.base_url,
+            state.config.data_mapping_engine.clone(),
         )
         .await
     {
@@ -835,282 +929,279 @@ pub async fn preview_data_mapping(
         }
     };
 
-    // Return preview data
-    let preview_channels: Vec<_> = mapped_channels.iter().take(10).collect();
+    // Filter to show only modified channels for preview
+    let modified_channels = DataMappingService::filter_modified_channels(mapped_channels.clone());
+
+    let transformed_channels: Vec<serde_json::Value> = modified_channels
+        .iter()
+        .map(|mc| mapped_channel_to_frontend_format(mc))
+        .collect();
+
+    // Get rule metadata for frontend
+    let rules = match state.data_mapping_service.get_all_rules().await {
+        Ok(rules) => rules
+            .into_iter()
+            .filter(|r| {
+                r.rule.is_active
+                    && r.rule.source_type
+                        == crate::models::data_mapping::DataMappingSourceType::Stream
+            })
+            .map(|rule| {
+                serde_json::json!({
+                    "rule_name": rule.rule.name,
+                    "rule_description": rule.rule.description,
+                    "affected_channels_count": modified_channels.iter()
+                        .filter(|mc| mc.applied_rules.contains(&rule.rule.id))
+                        .count(),
+                    "conditions": [],
+                    "actions": [],
+                    "affected_channels": []
+                })
+            })
+            .collect::<Vec<_>>(),
+        Err(_) => vec![],
+    };
 
     let result = serde_json::json!({
         "success": true,
-        "message": "Data mapping preview completed",
+        "message": "Data mapping applied successfully",
         "source_name": source.name,
+        "source_type": "stream",
         "original_count": channels.len(),
-        "mapped_count": mapped_channels.len(),
-        "preview_channels": preview_channels
+        "mapped_count": modified_channels.len(),
+        "total_rules": rules.len(),
+        "rules": rules,
+        "final_channels": transformed_channels
     });
 
     info!(
-        "Data mapping preview completed for source '{}': {} original -> {} mapped channels",
+        "Data mapping applied for stream source '{}': {} original -> {} modified channels shown in preview",
         source.name,
         channels.len(),
-        mapped_channels.len()
+        modified_channels.len()
     );
 
     Ok(Json(result))
 }
 
-pub async fn preview_data_mapping_rules(
-    Query(params): Query<std::collections::HashMap<String, String>>,
+pub async fn apply_epg_source_data_mapping(
     State(state): State<AppState>,
+    Path(source_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    info!("Generating data mapping rule preview");
+    info!("Applying data mapping for EPG source {}", source_id);
 
-    let view_type = params.get("view").map(|s| s.as_str()).unwrap_or("final");
-    let source_type = params.get("source_type").map(|s| s.as_str()).unwrap_or("stream");
+    let source_uuid = match uuid::Uuid::parse_str(&source_id) {
+        Ok(uuid) => uuid,
+        Err(_) => {
+            error!("Invalid source ID format: {}", source_id);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
 
-    // Get all active rules filtered by source type
-    let rules = match state.data_mapping_service.get_all_rules().await {
-        Ok(rules) => rules,
+    // Get EPG source
+    let source = match state.database.get_epg_source(source_uuid).await {
+        Ok(Some(source)) => source,
+        Ok(None) => {
+            error!("EPG source {} not found", source_uuid);
+            return Err(StatusCode::NOT_FOUND);
+        }
         Err(e) => {
-            error!("Failed to load data mapping rules for preview: {}", e);
+            error!("Failed to get EPG source {}: {}", source_uuid, e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
 
-    let active_rules: Vec<_> = rules
-        .into_iter()
-        .filter(|rule| {
-            rule.rule.is_active && 
-            match source_type {
-                "epg" => rule.rule.source_type == crate::models::data_mapping::DataMappingSourceType::Epg,
-                _ => rule.rule.source_type == crate::models::data_mapping::DataMappingSourceType::Stream,
-            }
-        })
-        .collect();
-
-    if active_rules.is_empty() {
-        return Ok(Json(serde_json::json!({
-            "success": true,
-            "message": format!("No active {} data mapping rules found", source_type),
-            "rules": [],
-            "total_rules": 0,
-            "total_affected_channels": 0,
-            "final_channels": []
-        })));
-    }
-
-    // For now, only support stream source preview since EPG preview needs more work
-    if source_type == "epg" {
-        return Ok(Json(serde_json::json!({
-            "success": true,
-            "message": "EPG rule preview not yet implemented",
-            "rules": [],
-            "total_rules": 0,
-            "total_affected_channels": 0,
-            "final_channels": []
-        })));
-    }
-
-    // Get all stream sources
-    let sources = match state.database.list_stream_sources().await {
-        Ok(sources) => sources,
+    // Get EPG channels (this will be different from stream channels)
+    let channels = match state.database.get_epg_source_channels(source_uuid).await {
+        Ok(channels) => channels,
         Err(e) => {
-            error!("Failed to list sources for preview: {}", e);
+            error!(
+                "Failed to get EPG channels for source {}: {}",
+                source_uuid, e
+            );
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
 
-    let mut rule_previews = Vec::new();
-    let mut total_affected_channels = 0;
-    let mut final_channel_map: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-
-    for rule_with_details in active_rules {
-        let mut rule_affected_channels = 0;
-        let mut affected_channels = Vec::new();
-
-        for source in &sources {
-            if !source.is_active {
-                continue;
-            }
-
-            // Get channels for this source
-            let channels = match state.database.get_source_channels(source.id).await {
-                Ok(channels) => channels,
-                Err(e) => {
-                    error!(
-                        "Failed to get channels for source {} during preview: {}",
-                        source.id, e
-                    );
-                    continue;
-                }
-            };
-
-            // Test each channel against this rule's conditions
-            for channel in channels {
-                let mut engine = crate::data_mapping::DataMappingEngine::new();
-
-                if let Ok((matches, _captures)) =
-                    engine.evaluate_rule_conditions(&channel, &rule_with_details.conditions)
-                {
-                    if matches {
-                        rule_affected_channels += 1;
-
-                        // Preview what actions would be applied
-                        let mut action_previews = Vec::new();
-                        let mut final_values = std::collections::HashMap::new();
-
-                        // Initialize with current values
-                        final_values
-                            .insert("channel_name".to_string(), channel.channel_name.clone());
-                        final_values.insert(
-                            "tvg_id".to_string(),
-                            channel.tvg_id.clone().unwrap_or_default(),
-                        );
-                        final_values.insert(
-                            "tvg_name".to_string(),
-                            channel.tvg_name.clone().unwrap_or_default(),
-                        );
-                        final_values.insert(
-                            "tvg_logo".to_string(),
-                            channel.tvg_logo.clone().unwrap_or_default(),
-                        );
-                        final_values.insert(
-                            "tvg_shift".to_string(),
-                            channel.tvg_shift.clone().unwrap_or_default(),
-                        );
-                        final_values.insert(
-                            "group_title".to_string(),
-                            channel.group_title.clone().unwrap_or_default(),
-                        );
-
-                        for action in &rule_with_details.actions {
-                            let current_value = match action.target_field.as_str() {
-                                "channel_name" => Some(channel.channel_name.clone()),
-                                "tvg_id" => channel.tvg_id.clone(),
-                                "tvg_name" => channel.tvg_name.clone(),
-                                "tvg_logo" => channel.tvg_logo.clone(),
-                                "tvg_shift" => channel.tvg_shift.clone(),
-                                "group_title" => channel.group_title.clone(),
-                                _ => None,
-                            };
-
-                            let new_value = match &action.action_type {
-                                crate::models::data_mapping::DataMappingActionType::SetValue => {
-                                    action.value.clone()
-                                },
-                                crate::models::data_mapping::DataMappingActionType::SetDefaultIfEmpty => {
-                                    if current_value.is_none() || current_value.as_ref().map_or(true, |s| s.is_empty()) {
-                                        action.value.clone()
-                                    } else {
-                                        current_value.clone()
-                                    }
-                                },
-                                crate::models::data_mapping::DataMappingActionType::SetLogo => {
-                                    if let Some(logo_id) = action.logo_asset_id {
-                                        Some(crate::utils::generate_logo_url(&state.config.web.base_url, logo_id))
-                                    } else {
-                                        current_value.clone()
-                                    }
-                                },
-                                _ => current_value.clone(),
-                            };
-
-                            // Update final values for aggregated view
-                            if let Some(ref new_val) = new_value {
-                                final_values.insert(action.target_field.clone(), new_val.clone());
-                            }
-
-                            action_previews.push(serde_json::json!({
-                                "action_type": action.action_type,
-                                "target_field": action.target_field,
-                                "current_value": current_value,
-                                "new_value": new_value,
-                                "will_change": current_value != new_value
-                            }));
-                        }
-
-                        // Update final channel map for aggregated view
-                        let channel_key = format!("{}:{}", source.id, channel.id);
-                        if let Some(existing) = final_channel_map.get_mut(&channel_key) {
-                            // Update with new values and add rule
-                            let existing_obj = existing.as_object_mut().unwrap();
-                            for (field, value) in &final_values {
-                                existing_obj.insert(
-                                    field.clone(),
-                                    serde_json::Value::String(value.clone()),
-                                );
-                            }
-                            if let Some(rules_array) = existing_obj.get_mut("applied_rules") {
-                                rules_array.as_array_mut().unwrap().push(
-                                    serde_json::Value::String(rule_with_details.rule.name.clone()),
-                                );
-                            }
-                        } else {
-                            final_channel_map.insert(channel_key, serde_json::json!({
-                                "channel_id": channel.id,
-                                "channel_name": final_values.get("channel_name").unwrap_or(&channel.channel_name),
-                                "tvg_id": final_values.get("tvg_id").unwrap_or(&"".to_string()),
-                                "tvg_name": final_values.get("tvg_name").unwrap_or(&"".to_string()),
-                                "tvg_logo": final_values.get("tvg_logo").unwrap_or(&"".to_string()),
-                                "group_title": final_values.get("group_title").unwrap_or(&"".to_string()),
-                                "source_id": source.id,
-                                "source_name": source.name,
-                                "applied_rules": vec![rule_with_details.rule.name.clone()],
-                                "original_channel_name": channel.channel_name,
-                                "original_tvg_id": channel.tvg_id,
-                                "original_tvg_name": channel.tvg_name,
-                                "original_tvg_logo": channel.tvg_logo,
-                                "original_group_title": channel.group_title
-                            }));
-                        }
-
-                        affected_channels.push(serde_json::json!({
-                            "channel_id": channel.id,
-                            "channel_name": channel.channel_name,
-                            "tvg_id": channel.tvg_id,
-                            "tvg_name": channel.tvg_name,
-                            "source_id": source.id,
-                            "source_name": source.name,
-                            "actions_preview": action_previews
-                        }));
-                    }
-                }
-            }
-        }
-
-        total_affected_channels += rule_affected_channels;
-
-        rule_previews.push(serde_json::json!({
-            "rule_id": rule_with_details.rule.id,
-            "rule_name": rule_with_details.rule.name,
-            "rule_description": rule_with_details.rule.description,
-            "affected_channels_count": rule_affected_channels,
-            "affected_channels": affected_channels,
-            "conditions": rule_with_details.conditions,
-            "actions": rule_with_details.actions
-        }));
+    if channels.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "No EPG channels found for preview",
+            "original_count": 0,
+            "mapped_count": 0,
+            "preview_channels": []
+        })));
     }
 
-    // Convert final channel map to array
-    let final_channels: Vec<_> = final_channel_map.into_values().collect();
-
+    // For now, return placeholder response since EPG data mapping may need different logic
     let result = serde_json::json!({
         "success": true,
-        "message": "Data mapping rules preview generated",
-        "rules": rule_previews,
-        "total_rules": rule_previews.len(),
-        "total_affected_channels": total_affected_channels,
-        "final_channels": final_channels,
-        "view_type": view_type
+        "message": "EPG data mapping preview completed",
+        "source_name": source.name,
+        "source_type": "epg",
+        "original_count": channels.len(),
+        "mapped_count": channels.len(),
+        "preview_channels": channels.iter().take(10).collect::<Vec<_>>()
     });
 
     info!(
-        "Data mapping preview completed: {} rules, {} total affected channels, {} final channels",
-        rule_previews.len(),
-        total_affected_channels,
-        final_channels.len()
+        "EPG data mapping preview completed for source '{}': {} channels",
+        source.name,
+        channels.len()
     );
 
     Ok(Json(result))
+}
+
+// Global data mapping application endpoints for "Preview All Rules" functionality
+pub async fn apply_data_mapping_rules(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let source_type = params
+        .get("source_type")
+        .unwrap_or(&"stream".to_string())
+        .clone();
+
+    match source_type.as_str() {
+        "stream" => {
+            // Get all active stream sources
+            let sources = match state.database.list_stream_sources().await {
+                Ok(sources) => sources
+                    .into_iter()
+                    .filter(|s| s.is_active)
+                    .collect::<Vec<_>>(),
+                Err(e) => {
+                    error!("Failed to get stream sources for preview: {}", e);
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            };
+
+            if sources.is_empty() {
+                return Ok(Json(serde_json::json!({
+                    "success": true,
+                    "message": "No active stream sources found",
+                    "total_sources": 0,
+                    "total_channels": 0,
+                    "final_channels": []
+                })));
+            }
+
+            let mut all_preview_channels = Vec::new();
+            let mut total_channels = 0;
+
+            // Process all sources
+            for source in sources.iter() {
+                let channels = match state.database.get_source_channels(source.id).await {
+                    Ok(channels) => channels,
+                    Err(_) => continue,
+                };
+
+                total_channels += channels.len();
+
+                if !channels.is_empty() {
+                    let mapped_channels = match state
+                        .data_mapping_service
+                        .apply_mapping_with_metadata(
+                            channels.clone(),
+                            source.id,
+                            &state.logo_asset_service,
+                            &state.config.web.base_url,
+                            state.config.data_mapping_engine.clone(),
+                        )
+                        .await
+                    {
+                        Ok(mapped) => mapped,
+                        Err(_) => continue,
+                    };
+
+                    // Filter to show only modified channels
+                    let modified_channels =
+                        DataMappingService::filter_modified_channels(mapped_channels);
+                    all_preview_channels.extend(modified_channels);
+                }
+            }
+
+            let transformed_channels: Vec<serde_json::Value> = all_preview_channels
+                .iter()
+                .map(|mc| mapped_channel_to_frontend_format(mc))
+                .collect();
+
+            // Get rule metadata for frontend
+            let rules = match state.data_mapping_service.get_all_rules().await {
+                Ok(rules) => rules
+                    .into_iter()
+                    .filter(|r| {
+                        r.rule.is_active
+                            && r.rule.source_type
+                                == crate::models::data_mapping::DataMappingSourceType::Stream
+                    })
+                    .map(|rule| {
+                        serde_json::json!({
+                            "rule_name": rule.rule.name,
+                            "rule_description": rule.rule.description,
+                            "affected_channels_count": all_preview_channels.iter()
+                                .filter(|mc| mc.applied_rules.contains(&rule.rule.id))
+                                .count(),
+                            "conditions": [],
+                            "actions": [],
+                            "affected_channels": []
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => vec![],
+            };
+
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": "Stream rules applied successfully",
+                "source_type": "stream",
+                "total_sources": sources.len(),
+                "total_channels": total_channels,
+                "total_rules": rules.len(),
+                "rules": rules,
+                "final_channels": transformed_channels
+            })))
+        }
+        "epg" => {
+            // Get all active EPG sources
+            let sources = match state.database.list_epg_sources().await {
+                Ok(sources) => sources
+                    .into_iter()
+                    .filter(|s| s.is_active)
+                    .collect::<Vec<_>>(),
+                Err(e) => {
+                    error!("Failed to get EPG sources for preview: {}", e);
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            };
+
+            if sources.is_empty() {
+                return Ok(Json(serde_json::json!({
+                    "success": true,
+                    "message": "No active EPG sources found",
+                    "total_sources": 0,
+                    "total_channels": 0,
+                    "final_channels": []
+                })));
+            }
+
+            // EPG mapping implementation would go here
+            // For now, return placeholder
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": "EPG rules applied successfully (placeholder)",
+                "source_type": "epg",
+                "total_sources": sources.len(),
+                "total_channels": 0,
+                "final_channels": []
+            })))
+        }
+        _ => {
+            error!("Invalid source_type parameter: {}", source_type);
+            Err(StatusCode::BAD_REQUEST)
+        }
+    }
 }
 
 // Logo Assets API
@@ -1385,6 +1476,657 @@ pub async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
     })))
 }
 
+/// List stream sources only
+pub async fn list_stream_sources(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<UnifiedSourceWithStats>>, StatusCode> {
+    match state.database.list_stream_sources_with_stats().await {
+        Ok(sources) => {
+            let unified_sources: Vec<UnifiedSourceWithStats> = sources
+                .into_iter()
+                .map(UnifiedSourceWithStats::from_stream)
+                .collect();
+            Ok(Json(unified_sources))
+        }
+        Err(e) => {
+            error!("Failed to list stream sources: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Create stream source
+pub async fn create_stream_source(
+    State(state): State<AppState>,
+    Json(payload): Json<StreamSourceCreateRequest>,
+) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
+    match state.database.create_stream_source(&payload).await {
+        Ok(source) => {
+            // Invalidate scheduler cache since we added a new source
+            let _ = state.cache_invalidation_tx.send(());
+
+            // Trigger immediate refresh
+            info!(
+                "Triggering immediate refresh for new stream source: {} ({})",
+                source.name, source.id
+            );
+
+            tokio::spawn({
+                let database = state.database.clone();
+                let state_manager = state.state_manager.clone();
+                let source_id = source.id;
+                let source_name = source.name.clone();
+                async move {
+                    use crate::ingestor::IngestorService;
+
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let ingestor = IngestorService::new(state_manager.clone());
+
+                    if let Ok(Some(stream_source)) = database.get_stream_source(source_id).await {
+                        match ingestor.ingest_source(&stream_source).await {
+                            Ok(channels) => {
+                                info!(
+                                    "Initial stream ingestion completed for '{}': {} channels",
+                                    source_name,
+                                    channels.len()
+                                );
+
+                                if let Err(e) = database
+                                    .update_source_channels(
+                                        source_id,
+                                        &channels,
+                                        Some(&state_manager),
+                                    )
+                                    .await
+                                {
+                                    error!(
+                                        "Failed to save initial stream data for source '{}': {}",
+                                        source_name, e
+                                    );
+                                } else if let Err(e) =
+                                    database.update_source_last_ingested(source_id).await
+                                {
+                                    error!("Failed to update last_ingested_at for stream source '{}': {}", source_name, e);
+                                } else {
+                                    // Mark ingestion as completed with final channel count
+                                    state_manager
+                                        .complete_ingestion(source_id, channels.len())
+                                        .await;
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Initial stream ingestion failed for '{}': {}",
+                                    source_name, e
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Return unified response
+            let source_with_stats = StreamSourceWithStats {
+                source,
+                channel_count: 0,
+                next_scheduled_update: None,
+            };
+            Ok(Json(UnifiedSourceWithStats::from_stream(source_with_stats)))
+        }
+        Err(e) => {
+            error!("Failed to create stream source: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Get stream source by ID
+pub async fn get_stream_source(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
+    match state.database.get_stream_source(id).await {
+        Ok(Some(source)) => {
+            // Get stats separately
+            let channel_count = state
+                .database
+                .get_source_channel_count(id)
+                .await
+                .unwrap_or(0);
+            let source_with_stats = StreamSourceWithStats {
+                source,
+                channel_count,
+                next_scheduled_update: None,
+            };
+            Ok(Json(UnifiedSourceWithStats::from_stream(source_with_stats)))
+        }
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to get stream source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Update stream source
+pub async fn update_stream_source(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(payload): Json<StreamSourceUpdateRequest>,
+) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
+    match state.database.update_stream_source(id, &payload).await {
+        Ok(Some(source)) => {
+            let _ = state.cache_invalidation_tx.send(());
+            let source_with_stats = StreamSourceWithStats {
+                source,
+                channel_count: 0,
+                next_scheduled_update: None,
+            };
+            Ok(Json(UnifiedSourceWithStats::from_stream(source_with_stats)))
+        }
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to update stream source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Delete stream source
+pub async fn delete_stream_source(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    match state.database.delete_stream_source(id).await {
+        Ok(_) => {
+            let _ = state.cache_invalidation_tx.send(());
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(e) => {
+            error!("Failed to delete stream source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Refresh stream source
+pub async fn refresh_stream_source(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.database.get_stream_source(id).await {
+        Ok(Some(source)) => {
+            tokio::spawn({
+                let database = state.database.clone();
+                let state_manager = state.state_manager.clone();
+                async move {
+                    use crate::ingestor::IngestorService;
+                    let ingestor = IngestorService::new(state_manager.clone());
+
+                    match ingestor.ingest_source(&source).await {
+                        Ok(channels) => {
+                            info!(
+                                "Manual refresh completed for '{}': {} channels",
+                                source.name,
+                                channels.len()
+                            );
+                            if let Err(e) = database
+                                .update_source_channels(id, &channels, Some(&state_manager))
+                                .await
+                            {
+                                error!(
+                                    "Failed to save refreshed data for source '{}': {}",
+                                    source.name, e
+                                );
+                            } else if let Err(e) = database.update_source_last_ingested(id).await {
+                                error!(
+                                    "Failed to update last_ingested_at for source '{}': {}",
+                                    source.name, e
+                                );
+                            } else {
+                                // Mark ingestion as completed with final channel count
+                                state_manager
+                                    .complete_ingestion(source.id, channels.len())
+                                    .await;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Manual refresh failed for '{}': {}", source.name, e);
+                        }
+                    }
+                }
+            });
+
+            Ok(Json(json!({"message": "Refresh started"})))
+        }
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to get stream source for refresh {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Cancel stream source ingestion
+pub async fn cancel_stream_source_ingestion(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    state.state_manager.cancel_ingestion(id).await;
+    Ok(Json(json!({"message": "Ingestion cancelled"})))
+}
+
+/// Get stream source progress
+pub async fn get_stream_source_progress(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let progress = state.state_manager.get_progress(id).await;
+    let processing_info = state.state_manager.get_processing_info(id).await;
+
+    let result = serde_json::json!({
+        "success": true,
+        "message": "Stream source progress retrieved",
+        "source_id": id,
+        "progress": progress,
+        "processing_info": processing_info
+    });
+
+    Ok(Json(result))
+}
+
+/// Get stream source processing info
+pub async fn get_stream_source_processing_info(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let info = state.state_manager.get_progress(id).await;
+    Ok(Json(json!(info)))
+}
+
+/// Get stream source channels
+pub async fn get_stream_source_channels(
+    Path(id): Path<Uuid>,
+    Query(params): Query<ChannelQueryParams>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let page = params.page.unwrap_or(1);
+    let limit = params.limit.unwrap_or(50);
+    let filter = params.filter.as_deref();
+
+    match state
+        .database
+        .get_source_channels_paginated(id, page, limit, filter)
+        .await
+    {
+        Ok(result) => Ok(Json(json!(result))),
+        Err(e) => {
+            error!("Failed to get channels for stream source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// List EPG sources only
+pub async fn list_epg_sources_unified(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<UnifiedSourceWithStats>>, StatusCode> {
+    match state.database.list_epg_sources_with_stats().await {
+        Ok(sources) => {
+            let unified_sources: Vec<UnifiedSourceWithStats> = sources
+                .into_iter()
+                .map(UnifiedSourceWithStats::from_epg)
+                .collect();
+            Ok(Json(unified_sources))
+        }
+        Err(e) => {
+            error!("Failed to list EPG sources: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Create EPG source
+pub async fn create_epg_source_unified(
+    State(state): State<AppState>,
+    Json(payload): Json<EpgSourceCreateRequest>,
+) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
+    match state.database.create_epg_source(&payload).await {
+        Ok(source) => {
+            let _ = state.cache_invalidation_tx.send(());
+
+            // Trigger immediate refresh
+            info!(
+                "Triggering immediate refresh for new EPG source: {} ({})",
+                source.name, source.id
+            );
+
+            tokio::spawn({
+                let database = state.database.clone();
+                let state_manager = state.state_manager.clone();
+                let source_id = source.id;
+                let source_name = source.name.clone();
+                async move {
+                    use crate::ingestor::ingest_epg::EpgIngestor;
+                    use crate::ingestor::state_manager::ProcessingTrigger;
+
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+                    let ingestor = EpgIngestor::new_with_state_manager(
+                        database.clone(),
+                        state_manager.clone(),
+                    );
+
+                    if let Ok(Some(epg_source)) = database.get_epg_source(source_id).await {
+                        match ingestor
+                            .ingest_epg_source_with_trigger(&epg_source, ProcessingTrigger::Manual)
+                            .await
+                        {
+                            Ok((channels, mut programs, detected_timezone)) => {
+                                // Update channel names in programs
+                                ingestor.update_channel_names(&channels, &mut programs);
+
+                                // Update detected timezone if found
+                                if let Some(ref detected_tz) = detected_timezone {
+                                    if detected_tz != &epg_source.timezone
+                                        && !epg_source.timezone_detected
+                                    {
+                                        info!(
+                                            "Updating EPG source '{}' timezone from '{}' to detected '{}'",
+                                            source_name, epg_source.timezone, detected_tz
+                                        );
+                                        let _ = database
+                                            .update_epg_source_detected_timezone(
+                                                source_id,
+                                                detected_tz,
+                                            )
+                                            .await;
+                                    }
+                                }
+
+                                // Save to database using cancellation-aware method
+                                match ingestor
+                                    .save_epg_data_with_cancellation(source_id, channels, programs)
+                                    .await
+                                {
+                                    Ok((channel_count, program_count)) => {
+                                        // Update last ingested timestamp
+                                        if let Err(e) = database
+                                            .update_epg_source_last_ingested(source_id)
+                                            .await
+                                        {
+                                            error!("Failed to update last_ingested_at for EPG source '{}': {}", source_name, e);
+                                        }
+
+                                        info!(
+                                            "Initial EPG ingestion completed for '{}': {} channels, {} programs",
+                                            source_name, channel_count, program_count
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to save initial EPG data for source '{}': {}",
+                                            source_name, e
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Initial EPG ingestion failed for '{}': {}", source_name, e);
+                            }
+                        }
+                    }
+                }
+            });
+
+            let source_with_stats = EpgSourceWithStats {
+                source,
+                channel_count: 0,
+                program_count: 0,
+                next_scheduled_update: None,
+            };
+            Ok(Json(UnifiedSourceWithStats::from_epg(source_with_stats)))
+        }
+        Err(e) => {
+            error!("Failed to create EPG source: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Get EPG source by ID
+pub async fn get_epg_source_unified(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
+    match state.database.get_epg_source(id).await {
+        Ok(Some(source)) => {
+            // Get stats separately
+            let channel_count = state
+                .database
+                .get_epg_source_channel_count(id)
+                .await
+                .unwrap_or(0);
+            let source_with_stats = EpgSourceWithStats {
+                source,
+                channel_count,
+                program_count: 0, // TODO: Add program count method
+                next_scheduled_update: None,
+            };
+            Ok(Json(UnifiedSourceWithStats::from_epg(source_with_stats)))
+        }
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to get EPG source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Update EPG source
+pub async fn update_epg_source_unified(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(payload): Json<EpgSourceUpdateRequest>,
+) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
+    match state.database.update_epg_source(id, &payload).await {
+        Ok(true) => {
+            let _ = state.cache_invalidation_tx.send(());
+            // Get the updated source
+            match state.database.get_epg_source(id).await {
+                Ok(Some(source)) => {
+                    let channel_count = state
+                        .database
+                        .get_epg_source_channel_count(id)
+                        .await
+                        .unwrap_or(0);
+                    let source_with_stats = EpgSourceWithStats {
+                        source,
+                        channel_count,
+                        program_count: 0,
+                        next_scheduled_update: None,
+                    };
+                    Ok(Json(UnifiedSourceWithStats::from_epg(source_with_stats)))
+                }
+                Ok(None) => Err(StatusCode::NOT_FOUND),
+                Err(e) => {
+                    error!("Failed to get updated EPG source {}: {}", id, e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        }
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to update EPG source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Delete EPG source
+pub async fn delete_epg_source_unified(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    match state.database.delete_epg_source(id).await {
+        Ok(_) => {
+            let _ = state.cache_invalidation_tx.send(());
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(e) => {
+            error!("Failed to delete EPG source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Refresh EPG source
+pub async fn refresh_epg_source_unified(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.database.get_epg_source(id).await {
+        Ok(Some(source)) => {
+            tokio::spawn({
+                let database = state.database.clone();
+                let state_manager = state.state_manager.clone();
+                let source_id = source.id;
+                let source_name = source.name.clone();
+                async move {
+                    use crate::ingestor::ingest_epg::EpgIngestor;
+                    use crate::ingestor::state_manager::ProcessingTrigger;
+
+                    info!(
+                        "Starting EPG refresh for source '{}' ({})",
+                        source_name, source_id
+                    );
+
+                    let ingestor = EpgIngestor::new_with_state_manager(
+                        database.clone(),
+                        state_manager.clone(),
+                    );
+
+                    match ingestor
+                        .ingest_epg_source_with_trigger(&source, ProcessingTrigger::Manual)
+                        .await
+                    {
+                        Ok((channels, mut programs, detected_timezone)) => {
+                            // Update channel names in programs
+                            ingestor.update_channel_names(&channels, &mut programs);
+
+                            // Update detected timezone if found
+                            if let Some(ref detected_tz) = detected_timezone {
+                                if detected_tz != &source.timezone && !source.timezone_detected {
+                                    info!(
+                                        "Updating EPG source '{}' timezone from '{}' to detected '{}'",
+                                        source_name, source.timezone, detected_tz
+                                    );
+                                    let _ = database
+                                        .update_epg_source_detected_timezone(source_id, detected_tz)
+                                        .await;
+                                }
+                            }
+
+                            // Save to database using cancellation-aware method
+                            match ingestor
+                                .save_epg_data_with_cancellation(source_id, channels, programs)
+                                .await
+                            {
+                                Ok((channel_count, program_count)) => {
+                                    // Update last ingested timestamp
+                                    if let Err(e) =
+                                        database.update_epg_source_last_ingested(source_id).await
+                                    {
+                                        error!("Failed to update last_ingested_at for EPG source '{}': {}", source_name, e);
+                                    }
+
+                                    info!(
+                                        "Manual EPG refresh completed for '{}': {} channels, {} programs",
+                                        source_name, channel_count, program_count
+                                    );
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to save EPG data for source '{}': {}",
+                                        source_name, e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("EPG refresh failed for source '{}': {}", source_name, e);
+                        }
+                    }
+                }
+            });
+
+            Ok(Json(json!({"message": "EPG refresh started"})))
+        }
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!("Failed to get EPG source for refresh {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Get EPG source channels
+pub async fn get_epg_source_channels_unified(
+    Path(id): Path<Uuid>,
+    Query(params): Query<ChannelQueryParams>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let _page = params.page.unwrap_or(1);
+    let _limit = params.limit.unwrap_or(50);
+    let _filter = params.filter;
+
+    match state.database.get_epg_source_channels(id).await {
+        Ok(result) => Ok(Json(json!(result))),
+        Err(e) => {
+            error!("Failed to get channels for EPG source {}: {}", id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// Unified Sources API
+pub async fn list_all_sources(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<UnifiedSourceWithStats>>, StatusCode> {
+    let mut unified_sources = Vec::new();
+
+    // Get stream sources
+    match state.database.list_stream_sources_with_stats().await {
+        Ok(stream_sources) => {
+            for stream_source in stream_sources {
+                unified_sources.push(UnifiedSourceWithStats::from_stream(stream_source));
+            }
+        }
+        Err(e) => {
+            error!("Failed to list stream sources: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    // Get EPG sources
+    match state.database.list_epg_sources_with_stats().await {
+        Ok(epg_sources) => {
+            for epg_source in epg_sources {
+                unified_sources.push(UnifiedSourceWithStats::from_epg(epg_source));
+            }
+        }
+        Err(e) => {
+            error!("Failed to list EPG sources: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    // Sort by name for consistent ordering
+    unified_sources.sort_by(|a, b| a.get_name().cmp(b.get_name()));
+
+    Ok(Json(unified_sources))
+}
+
 pub async fn search_logo_assets(
     Query(params): Query<crate::models::logo_asset::LogoAssetSearchRequest>,
     State(state): State<AppState>,
@@ -1467,315 +2209,6 @@ pub async fn get_logo_cache_stats(
 }
 
 // EPG Sources API
-pub async fn list_epg_sources(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<EpgSourceWithStats>>, StatusCode> {
-    match state.database.list_epg_sources_with_stats().await {
-        Ok(sources) => Ok(Json(sources)),
-        Err(e) => {
-            error!("Failed to list EPG sources: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-pub async fn create_epg_source(
-    State(state): State<AppState>,
-    Json(payload): Json<EpgSourceCreateRequest>,
-) -> Result<Json<EpgSource>, StatusCode> {
-    match state.database.create_epg_source(&payload).await {
-        Ok(source) => {
-            // Invalidate scheduler cache since we added a new EPG source
-            let _ = state.cache_invalidation_tx.send(());
-
-            // Trigger immediate refresh of the new EPG source to populate data right away
-            info!(
-                "Triggering immediate refresh for new EPG source: {} ({})",
-                source.name, source.id
-            );
-
-            tokio::spawn({
-                let database = state.database.clone();
-                let state_manager = state.state_manager.clone();
-                let source_id = source.id;
-                let source_name = source.name.clone();
-                async move {
-                    use crate::ingestor::ingest_epg::EpgIngestor;
-
-                    // Small delay to ensure the response is sent first
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                    let epg_ingestor = EpgIngestor::new_with_state_manager(
-                        database.clone(),
-                        state_manager.clone(),
-                    );
-
-                    if let Ok(Some(epg_source)) = database.get_epg_source(source_id).await {
-                        match epg_ingestor
-                            .ingest_epg_source_with_trigger(
-                                &epg_source,
-                                crate::ingestor::state_manager::ProcessingTrigger::Manual,
-                            )
-                            .await
-                        {
-                            Ok((channels, programs, _detected_timezone)) => {
-                                info!(
-                                    "Initial EPG ingestion completed for '{}': {} channels, {} programs",
-                                    source_name, channels.len(), programs.len()
-                                );
-
-                                // Update the EPG data in database
-                                if let Err(e) = database
-                                    .update_epg_source_data(source_id, channels, programs)
-                                    .await
-                                {
-                                    error!(
-                                        "Failed to save initial EPG data for source '{}': {}",
-                                        source_name, e
-                                    );
-                                } else {
-                                    // Update last_ingested_at timestamp
-                                    if let Err(e) =
-                                        database.update_epg_source_last_ingested(source_id).await
-                                    {
-                                        error!("Failed to update last_ingested_at for EPG source '{}': {}", source_name, e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to perform initial refresh of EPG source '{}': {}",
-                                    source_name, e
-                                );
-                            }
-                        }
-                    }
-                }
-            });
-
-            Ok(Json(source))
-        }
-        Err(e) => {
-            error!("Failed to create EPG source: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-pub async fn get_epg_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<EpgSource>, StatusCode> {
-    match state.database.get_epg_source(id).await {
-        Ok(Some(source)) => Ok(Json(source)),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to get EPG source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-pub async fn update_epg_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-    Json(payload): Json<EpgSourceUpdateRequest>,
-) -> Result<Json<EpgSource>, StatusCode> {
-    // Check if source is currently being processed before allowing edit
-    if let Some(processing_info) = state.state_manager.get_processing_info(id).await {
-        // If currently processing (no retry time set), reject the edit
-        if processing_info.next_retry_after.is_none() {
-            warn!(
-                "Attempted to edit EPG source {} while processing is active (started at {})",
-                id, processing_info.started_at
-            );
-            return Err(StatusCode::CONFLICT); // 409 Conflict
-        }
-    }
-
-    // Check if there's an active ingestion in progress
-    if let Some(progress) = state.state_manager.get_progress(id).await {
-        match progress.state {
-            crate::models::IngestionState::Connecting
-            | crate::models::IngestionState::Downloading
-            | crate::models::IngestionState::Parsing => {
-                warn!(
-                    "Attempted to edit EPG source {} while ingestion is in progress (state: {:?})",
-                    id, progress.state
-                );
-                return Err(StatusCode::CONFLICT); // 409 Conflict
-            }
-            _ => {
-                // Completed, error, or other final states - allow edit
-            }
-        }
-    }
-
-    // Update the source
-    match state.database.update_epg_source(id, &payload).await {
-        Ok(true) => {
-            // Get the updated source to return
-            match state.database.get_epg_source(id).await {
-                Ok(Some(source)) => {
-                    // Invalidate scheduler cache since source was updated
-                    let _ = state.cache_invalidation_tx.send(());
-                    info!(
-                        "Successfully updated EPG source {} after processing state check",
-                        id
-                    );
-                    Ok(Json(source))
-                }
-                Ok(None) => Err(StatusCode::NOT_FOUND),
-                Err(e) => {
-                    error!("Failed to get updated EPG source {}: {}", id, e);
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-        }
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to update EPG source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-pub async fn delete_epg_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    match state.database.delete_epg_source(id).await {
-        Ok(true) => {
-            // Invalidate scheduler cache since source was deleted
-            let _ = state.cache_invalidation_tx.send(());
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to delete EPG source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-pub async fn refresh_epg_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<EpgRefreshResponse>, StatusCode> {
-    use crate::ingestor::ingest_epg::EpgIngestor;
-
-    // Get the source first
-    let source = match state.database.get_epg_source(id).await {
-        Ok(Some(source)) => source,
-        Ok(None) => {
-            return Err(StatusCode::NOT_FOUND);
-        }
-        Err(e) => {
-            error!("Failed to get EPG source {}: {}", id, e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
-
-    info!("EPG source refresh requested for: {} ({})", source.name, id);
-
-    // Create EPG ingestor with state manager for progress tracking
-    let ingestor =
-        EpgIngestor::new_with_state_manager(state.database.clone(), state.state_manager.clone());
-
-    match ingestor
-        .ingest_epg_source_with_trigger(
-            &source,
-            crate::ingestor::state_manager::ProcessingTrigger::Manual,
-        )
-        .await
-    {
-        Ok((channels, mut programs, detected_timezone)) => {
-            // Update channel names in programs
-            ingestor.update_channel_names(&channels, &mut programs);
-
-            // Update detected timezone if found
-            if let Some(ref detected_tz) = detected_timezone {
-                if detected_tz != &source.timezone && !source.timezone_detected {
-                    info!(
-                        "Updating EPG source '{}' timezone from '{}' to detected '{}'",
-                        source.name, source.timezone, detected_tz
-                    );
-                    let _ = state
-                        .database
-                        .update_epg_source_detected_timezone(source.id, detected_tz)
-                        .await;
-                }
-            }
-
-            // Save to database using cancellation-aware method
-            match ingestor
-                .save_epg_data_with_cancellation(source.id, channels, programs)
-                .await
-            {
-                Ok((channel_count, program_count)) => {
-                    // Update last ingested timestamp
-                    let _ = state
-                        .database
-                        .update_epg_source_last_ingested(source.id)
-                        .await;
-
-                    let message = if detected_timezone.is_some() && !source.timezone_detected {
-                        format!(
-                            "EPG source '{}' refreshed successfully (timezone auto-detected: {})",
-                            source.name,
-                            detected_timezone.as_ref().unwrap()
-                        )
-                    } else {
-                        format!("EPG source '{}' refreshed successfully", source.name)
-                    };
-
-                    info!(
-                        "Successfully refreshed EPG source '{}': {} channels, {} programs",
-                        source.name, channel_count, program_count
-                    );
-
-                    Ok(Json(EpgRefreshResponse {
-                        success: true,
-                        message,
-                        channel_count,
-                        program_count,
-                    }))
-                }
-                Err(e) => {
-                    error!("Failed to save EPG data for source {}: {}", id, e);
-                    Ok(Json(EpgRefreshResponse {
-                        success: false,
-                        message: format!("Failed to save EPG data: {}", e),
-                        channel_count: 0,
-                        program_count: 0,
-                    }))
-                }
-            }
-        }
-        Err(e) => {
-            error!("Failed to ingest EPG source {}: {}", id, e);
-            Ok(Json(EpgRefreshResponse {
-                success: false,
-                message: format!("Failed to fetch EPG data: {}", e),
-                channel_count: 0,
-                program_count: 0,
-            }))
-        }
-    }
-}
-
-pub async fn get_epg_source_channels(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<Vec<EpgChannel>>, StatusCode> {
-    match state.database.get_epg_source_channels(id).await {
-        Ok(channels) => Ok(Json(channels)),
-        Err(e) => {
-            error!("Failed to get channels for EPG source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
 
 pub async fn get_epg_viewer_data(
     Query(request): Query<EpgViewerRequest>,
@@ -1909,199 +2342,6 @@ pub async fn delete_linked_xtream_source(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
-}
-
-// EPG DLQ (Dead Letter Queue) API endpoints
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct EpgDlqResponse {
-    pub entries: Vec<crate::models::EpgDlq>,
-    pub statistics: crate::models::EpgDlqStatistics,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct EpgDlqResolution {
-    pub channel_id: String,
-    pub new_mapping: String,
-    pub action: String, // "remap" or "ignore"
-}
-
-pub async fn get_epg_dlq_entries(
-    Query(params): Query<std::collections::HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<Json<EpgDlqResponse>, StatusCode> {
-    let source_id = params
-        .get("source_id")
-        .and_then(|id| Uuid::parse_str(id).ok());
-    let resolved = params.get("resolved").and_then(|r| r.parse::<bool>().ok());
-
-    // Get entries first
-    match state
-        .database
-        .get_epg_dlq_entries(source_id, resolved)
-        .await
-    {
-        Ok(entries) => {
-            // Get statistics
-            match state.database.get_epg_dlq_statistics(source_id).await {
-                Ok(statistics) => Ok(Json(EpgDlqResponse {
-                    entries,
-                    statistics,
-                })),
-                Err(e) => {
-                    error!("Failed to get EPG DLQ statistics: {}", e);
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-        }
-        Err(e) => {
-            error!("Failed to get EPG DLQ entries: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-pub async fn resolve_epg_dlq_conflicts(
-    State(state): State<AppState>,
-    Json(resolutions): Json<Vec<EpgDlqResolution>>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let mut resolved_count = 0;
-    let mut errors = Vec::new();
-
-    for resolution in resolutions {
-        match resolution.action.as_str() {
-            "remap" => {
-                // Find the DLQ entry to get source information
-                match state.database.get_epg_dlq_entries(None, Some(false)).await {
-                    Ok(dlq_entries) => {
-                        if let Some(entry) = dlq_entries
-                            .iter()
-                            .find(|e| e.original_channel_id == resolution.channel_id)
-                        {
-                            // Parse the channel data
-                            match serde_json::from_str::<serde_json::Value>(&entry.channel_data) {
-                                Ok(mut channel_data) => {
-                                    // Update the channel_id in the stored data
-                                    channel_data["channel_id"] =
-                                        serde_json::Value::String(resolution.new_mapping.clone());
-
-                                    // Create a new channel with the remapped ID
-                                    if let Ok(_updated_channel_data) =
-                                        serde_json::to_string(&channel_data)
-                                    {
-                                        // Mark the original DLQ entry as resolved
-                                        match state
-                                            .database
-                                            .resolve_epg_dlq_entry(
-                                                entry.source_id,
-                                                &entry.original_channel_id,
-                                                true,
-                                                Some(format!(
-                                                    "Remapped to {}",
-                                                    resolution.new_mapping
-                                                )),
-                                            )
-                                            .await
-                                        {
-                                            Ok(true) => {
-                                                info!(
-                                                    "Successfully resolved DLQ entry: {} -> {}",
-                                                    resolution.channel_id, resolution.new_mapping
-                                                );
-                                                resolved_count += 1;
-                                            }
-                                            Ok(false) => {
-                                                errors.push(format!(
-                                                    "DLQ entry not found: {}",
-                                                    resolution.channel_id
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                errors.push(format!(
-                                                    "Failed to resolve DLQ entry {}: {}",
-                                                    resolution.channel_id, e
-                                                ));
-                                            }
-                                        }
-                                    } else {
-                                        errors.push(format!(
-                                            "Failed to serialize updated channel data for {}",
-                                            resolution.channel_id
-                                        ));
-                                    }
-                                }
-                                Err(e) => {
-                                    errors.push(format!(
-                                        "Failed to parse channel data for {}: {}",
-                                        resolution.channel_id, e
-                                    ));
-                                }
-                            }
-                        } else {
-                            errors.push(format!("DLQ entry not found: {}", resolution.channel_id));
-                        }
-                    }
-                    Err(e) => {
-                        errors.push(format!("Failed to fetch DLQ entries: {}", e));
-                    }
-                }
-            }
-            "ignore" => {
-                // Find the DLQ entry to get source information for marking as resolved
-                match state.database.get_epg_dlq_entries(None, Some(false)).await {
-                    Ok(dlq_entries) => {
-                        if let Some(entry) = dlq_entries
-                            .iter()
-                            .find(|e| e.original_channel_id == resolution.channel_id)
-                        {
-                            match state
-                                .database
-                                .resolve_epg_dlq_entry(
-                                    entry.source_id,
-                                    &entry.original_channel_id,
-                                    true,
-                                    Some("Ignored by user".to_string()),
-                                )
-                                .await
-                            {
-                                Ok(true) => {
-                                    info!(
-                                        "Successfully ignored DLQ entry: {}",
-                                        resolution.channel_id
-                                    );
-                                    resolved_count += 1;
-                                }
-                                Ok(false) => {
-                                    errors.push(format!(
-                                        "DLQ entry not found: {}",
-                                        resolution.channel_id
-                                    ));
-                                }
-                                Err(e) => {
-                                    errors.push(format!(
-                                        "Failed to ignore DLQ entry {}: {}",
-                                        resolution.channel_id, e
-                                    ));
-                                }
-                            }
-                        } else {
-                            errors.push(format!("DLQ entry not found: {}", resolution.channel_id));
-                        }
-                    }
-                    Err(e) => {
-                        errors.push(format!("Failed to fetch DLQ entries: {}", e));
-                    }
-                }
-            }
-            _ => {
-                errors.push(format!("Unknown action: {}", resolution.action));
-            }
-        }
-    }
-
-    Ok(Json(serde_json::json!({
-        "resolved_count": resolved_count,
-        "errors": errors
-    })))
 }
 
 // Channel Mapping API Endpoints

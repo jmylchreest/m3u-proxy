@@ -1,7 +1,7 @@
 //! EPG Ingestor - Robust XMLTV parsing and ingestion
-//! 
+//!
 //! This module handles ingestion of EPG (Electronic Program Guide) data from XMLTV sources.
-//! It uses the xmltv crate for reliable parsing and handles deduplication through the 
+//! It uses the xmltv crate for reliable parsing and handles deduplication through the
 //! data mapping system rather than a DLQ (Dead Letter Queue) approach.
 //!
 //! Key features:
@@ -21,13 +21,13 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, TimeZone, Utc};
 #[cfg(test)]
 use chrono::{Datelike, Timelike};
+use quick_xml::de::from_str;
 use regex::Regex;
 use reqwest::Client;
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use xmltv::{Channel, Programme, Tv};
-use quick_xml::de::from_str;
 
 pub struct EpgIngestor {
     client: Client,
@@ -168,7 +168,11 @@ impl EpgIngestor {
             match &result {
                 Ok((channels, programs, _)) => {
                     state_manager
-                        .complete_ingestion_with_programs(source.id, channels.len(), Some(programs.len()))
+                        .complete_ingestion_with_programs(
+                            source.id,
+                            channels.len(),
+                            Some(programs.len()),
+                        )
                         .await;
                 }
                 Err(e) => {
@@ -373,18 +377,21 @@ impl EpgIngestor {
 
         // Use the proper XMLTV library for robust parsing
         info!("Starting XMLTV parsing using xmltv library with quick-xml");
-        
+
         // Parse the entire XMLTV document
         let xmltv_data: Tv = from_str(content)
             .map_err(|e| anyhow!("Failed to parse XMLTV content with xmltv library: {}", e))?;
-        
+
         let mut channels = Vec::new();
         let mut programs = Vec::new();
         let mut seen_channel_ids = std::collections::HashSet::new();
 
         // Process channels from the parsed XMLTV data
-        info!("Processing {} channels from XMLTV data", xmltv_data.channels.len());
-        
+        info!(
+            "Processing {} channels from XMLTV data",
+            xmltv_data.channels.len()
+        );
+
         for (i, xmltv_channel) in xmltv_data.channels.iter().enumerate() {
             // Check for cancellation every 50 channels
             if i % 50 == 0 {
@@ -430,14 +437,14 @@ impl EpgIngestor {
                         .await;
                 }
             }
-            
+
             // Skip duplicate channel_ids within the same source to respect database constraints
             // Cross-source duplicates will be handled by data mapping during proxy generation
             if seen_channel_ids.contains(&xmltv_channel.id) {
                 continue;
             }
             seen_channel_ids.insert(xmltv_channel.id.clone());
-            
+
             let channel = self.convert_xmltv_channel(xmltv_channel, source.id);
             channels.push(channel);
         }
@@ -454,8 +461,11 @@ impl EpgIngestor {
         }
 
         // Process programs from the parsed XMLTV data
-        info!("Processing {} programs from XMLTV data", xmltv_data.programmes.len());
-        
+        info!(
+            "Processing {} programs from XMLTV data",
+            xmltv_data.programmes.len()
+        );
+
         for (i, xmltv_program) in xmltv_data.programmes.iter().enumerate() {
             // Check for cancellation every 500 programs
             if i % 500 == 0 {
@@ -478,8 +488,7 @@ impl EpgIngestor {
                 debug!("Processed {}/{} programmes", i, xmltv_data.programmes.len());
                 // Update progress for programmes
                 if let Some(state_manager) = &self.state_manager {
-                    let percentage =
-                        60.0 + (i as f64 / xmltv_data.programmes.len() as f64) * 30.0;
+                    let percentage = 60.0 + (i as f64 / xmltv_data.programmes.len() as f64) * 30.0;
                     state_manager
                         .update_progress(
                             source.id,
@@ -502,8 +511,10 @@ impl EpgIngestor {
                         .await;
                 }
             }
-            
-            if let Some(program) = self.convert_xmltv_program(xmltv_program, source, &tz, time_offset_seconds) {
+
+            if let Some(program) =
+                self.convert_xmltv_program(xmltv_program, source, &tz, time_offset_seconds)
+            {
                 programs.push(program);
             }
         }
@@ -547,16 +558,14 @@ impl EpgIngestor {
         }
     }
 
-
     fn convert_xmltv_channel(&self, xmltv_channel: &Channel, source_id: Uuid) -> EpgChannel {
-        let channel_name = xmltv_channel.display_names
+        let channel_name = xmltv_channel
+            .display_names
             .first()
             .map(|name| name.name.clone())
             .unwrap_or_else(|| xmltv_channel.id.clone());
 
-        let channel_logo = xmltv_channel.icons
-            .first()
-            .cloned();
+        let channel_logo = xmltv_channel.icons.first().cloned();
 
         EpgChannel {
             id: Uuid::new_v4(),
@@ -580,7 +589,8 @@ impl EpgIngestor {
     ) -> Option<EpgProgram> {
         // Convert start and stop times
         let start_time = self.parse_xmltv_datetime(&xmltv_program.start, tz)?;
-        let end_time = xmltv_program.stop
+        let end_time = xmltv_program
+            .stop
             .as_ref()
             .and_then(|stop| self.parse_xmltv_datetime(stop, tz))?;
 
@@ -589,23 +599,27 @@ impl EpgIngestor {
         let end_time = crate::utils::time::apply_time_offset(end_time, time_offset_seconds);
 
         // Extract title
-        let program_title = xmltv_program.titles
+        let program_title = xmltv_program
+            .titles
             .first()
             .map(|title| title.value.clone())
             .unwrap_or_else(|| "Unknown Program".to_string());
 
         // Extract description
-        let program_description = xmltv_program.descriptions
+        let program_description = xmltv_program
+            .descriptions
             .first()
             .map(|desc| desc.value.clone());
 
         // Extract category
-        let program_category = xmltv_program.categories
+        let program_category = xmltv_program
+            .categories
             .first()
             .map(|category| category.name.clone());
 
         // Extract episode info
-        let episode_info = xmltv_program.episode_num
+        let episode_info = xmltv_program
+            .episode_num
             .first()
             .map(|ep| ep.value.clone())
             .unwrap_or_default();
@@ -613,12 +627,14 @@ impl EpgIngestor {
         let (season_num, episode_num) = self.parse_episode_info(&episode_info);
 
         // Extract rating
-        let rating = xmltv_program.ratings
+        let rating = xmltv_program
+            .ratings
             .first()
             .map(|rating| rating.value.clone());
 
         // Extract language
-        let language = xmltv_program.language
+        let language = xmltv_program
+            .language
             .as_ref()
             .map(|lang| lang.value.clone());
 
@@ -742,8 +758,6 @@ impl EpgIngestor {
         }
     }
 
-
-
     /// Save EPG data to database with cancellation support
     pub async fn save_epg_data_with_cancellation(
         &self,
@@ -756,13 +770,17 @@ impl EpgIngestor {
             if let Some(state_manager) = &self.state_manager {
                 use crate::models::IngestionState;
                 use crate::models::ProgressInfo;
-                
+
                 state_manager
                     .update_progress(
                         source_id,
                         IngestionState::Saving,
                         ProgressInfo {
-                            current_step: format!("Saving {} channels and {} programs to database", channels.len(), programs.len()),
+                            current_step: format!(
+                                "Saving {} channels and {} programs to database",
+                                channels.len(),
+                                programs.len()
+                            ),
                             total_bytes: None,
                             downloaded_bytes: None,
                             channels_parsed: Some(channels.len()),
@@ -783,17 +801,17 @@ impl EpgIngestor {
             };
 
             // Create progress callback that updates state manager
-            let total_programs = programs.len();
+            let _total_programs = programs.len();
             let channels_count = channels.len();
             let state_manager_clone = self.state_manager.clone();
             let progress_callback = move |programs_saved: usize, total: usize| {
                 if let Some(ref state_manager) = state_manager_clone {
-                    let percentage = if total > 0 { 
+                    let percentage = if total > 0 {
                         90.0 + (programs_saved as f64 / total as f64) * 10.0
-                    } else { 
-                        95.0 
+                    } else {
+                        95.0
                     };
-                    
+
                     // Use spawn to avoid blocking the database operation
                     let state_manager_inner = state_manager.clone();
                     tokio::spawn(async move {
@@ -802,7 +820,10 @@ impl EpgIngestor {
                                 source_id,
                                 crate::models::IngestionState::Saving,
                                 crate::models::ProgressInfo {
-                                    current_step: format!("Saved {}/{} programs to database", programs_saved, total),
+                                    current_step: format!(
+                                        "Saved {}/{} programs to database",
+                                        programs_saved, total
+                                    ),
                                     total_bytes: None,
                                     downloaded_bytes: None,
                                     channels_parsed: Some(channels_count),
@@ -832,7 +853,11 @@ impl EpgIngestor {
             if let Ok((channels_saved, programs_saved)) = &result {
                 if let Some(state_manager) = &self.state_manager {
                     state_manager
-                        .complete_ingestion_with_programs(source_id, *channels_saved, Some(*programs_saved))
+                        .complete_ingestion_with_programs(
+                            source_id,
+                            *channels_saved,
+                            Some(*programs_saved),
+                        )
                         .await;
                 }
             }

@@ -552,7 +552,7 @@ impl Database {
 
         // For very large channel sets, use chunked transactions with bulk inserts
         let chunk_size = self.batch_config.stream_channels.unwrap_or(1000); // Configurable chunk size for better performance
-        let progress_update_interval = self.ingestion_config.progress_update_interval;
+        let _progress_update_interval = self.ingestion_config.progress_update_interval;
         let mut inserted_count = 0;
 
         if channels.len() > chunk_size {
@@ -590,7 +590,12 @@ impl Database {
                 // Execute bulk insert
                 let query = query_builder.build();
                 query.execute(&mut *chunk_tx).await.map_err(|e| {
-                    error!("Failed to bulk insert {} channels for source ({}): {}", chunk.len(), source_id, e);
+                    error!(
+                        "Failed to bulk insert {} channels for source ({}): {}",
+                        chunk.len(),
+                        source_id,
+                        e
+                    );
                     e
                 })?;
 
@@ -684,7 +689,12 @@ impl Database {
                 // Execute bulk insert
                 let query = query_builder.build();
                 query.execute(&mut *tx).await.map_err(|e| {
-                    error!("Failed to bulk insert {} channels for source ({}): {}", channels.len(), source_id, e);
+                    error!(
+                        "Failed to bulk insert {} channels for source ({}): {}",
+                        channels.len(),
+                        source_id,
+                        e
+                    );
                     e
                 })?;
 

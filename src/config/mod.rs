@@ -127,8 +127,8 @@ impl Default for DatabaseBatchConfig {
             epg_channels: Some(3600),
             // EPG programs: 17 fields * 1900 = 32,300 variables (safe margin)
             epg_programs: Some(1900),
-            // Stream channels: optimized for performance (not variable-limited)
-            stream_channels: Some(1000),
+            // Stream channels: reduced for better SQLite performance with large datasets
+            stream_channels: Some(500),
         }
     }
 }

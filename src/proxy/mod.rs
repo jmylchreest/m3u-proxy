@@ -46,7 +46,7 @@ impl ProxyService {
     pub async fn apply_filters(
         &self,
         channels: Vec<Channel>,
-        filters: Vec<(Filter, ProxyFilter, Vec<FilterCondition>)>,
+        filters: Vec<(Filter, ProxyFilter)>,
     ) -> Result<Vec<Channel>> {
         let mut engine = filter_engine::FilterEngine::new();
         engine.apply_filters(channels, filters).await

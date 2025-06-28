@@ -62,8 +62,7 @@ pub struct Filter {
     pub source_type: FilterSourceType,
     pub starting_channel_number: i32,
     pub is_inverse: bool,
-    pub logical_operator: LogicalOperator,
-    pub condition_tree: Option<String>, // JSON tree structure for nested conditions
+    pub condition_tree: String, // JSON tree structure for complex nested conditions
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -74,17 +73,6 @@ pub struct Filter {
 pub enum FilterSourceType {
     Stream,
     Epg,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilterCondition {
-    pub id: Uuid,
-    pub filter_id: Uuid,
-    pub field_name: String,
-    pub operator: FilterOperator,
-    pub value: String,
-    pub sort_order: i32,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -238,36 +226,24 @@ pub struct ChannelListResponse {
 pub struct FilterCreateRequest {
     pub name: String,
     pub source_type: FilterSourceType,
-    pub conditions: Vec<FilterConditionRequest>,
-    pub logical_operator: LogicalOperator,
     pub starting_channel_number: i32,
     pub is_inverse: bool,
-    pub condition_tree: Option<String>,
+    pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterUpdateRequest {
     pub name: String,
     pub source_type: FilterSourceType,
-    pub conditions: Vec<FilterConditionRequest>,
-    pub logical_operator: LogicalOperator,
     pub starting_channel_number: i32,
     pub is_inverse: bool,
-    pub condition_tree: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilterConditionRequest {
-    pub field_name: String,
-    pub operator: FilterOperator,
-    pub value: String,
+    pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterWithUsage {
     #[serde(flatten)]
     pub filter: Filter,
-    pub conditions: Vec<FilterCondition>,
     pub usage_count: i64,
 }
 
@@ -275,10 +251,8 @@ pub struct FilterWithUsage {
 pub struct FilterTestRequest {
     pub source_id: Uuid,
     pub source_type: FilterSourceType,
-    pub conditions: Vec<FilterConditionRequest>,
-    pub logical_operator: LogicalOperator,
+    pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
     pub is_inverse: bool,
-    pub condition_tree: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,19 +317,7 @@ impl LogicalOperator {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilterGroup {
-    pub conditions: Vec<FilterConditionRequest>,
-    pub groups: Vec<FilterGroup>,
-    pub logical_operator: LogicalOperator,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AdvancedFilter {
-    pub root_group: FilterGroup,
-}
-
-// New tree-based condition structures for nested expressions
+// Tree-based condition structures for nested expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ConditionNode {
@@ -381,17 +343,82 @@ pub struct ConditionTree {
     pub root: ConditionNode,
 }
 
+// Extended expression support for action syntax
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ExtendedExpression {
+    #[serde(rename = "condition_only")]
+    ConditionOnly(ConditionTree),
+    #[serde(rename = "condition_with_actions")]
+    ConditionWithActions {
+        condition: ConditionTree,
+        actions: Vec<Action>,
+    },
+}
+
+// Individual action within a SET clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Action {
+    pub field: String,
+    pub operator: ActionOperator,
+    pub value: ActionValue,
+}
+
+// Assignment operators for actions
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum ActionOperator {
+    #[serde(rename = "set")]
+    Set, // = (overwrite)
+
+    #[serde(rename = "append")]
+    Append, // += (append with space)
+
+    #[serde(rename = "set_if_empty")]
+    SetIfEmpty, // ?= (set only if empty)
+
+    #[serde(rename = "remove")]
+    Remove, // -= (remove substring)
+}
+
+// Values that can be assigned in actions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ActionValue {
+    #[serde(rename = "literal")]
+    Literal(String),
+
+    // Future: Function call support
+    #[serde(rename = "function")]
+    Function(FunctionCall),
+
+    // Future: Variable reference support
+    #[serde(rename = "variable")]
+    Variable(VariableRef),
+}
+
+// Future: Function call support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: Vec<ActionValue>,
+}
+
+// Future: Variable reference support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariableRef {
+    pub field_name: String,
+}
+
 impl Filter {
     /// Check if this filter uses the new tree-based condition structure
     pub fn uses_condition_tree(&self) -> bool {
-        self.condition_tree.is_some()
+        true // Always uses condition_tree now
     }
 
-    /// Parse the condition tree from JSON if present
+    /// Parse the condition tree from JSON
     pub fn get_condition_tree(&self) -> Option<ConditionTree> {
-        self.condition_tree
-            .as_ref()
-            .and_then(|json| serde_json::from_str(json).ok())
+        serde_json::from_str(&self.condition_tree).ok()
     }
 }
 

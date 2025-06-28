@@ -133,10 +133,7 @@ impl ProxyGenerator {
             // Convert proxy filters to the format expected by filter engine
             let mut filter_tuples = Vec::new();
             for proxy_filter in proxy_filters {
-                let conditions = database
-                    .get_filter_conditions(proxy_filter.filter.id)
-                    .await?;
-                filter_tuples.push((proxy_filter.filter, proxy_filter.proxy_filter, conditions));
+                filter_tuples.push((proxy_filter.filter, proxy_filter.proxy_filter));
             }
 
             let filtered = filter_engine

@@ -1,7 +1,12 @@
--- Default Data and Rules Migration
--- Provides default data mapping rules for common use cases
+-- Default Data and Configurations
+-- Provides default data mapping rules and filter templates for common use cases
+-- Consolidated migration including all fixes and updates
 
--- Insert default timeshift rule using regex capture groups (for stream sources)
+-- =============================================================================
+-- DEFAULT DATA MAPPING RULES
+-- =============================================================================
+
+-- Default Timeshift Detection Rule (for stream sources)
 INSERT INTO data_mapping_rules (id, name, description, source_type, sort_order, is_active, created_at, updated_at)
 VALUES (
     '550e8400-e29b-41d4-a716-446655440001',
@@ -21,26 +26,39 @@ VALUES (
     '550e8400-e29b-41d4-a716-446655440001',
     'channel_name',
     'matches',
-    '.*(?:\+([0-9]+)|(-[0-9]+)).*',
+    '.*(?:(?:\s|^)\+([0-9]+)h?(?:\s|$)|(?:\s|^)(-[0-9]+)h?(?:\s|$)).*',
     'and',
     0,
     datetime('now')
 );
 
--- Add set_value action to set tvg-shift field using captured timeshift value
--- Add exclusion condition to avoid matching timestamps
+-- Add exclusion condition to avoid matching timestamps and patterns like 24-7
 INSERT INTO data_mapping_conditions (id, rule_id, field_name, operator, value, logical_operator, sort_order, created_at)
 VALUES (
     '550e8400-e29b-41d4-a716-446655440005',
     '550e8400-e29b-41d4-a716-446655440001',
     'channel_name',
     'not_matches',
-    '.*(?:start:|stop:|\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}).*',
+    '.*(?:start:|stop:|\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}|\d{2}-\d).*',
     'and',
     1,
     datetime('now')
 );
 
+-- Add condition to ensure tvg_id exists and is not empty (from migration 004)
+INSERT INTO data_mapping_conditions (id, rule_id, field_name, operator, value, logical_operator, sort_order, created_at)
+VALUES (
+    '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+    '550e8400-e29b-41d4-a716-446655440001',
+    'tvg_id',
+    'matches',
+    '^.+$',
+    'and',
+    2,
+    datetime('now')
+);
+
+-- Add set_value action to set tvg-shift field using captured timeshift value
 INSERT INTO data_mapping_actions (id, rule_id, action_type, target_field, value, sort_order, created_at)
 VALUES (
     '550e8400-e29b-41d4-a716-446655440003',
@@ -52,8 +70,9 @@ VALUES (
     datetime('now')
 );
 
--- Default Filters
--- These provide common filtering templates that users can enable/modify as needed
+-- =============================================================================
+-- DEFAULT FILTER TEMPLATES
+-- =============================================================================
 
 -- Hide Adult Content Filter (Exclude channels containing adult content)
 INSERT INTO filters (id, name, source_type, is_inverse, logical_operator, created_at, updated_at)
@@ -192,69 +211,62 @@ VALUES (
     datetime('now')
 );
 
--- English Channels Only Filter
-INSERT INTO filters (id, name, source_type, created_at, updated_at)
+-- English Channels Only Filter (updated for data sources with populated channel_name/tvg_name)
+INSERT INTO filters (id, name, source_type, logical_operator, created_at, updated_at)
 VALUES (
     '550e8400-e29b-41d4-a716-446655440040',
     'English Channels Only',
     'stream',
+    'or', -- Use OR logic to match any English channel indicator
     datetime('now'),
     datetime('now')
 );
 
+-- Updated conditions using channel_name and tvg_name instead of group_title (from migration 005_fix)
 INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order, created_at)
 VALUES (
-    '550e8400-e29b-41d4-a716-446655440041',
+    '550e8400-e29b-41d4-a716-446655440047',
     '550e8400-e29b-41d4-a716-446655440040',
-    'group_title',
-    'starts_with',
-    'UK:',
+    'channel_name',
+    'contains',
+    'UK',
     0,
     datetime('now')
 ),
 (
-    '550e8400-e29b-41d4-a716-446655440042',
+    '550e8400-e29b-41d4-a716-446655440048',
     '550e8400-e29b-41d4-a716-446655440040',
-    'group_title',
-    'starts_with',
-    'US:',
+    'channel_name',
+    'contains',
+    'US',
     1,
     datetime('now')
 ),
 (
-    '550e8400-e29b-41d4-a716-446655440043',
+    '550e8400-e29b-41d4-a716-446655440049',
     '550e8400-e29b-41d4-a716-446655440040',
-    'group_title',
+    'tvg_name',
     'contains',
-    'English',
+    'UK',
     2,
     datetime('now')
 ),
 (
-    '550e8400-e29b-41d4-a716-446655440044',
+    '550e8400-e29b-41d4-a716-446655440050',
     '550e8400-e29b-41d4-a716-446655440040',
-    'group_title',
-    'not_contains',
-    'Arabic',
+    'tvg_name',
+    'contains',
+    'US',
     3,
     datetime('now')
 ),
 (
-    '550e8400-e29b-41d4-a716-446655440045',
+    '550e8400-e29b-41d4-a716-446655440051',
     '550e8400-e29b-41d4-a716-446655440040',
-    'group_title',
-    'not_contains',
-    'German',
+    'channel_name',
+    'contains',
+    'BBC',
     4,
-    datetime('now')
-),
-(
-    '550e8400-e29b-41d4-a716-446655440046',
-    '550e8400-e29b-41d4-a716-446655440040',
-    'group_title',
-    'not_contains',
-    'French',
-    5,
     datetime('now')
 );
 
@@ -272,7 +284,7 @@ VALUES (
 
 INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order, created_at)
 VALUES (
-    '550e8400-e29b-41d4-a716-446655440051',
+    '550e8400-e29b-41d4-a716-446655440052',
     '550e8400-e29b-41d4-a716-446655440050',
     'channel_name',
     'contains',
@@ -281,7 +293,7 @@ VALUES (
     datetime('now')
 ),
 (
-    '550e8400-e29b-41d4-a716-446655440052',
+    '550e8400-e29b-41d4-a716-446655440053',
     '550e8400-e29b-41d4-a716-446655440050',
     'channel_name',
     'contains',
@@ -290,7 +302,7 @@ VALUES (
     datetime('now')
 ),
 (
-    '550e8400-e29b-41d4-a716-446655440053',
+    '550e8400-e29b-41d4-a716-446655440054',
     '550e8400-e29b-41d4-a716-446655440050',
     'channel_name',
     'contains',
@@ -299,11 +311,34 @@ VALUES (
     datetime('now')
 ),
 (
-    '550e8400-e29b-41d4-a716-446655440054',
+    '550e8400-e29b-41d4-a716-446655440055',
     '550e8400-e29b-41d4-a716-446655440050',
     'channel_name',
     'contains',
     '360p',
     3,
+    datetime('now')
+);
+
+-- Channels with valid stream URLs filter (Include filter from migration 005_fix)
+INSERT INTO filters (id, name, source_type, is_inverse, logical_operator, created_at, updated_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440060',
+    'Channels with valid stream URLs',
+    'stream',
+    FALSE, -- Include filter: includes channels that match conditions
+    'and', -- Include if ALL conditions match (though we only have one)
+    datetime('now'),
+    datetime('now')
+);
+
+INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order, created_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440061',
+    '550e8400-e29b-41d4-a716-446655440060',
+    'stream_url',
+    'contains',
+    'http',
+    0,
     datetime('now')
 );

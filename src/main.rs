@@ -7,6 +7,7 @@ pub mod assets;
 mod config;
 mod data_mapping;
 mod database;
+mod filter_parser;
 mod ingestor;
 mod logo_assets;
 mod models;

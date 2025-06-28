@@ -1,5 +1,5 @@
 use crate::assets::MigrationAssets;
-use crate::config::{DatabaseConfig, DatabaseBatchConfig, IngestionConfig};
+use crate::config::{DatabaseBatchConfig, DatabaseConfig, IngestionConfig};
 use crate::models::*;
 use anyhow::Result;
 use sqlx::{migrate::MigrateDatabase, Pool, Row, Sqlite, SqlitePool};
@@ -34,11 +34,31 @@ impl Database {
 
         let pool = SqlitePool::connect(&config.url).await?;
 
+        // Optimize SQLite for large dataset handling
+        sqlx::query("PRAGMA journal_mode = WAL")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA synchronous = NORMAL")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA cache_size = -64000")
+            .execute(&pool)
+            .await?; // 64MB cache
+        sqlx::query("PRAGMA temp_store = MEMORY")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA mmap_size = 268435456")
+            .execute(&pool)
+            .await?; // 256MB mmap
+
         let batch_config = config.batch_sizes.clone().unwrap_or_default();
-        
+
         // Validate batch configuration
         if let Err(e) = batch_config.validate() {
-            return Err(anyhow::anyhow!("Invalid database batch configuration: {}", e));
+            return Err(anyhow::anyhow!(
+                "Invalid database batch configuration: {}",
+                e
+            ));
         }
 
         Ok(Self {
@@ -242,7 +262,7 @@ impl Database {
     ) -> Result<Vec<ProxyFilterWithDetails>> {
         let rows = sqlx::query(
             "SELECT pf.proxy_id, pf.filter_id, pf.sort_order, pf.is_active, pf.created_at,
-                    f.name, f.starting_channel_number, f.is_inverse, f.logical_operator, f.condition_tree, f.updated_at as filter_updated_at
+                    f.name, f.starting_channel_number, f.is_inverse, f.condition_tree, f.updated_at as filter_updated_at
              FROM proxy_filters pf
              JOIN filters f ON pf.filter_id = f.id
              WHERE pf.proxy_id = ? AND pf.is_active = 1
@@ -268,7 +288,6 @@ impl Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.get("starting_channel_number"),
                 is_inverse: row.get("is_inverse"),
-                logical_operator: row.get("logical_operator"),
                 condition_tree: row.get("condition_tree"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("filter_updated_at"),

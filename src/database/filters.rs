@@ -57,7 +57,7 @@ impl super::Database {
     #[allow(dead_code)]
     pub async fn list_filters(&self) -> Result<Vec<Filter>> {
         let rows = sqlx::query(
-            "SELECT id, name, starting_channel_number, is_inverse, logical_operator, condition_tree, created_at, updated_at
+            "SELECT id, name, starting_channel_number, is_inverse, condition_tree, created_at, updated_at
              FROM filters
              ORDER BY name",
         )
@@ -72,7 +72,6 @@ impl super::Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
-                logical_operator: row.try_get("logical_operator")?,
                 condition_tree: row.try_get("condition_tree")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
@@ -86,38 +85,28 @@ impl super::Database {
     pub async fn create_filter(&self, request: &FilterCreateRequest) -> Result<Filter> {
         let id = Uuid::new_v4();
 
-        // Start a transaction to insert both filter and conditions
+        // Get available fields for validation
+        let available_fields = self.get_available_filter_fields().await?;
+        let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
+
+        // Parse the filter expression using the proper parser
+        let parser = crate::filter_parser::FilterParser::new().with_fields(field_names);
+        let condition_tree = parser.parse(&request.filter_expression)?;
+
+        // Start a transaction to insert filter
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "INSERT INTO filters (id, name, starting_channel_number, is_inverse, logical_operator, condition_tree)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO filters (id, name, starting_channel_number, is_inverse, condition_tree)
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&request.name)
         .bind(request.starting_channel_number)
         .bind(request.is_inverse)
-        .bind(&request.logical_operator)
-        .bind(&request.condition_tree)
+        .bind(serde_json::to_string(&condition_tree)?)
         .execute(&mut *tx)
         .await?;
-
-        // Insert filter conditions
-        for (index, condition) in request.conditions.iter().enumerate() {
-            let condition_id = Uuid::new_v4();
-            sqlx::query(
-                "INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .bind(condition_id.to_string())
-            .bind(id.to_string())
-            .bind(&condition.field_name)
-            .bind(&condition.operator)
-            .bind(&condition.value)
-            .bind(index as i32)
-            .execute(&mut *tx)
-            .await?;
-        }
 
         tx.commit().await?;
 
@@ -128,7 +117,7 @@ impl super::Database {
 
     pub async fn get_filter(&self, id: Uuid) -> Result<Option<Filter>> {
         let row = sqlx::query(
-            "SELECT id, name, starting_channel_number, is_inverse, logical_operator, condition_tree, created_at, updated_at
+            "SELECT id, name, starting_channel_number, is_inverse, condition_tree, created_at, updated_at
              FROM filters
              WHERE id = ?",
         )
@@ -143,7 +132,6 @@ impl super::Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
-                logical_operator: row.try_get("logical_operator")?,
                 condition_tree: row.try_get("condition_tree")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
@@ -159,18 +147,25 @@ impl super::Database {
         id: Uuid,
         request: &FilterUpdateRequest,
     ) -> Result<Option<Filter>> {
+        // Get available fields for validation
+        let available_fields = self.get_available_filter_fields().await?;
+        let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
+
+        // Parse the filter expression using the proper parser
+        let parser = crate::filter_parser::FilterParser::new().with_fields(field_names);
+        let condition_tree = parser.parse(&request.filter_expression)?;
+
         let mut tx = self.pool.begin().await?;
 
         let result = sqlx::query(
             "UPDATE filters
-             SET name = ?, starting_channel_number = ?, is_inverse = ?, logical_operator = ?, condition_tree = ?
+             SET name = ?, starting_channel_number = ?, is_inverse = ?, condition_tree = ?
              WHERE id = ?",
         )
         .bind(&request.name)
         .bind(request.starting_channel_number)
         .bind(request.is_inverse)
-        .bind(&request.logical_operator)
-        .bind(&request.condition_tree)
+        .bind(serde_json::to_string(&condition_tree)?)
         .bind(id.to_string())
         .execute(&mut *tx)
         .await?;
@@ -178,29 +173,6 @@ impl super::Database {
         if result.rows_affected() == 0 {
             tx.rollback().await?;
             return Ok(None);
-        }
-
-        // Delete existing conditions
-        sqlx::query("DELETE FROM filter_conditions WHERE filter_id = ?")
-            .bind(id.to_string())
-            .execute(&mut *tx)
-            .await?;
-
-        // Insert new conditions
-        for (index, condition) in request.conditions.iter().enumerate() {
-            let condition_id = Uuid::new_v4();
-            sqlx::query(
-                "INSERT INTO filter_conditions (id, filter_id, field_name, operator, value, sort_order)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .bind(condition_id.to_string())
-            .bind(id.to_string())
-            .bind(&condition.field_name)
-            .bind(&condition.operator)
-            .bind(&condition.value)
-            .bind(index as i32)
-            .execute(&mut *tx)
-            .await?;
         }
 
         tx.commit().await?;
@@ -218,11 +190,11 @@ impl super::Database {
 
     pub async fn get_filters_with_usage(&self) -> Result<Vec<FilterWithUsage>> {
         let filters = sqlx::query(
-            "SELECT f.id, f.name, f.starting_channel_number, f.is_inverse, f.logical_operator, f.condition_tree,
+            "SELECT f.id, f.name, f.starting_channel_number, f.is_inverse, f.condition_tree,
              f.created_at, f.updated_at, COUNT(pf.filter_id) as usage_count
              FROM filters f
              LEFT JOIN proxy_filters pf ON f.id = pf.filter_id AND pf.is_active = 1
-             GROUP BY f.id, f.name, f.starting_channel_number, f.is_inverse, f.logical_operator, f.condition_tree,
+             GROUP BY f.id, f.name, f.starting_channel_number, f.is_inverse, f.condition_tree,
              f.created_at, f.updated_at
              ORDER BY f.name",
         )
@@ -238,42 +210,15 @@ impl super::Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
-                logical_operator: row.try_get("logical_operator")?,
                 condition_tree: row.try_get("condition_tree")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
             };
 
-            // Get conditions for this filter
-            let condition_rows = sqlx::query(
-                "SELECT id, filter_id, field_name, operator, value, sort_order, created_at
-                 FROM filter_conditions
-                 WHERE filter_id = ?
-                 ORDER BY sort_order",
-            )
-            .bind(filter_id.to_string())
-            .fetch_all(&self.pool)
-            .await?;
-
-            let mut conditions = Vec::new();
-            for condition_row in condition_rows {
-                let condition = FilterCondition {
-                    id: condition_row.try_get::<String, _>("id")?.parse()?,
-                    filter_id: condition_row.try_get::<String, _>("filter_id")?.parse()?,
-                    field_name: condition_row.try_get("field_name")?,
-                    operator: condition_row.try_get("operator")?,
-                    value: condition_row.try_get("value")?,
-                    sort_order: condition_row.try_get("sort_order")?,
-                    created_at: condition_row.try_get("created_at")?,
-                };
-                conditions.push(condition);
-            }
-
             let usage_count: i64 = row.try_get("usage_count")?;
 
             result.push(FilterWithUsage {
                 filter,
-                conditions,
                 usage_count,
             });
         }
@@ -286,34 +231,38 @@ impl super::Database {
         source_id: Uuid,
         request: &FilterTestRequest,
     ) -> Result<FilterTestResult> {
-        // Create a temporary filter for testing
+        // Get available fields for validation
+        let available_fields = self.get_available_filter_fields().await?;
+        let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
+
+        // Parse the filter expression using the proper parser
+        let parser = crate::filter_parser::FilterParser::new().with_fields(field_names);
+        let condition_tree = match parser.parse(&request.filter_expression) {
+            Ok(tree) => tree,
+            Err(e) => {
+                return Ok(FilterTestResult {
+                    is_valid: false,
+                    error: Some(format!("Syntax error: {}", e)),
+                    matching_channels: vec![],
+                    total_channels: 0,
+                    matched_count: 0,
+                });
+            }
+        };
+
+        // Create a temporary filter for testing with the parsed tree
         let temp_filter = Filter {
             id: Uuid::new_v4(),
             name: "Test Filter".to_string(),
             source_type: request.source_type.clone(),
             starting_channel_number: 1,
             is_inverse: request.is_inverse,
-            logical_operator: request.logical_operator.clone(),
-            condition_tree: request.condition_tree.clone(),
+            condition_tree: serde_json::to_string(&condition_tree)?,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
 
-        // Create temporary conditions
-        let temp_conditions: Vec<FilterCondition> = request
-            .conditions
-            .iter()
-            .enumerate()
-            .map(|(index, condition)| FilterCondition {
-                id: Uuid::new_v4(),
-                filter_id: temp_filter.id,
-                field_name: condition.field_name.clone(),
-                operator: condition.operator.clone(),
-                value: condition.value.clone(),
-                sort_order: index as i32,
-                created_at: chrono::Utc::now(),
-            })
-            .collect();
+        // Using condition_tree only
 
         // Get all channels for the source - using manual row mapping to handle UUID strings
         let rows = sqlx::query(
@@ -357,7 +306,7 @@ impl super::Database {
         // Use the filter engine to apply the filter
         let mut filter_engine = crate::proxy::filter_engine::FilterEngine::new();
         let matching_channels: Vec<FilterTestChannel> = match filter_engine
-            .apply_single_filter(&channels, &temp_filter, &temp_conditions)
+            .apply_single_filter(&channels, &temp_filter)
             .await
         {
             Ok(filtered_channels) => {
@@ -396,7 +345,7 @@ impl super::Database {
     pub async fn get_proxy_filters(&self, proxy_id: Uuid) -> Result<Vec<ProxyFilterWithDetails>> {
         let filters = sqlx::query(
             "SELECT pf.proxy_id, pf.filter_id, pf.sort_order, pf.is_active, pf.created_at,
-                    f.name, f.starting_channel_number, f.is_inverse, f.logical_operator, f.condition_tree, f.updated_at as filter_updated_at
+                    f.name, f.starting_channel_number, f.is_inverse, f.condition_tree, f.updated_at as filter_updated_at
              FROM proxy_filters pf
              JOIN filters f ON pf.filter_id = f.id
              WHERE pf.proxy_id = ?
@@ -422,7 +371,6 @@ impl super::Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.get("starting_channel_number"),
                 is_inverse: row.get("is_inverse"),
-                logical_operator: row.get("logical_operator"),
                 condition_tree: row.get("condition_tree"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("filter_updated_at"),
@@ -508,33 +456,5 @@ impl super::Database {
         .await?;
 
         Ok(result.rows_affected() > 0)
-    }
-
-    pub async fn get_filter_conditions(&self, filter_id: Uuid) -> Result<Vec<FilterCondition>> {
-        let rows = sqlx::query(
-            "SELECT id, filter_id, field_name, operator, value, sort_order, created_at
-             FROM filter_conditions
-             WHERE filter_id = ?
-             ORDER BY sort_order",
-        )
-        .bind(filter_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut conditions = Vec::new();
-        for row in rows {
-            let condition = FilterCondition {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                filter_id: Uuid::parse_str(&row.get::<String, _>("filter_id"))?,
-                field_name: row.get("field_name"),
-                operator: row.get("operator"),
-                value: row.get("value"),
-                sort_order: row.get("sort_order"),
-                created_at: row.get("created_at"),
-            };
-            conditions.push(condition);
-        }
-
-        Ok(conditions)
     }
 }

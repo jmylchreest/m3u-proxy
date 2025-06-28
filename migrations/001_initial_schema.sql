@@ -62,23 +62,12 @@ CREATE TABLE filters (
     source_type TEXT NOT NULL DEFAULT 'stream' CHECK (source_type IN ('stream', 'epg')),
     starting_channel_number INTEGER NOT NULL DEFAULT 1,
     is_inverse BOOLEAN NOT NULL DEFAULT FALSE,
-    logical_operator TEXT NOT NULL DEFAULT 'all' CHECK (logical_operator IN ('and', 'or', 'all', 'any')),
-    condition_tree TEXT, -- JSON tree structure for nested conditions (NULL = use legacy flat structure)
+    condition_tree TEXT NOT NULL, -- JSON tree structure for complex nested conditions
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Filter Conditions Table
-CREATE TABLE filter_conditions (
-    id TEXT PRIMARY KEY NOT NULL,
-    filter_id TEXT NOT NULL REFERENCES filters(id) ON DELETE CASCADE,
-    field_name TEXT NOT NULL,
-    operator TEXT NOT NULL,
-    value TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (filter_id) REFERENCES filters(id) ON DELETE CASCADE
-);
+
 
 -- Junction table for proxy-filter relationships with ordering
 CREATE TABLE proxy_filters (
@@ -261,9 +250,7 @@ CREATE INDEX idx_filters_source_type ON filters(source_type);
 -- Proxy Filters
 CREATE INDEX idx_proxy_filters_sort_order ON proxy_filters(proxy_id, sort_order);
 
--- Filter Conditions
-CREATE INDEX idx_filter_conditions_filter_id ON filter_conditions(filter_id);
-CREATE INDEX idx_filter_conditions_sort_order ON filter_conditions(filter_id, sort_order);
+
 
 -- Data Mapping Rules
 CREATE INDEX idx_data_mapping_rules_sort_order ON data_mapping_rules(sort_order);

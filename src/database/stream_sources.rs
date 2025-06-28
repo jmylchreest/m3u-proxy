@@ -551,7 +551,7 @@ impl Database {
         );
 
         // For very large channel sets, use chunked transactions with bulk inserts
-        let chunk_size = self.batch_config.stream_channels.unwrap_or(1000); // Configurable chunk size for better performance
+        let chunk_size = self.batch_config.stream_channels.unwrap_or(500); // Reduced chunk size for better SQLite performance
         let _progress_update_interval = self.ingestion_config.progress_update_interval;
         let mut inserted_count = 0;
 
@@ -589,45 +589,44 @@ impl Database {
 
                 // Execute bulk insert
                 let query = query_builder.build();
+                debug!(
+                    "Inserting chunk {} with {} channels",
+                    chunk_idx,
+                    chunk.len()
+                );
                 query.execute(&mut *chunk_tx).await.map_err(|e| {
                     error!(
-                        "Failed to bulk insert {} channels for source ({}): {}",
+                        "Failed to bulk insert {} channels for source ({}) at chunk {}: {}",
                         chunk.len(),
                         source_id,
+                        chunk_idx,
                         e
                     );
                     e
                 })?;
+                debug!(
+                    "Successfully inserted chunk {} with {} channels",
+                    chunk_idx,
+                    chunk.len()
+                );
 
                 inserted_count += chunk.len();
 
-                // Update progress after each chunk
-                if let Some(state_mgr) = state_manager {
-                    let percentage = (inserted_count as f64 / channels.len() as f64) * 100.0;
-                    state_mgr
-                        .update_progress(
-                            source_id,
-                            crate::models::IngestionState::Processing,
-                            crate::models::ProgressInfo {
-                                current_step: format!(
-                                    "Processing channels into database ({}/{})",
-                                    inserted_count,
-                                    channels.len()
-                                ),
-                                total_bytes: None,
-                                downloaded_bytes: None,
-                                channels_parsed: Some(channels.len()),
-                                channels_saved: Some(inserted_count),
-                                programs_parsed: None,
-                                programs_saved: None,
-                                percentage: Some(percentage),
-                            },
-                        )
-                        .await;
-                }
-
                 // Commit chunk
-                chunk_tx.commit().await?;
+                debug!("Committing chunk {} transaction", chunk_idx);
+                chunk_tx.commit().await.map_err(|e| {
+                    error!(
+                        "Failed to commit chunk {} transaction for source ({}): {}",
+                        chunk_idx, source_id, e
+                    );
+                    e
+                })?;
+                debug!("Successfully committed chunk {} transaction", chunk_idx);
+
+                // Small delay between chunks to prevent SQLite from getting overwhelmed
+                if chunk_idx > 0 && chunk_idx % 10 == 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
 
                 // Update progress after each chunk and log every 10 chunks
                 if let Some(state_mgr) = state_manager {
@@ -654,14 +653,15 @@ impl Database {
                         .await;
                 }
 
-                if chunk_idx % 10 == 0
+                if chunk_idx % 5 == 0
                     || chunk_idx == (channels.len() + chunk_size - 1) / chunk_size - 1
                 {
-                    debug!(
-                        "Inserted {}/{} channels for source ({})",
+                    info!(
+                        "Progress: Inserted {}/{} channels for source ({}) - {:.1}%",
                         inserted_count,
                         channels.len(),
-                        source_id
+                        source_id,
+                        (inserted_count as f64 / channels.len() as f64) * 100.0
                     );
                 }
             }

@@ -22,23 +22,21 @@ impl FilterEngine {
     pub async fn apply_filters(
         &mut self,
         channels: Vec<Channel>,
-        filters: Vec<(Filter, ProxyFilter, Vec<FilterCondition>)>,
+        filters: Vec<(Filter, ProxyFilter)>,
     ) -> Result<Vec<Channel>> {
         // Sort filters by their order
         let mut sorted_filters = filters;
-        sorted_filters.sort_by_key(|(_, proxy_filter, _)| proxy_filter.sort_order);
+        sorted_filters.sort_by_key(|(_, proxy_filter)| proxy_filter.sort_order);
 
         let mut result_channels = Vec::new();
         let mut _current_channel_number = 1;
 
-        for (filter, proxy_filter, conditions) in sorted_filters {
+        for (filter, proxy_filter) in sorted_filters {
             if !proxy_filter.is_active {
                 continue;
             }
 
-            let filtered = self
-                .apply_single_filter(&channels, &filter, &conditions)
-                .await?;
+            let filtered = self.apply_single_filter(&channels, &filter).await?;
 
             if filter.is_inverse {
                 // For inverse filters, remove matches from the current result
@@ -72,18 +70,11 @@ impl FilterEngine {
         &mut self,
         channels: &[Channel],
         filter: &Filter,
-        conditions: &[FilterCondition],
     ) -> Result<Vec<Channel>> {
         let mut matches = Vec::new();
 
         for channel in channels {
-            let channel_matches = if filter.uses_condition_tree() {
-                // Use new tree-based evaluation
-                self.evaluate_filter_tree(channel, filter)?
-            } else {
-                // Use legacy flat condition evaluation
-                self.evaluate_filter_conditions(channel, filter, conditions)?
-            };
+            let channel_matches = self.evaluate_filter_tree(channel, filter)?;
 
             if channel_matches {
                 matches.push(channel.clone());
@@ -110,70 +101,16 @@ impl FilterEngine {
         Ok(self.regex_cache.get(&cache_key).unwrap())
     }
 
-    #[allow(dead_code)]
-    fn evaluate_filter_conditions(
-        &mut self,
-        channel: &Channel,
-        filter: &Filter,
-        conditions: &[FilterCondition],
-    ) -> Result<bool> {
-        if conditions.is_empty() {
-            return Ok(true);
-        }
+    // Tree-based filter evaluation methods
 
-        let mut condition_results = Vec::new();
-
-        // Evaluate all conditions
-        for condition in conditions {
-            let result = self.evaluate_condition(channel, condition)?;
-            condition_results.push(result);
-        }
-
-        // Apply logical operator - supports both old (and/or) and new (all/any) formats
-        if filter.logical_operator.is_and_like() {
-            Ok(condition_results.iter().all(|&x| x))
-        } else {
-            Ok(condition_results.iter().any(|&x| x))
+    fn evaluate_filter_tree(&mut self, channel: &Channel, filter: &Filter) -> Result<bool> {
+        match filter.get_condition_tree() {
+            Some(tree) => self.evaluate_condition_node(channel, &tree.root),
+            None => Ok(true), // If no tree, default to true (shouldn't happen)
         }
     }
 
-    #[allow(dead_code)]
-    fn evaluate_condition(
-        &mut self,
-        channel: &Channel,
-        condition: &FilterCondition,
-    ) -> Result<bool> {
-        // Get field value from channel using dynamic field access
-        let field_value = self.get_channel_field_value(channel, &condition.field_name);
-
-        match condition.operator {
-            FilterOperator::Contains => Ok(field_value
-                .to_lowercase()
-                .contains(&condition.value.to_lowercase())),
-            FilterOperator::Equals => Ok(field_value == condition.value),
-            FilterOperator::StartsWith => Ok(field_value
-                .to_lowercase()
-                .starts_with(&condition.value.to_lowercase())),
-            FilterOperator::EndsWith => Ok(field_value
-                .to_lowercase()
-                .ends_with(&condition.value.to_lowercase())),
-            FilterOperator::Matches => {
-                let regex = self.get_or_compile_regex(&condition.value, false)?; // case_insensitive by default
-                Ok(regex.is_match(&field_value))
-            }
-            FilterOperator::NotContains => Ok(!field_value
-                .to_lowercase()
-                .contains(&condition.value.to_lowercase())),
-            FilterOperator::NotEquals => Ok(field_value != condition.value),
-            FilterOperator::NotMatches => {
-                let regex = self.get_or_compile_regex(&condition.value, false)?; // case_insensitive by default
-                Ok(!regex.is_match(&field_value))
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn get_channel_field_value(&self, channel: &Channel, field_name: &str) -> String {
+    fn get_channel_field_value(channel: &Channel, field_name: &str) -> String {
         // Dynamically access channel fields
         // If a field doesn't exist, return empty string (graceful degradation)
         match field_name {
@@ -188,17 +125,6 @@ impl FilterEngine {
         }
     }
 
-    // New tree-based filter evaluation methods
-
-    #[allow(dead_code)]
-    fn evaluate_filter_tree(&mut self, channel: &Channel, filter: &Filter) -> Result<bool> {
-        match filter.get_condition_tree() {
-            Some(tree) => self.evaluate_condition_node(channel, &tree.root),
-            None => Ok(true), // If no tree, default to true (shouldn't happen)
-        }
-    }
-
-    #[allow(dead_code)]
     fn evaluate_condition_node(&mut self, channel: &Channel, node: &ConditionNode) -> Result<bool> {
         match node {
             ConditionNode::Condition {
@@ -245,7 +171,7 @@ impl FilterEngine {
         case_sensitive: bool,
         negate: bool,
     ) -> Result<bool> {
-        let field_value = self.get_channel_field_value(channel, field);
+        let field_value = Self::get_channel_field_value(channel, field);
 
         let result = match operator {
             FilterOperator::Contains => {

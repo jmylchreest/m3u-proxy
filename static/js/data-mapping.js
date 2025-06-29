@@ -1154,7 +1154,7 @@ function displayPreviewResults(title, result) {
             <div class="rule-card-stats">
               <span class="rule-stat">📊 ${rule.affected_channels_count} channels</span>
               <span class="rule-stat">📋 ${rule.condition_count || 0}C/${rule.action_count || 0}A</span>
-              <span class="rule-stat">⏱️ ${rule.avg_execution_time || "?"}μs/rec</span>
+              <span class="rule-stat" title="Total: ${rule.total_execution_time || 0}μs across ${rule.affected_channels_count} channels">⏱️ ${rule.avg_execution_time > 0 ? rule.avg_execution_time + "μs/channel" : "<1μs/channel"}</span>
             </div>
           </div>
         `,
@@ -1268,33 +1268,23 @@ function displayPreviewResults(title, result) {
                         ${
                           mutations.length > 0
                             ? `
-                          <div class="mutations-container">
-                            <code class="mutations-code">
+                          <code class="mutations-code">
 ${mutations
-  .filter((mut) => mut.type !== "logo")
   .map((mut) => {
     const beforeVal = mut.before;
     const afterVal = mut.after;
-    return `${mut.field.padEnd(12)} ${beforeVal} → ${afterVal}`;
+    const logoPreview =
+      mut.type === "logo"
+        ? `<div class="inline-logo-preview">
+           ${getLogoPreviewElement(mut.before, "before")}
+           <span class="logo-arrow">→</span>
+           ${getLogoPreviewElement(mut.after, "after")}
+         </div>`
+        : "";
+    return `${mut.field.padEnd(12)} ${beforeVal} → ${afterVal}${logoPreview}`;
   })
   .join("\n")}
-                            </code>
-                            ${mutations
-                              .filter((mut) => mut.type === "logo")
-                              .map(
-                                (mut) => `
-                              <div class="logo-preview-container">
-                                <span class="logo-field-name">${mut.field}:</span>
-                                <div class="logo-before-after">
-                                  ${mut.before !== "null" && mut.before.startsWith("http") ? `<img src="${mut.before}" class="mutation-logo-preview before" alt="before" onerror="this.style.display='none'">` : `<div class="mutation-logo-placeholder before">∅</div>`}
-                                  <span class="logo-arrow">→</span>
-                                  ${mut.after !== "null" && mut.after.startsWith("http") ? `<img src="${mut.after}" class="mutation-logo-preview after" alt="after" onerror="this.style.display='none'">` : `<div class="mutation-logo-placeholder after">∅</div>`}
-                                </div>
-                              </div>
-                            `,
-                              )
-                              .join("")}
-                          </div>
+                          </code>
                         `
                             : `
                           <span class="no-mutations">No visible changes detected</span>
@@ -1382,6 +1372,61 @@ function truncateText(text, maxLength) {
   return text.substring(0, maxLength - 3) + "...";
 }
 
+// Helper function to parse logo UUIDs and create preview elements
+function getLogoPreviewElement(logoValue, type) {
+  if (!logoValue || logoValue === "null") {
+    return `<div class="mutation-logo-placeholder ${type}">∅</div>`;
+  }
+
+  let logoUrl = logoValue;
+
+  // Parse @logo: format to extract UUID and construct proper URL
+  if (logoValue.includes("@logo:")) {
+    const uuidMatch = logoValue.match(/@logo:([a-f0-9-]{36})/);
+    if (uuidMatch) {
+      const logoUuid = uuidMatch[1];
+      // Get base URL from window location
+      const baseUrl = window.location.origin;
+      logoUrl = `${baseUrl}/api/logos/${logoUuid}`;
+    }
+  }
+
+  if (logoUrl.startsWith("http")) {
+    return `<img src="${logoUrl}"
+                 class="mutation-logo-preview ${type}"
+                 alt="${type}"
+                 onmouseover="showLogoPopup(event, '${logoUrl}')"
+                 onmouseout="hideLogoPopup()"
+                 onerror="this.style.display='none'">`;
+  }
+
+  return `<div class="mutation-logo-placeholder ${type}">∅</div>`;
+}
+
+// Logo popup functions
+function showLogoPopup(event, logoUrl) {
+  // Remove any existing popup
+  hideLogoPopup();
+
+  const popup = document.createElement("div");
+  popup.id = "logo-popup";
+  popup.className = "logo-popup";
+  popup.innerHTML = `<img src="${logoUrl}" alt="Logo preview" class="logo-popup-image">`;
+
+  // Position popup near mouse
+  popup.style.left = event.pageX + 10 + "px";
+  popup.style.top = event.pageY - 50 + "px";
+
+  document.body.appendChild(popup);
+}
+
+function hideLogoPopup() {
+  const popup = document.getElementById("logo-popup");
+  if (popup) {
+    popup.remove();
+  }
+}
+
 function toggleRuleFilter(ruleIndex) {
   const filterState = window.previewFilterState;
   if (!filterState) return;
@@ -1466,10 +1511,10 @@ function updateChannelVisibility() {
   channelRows.forEach((row) => {
     const appliedRules = JSON.parse(row.dataset.appliedRules || "[]");
 
-    // Show channel if any of its applied rules are selected, or if all rules are selected
+    // Show channel if any of its applied rules are selected
+    // Allow showing nothing when no rules are selected (deselect all)
     const shouldShow =
-      filterState.selectedRules.size === 0 ||
-      filterState.selectedRules.size === filterState.allRules.length ||
+      filterState.selectedRules.size > 0 &&
       appliedRules.some((ruleId) => selectedRuleIds.has(ruleId));
 
     row.style.display = shouldShow ? "block" : "none";

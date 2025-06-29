@@ -316,7 +316,7 @@ impl DataMappingService {
         let mut engine = DataMappingEngine::new();
         let total_channels = channels.len();
         let test_rule_clone = test_rule.clone();
-        let mapped_channels = engine.apply_mapping_rules(
+        let (mapped_channels, _rule_performance) = engine.apply_mapping_rules(
             channels,
             vec![test_rule],
             logo_assets,
@@ -705,7 +705,7 @@ impl DataMappingService {
     ) -> Result<
         (
             Vec<crate::models::data_mapping::MappedChannel>,
-            std::collections::HashMap<String, (u128, u128, usize)>,
+            std::collections::HashMap<Uuid, (u128, u128, usize)>,
         ),
         anyhow::Error,
     > {
@@ -770,9 +770,7 @@ impl DataMappingService {
 
         match engine.apply_mapping_rules(channels.clone(), rules, logo_assets, source_id, base_url)
         {
-            Ok(mapped_channels) => {
-                // Capture stats after processing but before they're cleared
-                let rule_performance = engine.get_rule_performance_summary();
+            Ok((mapped_channels, rule_performance)) => {
                 info!(
                     "Data mapping completed for source {}: {} channels processed",
                     source_id,

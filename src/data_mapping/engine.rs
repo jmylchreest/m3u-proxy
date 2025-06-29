@@ -103,7 +103,7 @@ impl RegexCaptures {
 
 pub struct DataMappingEngine {
     regex_cache: HashMap<String, Regex>,
-    rule_stats: HashMap<String, (u128, usize)>, // (total_time_micros, channels_processed)
+    rule_stats: HashMap<Uuid, (u128, usize)>, // (total_time_nanos, channels_processed)
     precheck_special_chars: String,
     minimum_literal_length: usize,
 }
@@ -129,7 +129,8 @@ impl DataMappingEngine {
         logo_assets: HashMap<Uuid, LogoAsset>,
         source_id: Uuid,
         base_url: &str,
-    ) -> Result<Vec<MappedChannel>, Box<dyn std::error::Error>> {
+    ) -> Result<(Vec<MappedChannel>, HashMap<Uuid, (u128, u128, usize)>), Box<dyn std::error::Error>>
+    {
         let mut mapped_channels = Vec::with_capacity(channels.len());
 
         let active_rules: Vec<_> = rules
@@ -161,8 +162,9 @@ impl DataMappingEngine {
             let record_duration = record_start.elapsed();
 
             debug!(
-                "record_processing_time={}μs for channel '{}'",
-                record_duration.as_micros(),
+                "record_processing_time={}ns ({}μs) for channel '{}'",
+                record_duration.as_nanos(),
+                (record_duration.as_nanos() + 500) / 1000,
                 original_name
             );
 
@@ -222,57 +224,75 @@ impl DataMappingEngine {
             let mut sorted_rules: Vec<_> = self.rule_stats.iter().collect();
             sorted_rules.sort_by(|a, b| b.1 .0.cmp(&a.1 .0)); // Sort by total time descending
 
-            for (rule_name, (total_time_micros, channels_processed)) in sorted_rules {
-                let avg_time_micros = if *channels_processed > 0 {
-                    total_time_micros / (*channels_processed as u128)
+            for (rule_id, (total_time_nanos, channels_processed)) in sorted_rules {
+                let avg_time_nanos = if *channels_processed > 0 {
+                    total_time_nanos / (*channels_processed as u128)
                 } else {
                     0
                 };
 
-                let time_display = if *total_time_micros >= 1000 {
-                    format!("{:.2}ms", *total_time_micros as f64 / 1000.0)
+                // Convert nanoseconds to microseconds for display
+                let total_time_micros_display = (*total_time_nanos + 500) / 1000;
+                let avg_time_micros_display = (avg_time_nanos + 500) / 1000;
+
+                let time_display = if total_time_micros_display >= 1000 {
+                    format!("{:.2}ms", total_time_micros_display as f64 / 1000.0)
                 } else {
-                    format!("{}μs", total_time_micros)
+                    format!("{}μs", total_time_micros_display)
                 };
 
-                let avg_display = if avg_time_micros >= 1000 {
-                    format!("{:.2}ms", avg_time_micros as f64 / 1000.0)
+                let avg_display = if avg_time_micros_display >= 1000 {
+                    format!("{:.2}ms", avg_time_micros_display as f64 / 1000.0)
                 } else {
-                    format!("{}μs", avg_time_micros)
+                    format!("{}μs", avg_time_micros_display)
                 };
+
+                // Find the rule name from active_rules
+                let rule_name = active_rules
+                    .iter()
+                    .find(|rule| rule.rule.id == *rule_id)
+                    .map(|rule| rule.rule.name.as_str())
+                    .unwrap_or("Unknown Rule");
 
                 info!(
-                    "  rule_processing_time={} rule='{}' avg_per_channel={} channels_processed={}",
-                    time_display, rule_name, avg_display, channels_processed
+                    "  rule_processing_time={} rule_id='{}' rule_name='{}' avg_per_channel={} channels_processed={}",
+                    time_display, rule_id, rule_name, avg_display, channels_processed
                 );
             }
         }
         info!("=== End Performance Summary ===");
 
+        // Capture stats before clearing
+        let performance_stats = self.get_rule_performance_summary();
+
         // Clear stats for next run
         self.rule_stats.clear();
 
-        Ok(mapped_channels)
+        Ok((mapped_channels, performance_stats))
     }
 
     /// Get current rule performance statistics before they are cleared
-    pub fn get_rule_stats(&self) -> &HashMap<String, (u128, usize)> {
+    pub fn get_rule_stats(&self) -> &HashMap<Uuid, (u128, usize)> {
         &self.rule_stats
     }
 
     /// Get rule performance statistics and calculate averages
-    pub fn get_rule_performance_summary(&self) -> HashMap<String, (u128, u128, usize)> {
+    pub fn get_rule_performance_summary(&self) -> HashMap<Uuid, (u128, u128, usize)> {
         self.rule_stats
             .iter()
-            .map(|(rule_name, (total_time_micros, channels_processed))| {
-                let avg_time_micros = if *channels_processed > 0 {
-                    total_time_micros / (*channels_processed as u128)
+            .map(|(rule_id, (total_time_nanos, channels_processed))| {
+                let avg_time_nanos = if *channels_processed > 0 {
+                    total_time_nanos / (*channels_processed as u128)
                 } else {
                     0
                 };
+                // Convert to microseconds for display (with decimal precision)
+                let total_time_micros = (total_time_nanos + 500) / 1000; // Round to nearest microsecond
+                let avg_time_micros = (avg_time_nanos + 500) / 1000; // Round to nearest microsecond
+
                 (
-                    rule_name.clone(),
-                    (*total_time_micros, avg_time_micros, *channels_processed),
+                    *rule_id,
+                    (total_time_micros, avg_time_micros, *channels_processed),
                 )
             })
             .collect()
@@ -326,7 +346,7 @@ impl DataMappingEngine {
                 let filter_result =
                     self.first_pass_regex_filter(&mapped.original, &rule.conditions);
 
-                let precheck_duration = precheck_start.elapsed().as_micros();
+                let precheck_duration = precheck_start.elapsed().as_nanos();
                 total_precheck_time += precheck_duration;
 
                 if filter_result {
@@ -348,7 +368,7 @@ impl DataMappingEngine {
 
                 if is_regex_rule {
                     regex_evaluated += 1;
-                    let regex_duration = regex_start.elapsed().as_micros();
+                    let regex_duration = regex_start.elapsed().as_nanos();
                     total_regex_time += regex_duration;
                 }
 
@@ -381,24 +401,25 @@ impl DataMappingEngine {
                 }
             }
 
-            let rule_duration = rule_start.elapsed().as_micros();
+            let rule_duration = rule_start.elapsed().as_nanos();
 
             // Track rule performance statistics
-            let entry = self
-                .rule_stats
-                .entry(rule.rule.name.clone())
-                .or_insert((0, 0));
+            let entry = self.rule_stats.entry(rule.rule.id).or_insert((0, 0));
             entry.0 += rule_duration;
             entry.1 += 1;
 
             debug!(
-                "Rule stats updated: '{}' total_time={}μs processed_channels={}",
-                rule.rule.name, entry.0, entry.1
+                "Rule stats updated: '{}' (ID: {}) total_time={}ns ({}μs) processed_channels={}",
+                rule.rule.name,
+                rule.rule.id,
+                entry.0,
+                (entry.0 + 500) / 1000,
+                entry.1
             );
         }
 
         debug!(
-            "'{}': precheck({}μs, {}/{}) regex({}μs, {})",
+            "'{}': precheck({}ns, {}/{}) regex({}ns, {})",
             mapped.original.channel_name,
             total_precheck_time,
             precheck_passed,
@@ -1051,11 +1072,11 @@ impl DataMappingEngine {
     fn get_field_value(&self, channel: &Channel, field_name: &str) -> Option<String> {
         match field_name {
             "channel_name" => Some(channel.channel_name.clone()),
-            "tvg_id" => channel.tvg_id.clone(),
-            "tvg_name" => channel.tvg_name.clone(),
-            "tvg_logo" => channel.tvg_logo.clone(),
-            "tvg_shift" => channel.tvg_shift.clone(),
-            "group_title" => channel.group_title.clone(),
+            "tvg_id" => Some(channel.tvg_id.clone().unwrap_or_default()),
+            "tvg_name" => Some(channel.tvg_name.clone().unwrap_or_default()),
+            "tvg_logo" => Some(channel.tvg_logo.clone().unwrap_or_default()),
+            "tvg_shift" => Some(channel.tvg_shift.clone().unwrap_or_default()),
+            "group_title" => Some(channel.group_title.clone().unwrap_or_default()),
             "stream_url" => Some(channel.stream_url.clone()),
             _ => None,
         }
@@ -1064,11 +1085,11 @@ impl DataMappingEngine {
     fn get_mapped_field_value(&self, mapped: &MappedChannel, field_name: &str) -> Option<String> {
         match field_name {
             "channel_name" => Some(mapped.mapped_channel_name.clone()),
-            "tvg_id" => mapped.mapped_tvg_id.clone(),
-            "tvg_name" => mapped.mapped_tvg_name.clone(),
-            "tvg_logo" => mapped.mapped_tvg_logo.clone(),
-            "tvg_shift" => mapped.mapped_tvg_shift.clone(),
-            "group_title" => mapped.mapped_group_title.clone(),
+            "tvg_id" => Some(mapped.mapped_tvg_id.clone().unwrap_or_default()),
+            "tvg_name" => Some(mapped.mapped_tvg_name.clone().unwrap_or_default()),
+            "tvg_logo" => Some(mapped.mapped_tvg_logo.clone().unwrap_or_default()),
+            "tvg_shift" => Some(mapped.mapped_tvg_shift.clone().unwrap_or_default()),
+            "group_title" => Some(mapped.mapped_group_title.clone().unwrap_or_default()),
             "stream_url" => Some(mapped.original.stream_url.clone()),
             _ => None,
         }
@@ -1403,9 +1424,9 @@ impl DataMappingEngine {
         match field_name {
             "channel_id" => Some(channel.channel_id.clone()),
             "channel_name" => Some(channel.channel_name.clone()),
-            "channel_logo" => channel.channel_logo.clone(),
-            "channel_group" => channel.channel_group.clone(),
-            "language" => channel.language.clone(),
+            "channel_logo" => Some(channel.channel_logo.clone().unwrap_or_default()),
+            "channel_group" => Some(channel.channel_group.clone().unwrap_or_default()),
+            "language" => Some(channel.language.clone().unwrap_or_default()),
             _ => None,
         }
     }
@@ -1418,9 +1439,9 @@ impl DataMappingEngine {
         match field_name {
             "channel_id" => Some(mapped.mapped_channel_id.clone()),
             "channel_name" => Some(mapped.mapped_channel_name.clone()),
-            "channel_logo" => mapped.mapped_channel_logo.clone(),
-            "channel_group" => mapped.mapped_channel_group.clone(),
-            "language" => mapped.mapped_language.clone(),
+            "channel_logo" => Some(mapped.mapped_channel_logo.clone().unwrap_or_default()),
+            "channel_group" => Some(mapped.mapped_channel_group.clone().unwrap_or_default()),
+            "language" => Some(mapped.mapped_language.clone().unwrap_or_default()),
             _ => None,
         }
     }
@@ -1974,7 +1995,7 @@ mod tests {
 
         // Verify the channel was removed
         assert!(result.is_ok());
-        let mapped_channels = result.unwrap();
+        let (mapped_channels, _) = result.unwrap();
         assert_eq!(mapped_channels.len(), 0, "Channel should have been removed");
     }
 
@@ -2087,7 +2108,7 @@ mod tests {
 
         // Verify the capture group was properly substituted
         assert!(result.is_ok());
-        let mapped_channels = result.unwrap();
+        let (mapped_channels, _performance_stats) = result.unwrap();
         assert_eq!(mapped_channels.len(), 1);
 
         let mapped_channel = &mapped_channels[0];
@@ -2187,6 +2208,8 @@ mod tests {
         };
 
         // Apply the rule
+        // Apply the rule again
+        // Apply the rule and check the result
         let result = engine.test_mapping_rule(
             vec![test_channel.clone()],
             test_rule.conditions.clone(),
@@ -2195,7 +2218,6 @@ mod tests {
             "http://localhost:8080",
         );
 
-        // Verify the rule was applied
         assert!(result.is_ok(), "Rule should apply successfully");
         let mapped_channels = result.unwrap();
         assert!(!mapped_channels.is_empty(), "Should have mapped channels");
@@ -2420,7 +2442,7 @@ mod tests {
 
             if should_match {
                 assert!(result.is_ok(), "Rule should apply for: {}", channel_name);
-                let mapped_channels = result.unwrap();
+                let (mapped_channels, _) = result.unwrap();
                 println!("Mapped channels count: {}", mapped_channels.len());
                 assert!(
                     !mapped_channels.is_empty(),
@@ -2444,7 +2466,7 @@ mod tests {
                     "Rule evaluation should not error for: {}",
                     channel_name
                 );
-                let mapped_channels = result.unwrap();
+                let (mapped_channels, _) = result.unwrap();
                 println!(
                     "Should not match - mapped channels count: {}",
                     mapped_channels.len()
@@ -2572,7 +2594,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let mapped_channels = result.unwrap();
+        let (mapped_channels, _) = result.unwrap();
 
         // Should have 3 channels, 2 with tvg_shift applied (those with +N pattern AND tvg_id)
         assert_eq!(mapped_channels.len(), 3);
@@ -2740,12 +2762,12 @@ mod tests {
             test_channels,
             vec![timeshift_rule],
             HashMap::new(),
-            source1_id,
+            Uuid::new_v4(),
             "http://localhost:8080",
         );
 
         assert!(result.is_ok());
-        let mapped_channels = result.unwrap();
+        let (mapped_channels, _) = result.unwrap();
 
         // Analyze results for preview
         let mut affected_channels = 0;
@@ -2942,7 +2964,7 @@ mod tests {
             .unwrap();
 
         println!("Results:");
-        for mapped in &result {
+        for mapped in &result.0 {
             if !mapped.applied_rules.is_empty() {
                 println!(
                     "✅ MATCHED: '{}' -> tvg_shift: {:?}",
@@ -2955,6 +2977,7 @@ mod tests {
 
         // Verify expected results - should match 4 channels with proper timeshift indicators
         let matched: Vec<_> = result
+            .0
             .iter()
             .filter(|m| !m.applied_rules.is_empty())
             .collect();
@@ -2994,6 +3017,7 @@ mod tests {
 
         // Verify channels that should NOT match
         let not_matched: Vec<_> = result
+            .0
             .iter()
             .filter(|m| m.applied_rules.is_empty())
             .collect();
@@ -3213,10 +3237,10 @@ mod tests {
             .unwrap();
 
         println!("\n=== RESULTS ===");
-        println!("Total mapped channels: {}", result.len());
+        println!("Total mapped channels: {}", result.0.len());
 
         let mut matched_count = 0;
-        for mapped in &result {
+        for mapped in &result.0 {
             if !mapped.applied_rules.is_empty() {
                 matched_count += 1;
                 println!(

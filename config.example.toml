@@ -59,8 +59,8 @@ local_timezone = "UTC"
 # Special characters used for regex precheck filtering
 # These characters are considered significant enough to use as first-pass filters
 # Set to empty string "" to disable special character precheck
-# Default: "+-@#$%&*=<>!~`€£{}[]"
-precheck_special_chars = "+-@#$%&*=<>!~`€£{}[]"
+# Default: "+-@#$%&*=<>!~`€£{}[]."
+precheck_special_chars = "+-@#$%&*=<>!~`€£{}[]."
 
 # Minimum length required for literal strings in regex precheck
 # Strings shorter than this will not be used for precheck filtering

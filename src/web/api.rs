@@ -1230,6 +1230,19 @@ pub async fn apply_stream_source_data_mapping(
         }
     };
 
+    // Debug logging for performance data
+    info!(
+        "Performance data collected for {} rules",
+        rule_performance.len()
+    );
+    info!("Available performance rule IDs:");
+    for (rule_id, (total_time, avg_time, processed)) in &rule_performance {
+        info!(
+            "  Performance Rule ID '{}': total={}μs, avg={}μs, channels={}",
+            rule_id, total_time, avg_time, processed
+        );
+    }
+
     // Filter to show only modified channels for preview
     let modified_channels = DataMappingService::filter_modified_channels(mapped_channels.clone());
 
@@ -1256,10 +1269,27 @@ pub async fn apply_stream_source_data_mapping(
                 let action_count = rule.actions.len();
 
                 // Get performance stats for this rule
-                let avg_execution_time = rule_performance
-                    .get(&rule.rule.name)
-                    .map(|(_, avg_micros, _)| *avg_micros)
-                    .unwrap_or(0);
+                let (total_execution_time, avg_execution_time) = rule_performance
+                    .get(&rule.rule.id)
+                    .map(|(total_micros, avg_micros, _)| (*total_micros, *avg_micros))
+                    .unwrap_or((0, 0));
+
+                // Debug logging for performance data
+                info!(
+                    "Looking up rule '{}' (ID: {}) in performance data...",
+                    rule.rule.name, rule.rule.id
+                );
+                info!(
+                    "Rule '{}' (ID: {}): performance stats lookup - found: {}, total_time: {}μs, avg_time: {}μs",
+                    rule.rule.name,
+                    rule.rule.id,
+                    rule_performance.contains_key(&rule.rule.id),
+                    total_execution_time,
+                    avg_execution_time
+                );
+                if !rule_performance.contains_key(&rule.rule.id) {
+                    info!("Available IDs in performance data: {:?}", rule_performance.keys().collect::<Vec<_>>());
+                }
 
                 serde_json::json!({
                     "rule_id": rule.rule.id,
@@ -1269,6 +1299,7 @@ pub async fn apply_stream_source_data_mapping(
                     "condition_count": condition_count,
                     "action_count": action_count,
                     "avg_execution_time": avg_execution_time,
+                    "total_execution_time": total_execution_time,
                     "sort_order": rule.rule.sort_order,
                     "conditions": rule.conditions.iter().map(|c| {
                         serde_json::json!({
@@ -1433,6 +1464,7 @@ async fn apply_data_mapping_rules_impl(
 
             let mut all_preview_channels = Vec::new();
             let mut total_channels = 0;
+            let mut combined_performance_data = std::collections::HashMap::new();
 
             // Process all sources
             for source in sources.iter() {
@@ -1444,7 +1476,7 @@ async fn apply_data_mapping_rules_impl(
                 total_channels += channels.len();
 
                 if !channels.is_empty() {
-                    let (mapped_channels, _) = match state
+                    let (mapped_channels, rule_performance) = match state
                         .data_mapping_service
                         .apply_mapping_with_metadata(
                             channels.clone(),
@@ -1458,6 +1490,18 @@ async fn apply_data_mapping_rules_impl(
                         Ok(result) => result,
                         Err(_) => continue,
                     };
+
+                    // Merge performance data from all sources
+                    for (rule_id, (total_time, avg_time, processed_count)) in rule_performance {
+                        let entry = combined_performance_data.entry(rule_id).or_insert((0u128, 0u128, 0usize));
+                        entry.0 += total_time; // Sum total execution times
+                        entry.1 = if entry.2 + processed_count > 0 {
+                            (entry.1 * entry.2 as u128 + avg_time * processed_count as u128) / (entry.2 + processed_count) as u128
+                        } else {
+                            0
+                        }; // Recalculate weighted average
+                        entry.2 += processed_count; // Sum processed counts
+                    }
 
                     // Filter to show only modified channels
                     let modified_channels =
@@ -1498,33 +1542,36 @@ async fn apply_data_mapping_rules_impl(
                         let condition_count = rule.conditions.len();
                         let action_count = rule.actions.len();
 
-                        // For global preview, we don't have individual rule performance data
-                        // So we'll use a placeholder for now
-                        let avg_execution_time = 0;
+                        // Get actual performance data for this rule
+                        let (total_execution_time, avg_execution_time, _processed_count) = 
+                            combined_performance_data.get(&rule.rule.id)
+                                .map(|(total, avg, count)| (*total, *avg, *count))
+                                .unwrap_or((0, 0, 0));
 
                         serde_json::json!({
-                            "rule_id": rule.rule.id,
-                            "rule_name": rule.rule.name,
-                            "rule_description": rule.rule.description,
-                            "affected_channels_count": affected_count,
-                            "condition_count": condition_count,
-                            "action_count": action_count,
-                            "avg_execution_time": avg_execution_time,
-                            "sort_order": rule.rule.sort_order,
-                            "conditions": rule.conditions.iter().map(|c| {
-                                serde_json::json!({
-                                    "field": c.field_name,
-                                    "operator": format!("{:?}", c.operator),
-                                    "value": c.value
-                                })
-                            }).collect::<Vec<_>>(),
-                            "actions": rule.actions.iter().map(|a| {
-                                serde_json::json!({
-                                    "field": a.target_field,
-                                    "value": a.value
-                                })
-                            }).collect::<Vec<_>>()
-                        })
+                                "rule_id": rule.rule.id,
+                                "rule_name": rule.rule.name,
+                                "rule_description": rule.rule.description,
+                                "affected_channels_count": affected_count,
+                                "condition_count": condition_count,
+                                "action_count": action_count,
+                                "avg_execution_time": avg_execution_time,
+                        "total_execution_time": total_execution_time,
+                                "sort_order": rule.rule.sort_order,
+                                "conditions": rule.conditions.iter().map(|c| {
+                                    serde_json::json!({
+                                        "field": c.field_name,
+                                        "operator": format!("{:?}", c.operator),
+                                        "value": c.value
+                                    })
+                                }).collect::<Vec<_>>(),
+                                "actions": rule.actions.iter().map(|a| {
+                                    serde_json::json!({
+                                        "field": a.target_field,
+                                        "value": a.value
+                                    })
+                                }).collect::<Vec<_>>()
+                            })
                     })
                     .collect::<Vec<_>>(),
                 Err(_) => vec![],

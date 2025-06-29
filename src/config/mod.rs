@@ -136,7 +136,7 @@ impl Default for DatabaseBatchConfig {
 impl Default for DataMappingEngineConfig {
     fn default() -> Self {
         Self {
-            precheck_special_chars: Some("+-@#$%&*=<>!~`€£{}[]".to_string()),
+            precheck_special_chars: Some("+-@#$%&*=<>!~`€£{}[].".to_string()),
             minimum_literal_length: Some(2),
         }
     }

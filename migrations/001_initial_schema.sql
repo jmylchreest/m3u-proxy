@@ -164,31 +164,8 @@ CREATE TABLE data_mapping_rules (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Data Mapping Conditions Table
-CREATE TABLE data_mapping_conditions (
-    id TEXT PRIMARY KEY NOT NULL,
-    rule_id TEXT NOT NULL REFERENCES data_mapping_rules(id) ON DELETE CASCADE,
-    field_name TEXT NOT NULL,
-    operator TEXT NOT NULL CHECK (operator IN ('matches', 'equals', 'contains', 'starts_with', 'ends_with', 'not_matches', 'not_equals', 'not_contains')),
-    value TEXT NOT NULL,
-    logical_operator TEXT CHECK (logical_operator IN ('and', 'or', 'all', 'any')),
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Data Mapping Actions Table (enhanced with EPG-specific actions)
-CREATE TABLE data_mapping_actions (
-    id TEXT PRIMARY KEY NOT NULL,
-    rule_id TEXT NOT NULL REFERENCES data_mapping_rules(id) ON DELETE CASCADE,
-    action_type TEXT NOT NULL CHECK (action_type IN ('set_value', 'set_default_if_empty', 'set_logo', 'timeshift_epg', 'deduplicate_stream_urls', 'remove_channel')),
-    target_field TEXT NOT NULL,
-    value TEXT,
-    logo_asset_id TEXT,
-    timeshift_minutes INTEGER, -- For timeshift EPG action
-
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+-- Note: Legacy condition/action tables removed
+-- Data mapping now uses expression-only format stored in data_mapping_rules.expression column
 
 -- Logo Assets Table
 CREATE TABLE logo_assets (
@@ -258,15 +235,6 @@ CREATE INDEX idx_data_mapping_rules_sort_order ON data_mapping_rules(sort_order)
 CREATE INDEX idx_data_mapping_rules_active ON data_mapping_rules(is_active);
 CREATE INDEX idx_data_mapping_rules_source_type ON data_mapping_rules(source_type);
 CREATE INDEX idx_data_mapping_rules_expression ON data_mapping_rules(expression);
-
--- Data Mapping Conditions
-CREATE INDEX idx_data_mapping_conditions_rule_id ON data_mapping_conditions(rule_id);
-CREATE INDEX idx_data_mapping_conditions_sort_order ON data_mapping_conditions(rule_id, sort_order);
-
--- Data Mapping Actions
-CREATE INDEX idx_data_mapping_actions_rule_id ON data_mapping_actions(rule_id);
-CREATE INDEX idx_data_mapping_actions_sort_order ON data_mapping_actions(rule_id, sort_order);
-CREATE INDEX idx_data_mapping_actions_logo_asset ON data_mapping_actions(logo_asset_id);
 
 -- Logo Assets
 CREATE INDEX idx_logo_assets_type ON logo_assets(asset_type);

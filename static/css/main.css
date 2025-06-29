@@ -3313,6 +3313,74 @@ body.dark-theme .standard-modal .table tbody tr:hover {
     color: var(--text-color);
 }
 
+/* Expression Tree Visualization */
+.expression-tree-container {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.expression-tree-header {
+    margin-bottom: 0.75rem;
+}
+
+.expression-tree-header strong {
+    display: block;
+    color: var(--text-color);
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0;
+}
+
+.expression-tree {
+    font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, "Courier New", monospace;
+    font-size: 0.813rem;
+    line-height: 1.5;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: calc(var(--border-radius) * 0.75);
+    padding: 0.75rem;
+    overflow-x: auto;
+}
+
+.tree-node {
+    white-space: pre;
+    margin: 0;
+    padding: 0.125rem 0;
+}
+
+.tree-operator {
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.tree-condition {
+    color: var(--text-color);
+}
+
+.tree-connector {
+    color: var(--text-muted);
+}
+
+/* Dark theme adjustments */
+body.dark-theme .expression-tree {
+    background: #2d2d2d;
+    border-color: #404040;
+}
+
+body.dark-theme .tree-operator {
+    color: var(--primary-color);
+}
+
+body.dark-theme .tree-condition {
+    color: #e0e0e0;
+}
+
+body.dark-theme .tree-connector {
+    color: #888888;
+}
+
 /* Standard button colors */
 .btn-success {
     background-color: var(--success-color);

@@ -383,8 +383,6 @@ pub enum ActionOperator {
     #[serde(rename = "append")]
     Append, // += (append with space)
 
-    #[serde(rename = "set_if_empty")]
-    SetIfEmpty, // ?= (set only if empty)
 
     #[serde(rename = "remove")]
     Remove, // -= (remove substring)

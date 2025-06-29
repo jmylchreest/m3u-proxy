@@ -657,6 +657,144 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// Generate a visual tree representation of an expression
+function generateExpressionTree(expression) {
+  if (!expression || typeof expression !== "string") {
+    return "";
+  }
+
+  try {
+    // Parse the expression to extract logical structure
+    const tree = parseExpressionToTree(expression);
+    if (!tree) return "";
+
+    return `
+      <div class="expression-tree-container">
+        <div class="expression-tree-header">
+          <strong>Logical Structure:</strong>
+        </div>
+        <div class="expression-tree">
+          ${renderTreeNode(tree, 0)}
+        </div>
+      </div>
+    `;
+  } catch (error) {
+    console.warn("Failed to parse expression tree:", error);
+    return "";
+  }
+}
+
+// Simple expression parser for tree visualization
+function parseExpressionToTree(expression) {
+  // Remove the SET action part for tree visualization
+  let conditionPart = expression.split(" SET ")[0].trim();
+
+  // Handle parentheses and logical operators
+  if (conditionPart.includes(" AND ") || conditionPart.includes(" OR ")) {
+    return parseLogicalExpression(conditionPart);
+  } else {
+    return parseCondition(conditionPart);
+  }
+}
+
+// Parse logical expressions with AND/OR
+function parseLogicalExpression(expr) {
+  // Simple parsing - look for main logical operator
+  // Handle parentheses by finding the main operator outside parentheses
+
+  let depth = 0;
+  let mainOperatorPos = -1;
+  let mainOperator = null;
+
+  // Find the main logical operator (AND/OR) outside parentheses
+  for (let i = 0; i < expr.length; i++) {
+    if (expr[i] === "(") depth++;
+    else if (expr[i] === ")") depth--;
+    else if (depth === 0) {
+      if (expr.substr(i, 5) === " AND ") {
+        mainOperatorPos = i;
+        mainOperator = "AND";
+        break;
+      } else if (expr.substr(i, 4) === " OR ") {
+        mainOperatorPos = i;
+        mainOperator = "OR";
+        break;
+      }
+    }
+  }
+
+  if (mainOperator && mainOperatorPos > 0) {
+    const left = expr.substring(0, mainOperatorPos).trim();
+    const right = expr
+      .substring(mainOperatorPos + mainOperator.length + 2)
+      .trim();
+
+    return {
+      type: "operator",
+      operator: mainOperator,
+      children: [parseExpressionToTree(left), parseExpressionToTree(right)],
+    };
+  }
+
+  // Remove outer parentheses if present
+  if (expr.startsWith("(") && expr.endsWith(")")) {
+    return parseExpressionToTree(expr.slice(1, -1));
+  }
+
+  return parseCondition(expr);
+}
+
+// Parse individual conditions
+function parseCondition(condition) {
+  // Match patterns like "field operator value"
+  const match = condition.match(
+    /^(.+?)\s+(equals|contains|matches|starts_with|ends_with|not_equals|not_contains|not_matches)\s+"?([^"]*)"?$/,
+  );
+
+  if (match) {
+    return {
+      type: "condition",
+      field: match[1].trim(),
+      operator: match[2],
+      value: match[3],
+    };
+  }
+
+  return {
+    type: "condition",
+    field: "unknown",
+    operator: "unknown",
+    value: condition,
+  };
+}
+
+// Render a tree node with proper indentation
+function renderTreeNode(node, depth) {
+  if (!node) return "";
+
+  const indent = "  ".repeat(depth);
+
+  if (node.type === "operator") {
+    let html = `<div class="tree-node tree-operator">${indent}${node.operator}</div>`;
+
+    node.children.forEach((child, index) => {
+      const isLast = index === node.children.length - 1;
+      const connector = isLast ? "└── " : "├── ";
+
+      if (child.type === "operator") {
+        html += `<div class="tree-node tree-connector">${indent}${connector}</div>`;
+        html += renderTreeNode(child, depth + 1);
+      } else {
+        html += `<div class="tree-node tree-condition">${indent}${connector}(${escapeHtml(child.field)} ${child.operator} "${escapeHtml(child.value)}")</div>`;
+      }
+    });
+
+    return html;
+  } else {
+    return `<div class="tree-node tree-condition">${indent}(${escapeHtml(node.field)} ${node.operator} "${escapeHtml(node.value)}")</div>`;
+  }
+}
+
 // Load all data mapping rules
 async function loadRules() {
   try {
@@ -692,9 +830,9 @@ function renderRules() {
   container.innerHTML = currentRules
     .map(
       (rule, index) => `
-    <div class="rule-card" data-rule-id="${rule.id}" data-sort-order="${rule.sort_order}" draggable="true">
+    <div class="rule-card" data-rule-id="${rule.id}" data-sort-order="${rule.sort_order}">
       <div class="rule-header">
-        <div class="drag-handle" title="Drag to reorder">
+        <div class="drag-handle" title="Drag to reorder" draggable="true">
           <span class="drag-icon">⋮</span>
           <span class="rule-order">#${index + 1}</span>
         </div>
@@ -724,6 +862,7 @@ function renderRules() {
         <div class="rule-expression">
           <strong>Expression:</strong>
           <pre><code>${escapeHtml(rule.expression || "No expression defined")}</code></pre>
+          ${rule.expression ? generateExpressionTree(rule.expression) : ""}
         </div>
       </div>
     </div>
@@ -2314,10 +2453,14 @@ let draggedElement = null;
 let draggedElementId = null;
 
 function enableDragAndDrop() {
+  const dragHandles = document.querySelectorAll(".drag-handle");
+  dragHandles.forEach((handle) => {
+    handle.addEventListener("dragstart", handleDragStart);
+    handle.addEventListener("dragend", handleDragEnd);
+  });
+
   const ruleItems = document.querySelectorAll(".rule-card");
   ruleItems.forEach((item) => {
-    item.addEventListener("dragstart", handleDragStart);
-    item.addEventListener("dragend", handleDragEnd);
     item.addEventListener("dragover", handleDragOver);
     item.addEventListener("drop", handleDrop);
     item.addEventListener("dragenter", handleDragEnter);
@@ -2333,11 +2476,11 @@ function enableDragAndDrop() {
 }
 
 function handleDragStart(e) {
-  draggedElement = this;
-  draggedElementId = this.dataset.ruleId;
-  this.classList.add("dragging");
+  draggedElement = this.closest(".rule-card");
+  draggedElementId = draggedElement.dataset.ruleId;
+  draggedElement.classList.add("dragging");
   e.dataTransfer.effectAllowed = "move";
-  e.dataTransfer.setData("text/html", this.outerHTML);
+  e.dataTransfer.setData("text/html", draggedElement.outerHTML);
 }
 
 function handleDragOver(e) {

@@ -696,7 +696,7 @@ pub async fn get_epg_filter_fields(
 // Data Mapping API
 pub async fn list_data_mapping_rules(
     State(state): State<AppState>,
-) -> Result<Json<Vec<crate::models::data_mapping::DataMappingRuleWithDetails>>, StatusCode> {
+) -> Result<Json<Vec<crate::models::data_mapping::DataMappingRule>>, StatusCode> {
     match state.data_mapping_service.get_all_rules().await {
         Ok(rules) => Ok(Json(rules)),
         Err(e) => {
@@ -709,7 +709,7 @@ pub async fn list_data_mapping_rules(
 pub async fn create_data_mapping_rule(
     State(state): State<AppState>,
     Json(payload): Json<crate::models::data_mapping::DataMappingRuleCreateRequest>,
-) -> Result<Json<crate::models::data_mapping::DataMappingRuleWithDetails>, StatusCode> {
+) -> Result<Json<crate::models::data_mapping::DataMappingRule>, StatusCode> {
     match state.data_mapping_service.create_rule(payload).await {
         Ok(rule) => Ok(Json(rule)),
         Err(e) => {
@@ -722,7 +722,7 @@ pub async fn create_data_mapping_rule(
 pub async fn get_data_mapping_rule(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
-) -> Result<Json<crate::models::data_mapping::DataMappingRuleWithDetails>, StatusCode> {
+) -> Result<Json<crate::models::data_mapping::DataMappingRule>, StatusCode> {
     match state.data_mapping_service.get_rule_with_details(id).await {
         Ok(rule) => Ok(Json(rule)),
         Err(e) => {
@@ -736,7 +736,7 @@ pub async fn update_data_mapping_rule(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
     Json(payload): Json<crate::models::data_mapping::DataMappingRuleUpdateRequest>,
-) -> Result<Json<crate::models::data_mapping::DataMappingRuleWithDetails>, StatusCode> {
+) -> Result<Json<crate::models::data_mapping::DataMappingRule>, StatusCode> {
     match state.data_mapping_service.update_rule(id, payload).await {
         Ok(rule) => Ok(Json(rule)),
         Err(e) => {
@@ -1081,32 +1081,6 @@ pub async fn test_data_mapping_rule(
                                             format!("Set {} = {}", action.target_field, display_template)
                                         }
                                     },
-                                    crate::models::data_mapping::DataMappingActionType::SetDefaultIfEmpty => {
-                                        let template = action.value.as_deref().unwrap_or("");
-                                        let resolved_value = get_resolved_value(&mc, &action.target_field);
-
-                                        // Check if template contains @logo: reference
-                                        let display_template = if template.starts_with("@logo:") {
-                                            if let Ok(logo_uuid) = uuid::Uuid::parse_str(&template[6..]) {
-                                                if let Some(logo_asset) = logo_assets.get(&logo_uuid) {
-                                                    let logo_url = crate::utils::generate_logo_url(&state.config.web.base_url, logo_uuid);
-                                                    format!("@logo:{} ({})", &logo_asset.name, logo_url)
-                                                } else {
-                                                    format!("{} (logo not found)", template)
-                                                }
-                                            } else {
-                                                template.to_string()
-                                            }
-                                        } else {
-                                            template.to_string()
-                                        };
-
-                                        if template.contains('$') && resolved_value.is_some() {
-                                            format!("Set default {} = {} ('{}')", action.target_field, display_template, resolved_value.unwrap())
-                                        } else {
-                                            format!("Set default {} = {}", action.target_field, display_template)
-                                        }
-                                    },
                                     crate::models::data_mapping::DataMappingActionType::SetLogo => {
                                         if let Some(logo_id) = action.logo_asset_id {
                                             if let Some(logo_asset) = logo_assets.get(&logo_id) {
@@ -1263,57 +1237,41 @@ pub async fn apply_stream_source_data_mapping(
             .map(|rule| {
                 let affected_count = modified_channels
                     .iter()
-                    .filter(|mc| mc.applied_rules.contains(&rule.rule.id))
+                    .filter(|mc| mc.applied_rules.contains(&rule.name))
                     .count();
-                let condition_count = rule.conditions.len();
-                let action_count = rule.actions.len();
 
                 // Get performance stats for this rule
                 let (total_execution_time, avg_execution_time) = rule_performance
-                    .get(&rule.rule.id)
+                    .get(&rule.id)
                     .map(|(total_micros, avg_micros, _)| (*total_micros, *avg_micros))
                     .unwrap_or((0, 0));
 
                 // Debug logging for performance data
                 info!(
                     "Looking up rule '{}' (ID: {}) in performance data...",
-                    rule.rule.name, rule.rule.id
+                    rule.name, rule.id
                 );
                 info!(
                     "Rule '{}' (ID: {}): performance stats lookup - found: {}, total_time: {}μs, avg_time: {}μs",
-                    rule.rule.name,
-                    rule.rule.id,
-                    rule_performance.contains_key(&rule.rule.id),
+                    rule.name,
+                    rule.id,
+                    rule_performance.contains_key(&rule.id),
                     total_execution_time,
                     avg_execution_time
                 );
-                if !rule_performance.contains_key(&rule.rule.id) {
+                if !rule_performance.contains_key(&rule.id) {
                     info!("Available IDs in performance data: {:?}", rule_performance.keys().collect::<Vec<_>>());
                 }
 
                 serde_json::json!({
-                    "rule_id": rule.rule.id,
-                    "rule_name": rule.rule.name,
-                    "rule_description": rule.rule.description,
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "rule_description": rule.description,
                     "affected_channels_count": affected_count,
-                    "condition_count": condition_count,
-                    "action_count": action_count,
+                    "expression": rule.expression,
                     "avg_execution_time": avg_execution_time,
                     "total_execution_time": total_execution_time,
-                    "sort_order": rule.rule.sort_order,
-                    "conditions": rule.conditions.iter().map(|c| {
-                        serde_json::json!({
-                            "field": c.field_name,
-                            "operator": format!("{:?}", c.operator),
-                            "value": c.value
-                        })
-                    }).collect::<Vec<_>>(),
-                    "actions": rule.actions.iter().map(|a| {
-                        serde_json::json!({
-                            "field": a.target_field,
-                            "value": a.value
-                        })
-                    }).collect::<Vec<_>>()
+                    "sort_order": rule.sort_order,
                 })
             })
             .collect::<Vec<_>>(),
@@ -1493,10 +1451,13 @@ async fn apply_data_mapping_rules_impl(
 
                     // Merge performance data from all sources
                     for (rule_id, (total_time, avg_time, processed_count)) in rule_performance {
-                        let entry = combined_performance_data.entry(rule_id).or_insert((0u128, 0u128, 0usize));
+                        let entry = combined_performance_data
+                            .entry(rule_id)
+                            .or_insert((0u128, 0u128, 0usize));
                         entry.0 += total_time; // Sum total execution times
                         entry.1 = if entry.2 + processed_count > 0 {
-                            (entry.1 * entry.2 as u128 + avg_time * processed_count as u128) / (entry.2 + processed_count) as u128
+                            (entry.1 * entry.2 as u128 + avg_time * processed_count as u128)
+                                / (entry.2 + processed_count) as u128
                         } else {
                             0
                         }; // Recalculate weighted average
@@ -1530,48 +1491,33 @@ async fn apply_data_mapping_rules_impl(
                 Ok(rules) => rules
                     .into_iter()
                     .filter(|r| {
-                        r.rule.is_active
-                            && r.rule.source_type
+                        r.is_active
+                            && r.source_type
                                 == crate::models::data_mapping::DataMappingSourceType::Stream
                     })
                     .map(|rule| {
                         let affected_count = limited_channels
                             .iter()
-                            .filter(|mc| mc.applied_rules.contains(&rule.rule.id))
+                            .filter(|mc| mc.applied_rules.contains(&rule.name))
                             .count();
-                        let condition_count = rule.conditions.len();
-                        let action_count = rule.actions.len();
 
                         // Get actual performance data for this rule
-                        let (total_execution_time, avg_execution_time, _processed_count) = 
-                            combined_performance_data.get(&rule.rule.id)
+                        let (total_execution_time, avg_execution_time, _processed_count) =
+                            combined_performance_data
+                                .get(&rule.id)
                                 .map(|(total, avg, count)| (*total, *avg, *count))
                                 .unwrap_or((0, 0, 0));
 
                         serde_json::json!({
-                                "rule_id": rule.rule.id,
-                                "rule_name": rule.rule.name,
-                                "rule_description": rule.rule.description,
+                                "rule_id": rule.id,
+                                "rule_name": rule.name,
+                                "rule_description": rule.description,
                                 "affected_channels_count": affected_count,
-                                "condition_count": condition_count,
-                                "action_count": action_count,
+                                "expression": rule.expression,
                                 "avg_execution_time": avg_execution_time,
                         "total_execution_time": total_execution_time,
-                                "sort_order": rule.rule.sort_order,
-                                "conditions": rule.conditions.iter().map(|c| {
-                                    serde_json::json!({
-                                        "field": c.field_name,
-                                        "operator": format!("{:?}", c.operator),
-                                        "value": c.value
-                                    })
-                                }).collect::<Vec<_>>(),
-                                "actions": rule.actions.iter().map(|a| {
-                                    serde_json::json!({
-                                        "field": a.target_field,
-                                        "value": a.value
-                                    })
-                                }).collect::<Vec<_>>()
-                            })
+                                "sort_order": rule.sort_order,
+                        })
                     })
                     .collect::<Vec<_>>(),
                 Err(_) => vec![],
@@ -2911,9 +2857,6 @@ fn convert_actions_for_test(
             let action_type = match action.operator {
                 crate::models::ActionOperator::Set => {
                     crate::models::data_mapping::DataMappingActionType::SetValue
-                }
-                crate::models::ActionOperator::SetIfEmpty => {
-                    crate::models::data_mapping::DataMappingActionType::SetDefaultIfEmpty
                 }
                 _ => return None, // Skip unsupported operators for now
             };

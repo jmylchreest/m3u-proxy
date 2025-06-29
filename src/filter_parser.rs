@@ -451,11 +451,6 @@ impl FilterParser {
                 current_pos += 2;
                 continue;
             }
-            if remaining.starts_with("?=") {
-                tokens.push(Token::AssignmentOp(ActionOperator::SetIfEmpty));
-                current_pos += 2;
-                continue;
-            }
             if remaining.starts_with("-=") {
                 tokens.push(Token::AssignmentOp(ActionOperator::Remove));
                 current_pos += 2;
@@ -1310,13 +1305,6 @@ mod tests {
             assert!(matches!(actions[0].operator, ActionOperator::Append));
         }
 
-        // Test SetIfEmpty operator
-        let result = parser
-            .parse_extended("channel_name contains \"test\" SET group_title ?= \"Default\"")
-            .unwrap();
-        if let ExtendedExpression::ConditionWithActions { actions, .. } = result {
-            assert!(matches!(actions[0].operator, ActionOperator::SetIfEmpty));
-        }
 
         // Test Remove operator
         let result = parser
@@ -1470,16 +1458,15 @@ mod tests {
         let parser = FilterParser::new();
 
         // BBC channel organization
-        let result = parser.parse_extended("tvg_id starts_with \"bbc\" SET tvg_logo = \"https://logos.example.com/bbc.png\", group_title ?= \"BBC Channels\", language ?= \"en\"").unwrap();
+        let result = parser.parse_extended("tvg_id starts_with \"bbc\" SET tvg_logo = \"https://logos.example.com/bbc.png\", group_title = \"BBC Channels\"").unwrap();
 
         match result {
             ExtendedExpression::ConditionWithActions { actions, .. } => {
-                assert_eq!(actions.len(), 3);
+                assert_eq!(actions.len(), 2);
                 assert_eq!(actions[0].field, "tvg_logo");
                 assert_eq!(actions[1].field, "group_title");
-                assert_eq!(actions[2].field, "language");
-                assert!(matches!(actions[1].operator, ActionOperator::SetIfEmpty));
-                assert!(matches!(actions[2].operator, ActionOperator::SetIfEmpty));
+                assert!(matches!(actions[0].operator, ActionOperator::Set));
+                assert!(matches!(actions[1].operator, ActionOperator::Set));
             }
             _ => panic!("Expected condition with actions"),
         }

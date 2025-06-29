@@ -13,6 +13,7 @@ pub struct DataMappingRule {
     pub scope: DataMappingRuleScope,
     pub sort_order: i32,
     pub is_active: bool,
+    pub expression: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -46,114 +47,25 @@ pub enum DataMappingRuleScope {
     EpgWide,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct DataMappingCondition {
-    pub id: Uuid,
-    pub rule_id: Uuid,
-    pub field_name: String,
-    pub operator: crate::models::FilterOperator,
-    pub value: String,
-    pub logical_operator: Option<crate::models::LogicalOperator>,
-    pub sort_order: i32,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct DataMappingAction {
-    pub id: Uuid,
-    pub rule_id: Uuid,
-    pub action_type: DataMappingActionType,
-    pub target_field: String,
-    pub value: Option<String>,
-    pub logo_asset_id: Option<Uuid>,
-    pub timeshift_minutes: Option<i32>, // For timeshift EPG action
-    pub sort_order: i32,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text", rename_all = "snake_case")]
-pub enum DataMappingActionType {
-    // Shared actions - work on both Stream and EPG sources (but with different fields)
-    #[serde(rename = "set_value")]
-    SetValue,
-    #[serde(rename = "set_default_if_empty")]
-    SetDefaultIfEmpty,
-    #[serde(rename = "set_logo")]
-    SetLogo,
-    // Stream-only actions
-    #[serde(rename = "timeshift_epg")]
-    TimeshiftEpg,
-    #[serde(rename = "deduplicate_stream_urls")]
-    DeduplicateStreamUrls,
-    #[serde(rename = "remove_channel")]
-    RemoveChannel,
-}
-
-impl DataMappingActionType {
-    /// Returns true if this action type is valid for the given source type
-    pub fn is_valid_for_source_type(&self, source_type: &DataMappingSourceType) -> bool {
-        match (self, source_type) {
-            // Shared actions - valid for both source types
-            (DataMappingActionType::SetValue, _) => true,
-            (DataMappingActionType::SetDefaultIfEmpty, _) => true,
-            (DataMappingActionType::SetLogo, _) => true,
-            // Stream-only actions
-            (DataMappingActionType::TimeshiftEpg, DataMappingSourceType::Stream) => true,
-            (DataMappingActionType::DeduplicateStreamUrls, DataMappingSourceType::Stream) => true,
-            (DataMappingActionType::RemoveChannel, DataMappingSourceType::Stream) => true,
-            // Cross-type restrictions
-            (DataMappingActionType::TimeshiftEpg, DataMappingSourceType::Epg) => false,
-            (DataMappingActionType::DeduplicateStreamUrls, DataMappingSourceType::Epg) => false,
-            (DataMappingActionType::RemoveChannel, DataMappingSourceType::Epg) => false,
-        }
-    }
-
-    /// Get available action types for a specific source type
-    pub fn available_for_source_type(
-        source_type: &DataMappingSourceType,
-    ) -> Vec<DataMappingActionType> {
-        match source_type {
-            DataMappingSourceType::Stream => vec![
-                DataMappingActionType::SetValue,
-                DataMappingActionType::SetDefaultIfEmpty,
-                DataMappingActionType::SetLogo,
-                DataMappingActionType::DeduplicateStreamUrls, // Deduplicates channels with same stream URL
-                DataMappingActionType::RemoveChannel, // Removes channel from output entirely
-            ],
-            DataMappingSourceType::Epg => vec![
-                DataMappingActionType::SetValue,
-                DataMappingActionType::SetDefaultIfEmpty,
-                DataMappingActionType::SetLogo,
-            ],
-        }
-    }
-}
-
-/// Available fields for Stream source data mapping
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamMappingFields;
 
 impl StreamMappingFields {
     pub fn available_fields() -> Vec<&'static str> {
         vec![
-            "channel_name",
             "tvg_id",
             "tvg_name",
             "tvg_logo",
-            "tvg_shift", // For timeshift channels
+            "tvg_shift",
             "group_title",
-            "stream_url",
+            "channel_name",
         ]
     }
 
-    pub fn is_valid_field(field_name: &str) -> bool {
-        Self::available_fields().contains(&field_name)
+    pub fn is_valid_field(field: &str) -> bool {
+        Self::available_fields().contains(&field)
     }
 }
 
-/// Available fields for EPG source data mapping
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgMappingFields;
 
 impl EpgMappingFields {
@@ -167,12 +79,11 @@ impl EpgMappingFields {
         ]
     }
 
-    pub fn is_valid_field(field_name: &str) -> bool {
-        Self::available_fields().contains(&field_name)
+    pub fn is_valid_field(field: &str) -> bool {
+        Self::available_fields().contains(&field)
     }
 }
 
-/// Field validation for data mapping
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingFieldInfo {
     pub field_name: String,
@@ -183,19 +94,11 @@ pub struct DataMappingFieldInfo {
 }
 
 impl DataMappingFieldInfo {
-    /// Get available fields for a specific source type
     pub fn available_for_source_type(
         source_type: &DataMappingSourceType,
     ) -> Vec<DataMappingFieldInfo> {
         match source_type {
             DataMappingSourceType::Stream => vec![
-                DataMappingFieldInfo {
-                    field_name: "channel_name".to_string(),
-                    display_name: "Channel Name".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: DataMappingSourceType::Stream,
-                },
                 DataMappingFieldInfo {
                     field_name: "tvg_id".to_string(),
                     display_name: "TVG ID".to_string(),
@@ -218,6 +121,13 @@ impl DataMappingFieldInfo {
                     source_type: DataMappingSourceType::Stream,
                 },
                 DataMappingFieldInfo {
+                    field_name: "tvg_shift".to_string(),
+                    display_name: "TVG Shift".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: DataMappingSourceType::Stream,
+                },
+                DataMappingFieldInfo {
                     field_name: "group_title".to_string(),
                     display_name: "Group Title".to_string(),
                     field_type: "string".to_string(),
@@ -225,8 +135,8 @@ impl DataMappingFieldInfo {
                     source_type: DataMappingSourceType::Stream,
                 },
                 DataMappingFieldInfo {
-                    field_name: "stream_url".to_string(),
-                    display_name: "Stream URL".to_string(),
+                    field_name: "channel_name".to_string(),
+                    display_name: "Channel Name".to_string(),
                     field_type: "string".to_string(),
                     nullable: false,
                     source_type: DataMappingSourceType::Stream,
@@ -272,15 +182,13 @@ impl DataMappingFieldInfo {
         }
     }
 
-    /// Validate if a field is valid for a source type
     pub fn is_valid_field_for_source_type(
-        field_name: &str,
+        field: &str,
         source_type: &DataMappingSourceType,
     ) -> bool {
-        match source_type {
-            DataMappingSourceType::Stream => StreamMappingFields::is_valid_field(field_name),
-            DataMappingSourceType::Epg => EpgMappingFields::is_valid_field(field_name),
-        }
+        Self::available_for_source_type(source_type)
+            .iter()
+            .any(|f| f.field_name == field)
     }
 }
 
@@ -294,8 +202,8 @@ pub struct MappedChannel {
     pub mapped_tvg_shift: Option<String>,
     pub mapped_group_title: Option<String>,
     pub mapped_channel_name: String,
-    pub applied_rules: Vec<Uuid>,
-    pub is_removed: bool, // True if channel should be removed from output
+    pub applied_rules: Vec<String>,
+    pub is_removed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,10 +215,10 @@ pub struct MappedEpgChannel {
     pub mapped_channel_logo: Option<String>,
     pub mapped_channel_group: Option<String>,
     pub mapped_language: Option<String>,
-    pub applied_rules: Vec<Uuid>,
-    pub clone_group_id: Option<String>, // For identifying cloned channels
-    pub is_primary_clone: bool,         // True for the primary channel in a clone group
-    pub timeshift_offset: Option<i32>,  // Timeshift offset in minutes
+    pub applied_rules: Vec<String>,
+    pub clone_group_id: Option<String>,
+    pub is_primary_clone: bool,
+    pub timeshift_offset: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -324,16 +232,7 @@ pub struct MappedEpgProgram {
     pub mapped_program_category: Option<String>,
     pub mapped_start_time: DateTime<Utc>,
     pub mapped_end_time: DateTime<Utc>,
-    pub applied_rules: Vec<Uuid>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataMappingRuleWithDetails {
-    #[serde(flatten)]
-    pub rule: DataMappingRule,
-    pub conditions: Vec<DataMappingCondition>,
-    pub actions: Vec<DataMappingAction>,
-    pub expression: Option<String>, // The parsed expression for this rule
+    pub applied_rules: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -341,41 +240,23 @@ pub struct DataMappingRuleCreateRequest {
     pub name: String,
     pub description: Option<String>,
     pub source_type: DataMappingSourceType,
-    pub expression: String, // Advanced conditional action expressions
+    pub expression: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingRuleUpdateRequest {
-    pub name: String,
+    pub name: Option<String>,
     pub description: Option<String>,
-    pub source_type: DataMappingSourceType,
-    pub expression: String, // Advanced conditional action expressions
-    pub is_active: bool,
-}
-
-// Helper structs for API compatibility and testing
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataMappingConditionRequest {
-    pub field_name: String,
-    pub operator: crate::models::FilterOperator,
-    pub value: String,
-    pub logical_operator: Option<crate::models::LogicalOperator>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataMappingActionRequest {
-    pub action_type: DataMappingActionType,
-    pub target_field: String,
-    pub value: Option<String>,
-    pub logo_asset_id: Option<Uuid>,
-    pub timeshift_minutes: Option<i32>, // For timeshift EPG action
+    pub source_type: Option<DataMappingSourceType>,
+    pub expression: Option<String>,
+    pub is_active: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingTestRequest {
     pub source_id: Uuid,
     pub source_type: DataMappingSourceType,
-    pub expression: String, // Advanced conditional action expressions
+    pub expression: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,16 +264,16 @@ pub struct DataMappingTestResult {
     pub is_valid: bool,
     pub error: Option<String>,
     pub matching_channels: Vec<DataMappingTestChannel>,
-    pub total_channels: usize,
-    pub matched_count: usize,
+    pub total_channels: i32,
+    pub matched_count: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingTestChannel {
     pub channel_name: String,
     pub group_title: Option<String>,
-    pub original_values: std::collections::HashMap<String, Option<String>>,
-    pub mapped_values: std::collections::HashMap<String, Option<String>>,
+    pub original_values: serde_json::Value,
+    pub mapped_values: serde_json::Value,
     pub applied_actions: Vec<String>,
 }
 
@@ -400,8 +281,8 @@ pub struct DataMappingTestChannel {
 pub struct DataMappingTestEpgChannel {
     pub channel_name: String,
     pub channel_group: Option<String>,
-    pub original_values: std::collections::HashMap<String, Option<String>>,
-    pub mapped_values: std::collections::HashMap<String, Option<String>>,
+    pub original_values: serde_json::Value,
+    pub mapped_values: serde_json::Value,
     pub applied_actions: Vec<String>,
     pub clone_group_info: Option<CloneGroupInfo>,
 }
@@ -410,7 +291,7 @@ pub struct DataMappingTestEpgChannel {
 pub struct CloneGroupInfo {
     pub clone_group_id: String,
     pub is_primary: bool,
-    pub clone_count: usize,
+    pub clone_count: i32,
     pub timeshift_offset: Option<i32>,
 }
 
@@ -418,17 +299,17 @@ pub struct CloneGroupInfo {
 pub struct EpgDataMappingResult {
     pub mapped_channels: Vec<MappedEpgChannel>,
     pub mapped_programs: Vec<MappedEpgProgram>,
-    pub clone_groups: std::collections::HashMap<String, Vec<Uuid>>, // clone_group_id -> channel IDs
-    pub total_mutations: usize,
-    pub channels_affected: usize,
-    pub programs_affected: usize,
+    pub clone_groups: std::collections::HashMap<String, Vec<MappedEpgChannel>>,
+    pub total_mutations: i32,
+    pub channels_affected: i32,
+    pub programs_affected: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingPreviewRequest {
     pub source_type: DataMappingSourceType,
     pub source_id: Option<Uuid>,
-    pub limit: Option<u32>,
+    pub limit: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -440,25 +321,24 @@ pub struct DataMappingPreviewResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamDataMappingPreview {
-    pub total_channels: usize,
-    pub affected_channels: usize,
-    pub preview_channels: Vec<DataMappingTestChannel>,
+    pub total_channels: i32,
+    pub affected_channels: i32,
+    pub preview_channels: Vec<MappedChannel>,
     pub applied_rules: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgDataMappingPreview {
-    pub total_channels: usize,
-    pub total_programs: usize,
-    pub affected_channels: usize,
-    pub affected_programs: usize,
-    pub preview_channels: Vec<DataMappingTestEpgChannel>,
-    pub clone_groups: std::collections::HashMap<String, CloneGroupInfo>,
+    pub total_channels: i32,
+    pub total_programs: i32,
+    pub affected_channels: i32,
+    pub affected_programs: i32,
+    pub preview_channels: Vec<MappedEpgChannel>,
+    pub clone_groups: std::collections::HashMap<String, Vec<MappedEpgChannel>>,
     pub applied_rules: Vec<String>,
 }
 
 impl DataMappingRuleCreateRequest {
-    /// Create request from validated expression
     pub fn from_expression(
         name: String,
         description: Option<String>,
@@ -469,71 +349,31 @@ impl DataMappingRuleCreateRequest {
             name,
             description,
             source_type,
-            expression,
+            expression: Some(expression),
         }
     }
 
-    /// Validate expression syntax for the given source type
     pub fn validate_expression(&self) -> Result<(), String> {
-        use crate::filter_parser::FilterParser;
-
-        // Get available fields for this source type
-        let available_fields = match self.source_type {
-            DataMappingSourceType::Stream => StreamMappingFields::available_fields()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-            DataMappingSourceType::Epg => EpgMappingFields::available_fields()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-        };
-
-        let parser = FilterParser::new().with_fields(available_fields);
-
-        // Parse and validate the expression
-        match parser.parse_extended(&self.expression) {
-            Ok(parsed) => {
-                // Additional validation can be added here
-                parser
-                    .validate_extended(&parsed)
-                    .map_err(|e| e.to_string())?;
-                Ok(())
+        if let Some(expression) = &self.expression {
+            if expression.trim().is_empty() {
+                return Err("Expression cannot be empty".to_string());
             }
-            Err(e) => Err(format!("Expression syntax error: {}", e)),
+            // Add more expression validation logic here as needed
+            Ok(())
+        } else {
+            Err("Expression is required".to_string())
         }
     }
 }
 
 impl DataMappingRuleUpdateRequest {
-    /// Validate expression syntax for the given source type
     pub fn validate_expression(&self) -> Result<(), String> {
-        use crate::filter_parser::FilterParser;
-
-        // Get available fields for this source type
-        let available_fields = match self.source_type {
-            DataMappingSourceType::Stream => StreamMappingFields::available_fields()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-            DataMappingSourceType::Epg => EpgMappingFields::available_fields()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-        };
-
-        let parser = FilterParser::new().with_fields(available_fields);
-
-        // Parse and validate the expression
-        match parser.parse_extended(&self.expression) {
-            Ok(parsed) => {
-                // Additional validation can be added here
-                parser
-                    .validate_extended(&parsed)
-                    .map_err(|e| e.to_string())?;
-                Ok(())
+        if let Some(expression) = &self.expression {
+            if expression.trim().is_empty() {
+                return Err("Expression cannot be empty".to_string());
             }
-            Err(e) => Err(format!("Expression syntax error: {}", e)),
+            // Add more expression validation logic here as needed
         }
+        Ok(())
     }
 }

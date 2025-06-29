@@ -1,9 +1,8 @@
 use crate::data_mapping::engine::DataMappingEngine;
 use crate::filter_parser::FilterParser;
 use crate::logo_assets::LogoAssetService;
-use crate::models::data_mapping::DataMappingActionType;
 use crate::models::data_mapping::*;
-use crate::models::{logo_asset::LogoAsset, Channel, ExtendedExpression};
+use crate::models::{logo_asset::LogoAsset, Channel};
 use chrono::Utc;
 use sqlx::{Pool, Row, Sqlite};
 use std::collections::HashMap;
@@ -23,7 +22,7 @@ impl DataMappingService {
     pub async fn create_rule(
         &self,
         request: DataMappingRuleCreateRequest,
-    ) -> Result<DataMappingRuleWithDetails, sqlx::Error> {
+    ) -> Result<DataMappingRule, sqlx::Error> {
         let rule_id = Uuid::new_v4();
         let now = Utc::now();
 
@@ -57,7 +56,7 @@ impl DataMappingService {
 
         tx.commit().await?;
 
-        // Return the created rule with parsed details
+        // Return the created rule
         self.get_rule_with_details(rule_id).await
     }
 
@@ -65,15 +64,12 @@ impl DataMappingService {
         &self,
         rule_id: Uuid,
         request: DataMappingRuleUpdateRequest,
-    ) -> Result<DataMappingRuleWithDetails, sqlx::Error> {
+    ) -> Result<DataMappingRule, sqlx::Error> {
         let now = Utc::now();
 
         // Validate expression before saving
         if let Err(e) = request.validate_expression() {
-            error!(
-                "Invalid expression for rule update '{}': {}",
-                request.name, e
-            );
+            error!("Invalid expression for rule update: {}", e);
             return Err(sqlx::Error::Decode(
                 format!("Invalid expression: {}", e).into(),
             ));
@@ -85,13 +81,18 @@ impl DataMappingService {
         let result = sqlx::query(
             r#"
             UPDATE data_mapping_rules
-            SET name = ?, description = ?, source_type = ?, expression = ?, is_active = ?, updated_at = ?
+            SET name = COALESCE(?, name),
+                description = COALESCE(?, description),
+                source_type = COALESCE(?, source_type),
+                expression = COALESCE(?, expression),
+                is_active = COALESCE(?, is_active),
+                updated_at = ?
             WHERE id = ?
-            "#
+            "#,
         )
         .bind(&request.name)
         .bind(&request.description)
-        .bind(request.source_type.to_string())
+        .bind(request.source_type.as_ref().map(|s| s.to_string()))
         .bind(&request.expression)
         .bind(request.is_active)
         .bind(now.to_rfc3339())
@@ -105,7 +106,7 @@ impl DataMappingService {
 
         tx.commit().await?;
 
-        // Return the updated rule with parsed details
+        // Return the updated rule
         self.get_rule_with_details(rule_id).await
     }
 
@@ -128,7 +129,7 @@ impl DataMappingService {
     pub async fn get_rule_with_details(
         &self,
         rule_id: Uuid,
-    ) -> Result<DataMappingRuleWithDetails, sqlx::Error> {
+    ) -> Result<DataMappingRule, sqlx::Error> {
         let row = sqlx::query(
             r#"
             SELECT id, name, description, source_type, scope, expression, sort_order, is_active, created_at, updated_at
@@ -140,34 +141,10 @@ impl DataMappingService {
         .fetch_one(&self.pool)
         .await?;
 
-        let rule = self.row_to_rule(&row)?;
-        let expression = row.get::<String, _>("expression");
-
-        // Parse expression to extract conditions and actions for compatibility
-        // If parsing fails, disable the rule and use empty conditions/actions
-        let (conditions, actions, final_rule) =
-            match self.parse_expression_for_compatibility(&expression, &rule.source_type) {
-                Ok((conditions, actions)) => (conditions, actions, rule),
-                Err(e) => {
-                    warn!(
-                        "Failed to parse expression for rule '{}': {}. Rule will be disabled.",
-                        rule.name, e
-                    );
-                    let mut disabled_rule = rule;
-                    disabled_rule.is_active = false;
-                    (vec![], vec![], disabled_rule)
-                }
-            };
-
-        Ok(DataMappingRuleWithDetails {
-            rule: final_rule,
-            conditions,
-            actions,
-            expression: Some(expression),
-        })
+        self.row_to_rule(&row)
     }
 
-    pub async fn get_all_rules(&self) -> Result<Vec<DataMappingRuleWithDetails>, sqlx::Error> {
+    pub async fn get_all_rules(&self) -> Result<Vec<DataMappingRule>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT id, name, description, source_type, scope, expression, sort_order, is_active, created_at, updated_at
@@ -180,37 +157,13 @@ impl DataMappingService {
 
         let mut rules = Vec::new();
         for row in rows {
-            let rule = self.row_to_rule(&row)?;
-            let expression = row.get::<String, _>("expression");
-
-            // Parse expression to extract conditions and actions for compatibility
-            // If parsing fails, disable the rule and use empty conditions/actions
-            let (conditions, actions, final_rule) =
-                match self.parse_expression_for_compatibility(&expression, &rule.source_type) {
-                    Ok((conditions, actions)) => (conditions, actions, rule),
-                    Err(e) => {
-                        warn!(
-                            "Failed to parse expression for rule '{}': {}. Rule will be disabled.",
-                            rule.name, e
-                        );
-                        let mut disabled_rule = rule;
-                        disabled_rule.is_active = false;
-                        (vec![], vec![], disabled_rule)
-                    }
-                };
-
-            rules.push(DataMappingRuleWithDetails {
-                rule: final_rule,
-                conditions,
-                actions,
-                expression: Some(expression),
-            });
+            rules.push(self.row_to_rule(&row)?);
         }
 
         Ok(rules)
     }
 
-    pub async fn get_active_rules(&self) -> Result<Vec<DataMappingRuleWithDetails>, sqlx::Error> {
+    pub async fn get_active_rules(&self) -> Result<Vec<DataMappingRule>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT id, name, description, source_type, scope, expression, sort_order, is_active, created_at, updated_at
@@ -224,31 +177,7 @@ impl DataMappingService {
 
         let mut rules = Vec::new();
         for row in rows {
-            let rule = self.row_to_rule(&row)?;
-            let expression = row.get::<String, _>("expression");
-
-            // Parse expression to extract conditions and actions for compatibility
-            // If parsing fails, disable the rule and use empty conditions/actions
-            let (conditions, actions, final_rule) =
-                match self.parse_expression_for_compatibility(&expression, &rule.source_type) {
-                    Ok((conditions, actions)) => (conditions, actions, rule),
-                    Err(e) => {
-                        warn!(
-                            "Failed to parse expression for rule '{}': {}. Rule will be disabled.",
-                            rule.name, e
-                        );
-                        let mut disabled_rule = rule;
-                        disabled_rule.is_active = false;
-                        (vec![], vec![], disabled_rule)
-                    }
-                };
-
-            rules.push(DataMappingRuleWithDetails {
-                rule: final_rule,
-                conditions,
-                actions,
-                expression: Some(expression),
-            });
+            rules.push(self.row_to_rule(&row)?);
         }
 
         Ok(rules)
@@ -276,46 +205,34 @@ impl DataMappingService {
         logo_assets: HashMap<Uuid, LogoAsset>,
         base_url: &str,
     ) -> Result<DataMappingTestResult, Box<dyn std::error::Error>> {
-        // Parse the expression
-        let available_fields = match request.source_type {
-            DataMappingSourceType::Stream => StreamMappingFields::available_fields()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-            DataMappingSourceType::Epg => EpgMappingFields::available_fields()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-        };
-
-        let parser = FilterParser::new().with_fields(available_fields);
-        let parsed_expression = parser.parse_extended(&request.expression)?;
-
-        // Validate expression
-        parser.validate_extended(&parsed_expression)?;
+        // Validate the expression syntax
+        if let Err(e) = self.validate_expression(&request.expression, &request.source_type) {
+            return Ok(DataMappingTestResult {
+                is_valid: false,
+                error: Some(e),
+                matching_channels: vec![],
+                total_channels: channels.len() as i32,
+                matched_count: 0,
+            });
+        }
 
         // Create a temporary rule for testing
-        let test_rule = DataMappingRuleWithDetails {
-            rule: DataMappingRule {
-                id: Uuid::new_v4(),
-                name: "Test Rule".to_string(),
-                description: Some("Temporary rule for testing".to_string()),
-                source_type: request.source_type,
-                scope: DataMappingRuleScope::Individual,
-                sort_order: 0,
-                is_active: true,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            },
-            conditions: vec![], // Will be filled by expression parsing
-            actions: vec![],    // Will be filled by expression parsing
+        let test_rule = DataMappingRule {
+            id: Uuid::new_v4(),
+            name: "Test Rule".to_string(),
+            description: Some("Temporary rule for testing".to_string()),
+            source_type: request.source_type,
+            scope: DataMappingRuleScope::Individual,
+            sort_order: 0,
+            is_active: true,
             expression: Some(request.expression.clone()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         };
 
         // Use the engine to test the rule
         let mut engine = DataMappingEngine::new();
         let total_channels = channels.len();
-        let test_rule_clone = test_rule.clone();
         let (mapped_channels, _rule_performance) = engine.apply_mapping_rules(
             channels,
             vec![test_rule],
@@ -329,115 +246,41 @@ impl DataMappingService {
             .into_iter()
             .filter(|mc| !mc.applied_rules.is_empty()) // Only include channels that were affected
             .map(|mc| {
-                let mut original_values = HashMap::new();
-                let mut mapped_values = HashMap::new();
+                // Create simplified original and mapped values
+                let original_values = serde_json::json!({
+                    "channel_name": mc.original.channel_name,
+                    "tvg_id": mc.original.tvg_id,
+                    "tvg_name": mc.original.tvg_name,
+                    "tvg_logo": mc.original.tvg_logo,
+                    "group_title": mc.original.group_title,
+                });
 
-                // Compare original vs mapped values
-                original_values.insert(
-                    "channel_name".to_string(),
-                    Some(mc.original.channel_name.clone()),
-                );
-                mapped_values.insert(
-                    "channel_name".to_string(),
-                    Some(mc.mapped_channel_name.clone()),
-                );
-
-                if let Some(ref orig_tvg_id) = mc.original.tvg_id {
-                    original_values.insert("tvg_id".to_string(), Some(orig_tvg_id.clone()));
-                }
-                if let Some(ref mapped_tvg_id) = mc.mapped_tvg_id {
-                    mapped_values.insert("tvg_id".to_string(), Some(mapped_tvg_id.clone()));
-                }
-
-                if let Some(ref orig_group) = mc.original.group_title {
-                    original_values.insert("group_title".to_string(), Some(orig_group.clone()));
-                }
-                if let Some(ref mapped_group) = mc.mapped_group_title {
-                    mapped_values.insert("group_title".to_string(), Some(mapped_group.clone()));
-                }
-
-                // Helper function to get resolved value from mapped channel
-                let get_resolved_value = |field: &str| -> Option<String> {
-                    match field {
-                        "channel_name" => Some(mc.mapped_channel_name.clone()),
-                        "tvg_id" => mc.mapped_tvg_id.clone(),
-                        "tvg_name" => mc.mapped_tvg_name.clone(),
-                        "tvg_logo" => mc.mapped_tvg_logo.clone(),
-                        "tvg_shift" => mc.mapped_tvg_shift.clone(),
-                        "group_title" => mc.mapped_group_title.clone(),
-                        _ => None,
-                    }
-                };
-
-                // Create meaningful action descriptions with resolved values
-                let applied_actions = if mc.applied_rules.is_empty() {
-                    vec![]
-                } else {
-                    test_rule_clone
-                        .actions
-                        .iter()
-                        .map(|action| match action.action_type {
-                            DataMappingActionType::SetValue => {
-                                let template = action.value.as_deref().unwrap_or("");
-                                let resolved_value = get_resolved_value(&action.target_field);
-                                if template.contains('$') && resolved_value.is_some() {
-                                    format!(
-                                        "Set {} = {} ('{}')",
-                                        action.target_field,
-                                        template,
-                                        resolved_value.unwrap()
-                                    )
-                                } else {
-                                    format!("Set {} = {}", action.target_field, template)
-                                }
-                            }
-                            DataMappingActionType::SetDefaultIfEmpty => {
-                                let template = action.value.as_deref().unwrap_or("");
-                                let resolved_value = get_resolved_value(&action.target_field);
-                                if template.contains('$') && resolved_value.is_some() {
-                                    format!(
-                                        "Set default {} = {} ('{}')",
-                                        action.target_field,
-                                        template,
-                                        resolved_value.unwrap()
-                                    )
-                                } else {
-                                    format!("Set default {} = {}", action.target_field, template)
-                                }
-                            }
-                            DataMappingActionType::SetLogo => {
-                                format!("Set logo for {}", action.target_field)
-                            }
-                            DataMappingActionType::TimeshiftEpg => {
-                                format!(
-                                    "Timeshift EPG by {} minutes",
-                                    action.timeshift_minutes.unwrap_or(0)
-                                )
-                            }
-                            DataMappingActionType::DeduplicateStreamUrls => {
-                                "Deduplicate stream URLs".to_string()
-                            }
-                            DataMappingActionType::RemoveChannel => "Remove channel".to_string(),
-                        })
-                        .collect()
-                };
+                let mapped_values = serde_json::json!({
+                    "channel_name": mc.mapped_channel_name,
+                    "tvg_id": mc.mapped_tvg_id,
+                    "tvg_name": mc.mapped_tvg_name,
+                    "tvg_logo": mc.mapped_tvg_logo,
+                    "group_title": mc.mapped_group_title,
+                });
 
                 DataMappingTestChannel {
                     channel_name: mc.mapped_channel_name,
                     group_title: mc.mapped_group_title,
                     original_values,
                     mapped_values,
-                    applied_actions,
+                    applied_actions: mc.applied_rules,
                 }
             })
             .collect();
 
+        let matched_count = matching_channels.len();
+
         Ok(DataMappingTestResult {
             is_valid: true,
             error: None,
-            total_channels,
-            matched_count: matching_channels.len(),
             matching_channels,
+            total_channels: total_channels as i32,
+            matched_count: matched_count as i32,
         })
     }
 
@@ -468,6 +311,7 @@ impl DataMappingService {
             scope,
             sort_order: row.get("sort_order"),
             is_active: row.get("is_active"),
+            expression: row.try_get("expression").ok(),
             created_at: {
                 let dt_str = row.get::<String, _>("created_at");
                 // Try RFC3339 first, then SQLite format
@@ -493,11 +337,15 @@ impl DataMappingService {
         })
     }
 
-    fn parse_expression_for_compatibility(
+    fn validate_expression(
         &self,
         expression: &str,
         source_type: &DataMappingSourceType,
-    ) -> Result<(Vec<DataMappingCondition>, Vec<DataMappingAction>), String> {
+    ) -> Result<(), String> {
+        if expression.trim().is_empty() {
+            return Err("Expression cannot be empty".to_string());
+        }
+
         // Get available fields for this source type
         let available_fields = match source_type {
             DataMappingSourceType::Stream => StreamMappingFields::available_fields()
@@ -512,185 +360,16 @@ impl DataMappingService {
 
         let parser = FilterParser::new().with_fields(available_fields);
 
+        // Parse and validate the expression
         match parser.parse_extended(expression) {
             Ok(parsed) => {
-                // Convert parsed expression back to conditions and actions for compatibility
-                let (conditions, actions) = self
-                    .extract_conditions_and_actions_from_expression(parsed)
+                parser
+                    .validate_extended(&parsed)
                     .map_err(|e| e.to_string())?;
-                Ok((conditions, actions))
+                Ok(())
             }
-            Err(e) => {
-                warn!("Failed to parse expression '{}': {}", expression, e);
-                Err(e.to_string())
-            }
+            Err(e) => Err(format!("Expression syntax error: {}", e)),
         }
-    }
-
-    fn extract_conditions_and_actions_from_expression(
-        &self,
-        expression: ExtendedExpression,
-    ) -> Result<(Vec<DataMappingCondition>, Vec<DataMappingAction>), sqlx::Error> {
-        let now = Utc::now();
-
-        match expression {
-            ExtendedExpression::ConditionOnly(_) => {
-                // No actions, only conditions (not common for data mapping)
-                Ok((vec![], vec![]))
-            }
-            ExtendedExpression::ConditionWithActions { condition, actions } => {
-                // Simple case: one set of conditions with actions
-                let flat_conditions =
-                    self.flatten_condition_tree_for_compatibility(&condition, &now)?;
-                let converted_actions = self.convert_actions_for_compatibility(&actions, &now)?;
-                Ok((flat_conditions, converted_actions))
-            }
-            ExtendedExpression::ConditionalActionGroups(groups) => {
-                // Complex case: multiple condition-action groups
-                // For compatibility, we'll flatten to the first group's conditions and all actions
-                let mut all_conditions = vec![];
-                let mut all_actions = vec![];
-
-                for (group_idx, group) in groups.iter().enumerate() {
-                    let mut group_conditions =
-                        self.flatten_condition_tree_for_compatibility(&group.conditions, &now)?;
-                    let group_actions =
-                        self.convert_actions_for_compatibility(&group.actions, &now)?;
-
-                    // Adjust sort order for conditions to maintain group separation
-                    for condition in &mut group_conditions {
-                        condition.sort_order += (group_idx * 100) as i32;
-                    }
-
-                    all_conditions.extend(group_conditions);
-                    all_actions.extend(group_actions);
-                }
-
-                Ok((all_conditions, all_actions))
-            }
-        }
-    }
-
-    fn flatten_condition_tree_for_compatibility(
-        &self,
-        condition_tree: &crate::models::ConditionTree,
-        now: &chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<DataMappingCondition>, sqlx::Error> {
-        let mut conditions = vec![];
-        self.flatten_condition_node_for_compatibility(
-            &condition_tree.root,
-            &mut conditions,
-            None,
-            now,
-        );
-        Ok(conditions)
-    }
-
-    fn flatten_condition_node_for_compatibility(
-        &self,
-        node: &crate::models::ConditionNode,
-        conditions: &mut Vec<DataMappingCondition>,
-        logical_op: Option<crate::models::LogicalOperator>,
-        now: &chrono::DateTime<chrono::Utc>,
-    ) {
-        match node {
-            crate::models::ConditionNode::Condition {
-                field,
-                operator,
-                value,
-                case_sensitive: _,
-                negate,
-            } => {
-                let final_operator = if *negate {
-                    match operator {
-                        crate::models::FilterOperator::Equals => {
-                            crate::models::FilterOperator::NotEquals
-                        }
-                        crate::models::FilterOperator::Contains => {
-                            crate::models::FilterOperator::NotContains
-                        }
-                        crate::models::FilterOperator::Matches => {
-                            crate::models::FilterOperator::NotMatches
-                        }
-                        crate::models::FilterOperator::NotEquals => {
-                            crate::models::FilterOperator::Equals
-                        }
-                        crate::models::FilterOperator::NotContains => {
-                            crate::models::FilterOperator::Contains
-                        }
-                        crate::models::FilterOperator::NotMatches => {
-                            crate::models::FilterOperator::Matches
-                        }
-                        _ => operator.clone(),
-                    }
-                } else {
-                    operator.clone()
-                };
-
-                conditions.push(DataMappingCondition {
-                    id: Uuid::new_v4(),
-                    rule_id: Uuid::new_v4(), // Will be overridden when actually used
-                    field_name: field.clone(),
-                    operator: final_operator,
-                    value: value.clone(),
-                    logical_operator: logical_op,
-                    sort_order: conditions.len() as i32,
-                    created_at: *now,
-                });
-            }
-            crate::models::ConditionNode::Group { operator, children } => {
-                for (i, child) in children.iter().enumerate() {
-                    let child_logical_op = if i == 0 {
-                        logical_op.clone()
-                    } else {
-                        Some(operator.clone())
-                    };
-                    self.flatten_condition_node_for_compatibility(
-                        child,
-                        conditions,
-                        child_logical_op,
-                        now,
-                    );
-                }
-            }
-        }
-    }
-
-    fn convert_actions_for_compatibility(
-        &self,
-        actions: &[crate::models::Action],
-        now: &chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<DataMappingAction>, sqlx::Error> {
-        Ok(actions
-            .iter()
-            .enumerate()
-            .filter_map(|(i, action)| {
-                let action_type = match action.operator {
-                    crate::models::ActionOperator::Set => DataMappingActionType::SetValue,
-                    crate::models::ActionOperator::SetIfEmpty => {
-                        DataMappingActionType::SetDefaultIfEmpty
-                    }
-                    _ => return None, // Skip unsupported operators
-                };
-
-                let value = match &action.value {
-                    crate::models::ActionValue::Literal(v) => Some(v.clone()),
-                    _ => None, // Skip complex values
-                };
-
-                Some(DataMappingAction {
-                    id: Uuid::new_v4(),
-                    rule_id: Uuid::new_v4(), // Will be overridden when actually used
-                    action_type,
-                    target_field: action.field.clone(),
-                    value,
-                    logo_asset_id: None, // TODO: Extract from special syntax like @logo:name
-                    timeshift_minutes: None,
-                    sort_order: i as i32,
-                    created_at: *now,
-                })
-            })
-            .collect())
     }
 
     /// Apply data mapping rules and return mapped channels with metadata for preview/testing.
@@ -808,7 +487,22 @@ impl DataMappingService {
             .await?;
 
         // Convert to final channels (for proxy generation)
-        let result_channels = DataMappingEngine::mapped_to_channels(mapped_channels);
+        let result_channels = mapped_channels
+            .into_iter()
+            .map(|mapped| Channel {
+                id: mapped.original.id,
+                source_id: mapped.original.source_id,
+                tvg_id: mapped.mapped_tvg_id,
+                tvg_name: mapped.mapped_tvg_name,
+                tvg_logo: mapped.mapped_tvg_logo,
+                tvg_shift: mapped.mapped_tvg_shift,
+                group_title: mapped.mapped_group_title,
+                channel_name: mapped.mapped_channel_name,
+                stream_url: mapped.original.stream_url,
+                created_at: mapped.original.created_at,
+                updated_at: mapped.original.updated_at,
+            })
+            .collect();
         tracing::info!(
             "Data mapping for proxy generation completed successfully for source {}",
             source_id

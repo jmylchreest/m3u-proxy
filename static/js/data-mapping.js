@@ -1,121 +1,103 @@
-// Data Mapping Management JavaScript
+// Data Mapping Management JavaScript - Expression-Only Mode
 
 let currentRules = [];
 let editingRule = null;
-let currentLogoAction = null;
-let selectedLogoId = null;
-let conditionCounter = 0;
-let actionCounter = 0;
+let validationTimeout = null;
+let lastValidationExpression = "";
+let availableSources = [];
 
-// Available field options by source type
-const STREAM_FIELD_OPTIONS = [
-  { value: "channel_name", label: "Channel Name" },
-  { value: "tvg_id", label: "TVG ID" },
-  { value: "tvg_name", label: "TVG Name" },
-  { value: "tvg_logo", label: "TVG Logo" },
-  { value: "tvg_shift", label: "TVG Shift" },
-  { value: "group_title", label: "Group Title" },
-  { value: "stream_url", label: "Stream URL" },
+// Available field options by source type (loaded from API)
+let STREAM_FIELDS = [];
+let EPG_FIELDS = [];
+let FIELD_DESCRIPTIONS = {};
+
+// Available operators for expressions
+const OPERATORS = [
+  "equals",
+  "contains",
+  "starts_with",
+  "ends_with",
+  "matches",
+  "not_equals",
+  "not_contains",
+  "not_matches",
 ];
 
-const EPG_FIELD_OPTIONS = [
-  { value: "channel_id", label: "Channel ID" },
-  { value: "channel_name", label: "Channel Name" },
-  { value: "channel_logo", label: "Channel Logo" },
-  { value: "channel_group", label: "Channel Group" },
-  { value: "language", label: "Language" },
-];
-
-// Available operators
-const OPERATOR_OPTIONS = [
-  { value: "equals", label: "Equals" },
-  { value: "contains", label: "Contains" },
-  { value: "starts_with", label: "Starts With" },
-  { value: "ends_with", label: "Ends With" },
-  { value: "matches", label: "Regex Match" },
-  { value: "not_equals", label: "Not Equals" },
-  { value: "not_contains", label: "Does Not Contain" },
-  { value: "not_matches", label: "Does Not Match Regex" },
-];
-
-// Available action types by source type
-const STREAM_ACTION_TYPES = [
-  { value: "set_value", label: "Set Value" },
-  { value: "set_default_if_empty", label: "Set Default If Empty" },
-  { value: "set_logo", label: "Set Logo" },
-  { value: "timeshift_epg", label: "Set Timeshift" },
-  { value: "deduplicate_stream_urls", label: "Deduplicate Stream URLs" },
-  { value: "remove_channel", label: "Remove Channel" },
-];
-
-const EPG_ACTION_TYPES = [
-  { value: "set_value", label: "Set Value" },
-  { value: "set_default_if_empty", label: "Set Default If Empty" },
-  { value: "set_logo", label: "Set Logo" },
-];
-
-// Action argument configurations
-const ACTION_CONFIGS = {
-  // Actions that need target field + value
-  set_value: {
-    needsField: true,
-    needsValue: true,
-    needsLogo: false,
-    isGlobal: false,
-  },
-  set_default_if_empty: {
-    needsField: true,
-    needsValue: true,
-    needsLogo: false,
-    isGlobal: false,
-  },
-
-  // Actions that need target field + logo
-  set_logo: {
-    needsField: true,
-    needsValue: false,
-    needsLogo: true,
-    isGlobal: false,
-  },
-
-  // Global actions that don't operate on specific fields
-  deduplicate_stream_urls: {
-    needsField: false,
-    needsValue: false,
-    needsLogo: false,
-    isGlobal: true,
-  },
-  remove_channel: {
-    needsField: true,
-    needsValue: false,
-    needsLogo: false,
-    isGlobal: false,
-  },
-
-  // EPG-specific timeshift action (kept for EPG, removed from streams)
-  timeshift_epg: {
-    needsField: true,
-    needsValue: true,
-    needsLogo: false,
-    isGlobal: false,
-  },
-};
-
-// Helper function to get field options based on source type
-function getFieldOptions(sourceType) {
-  return sourceType === "stream" ? STREAM_FIELD_OPTIONS : EPG_FIELD_OPTIONS;
+// Initialize the data mapping manager
+async function init() {
+  await loadFieldDefinitions();
+  await loadRules();
+  setupEventListeners();
 }
 
-// Helper function to get action configuration
-function getActionConfig(actionType) {
-  return (
-    ACTION_CONFIGS[actionType] || {
-      needsField: true,
-      needsValue: true,
-      needsLogo: false,
-      isGlobal: false,
+// Setup event listeners
+function setupEventListeners() {
+  // Note: Removed backdrop click to close for rule modal to prevent accidental closing
+
+  // Logo picker modal close
+  document.getElementById("logoPickerModal").addEventListener("click", (e) => {
+    if (e.target === document.getElementById("logoPickerModal")) {
+      closeLogoPickerModal();
     }
-  );
+  });
+
+  // Expression examples modal close
+  document
+    .getElementById("expressionExamplesModal")
+    .addEventListener("click", (e) => {
+      if (e.target === document.getElementById("expressionExamplesModal")) {
+        closeExpressionExamples();
+      }
+    });
+}
+
+// Load field definitions from API
+async function loadFieldDefinitions() {
+  try {
+    // Load stream fields
+    const streamResponse = await fetch("/api/data-mapping/fields/stream");
+    if (streamResponse.ok) {
+      const streamData = await streamResponse.json();
+      STREAM_FIELDS = streamData.fields.map((f) => f.name);
+      streamData.fields.forEach((f) => {
+        FIELD_DESCRIPTIONS[f.name] = f.description;
+      });
+    }
+
+    // Load EPG fields
+    const epgResponse = await fetch("/api/data-mapping/fields/epg");
+    if (epgResponse.ok) {
+      const epgData = await epgResponse.json();
+      EPG_FIELDS = epgData.fields.map((f) => f.name);
+      epgData.fields.forEach((f) => {
+        FIELD_DESCRIPTIONS[f.name] = f.description;
+      });
+    }
+  } catch (error) {
+    console.error("Failed to load field definitions:", error);
+    // Fallback to hardcoded fields
+    STREAM_FIELDS = [
+      "channel_name",
+      "tvg_id",
+      "tvg_name",
+      "tvg_logo",
+      "tvg_shift",
+      "group_title",
+      "stream_url",
+    ];
+    EPG_FIELDS = [
+      "channel_id",
+      "channel_name",
+      "channel_logo",
+      "channel_group",
+      "language",
+    ];
+  }
+}
+
+// Helper function to get available fields based on source type
+function getAvailableFields(sourceType) {
+  return sourceType === "stream" ? STREAM_FIELDS : EPG_FIELDS;
 }
 
 // Update rule scope options based on source type
@@ -132,414 +114,634 @@ function updateRuleScope() {
   const epgWideOption = scopeSelect.querySelector('option[value="epgwide"]');
 
   if (sourceType === "stream") {
-    streamWideOption.style.display = "";
-    epgWideOption.style.display = "none";
+    if (streamWideOption) streamWideOption.style.display = "";
+    if (epgWideOption) epgWideOption.style.display = "none";
     if (scopeSelect.value === "epgwide") {
       scopeSelect.value = "";
     }
   } else if (sourceType === "epg") {
-    streamWideOption.style.display = "none";
-    epgWideOption.style.display = "";
+    if (streamWideOption) streamWideOption.style.display = "none";
+    if (epgWideOption) epgWideOption.style.display = "";
     if (scopeSelect.value === "streamwide") {
       scopeSelect.value = "";
     }
   }
 }
 
-// Helper function to get action types based on source type
-function getActionTypes(sourceType) {
-  return sourceType === "stream" ? STREAM_ACTION_TYPES : EPG_ACTION_TYPES;
+// Update fields and load sources when source type changes
+function updateFieldsAndActions() {
+  updateRuleScope();
+  loadTestSources();
+  validateExpression();
 }
 
-// Update condition and action dropdowns when source type changes
-function updateFieldsAndActions() {
-  const sourceTypeSelect = document.getElementById("ruleSourceType");
-  const sourceType = sourceTypeSelect.value;
-
+// Load available sources for testing based on source type
+async function loadTestSources() {
+  const sourceType = document.getElementById("ruleSourceType")?.value;
   if (!sourceType) {
-    // Clear all conditions and actions if no source type selected
-    document.getElementById("conditionsContainer").innerHTML = "";
-    document.getElementById("actionsContainer").innerHTML = "";
-    conditionCounter = 0;
-    actionCounter = 0;
+    console.log("No source type selected");
     return;
   }
 
-  // Reload sources for testing when source type changes
-  loadSourcesForTesting();
+  console.log("Loading test sources for type:", sourceType);
 
-  // Update existing conditions
-  const conditionRows = document.querySelectorAll(".condition-row");
-  const fieldOptions = getFieldOptions(sourceType);
+  try {
+    const response = await fetch("/api/sources/unified");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const allSources = await response.json();
+    console.log("All sources loaded:", allSources.length);
+    console.log(
+      "First source structure:",
+      allSources.length > 0 ? allSources[0] : "No sources",
+    );
 
-  conditionRows.forEach((row) => {
-    const fieldSelect = row.querySelector('[name^="field_"]');
-    if (fieldSelect) {
-      const currentValue = fieldSelect.value;
-      fieldSelect.innerHTML = `
-        <option value="">Select Field</option>
-        ${fieldOptions
-          .map(
-            (option) =>
-              `<option value="${option.value}" ${currentValue === option.value ? "selected" : ""}>${option.label}</option>`,
-          )
-          .join("")}
+    // Filter sources by type using source_kind property
+    availableSources = allSources.filter((source) => {
+      if (sourceType === "stream") {
+        return source.source_kind === "stream";
+      } else if (sourceType === "epg") {
+        return source.source_kind === "epg";
+      }
+      return false;
+    });
+
+    console.log(
+      "Filtered sources for",
+      sourceType,
+      ":",
+      availableSources.length,
+    );
+    updateTestSourceUI();
+  } catch (error) {
+    console.error("Failed to load sources:", error);
+    availableSources = [];
+    updateTestSourceUI();
+  }
+}
+
+// Update test source UI based on available sources (like filters)
+function updateTestSourceUI() {
+  const testSourceSelect = document.getElementById("testSourceSelect");
+  const testSourceContainer = document.getElementById("testSourceContainer");
+
+  if (!testSourceSelect || !testSourceContainer) {
+    console.log("Test source elements not found");
+    return;
+  }
+
+  console.log(
+    "Updating test source UI with",
+    availableSources.length,
+    "sources",
+  );
+
+  // Clear existing options
+  testSourceSelect.innerHTML =
+    '<option value="">Select a source to test against...</option>';
+
+  // Add available sources
+  availableSources.forEach((source) => {
+    const option = document.createElement("option");
+    option.value = source.id;
+    option.textContent = source.name;
+    testSourceSelect.appendChild(option);
+  });
+
+  // Add event listener for source selection changes
+  testSourceSelect.onchange = function () {
+    console.log("Source selected:", this.value);
+    updateTestButton();
+  };
+
+  // Hide/show source selector based on number of sources (like filters UI)
+  if (availableSources.length === 0) {
+    testSourceContainer.style.display = "none";
+  } else if (availableSources.length === 1) {
+    // Hide dropdown but show test button - auto-select the only source
+    testSourceSelect.style.display = "none";
+    testSourceSelect.value = availableSources[0].id;
+    testSourceContainer.style.display = "block";
+
+    // Show a label indicating which source is selected
+    let sourceLabel = testSourceContainer.querySelector(
+      ".auto-selected-source",
+    );
+    if (!sourceLabel) {
+      sourceLabel = document.createElement("div");
+      sourceLabel.className = "auto-selected-source text-muted small";
+      testSourceContainer.insertBefore(sourceLabel, testSourceSelect);
+    }
+    sourceLabel.textContent = `Testing against: ${availableSources[0].name}`;
+  } else {
+    // Show dropdown for multiple sources
+    testSourceSelect.style.display = "block";
+    testSourceContainer.style.display = "block";
+
+    // Remove auto-selected label if it exists
+    const sourceLabel = testSourceContainer.querySelector(
+      ".auto-selected-source",
+    );
+    if (sourceLabel) {
+      sourceLabel.remove();
+    }
+  }
+
+  updateTestButton();
+}
+
+// Update test button state
+function updateTestButton() {
+  const testButton = document.getElementById("runTestBtn");
+  const expression = document.getElementById("ruleExpression")?.value?.trim();
+  const sourceId = document.getElementById("testSourceSelect")?.value;
+
+  if (!testButton) {
+    console.log("Test button not found");
+    return;
+  }
+
+  const canTest = expression && sourceId && availableSources.length > 0;
+  console.log("Test button update:", {
+    expression: !!expression,
+    sourceId: !!sourceId,
+    availableSourcesCount: availableSources.length,
+    canTest: canTest,
+  });
+
+  testButton.disabled = !canTest;
+}
+
+// Debounced expression validation
+function debouncedValidateExpression() {
+  clearTimeout(validationTimeout);
+  validationTimeout = setTimeout(() => {
+    validateExpression();
+  }, 500);
+}
+
+// Validate expression syntax
+function validateExpression() {
+  const expression = document.getElementById("ruleExpression")?.value?.trim();
+  const sourceType = document.getElementById("ruleSourceType")?.value;
+  const textarea = document.getElementById("ruleExpression");
+  const validationDiv = document.getElementById("expressionValidation");
+
+  if (!validationDiv || !textarea) return;
+
+  // Clear previous validation
+  clearValidationHighlights(textarea);
+  validationDiv.innerHTML = "";
+
+  if (!expression) {
+    textarea.classList.remove("is-invalid", "is-valid");
+    updateTestButton();
+    return;
+  }
+
+  if (!sourceType) {
+    validationDiv.innerHTML = `
+      <div class="alert alert-warning">
+        <small>⚠️ Please select a source type first</small>
+      </div>
+    `;
+    textarea.classList.remove("is-valid");
+    textarea.classList.add("is-invalid");
+    updateTestButton();
+    return;
+  }
+
+  // Skip validation if expression hasn't changed
+  if (expression === lastValidationExpression) {
+    updateTestButton();
+    return;
+  }
+
+  lastValidationExpression = expression;
+
+  // Start with lightweight client-side validation for immediate feedback
+  const clientValidation = validateExpressionSyntax(expression, sourceType);
+  updateValidationHighlights(textarea, clientValidation);
+
+  // Skip server validation if critical client-side errors (like unmatched quotes)
+  if (
+    !clientValidation.valid &&
+    clientValidation.errors.some(
+      (error) => error.includes("quote") || error.includes("parenthes"),
+    )
+  ) {
+    validationDiv.innerHTML = `
+      <div class="alert alert-danger py-2">
+        <small>❌ ${clientValidation.errors.join(", ")}</small>
+      </div>
+    `;
+    textarea.classList.remove("is-valid");
+    textarea.classList.add("is-invalid");
+    updateTestButton();
+    return;
+  }
+
+  // Show loading indicator for server validation
+  validationDiv.innerHTML = `
+    <div class="d-flex align-items-center text-muted small">
+      <div class="spinner-border spinner-border-sm me-2" role="status" style="width: 12px; height: 12px;">
+        <span class="visually-hidden">Loading...</span>
+      </div>
+      Validating expression...
+    </div>
+  `;
+
+  // Validate expression on server - this is the authoritative validation
+  validateExpressionAsync(expression, sourceType)
+    .then((result) => {
+      if (result.isValid) {
+        validationDiv.innerHTML = `
+          <div class="alert alert-success py-2">
+            <small>✅ Expression is valid</small>
+          </div>
+        `;
+        textarea.classList.remove("is-invalid");
+        textarea.classList.add("is-valid");
+
+        // Clear client-side error highlights on successful server validation
+        clearValidationHighlights(textarea);
+        updateTestButton();
+      } else {
+        validationDiv.innerHTML = `
+          <div class="alert alert-danger py-2">
+            <small>❌ ${result.error}</small>
+          </div>
+        `;
+        textarea.classList.remove("is-valid");
+        textarea.classList.add("is-invalid");
+
+        // Show server error with less intrusive highlighting
+        const serverValidation = {
+          valid: false,
+          highlights: [
+            {
+              start: 0,
+              end: expression.length,
+              type: "error",
+              message: result.error,
+            },
+          ],
+        };
+        updateValidationHighlights(textarea, serverValidation);
+        updateTestButton();
+      }
+    })
+    .catch((error) => {
+      console.error("Validation error:", error);
+      validationDiv.innerHTML = `
+        <div class="alert alert-warning py-2">
+          <small>⚠️ Could not validate expression - server unavailable</small>
+        </div>
       `;
+      textarea.classList.remove("is-valid");
+      textarea.classList.add("is-invalid");
+      updateTestButton();
+    });
+}
+
+// Client-side validation for immediate feedback
+function validateExpressionSyntax(expression, sourceType) {
+  const result = {
+    valid: true,
+    errors: [],
+    highlights: [],
+  };
+
+  const availableFields = getAvailableFields(sourceType);
+
+  try {
+    // Basic syntax checks only - let server handle complex validation
+
+    // Check for unmatched quotes
+    const quotes = expression.match(/"/g);
+    if (quotes && quotes.length % 2 !== 0) {
+      const lastQuoteIndex = expression.lastIndexOf('"');
+      result.valid = false;
+      result.errors.push("Unmatched quote - missing closing quote");
+      result.highlights.push({
+        start: lastQuoteIndex,
+        end: lastQuoteIndex + 1,
+        type: "error",
+        message: "Unmatched quote",
+      });
+    }
+
+    // Check for empty parentheses
+    if (/\(\s*\)/.test(expression)) {
+      const match = expression.match(/\(\s*\)/);
+      result.valid = false;
+      result.errors.push("Empty parentheses are not allowed");
+      result.highlights.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        type: "error",
+        message: "Empty parentheses",
+      });
+    }
+
+    // Basic parentheses matching
+    let parenCount = 0;
+    let lastUnmatched = -1;
+    for (let i = 0; i < expression.length; i++) {
+      if (expression[i] === "(") {
+        parenCount++;
+        if (lastUnmatched === -1) lastUnmatched = i;
+      } else if (expression[i] === ")") {
+        parenCount--;
+        if (parenCount === 0) lastUnmatched = -1;
+        if (parenCount < 0) {
+          result.valid = false;
+          result.errors.push("Unmatched closing parenthesis");
+          result.highlights.push({
+            start: i,
+            end: i + 1,
+            type: "error",
+            message: "Unmatched closing parenthesis",
+          });
+          break;
+        }
+      }
+    }
+
+    if (parenCount > 0) {
+      result.valid = false;
+      result.errors.push("Unmatched opening parenthesis");
+      if (lastUnmatched >= 0) {
+        result.highlights.push({
+          start: lastUnmatched,
+          end: lastUnmatched + 1,
+          type: "error",
+          message: "Unmatched opening parenthesis",
+        });
+      }
+    }
+
+    // Only do lightweight field validation - let server handle modifiers and complex patterns
+    if (availableFields.length > 0) {
+      // Use same regex pattern as filters for consistency
+      const fieldRegex = /\b(\w+)\s+(?:not\s+)?(?:case_sensitive\s+)?(\w+)/gi;
+      let match;
+      while ((match = fieldRegex.exec(expression)) !== null) {
+        const fieldName = match[1];
+        const operator = match[2];
+
+        // Skip logical operators and keywords
+        if (
+          ["and", "or", "set"].includes(fieldName.toLowerCase()) ||
+          ["and", "or", "set"].includes(operator.toLowerCase())
+        ) {
+          continue;
+        }
+
+        if (!availableFields.includes(fieldName)) {
+          // Only warn, don't fail validation - let server decide
+          const suggestions = findSimilarFields(fieldName, availableFields);
+          const suggestionText =
+            suggestions.length > 0
+              ? ` Did you mean: ${suggestions.slice(0, 3).join(", ")}?`
+              : "";
+
+          result.highlights.push({
+            start: match.index,
+            end: match.index + fieldName.length,
+            type: "warning",
+            message: `Possible unknown field '${fieldName}'.${suggestionText} Available fields: ${availableFields.join(", ")}`,
+          });
+        }
+      }
+    }
+  } catch (error) {
+    result.valid = false;
+    result.errors.push("Syntax validation error");
+  }
+
+  return result;
+}
+
+// Async expression validation
+async function validateExpressionAsync(expression, sourceType) {
+  try {
+    const response = await fetch("/api/data-mapping/validate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        expression: expression,
+        source_type: sourceType,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    return { isValid: false, error: "Validation service unavailable" };
+  }
+}
+
+// Update validation highlights (similar to filters)
+function updateValidationHighlights(textarea, validation) {
+  clearValidationHighlights(textarea);
+
+  if (validation.highlights && validation.highlights.length > 0) {
+    showValidationMessages(textarea, validation.highlights);
+  }
+}
+
+// Clear validation highlights
+function clearValidationHighlights(textarea) {
+  const messagesContainer = document.getElementById(
+    "validation-messages-container",
+  );
+  if (messagesContainer) {
+    messagesContainer.remove();
+  }
+}
+
+// Show validation messages below textarea
+function showValidationMessages(textarea, highlights) {
+  let container = document.getElementById("validation-messages-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "validation-messages-container";
+    container.className = "validation-messages-container mt-2";
+    textarea.parentNode.insertBefore(container, textarea.nextSibling);
+  }
+
+  // Deduplicate highlights
+  const uniqueHighlights = [];
+  const seen = new Set();
+
+  highlights.forEach((highlight) => {
+    const text = textarea.value.slice(highlight.start, highlight.end);
+    const key = `${text}:${highlight.message}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueHighlights.push({ ...highlight, text });
     }
   });
 
-  // Update existing actions
-  const actionRows = document.querySelectorAll(".action-row");
-  const actionTypes = getActionTypes(sourceType);
+  // Group highlights by type
+  const errors = uniqueHighlights.filter((h) => h.type === "error");
+  const warnings = uniqueHighlights.filter((h) => h.type === "warning");
 
-  actionRows.forEach((row) => {
-    const actionTypeSelect = row.querySelector('[name^="action_type_"]');
-    const targetFieldSelect = row.querySelector('[name^="target_field_"]');
+  let html = "";
 
-    if (actionTypeSelect) {
-      const currentValue = actionTypeSelect.value;
-      actionTypeSelect.innerHTML = `
-        <option value="">Select Action Type</option>
-        ${actionTypes
-          .map(
-            (option) =>
-              `<option value="${option.value}" ${currentValue === option.value ? "selected" : ""}>${option.label}</option>`,
-          )
-          .join("")}
-      `;
-    }
+  if (errors.length > 0) {
+    html += `<div class="validation-message-group">`;
+    html += `<div class="validation-message-header text-danger small">⚠ ${errors.length} Error${errors.length > 1 ? "s" : ""}:</div>`;
+    errors.forEach((error) => {
+      const fieldDesc = FIELD_DESCRIPTIONS[error.text]
+        ? ` (${FIELD_DESCRIPTIONS[error.text]})`
+        : "";
+      html += `<div class="validation-message-item small text-muted" title="${escapeHtml(error.message)}">• <code>${escapeHtml(error.text)}</code>${fieldDesc} - ${escapeHtml(error.message)}</div>`;
+    });
+    html += `</div>`;
+  }
 
-    if (targetFieldSelect) {
-      const currentValue = targetFieldSelect.value;
-      targetFieldSelect.innerHTML = `
-        <option value="">Target Field</option>
-        ${fieldOptions
-          .map(
-            (option) =>
-              `<option value="${option.value}" ${currentValue === option.value ? "selected" : ""}>${option.label}</option>`,
-          )
-          .join("")}
-      `;
+  if (warnings.length > 0) {
+    html += `<div class="validation-message-group">`;
+    html += `<div class="validation-message-header text-warning small">⚠ ${warnings.length} Warning${warnings.length > 1 ? "s" : ""}:</div>`;
+    warnings.forEach((warning) => {
+      const fieldDesc = FIELD_DESCRIPTIONS[warning.text]
+        ? ` (${FIELD_DESCRIPTIONS[warning.text]})`
+        : "";
+      html += `<div class="validation-message-item small text-muted" title="${escapeHtml(warning.message)}">• <code>${escapeHtml(warning.text)}</code>${fieldDesc} - ${escapeHtml(warning.message)}</div>`;
+    });
+    html += `</div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+// Find similar field names for suggestions
+function findSimilarFields(input, validFields) {
+  const inputLower = input.toLowerCase();
+  const suggestions = [];
+
+  // Exact partial matches first
+  validFields.forEach((field) => {
+    if (
+      field.toLowerCase().includes(inputLower) ||
+      inputLower.includes(field.toLowerCase())
+    ) {
+      suggestions.push(field);
     }
   });
 
-  // Update rule scope options
-  updateRuleScope();
+  // If no partial matches, find fields that start with same letter
+  if (suggestions.length === 0) {
+    validFields.forEach((field) => {
+      if (field.toLowerCase().charAt(0) === inputLower.charAt(0)) {
+        suggestions.push(field);
+      }
+    });
+  }
+
+  return suggestions;
 }
 
-// Initialize page
-function initializeDataMappingPage() {
-  console.log("Initializing data mapping page..."); // Debug log
-  loadRules();
-
-  // Setup standard modal close handlers
-  SharedUtils.setupStandardModalCloseHandlers("ruleModal");
-  SharedUtils.setupStandardModalCloseHandlers("logoPickerModal");
-  SharedUtils.setupStandardModalCloseHandlers("sourceModal");
-}
-
-// Check if DOM is already loaded, if so initialize immediately
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", initializeDataMappingPage);
-} else {
-  // DOM is already loaded, initialize immediately
-  initializeDataMappingPage();
+// Escape HTML for safe display
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 // Load all data mapping rules
 async function loadRules() {
   try {
-    const response = await fetch("/api/data-mapping?" + new Date().getTime());
-    console.log("Data mapping API response status:", response.status); // Debug log
-    if (!response.ok) throw new Error("Failed to load rules");
-
-    const data = await response.json();
-    console.log("Data mapping API response:", data); // Debug log
-    console.log(
-      "Data mapping data type:",
-      typeof data,
-      "Array?",
-      Array.isArray(data),
-    ); // Debug log
-    currentRules = Array.isArray(data) ? data : [];
-    console.log("Current rules count:", currentRules.length); // Debug log
+    const response = await fetch("/api/data-mapping");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    currentRules = await response.json();
     renderRules();
   } catch (error) {
-    console.error("Error loading rules:", error);
-    // Ensure currentRules is still a valid array even if API fails
-    currentRules = [];
-    renderRules(); // Render empty state
-    showError("Failed to load data mapping rules");
+    console.error("Failed to load rules:", error);
+    showAlert("error", "Failed to load data mapping rules");
   }
 }
 
-// Render rules list
+// Render rules in the UI
 function renderRules() {
   const container = document.getElementById("rulesContainer");
+  if (!container) return;
 
   if (currentRules.length === 0) {
     container.innerHTML = `
-            <div class="empty-state">
-                <h3>No Data Mapping Rules</h3>
-                <p>Create your first rule to start transforming channel data</p>
-                <button class="btn btn-primary" onclick="createRule()">
-                    ➕ Add Your First Rule
-                </button>
-            </div>
-        `;
+      <div class="text-center py-4">
+        <p class="text-muted">No data mapping rules configured yet</p>
+        <button class="btn btn-primary" onclick="createRule()">
+          ➕ Create First Rule
+        </button>
+      </div>
+    `;
     return;
   }
 
-  let html = '<div id="sortableRules">';
-
-  currentRules.forEach((rule, index) => {
-    if (!rule || typeof rule !== "object" || !rule.id) return; // Skip if rule is null/undefined, not an object, or has no id
-
-    // Provide defaults for missing properties
-    const isActive = rule.is_active !== undefined ? rule.is_active : true;
-    const sourceType = rule.source_type || "stream";
-    const sourceTypeLabel = sourceType === "stream" ? "STREAM" : "EPG";
-    const sourceTypeColor = sourceType === "stream" ? "#007bff" : "#17a2b8";
-    const ruleName = rule.name || "Unnamed Rule";
-    const ruleDescription = rule.description || "";
-    const conditions = rule.conditions || [];
-    const actions = rule.actions || [];
-
-    // Apply transparency if inactive
-    const cardOpacity = isActive ? "1" : "0.6";
-
-    html += `
-            <div class="rule-card" data-rule-id="${rule.id}" draggable="true" style="cursor: move; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 5px; padding: 12px; background: white; opacity: ${cardOpacity};">
-                <div class="rule-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <span class="drag-handle" style="cursor: move; color: #999; font-size: 16px; user-select: none; background: #f8f9fa; padding: 2px 4px; border-radius: 3px;">⋮</span>
-                        <strong class="rule-title">${escapeHtml(ruleName)}<sup style="color: ${sourceTypeColor}; font-size: 0.7em; margin-left: 4px;">${sourceTypeLabel}</sup></strong>
-                    </div>
-                    <div class="rule-buttons" style="display: flex; gap: 5px;">
-                        <button class="btn btn-sm btn-primary" onclick="editRule('${rule.id}')">
-                            ✏️ Edit
-                        </button>
-                        <button class="btn btn-sm ${isActive ? "btn-warning" : "btn-success"}" onclick="toggleRule('${rule.id}')">
-                            ${isActive ? "⏸️ Disable" : "▶️ Enable"}
-                        </button>
-                        <button class="btn btn-sm btn-danger" onclick="deleteRule('${rule.id}')">
-                            🗑️ Delete
-                        </button>
-                    </div>
-                </div>
-                ${ruleDescription ? `<div style="margin-bottom: 8px; font-style: italic; color: #666; font-size: 13px;">${escapeHtml(ruleDescription)}</div>` : ""}
-                <div class="rule-content" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 5px;">
-                    <div class="conditions-column">
-                        <h6 style="margin: 0 0 5px 0; color: #333; font-weight: bold; font-size: 14px;">Conditions (${conditions.length})</h6>
-                        ${renderConditionsSummary(conditions, sourceType)}
-                    </div>
-                    <div class="actions-column">
-                        <h6 style="margin: 0 0 5px 0; color: #333; font-weight: bold; font-size: 14px;">Actions (${actions.length})</h6>
-                        ${renderActionsSummary(actions, sourceType)}
-                    </div>
-                </div>
-            </div>
-        `;
-  });
-
-  html += "</div>";
-
-  // Add the "Add Rule" button at the bottom right
-  html += `
-    <div class="d-flex justify-content-end mt-3">
-      <button class="btn btn-primary" onclick="createRule()">
-        ➕ Add Rule
-      </button>
+  container.innerHTML = currentRules
+    .map(
+      (rule, index) => `
+    <div class="rule-card" data-rule-id="${rule.id}" data-sort-order="${rule.sort_order}" draggable="true">
+      <div class="rule-header">
+        <div class="drag-handle" title="Drag to reorder">
+          <span class="drag-icon">⋮</span>
+          <span class="rule-order">#${index + 1}</span>
+        </div>
+        <div class="rule-info">
+          <h5 class="rule-name">${escapeHtml(rule.name)}</h5>
+          <div class="rule-meta">
+            <span class="badge badge-${rule.source_type === "stream" ? "primary" : "info"}">
+              ${rule.source_type.toUpperCase()}
+            </span>
+            <span class="badge badge-secondary">${rule.scope}</span>
+            <span class="badge badge-${rule.is_active ? "success" : "warning"}">
+              ${rule.is_active ? "Active" : "Inactive"}
+            </span>
+          </div>
+        </div>
+        <div class="rule-actions">
+          <button class="btn btn-sm btn-success" onclick="editRule('${rule.id}')">
+            ✏️ Edit
+          </button>
+          <button class="btn btn-sm btn-danger" onclick="deleteRule('${rule.id}')">
+            🗑️ Delete
+          </button>
+        </div>
+      </div>
+      <div class="rule-content">
+        ${rule.description ? `<div class="rule-description">${escapeHtml(rule.description)}</div>` : ""}
+        <div class="rule-expression">
+          <strong>Expression:</strong>
+          <pre><code>${escapeHtml(rule.expression || "No expression defined")}</code></pre>
+        </div>
+      </div>
     </div>
-  `;
+  `,
+    )
+    .join("");
 
-  container.innerHTML = html;
-
-  // Initialize drag and drop
-  initializeSortable();
-}
-
-// Render conditions summary
-function renderConditionsSummary(conditions, sourceType = "stream") {
-  if (conditions.length === 0) {
-    return '<div style="color: #999; font-style: italic; font-size: 13px;">Always applies</div>';
-  }
-
-  let html = '<div style="font-size: 13px; line-height: 1.4;">';
-  conditions.forEach((condition, index) => {
-    if (index > 0 && condition.logical_operator) {
-      html += `<div style="margin: 3px 0; font-weight: bold; color: #666;">${condition.logical_operator.toUpperCase()}</div>`;
-    }
-
-    const fieldOptions = getFieldOptions(sourceType);
-    const field =
-      fieldOptions.find((f) => f.value === condition.field_name)?.label ||
-      condition.field_name;
-    const operator =
-      OPERATOR_OPTIONS.find((o) => o.value === condition.operator)?.label ||
-      condition.operator;
-
-    html += `<div style="margin: 2px 0; padding: 2px 6px; background: #f8f9fa; border-radius: 3px; border-left: 3px solid #007bff;">
-            <strong>${field}</strong> ${operator}<br>
-            <code style="font-size: 11px; color: #d63384;">"${escapeHtml(condition.value)}"</code>
-        </div>`;
-  });
-  html += "</div>";
-
-  return html;
-}
-
-// Render actions summary
-function renderActionsSummary(actions, sourceType = "stream") {
-  if (actions.length === 0) {
-    return '<div style="color: #999; font-style: italic; font-size: 13px;">No actions</div>';
-  }
-
-  let html = '<div style="font-size: 13px; line-height: 1.4;">';
-  actions.forEach((action) => {
-    const actionTypes = getActionTypes(sourceType);
-    const fieldOptions = getFieldOptions(sourceType);
-    const actionType =
-      actionTypes.find((a) => a.value === action.action_type)?.label ||
-      action.action_type;
-    const field =
-      fieldOptions.find((f) => f.value === action.target_field)?.label ||
-      action.target_field;
-
-    let valueDisplay = "";
-    if (action.value) {
-      valueDisplay = `<br><code style="font-size: 11px; color: #198754;">"${escapeHtml(action.value)}"</code>`;
-    } else if (action.logo_asset_id) {
-      valueDisplay =
-        '<br><span style="font-size: 11px; color: #6f42c1;">🖼️ Custom Logo</span>';
-    } else if (action.label_key && action.label_value) {
-      valueDisplay = `<br><code style="font-size: 11px; color: #fd7e14; background: #fff3cd; padding: 1px 3px; border-radius: 2px;">${escapeHtml(action.label_key)}=${escapeHtml(action.label_value)}</code>`;
-    }
-
-    html += `<div style="margin: 2px 0; padding: 2px 6px; background: #f8f9fa; border-radius: 3px; border-left: 3px solid #198754;">
-            <strong>${actionType}</strong> → ${field}${valueDisplay}
-        </div>`;
-  });
-  html += "</div>";
-
-  return html;
-}
-
-// Initialize sortable drag and drop
-function initializeSortable() {
-  const container = document.getElementById("sortableRules");
-  if (!container) return;
-
-  let draggedElement = null;
-
-  // Add event listeners to all rule cards
-  const ruleCards = container.querySelectorAll(".rule-card");
-  ruleCards.forEach((card) => {
-    card.addEventListener("dragstart", handleDragStart);
-    card.addEventListener("dragover", handleDragOver);
-    card.addEventListener("drop", handleDrop);
-    card.addEventListener("dragend", handleDragEnd);
-
-    // Prevent text selection when dragging
-    card.addEventListener("selectstart", (e) => {
-      if (e.target.closest(".drag-handle")) {
-        e.preventDefault();
-      }
-    });
-  });
-
-  function handleDragStart(e) {
-    draggedElement = this;
-    this.style.opacity = "0.5";
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/html", this.outerHTML);
-  }
-
-  function handleDragOver(e) {
-    if (e.preventDefault) {
-      e.preventDefault();
-    }
-    e.dataTransfer.dropEffect = "move";
-    return false;
-  }
-
-  function handleDrop(e) {
-    if (e.stopPropagation) {
-      e.stopPropagation();
-    }
-
-    if (draggedElement !== this) {
-      // Get the dragged element's position
-      const draggedId = draggedElement.dataset.ruleId;
-      const targetId = this.dataset.ruleId;
-
-      // Move in DOM
-      const parent = this.parentNode;
-      const targetIndex = Array.from(parent.children).indexOf(this);
-      const draggedIndex = Array.from(parent.children).indexOf(draggedElement);
-
-      if (draggedIndex < targetIndex) {
-        parent.insertBefore(draggedElement, this.nextSibling);
-      } else {
-        parent.insertBefore(draggedElement, this);
-      }
-
-      // Save new order
-      saveRuleOrder();
-    }
-
-    return false;
-  }
-
-  function handleDragEnd(e) {
-    this.style.opacity = "1";
-    draggedElement = null;
-  }
-}
-
-// Save the new rule order
-async function saveRuleOrder() {
-  const container = document.getElementById("sortableRules");
-  const ruleCards = container.querySelectorAll(".rule-card");
-
-  // Create array of [rule_id, priority] pairs
-  const ruleOrder = Array.from(ruleCards).map((card, index) => [
-    card.dataset.ruleId,
-    index + 1, // Priority starts at 1
-  ]);
-
-  console.log("Saving rule order:", ruleOrder);
-
-  try {
-    const response = await fetch("/api/data-mapping/reorder", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(ruleOrder),
-    });
-
-    if (response.ok) {
-      showSuccess("Rule order updated successfully");
-    } else {
-      const errorText = await response.text();
-      console.error("Failed to save rule order:", response.status, errorText);
-      showError("Failed to save rule order: " + errorText);
-    }
-  } catch (error) {
-    console.error("Error saving rule order:", error);
-    showError("Failed to save rule order: " + error.message);
-  }
+  // Setup drag and drop functionality
+  enableDragAndDrop();
 }
 
 // Create new rule
 function createRule() {
   editingRule = null;
-  resetRuleForm();
   document.getElementById("ruleModalTitle").textContent =
     "Create Data Mapping Rule";
-  loadSourcesForTesting();
-  SharedUtils.showStandardModal("ruleModal");
+  clearRuleForm();
+  showRuleModal();
 }
 
 // Edit existing rule
@@ -548,757 +750,102 @@ function editRule(ruleId) {
   if (!rule) return;
 
   editingRule = rule;
-  populateRuleForm(rule);
   document.getElementById("ruleModalTitle").textContent =
     "Edit Data Mapping Rule";
-  loadSourcesForTesting();
-  SharedUtils.showStandardModal("ruleModal");
+  populateRuleForm(rule);
+  showRuleModal();
 }
 
-// Reset rule form
-function resetRuleForm() {
+// Delete rule
+async function deleteRule(ruleId) {
+  const rule = currentRules.find((r) => r.id === ruleId);
+  if (!rule) return;
+
+  if (!confirm(`Are you sure you want to delete the rule "${rule.name}"?`)) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/data-mapping/rules/${ruleId}`, {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    showAlert("success", "Rule deleted successfully");
+    await loadRules();
+  } catch (error) {
+    console.error("Failed to delete rule:", error);
+    showAlert("error", "Failed to delete rule");
+  }
+}
+
+// Show rule modal
+function showRuleModal() {
+  const modal = document.getElementById("ruleModal");
+  modal.style.display = "flex";
+  modal.classList.add("show");
+  document.body.classList.add("modal-open");
+
+  // Initialize autocomplete for expression textarea
+  const textarea = document.getElementById("ruleExpression");
+  if (textarea && !textarea.expressionAutocomplete) {
+    textarea.expressionAutocomplete = new ExpressionAutocomplete(textarea);
+  }
+}
+
+// Close rule modal
+function closeRuleModal() {
+  const modal = document.getElementById("ruleModal");
+  modal.style.display = "none";
+  modal.classList.remove("show");
+  document.body.classList.remove("modal-open");
+  clearRuleForm();
+}
+
+// Clear rule form
+function clearRuleForm() {
   document.getElementById("ruleForm").reset();
-  document.getElementById("ruleActive").checked = true;
-  document.getElementById("ruleSourceType").value = "";
-  document.getElementById("conditionsContainer").innerHTML = "";
-  document.getElementById("actionsContainer").innerHTML = "";
-  document.getElementById("testResults").style.display = "none";
-  document.getElementById("runTestBtn").disabled = true;
-  conditionCounter = 0;
-  actionCounter = 0;
-
-  // Add default condition and action
-  addCondition();
-  addAction();
+  document.getElementById("expressionValidation").innerHTML = "";
+  availableSources = [];
+  updateTestSourceUI();
 }
 
-// Populate form with rule data
-function populateRuleForm(ruleData) {
-  console.log("Populating form with rule data:", ruleData); // Debug log
+// Populate rule form with existing rule data
+function populateRuleForm(rule) {
+  document.getElementById("ruleName").value = rule.name;
+  document.getElementById("ruleDescription").value = rule.description || "";
+  document.getElementById("ruleSourceType").value = rule.source_type;
+  document.getElementById("ruleScope").value = rule.scope;
+  document.getElementById("ruleActive").checked = rule.is_active;
+  document.getElementById("ruleExpression").value = rule.expression || "";
 
-  // The API returns a flat structure, not nested
-  const nameField = document.getElementById("ruleName");
-  const descField = document.getElementById("ruleDescription");
-  const activeField = document.getElementById("ruleActive");
-  const sourceTypeField = document.getElementById("ruleSourceType");
-  const scopeField = document.getElementById("ruleScope");
-
-  if (nameField) nameField.value = ruleData.name || "";
-  if (descField) descField.value = ruleData.description || "";
-  if (activeField) activeField.checked = ruleData.is_active;
-  if (sourceTypeField) sourceTypeField.value = ruleData.source_type || "stream";
-  if (scopeField) scopeField.value = ruleData.scope || "individual";
-
-  console.log("Populated form fields:", {
-    name: ruleData.name,
-    description: ruleData.description,
-    isActive: ruleData.is_active,
-    nameFieldValue: nameField?.value,
-    descFieldValue: descField?.value,
-    activeFieldChecked: activeField?.checked,
-  });
-
-  // Clear containers
-  document.getElementById("conditionsContainer").innerHTML = "";
-  document.getElementById("actionsContainer").innerHTML = "";
-  conditionCounter = 0;
-  actionCounter = 0;
-
-  // Update field and action options based on source type
+  // Update dependent fields
   updateFieldsAndActions();
-
-  // Populate conditions
-  const conditions = ruleData.conditions || [];
-  if (conditions.length === 0) {
-    addCondition();
-  } else {
-    conditions.forEach((condition) => {
-      addCondition(condition);
-    });
-  }
-
-  // Populate actions
-  const actions = ruleData.actions || [];
-  console.log("Populating actions:", actions); // Debug log
-  if (actions.length === 0) {
-    addAction();
-  } else {
-    actions.forEach((action, index) => {
-      console.log(`Adding action ${index}:`, action); // Debug log
-      addAction(action);
-    });
-  }
-}
-
-// Add condition row
-function addCondition(conditionData = null) {
-  const container = document.getElementById("conditionsContainer");
-  const conditionId = ++conditionCounter;
-
-  // Get current source type
-  const sourceType =
-    document.getElementById("ruleSourceType")?.value || "stream";
-  const fieldOptions = getFieldOptions(sourceType);
-
-  const showLogicalOperator = container.children.length > 0;
-
-  const html = `
-        <div class="condition-row" data-condition-id="${conditionId}">
-            ${
-              showLogicalOperator
-                ? `
-                <select name="logical_operator_${conditionId}" class="logical-operator-select">
-                    <option value="and" ${conditionData?.logical_operator === "and" ? "selected" : ""}>AND</option>
-                    <option value="or" ${conditionData?.logical_operator === "or" ? "selected" : ""}>OR</option>
-                </select>
-            `
-                : ""
-            }
-            <select name="field_${conditionId}" required>
-                <option value="">Select Field</option>
-                ${fieldOptions
-                  .map(
-                    (option) =>
-                      `<option value="${option.value}" ${conditionData?.field_name === option.value ? "selected" : ""}>${option.label}</option>`,
-                  )
-                  .join("")}
-            </select>
-            <select name="operator_${conditionId}" required>
-                <option value="">Select Operator</option>
-                ${OPERATOR_OPTIONS.map(
-                  (option) =>
-                    `<option value="${option.value}" ${conditionData?.operator === option.value ? "selected" : ""}>${option.label}</option>`,
-                ).join("")}
-            </select>
-            <input type="text" name="condition_value_${conditionId}" placeholder="Value" required
-                   value="${conditionData?.value || ""}">
-            <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeCondition(${conditionId})">
-                ✖️
-            </button>
-        </div>
-    `;
-
-  container.insertAdjacentHTML("beforeend", html);
-}
-
-// Remove condition
-function removeCondition(conditionId) {
-  const element = document.querySelector(
-    `[data-condition-id="${conditionId}"]`,
-  );
-  if (element) {
-    element.remove();
-
-    // If this was the first condition, remove logical operator from new first condition
-    const firstCondition = document.querySelector(".condition-row");
-    if (firstCondition) {
-      const logicalSelect = firstCondition.querySelector(
-        ".logical-operator-select",
-      );
-      if (logicalSelect) {
-        logicalSelect.remove();
-      }
-    }
-  }
-}
-
-// Add action row
-function addAction(actionData = null) {
-  const container = document.getElementById("actionsContainer");
-  const actionId = ++actionCounter;
-
-  // Get current source type
-  const sourceType =
-    document.getElementById("ruleSourceType")?.value || "stream";
-  const fieldOptions = getFieldOptions(sourceType);
-  const actionTypes = getActionTypes(sourceType);
-
-  const html = `
-        <div class="action-row" data-action-id="${actionId}">
-            <select name="action_type_${actionId}" required onchange="updateActionType(${actionId})">
-                <option value="">Select Action Type</option>
-                ${actionTypes
-                  .map(
-                    (option) =>
-                      `<option value="${option.value}" ${actionData?.action_type === option.value ? "selected" : ""}>${option.label}</option>`,
-                  )
-                  .join("")}
-            </select>
-            <select name="target_field_${actionId}" id="targetField_${actionId}" required>
-                <option value="">Target Field</option>
-                ${fieldOptions
-                  .map(
-                    (option) =>
-                      `<option value="${option.value}" ${actionData?.target_field === option.value ? "selected" : ""}>${option.label}</option>`,
-                  )
-                  .join("")}
-            </select>
-            <div class="action-value-container" id="actionValue_${actionId}">
-                ${renderActionValueInput(actionId, actionData)}
-            </div>
-            <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeAction(${actionId})">
-                ✖️
-            </button>
-        </div>
-    `;
-
-  container.insertAdjacentHTML("beforeend", html);
-
-  // If we have existing action data, update the UI to show/hide fields correctly
-  if (actionData?.action_type) {
-    updateActionType(actionId);
-  }
-}
-
-// Render action value input based on action type
-function renderActionValueInput(actionId, actionData = null) {
-  const actionType = actionData?.action_type;
-  const config = getActionConfig(actionType);
-
-  if (!actionType) {
-    return `<input type="text" name="action_value_${actionId}" placeholder="Value" value="${actionData?.value || ""}" />`;
-  }
-
-  if (config.isGlobal) {
-    return `<span class="text-muted">This action applies globally - no additional parameters needed</span>`;
-  }
-
-  if (config.needsLogo) {
-    const logoId = actionData?.logo_asset_id;
-    return `
-            <div class="logo-selector">
-                <input type="hidden" name="logo_asset_id_${actionId}" value="${logoId || ""}">
-                <button type="button" class="btn btn-outline-secondary" onclick="openLogoPicker(${actionId})">
-                    ${logoId ? "🖼️ Change Logo" : "🖼️ Choose Logo"}
-                </button>
-                ${logoId ? `<img class="logo-preview-small ml-2" src="/api/logos/${logoId}" alt="Selected logo">` : ""}
-            </div>
-        `;
-  } else if (config.needsValue) {
-    return `
-            <input type="text" name="action_value_${actionId}" placeholder="Value"
-                   value="${actionData?.value || ""}" />
-        `;
-  } else {
-    return `<span class="text-muted">No additional parameters needed</span>`;
-  }
-}
-
-// Update action type and regenerate value input
-function updateActionType(actionId) {
-  const select = document.querySelector(`[name="action_type_${actionId}"]`);
-  const container = document.getElementById(`actionValue_${actionId}`);
-  const targetFieldSelect = document.getElementById(`targetField_${actionId}`);
-
-  if (select && container) {
-    const actionType = select.value;
-    const config = getActionConfig(actionType);
-
-    // Update value input
-    container.innerHTML = renderActionValueInput(actionId, {
-      action_type: actionType,
-    });
-
-    // Show/hide target field based on action config
-    if (targetFieldSelect) {
-      if (config.needsField) {
-        targetFieldSelect.style.display = "";
-        targetFieldSelect.required = true;
-      } else {
-        targetFieldSelect.style.display = "none";
-        targetFieldSelect.required = false;
-        targetFieldSelect.value = ""; // Clear the value for global actions
-      }
-    }
-  }
-}
-
-// Remove action
-function removeAction(actionId) {
-  const element = document.querySelector(`[data-action-id="${actionId}"]`);
-  if (element) {
-    element.remove();
-  }
-}
-
-// Open logo picker
-function openLogoPicker(actionId) {
-  currentLogoAction = actionId;
-  selectedLogoId = null;
-
-  // Load logos
-  loadLogosForPicker();
-  SharedUtils.showStandardModal("logoPickerModal");
-}
-
-// Load logos for picker
-async function loadLogosForPicker() {
-  try {
-    const response = await fetch("/api/logos?limit=50");
-    if (!response.ok) throw new Error("Failed to load logos");
-
-    const data = await response.json();
-    renderLogoPickerGrid(data.assets);
-  } catch (error) {
-    console.error("Error loading logos:", error);
-    document.getElementById("logoPickerGrid").innerHTML =
-      '<div class="empty-state"><p>Failed to load logos</p></div>';
-  }
-}
-
-// Render logo picker grid
-function renderLogoPickerGrid(logos) {
-  const grid = document.getElementById("logoPickerGrid");
-
-  if (logos.length === 0) {
-    grid.innerHTML = `
-            <div class="empty-state col-12">
-                <h4>No Logos Available</h4>
-                <p>Upload logos first to use them in mapping rules</p>
-                <a href="/logos" class="btn btn-primary">Manage Logos</a>
-            </div>
-        `;
-    return;
-  }
-
-  let html = "";
-  logos.forEach((logoWithUrl) => {
-    html += `
-            <div class="logo-card" onclick="selectLogoForPicker('${logoWithUrl.id}')" data-logo-id="${logoWithUrl.id}">
-                <img class="logo-preview" src="${logoWithUrl.url}" alt="${escapeHtml(logoWithUrl.name)}"
-                     onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2YwZjBmMCIvPjx0ZXh0IHg9IjUwIiB5PSI1NSIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjE0IiBmaWxsPSIjOTk5IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5ObyBJbWFnZTwvdGV4dD48L3N2Zz4='">
-                <div class="logo-info">
-                    <div class="logo-name">${escapeHtml(logoWithUrl.name)}</div>
-                    <div class="logo-meta">${formatFileSize(logoWithUrl.file_size)}</div>
-                </div>
-            </div>
-        `;
-  });
-
-  grid.innerHTML = html;
-}
-
-// Select logo in picker
-function selectLogoForPicker(logoId) {
-  // Remove previous selection
-  document.querySelectorAll(".logo-card").forEach((card) => {
-    card.classList.remove("selected");
-  });
-
-  // Add selection to clicked card
-  const card = document.querySelector(`[data-logo-id="${logoId}"]`);
-  if (card) {
-    card.classList.add("selected");
-    selectedLogoId = logoId;
-  }
-}
-
-// Confirm logo selection
-function selectLogo() {
-  if (selectedLogoId && currentLogoAction) {
-    const input = document.querySelector(
-      `[name="logo_asset_id_${currentLogoAction}"]`,
-    );
-    if (input) {
-      input.value = selectedLogoId;
-
-      // Update the action value container
-      const container = document.getElementById(
-        `actionValue_${currentLogoAction}`,
-      );
-      container.innerHTML = renderActionValueInput(currentLogoAction, {
-        action_type: "set_logo",
-        logo_asset_id: selectedLogoId,
-      });
-    }
-
-    closeLogoPicker();
-  }
-}
-
-// Close logo picker
-function closeLogoPicker() {
-  SharedUtils.hideStandardModal("logoPickerModal");
-  currentLogoAction = null;
-  selectedLogoId = null;
-}
-
-// Search logos in picker
-function searchLogos() {
-  const query = document.getElementById("logoSearch").value;
-  // Implement logo search functionality
-  // For now, just reload all logos
-  loadLogosForPicker();
-}
-
-// Test rule
-async function testRule() {
-  // First, we need to select a source
-  showSourceSelector();
-}
-
-// Load sources for testing in rule modal
-async function loadSourcesForTesting() {
-  try {
-    // Get the current rule's source type
-    const sourceTypeSelect = document.getElementById("ruleSourceType");
-    const sourceType = sourceTypeSelect ? sourceTypeSelect.value : "stream";
-
-    // Use unified API endpoints
-    const endpoint =
-      sourceType === "epg" ? "/api/sources/epg" : "/api/sources/stream";
-
-    const response = await fetch(endpoint);
-    if (!response.ok) throw new Error("Failed to load sources");
-
-    const sources = await response.json();
-    populateTestSourceSelect(sources);
-  } catch (error) {
-    console.error("Error loading sources:", error);
-    showError("Failed to load sources for testing");
-  }
-}
-
-// Populate test source selector
-function populateTestSourceSelect(sources) {
-  const select = document.getElementById("testSourceSelect");
-
-  // Clear existing options except the first one
-  select.innerHTML =
-    '<option value="">Select a source to test against...</option>';
-
-  sources.forEach((source) => {
-    const option = document.createElement("option");
-    // Handle unified source structure
-    const sourceData = source.source || source;
-    const channelCount = source.channel_count || 0;
-    option.value = sourceData.id;
-    option.textContent = `${sourceData.name} (${channelCount} channels)`;
-    select.appendChild(option);
-  });
-
-  // Enable test button when source is selected
-  select.addEventListener("change", () => {
-    document.getElementById("runTestBtn").disabled = !select.value;
-  });
-}
-
-// Run rule test
-async function runRuleTest() {
-  const sourceId = document.getElementById("testSourceSelect").value;
-  if (!sourceId) {
-    showError("Please select a source to test");
-    return;
-  }
-
-  const testBtn = document.getElementById("runTestBtn");
-  const originalText = testBtn.textContent;
-  testBtn.textContent = "🔄 Testing...";
-  testBtn.disabled = true;
-
-  try {
-    await testRuleWithSource(sourceId);
-  } catch (error) {
-    console.error("Test failed:", error);
-    showError("Failed to run test");
-  } finally {
-    testBtn.textContent = originalText;
-    testBtn.disabled = false;
-  }
-}
-
-// Show source selector for testing (legacy function for backward compatibility)
-async function showSourceSelector() {
-  try {
-    // Get the current rule's source type
-    const sourceTypeSelect = document.getElementById("ruleSourceType");
-    const sourceType = sourceTypeSelect ? sourceTypeSelect.value : "stream";
-
-    // Use unified API endpoints
-    const endpoint =
-      sourceType === "epg" ? "/api/sources/epg" : "/api/sources/stream";
-
-    const response = await fetch(endpoint);
-    if (!response.ok) throw new Error("Failed to load sources");
-
-    const sources = await response.json();
-    renderSourceSelector(sources);
-    SharedUtils.showStandardModal("sourceModal");
-  } catch (error) {
-    console.error("Error loading sources for testing:", error);
-    showError("Failed to load sources for testing");
-  }
-}
-
-// Render source selector
-function renderSourceSelector(sources) {
-  const container = document.getElementById("sourcesList");
-
-  if (sources.length === 0) {
-    container.innerHTML = `
-            <div class="empty-state">
-                <p>No sources available for testing</p>
-                <a href="/sources" class="btn btn-primary">Add Sources</a>
-            </div>
-        `;
-    return;
-  }
-
-  let html = '<div class="list-group">';
-  sources.forEach((source) => {
-    // Handle unified source structure
-    const sourceData = source.source || source;
-    const channelCount = source.channel_count || 0;
-    html += `
-            <button class="list-group-item list-group-item-action"
-                    onclick="testRuleWithSource('${sourceData.id}')">
-                <strong>${escapeHtml(sourceData.name)}</strong>
-                <br>
-                <small class="text-muted">${channelCount} channels</small>
-            </button>
-        `;
-  });
-  html += "</div>";
-
-  container.innerHTML = html;
-}
-
-// Test rule with selected source
-async function testRuleWithSource(sourceId) {
-  // Collect form data
-  const formData = collectRuleFormData();
-  if (!formData) return;
-
-  try {
-    // Get the source type from the form
-    const sourceTypeSelect = document.getElementById("ruleSourceType");
-    const sourceType = sourceTypeSelect ? sourceTypeSelect.value : "stream";
-
-    const testData = {
-      source_id: sourceId,
-      source_type: sourceType,
-      conditions: formData.conditions,
-      actions: formData.actions,
-    };
-
-    const response = await fetch("/api/data-mapping/test", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(testData),
-    });
-
-    if (!response.ok) throw new Error("Test failed");
-
-    const result = await response.json();
-    displayTestResults(result);
-  } catch (error) {
-    console.error("Error testing rule:", error);
-    showError("Failed to test rule");
-  }
-}
-
-// Display test results
-function displayTestResults(result) {
-  const container = document.getElementById("testResultsContent");
-
-  if (!result.is_valid) {
-    container.innerHTML = `
-            <div class="alert alert-danger">
-                <strong>Test Failed:</strong> ${escapeHtml(result.error || "Unknown error")}
-            </div>
-        `;
-  } else if (result.matched_count === 0) {
-    container.innerHTML = `
-            <div class="alert alert-warning">
-                <strong>No Matches:</strong> No channels matched the specified conditions.
-            </div>
-        `;
-  } else {
-    let html = `
-            <div class="alert alert-success">
-                <strong>Test Successful:</strong> ${result.matched_count} channels matched
-            </div>
-            <h6>Sample Results (showing first 5):</h6>
-        `;
-
-    const sampleChannels = result.matching_channels.slice(0, 5);
-    sampleChannels.forEach((channel) => {
-      html += `
-                <div class="test-channel">
-                    <div class="test-channel-name">${escapeHtml(channel.channel_name)}</div>
-                    <div class="test-changes">
-                        ${renderTestChanges(channel.original_values, channel.mapped_values)}
-                    </div>
-                </div>
-            `;
-    });
-
-    container.innerHTML = html;
-  }
-
-  document.getElementById("testResults").style.display = "block";
-}
-
-// Render test changes
-function renderTestChanges(original, mapped) {
-  const changes = [];
-
-  Object.keys(mapped).forEach((field) => {
-    const originalValue = original[field];
-    const mappedValue = mapped[field];
-
-    if (originalValue !== mappedValue) {
-      // Try to find field in both stream and EPG options
-      const streamOptions = getFieldOptions("stream");
-      const epgOptions = getFieldOptions("epg");
-      const fieldLabel =
-        streamOptions.find((f) => f.value === field)?.label ||
-        epgOptions.find((f) => f.value === field)?.label ||
-        field;
-      changes.push(
-        `${fieldLabel}: "${originalValue || ""}" → "${mappedValue || ""}"`,
-      );
-    }
-  });
-
-  return changes.length > 0 ? changes.join("<br>") : "No changes";
-}
-
-// Close source modal
-function closeSourceModal() {
-  SharedUtils.hideStandardModal("sourceModal");
-}
-
-// Collect form data
-function collectRuleFormData() {
-  console.log("Collecting rule form data..."); // Debug log
-  const form = document.getElementById("ruleForm");
-  if (!form) {
-    console.error("Rule form not found");
-    return null;
-  }
-
-  const formData = new FormData(form);
-
-  // Get basic form fields by direct element access for reliability
-  const nameElement = document.getElementById("ruleName");
-  const descriptionElement = document.getElementById("ruleDescription");
-  const activeElement = document.getElementById("ruleActive");
-  const sourceTypeElement = document.getElementById("ruleSourceType");
-
-  const name = nameElement ? nameElement.value.trim() : "";
-  const description = descriptionElement ? descriptionElement.value.trim() : "";
-  const isActive = activeElement ? activeElement.checked : true;
-  const sourceType = sourceTypeElement ? sourceTypeElement.value : "";
-
-  console.log("Form elements found:", {
-    nameElement: !!nameElement,
-    descriptionElement: !!descriptionElement,
-    activeElement: !!activeElement,
-  });
-  console.log("Raw element values:", {
-    nameValue: nameElement?.value,
-    descriptionValue: descriptionElement?.value,
-    activeChecked: activeElement?.checked,
-  });
-  console.log("Form data collected:", { name, description, isActive }); // Debug log
-
-  if (!name) {
-    showError("Rule name is required");
-    return null;
-  }
-
-  if (!sourceType) {
-    showError("Source type is required");
-    return null;
-  }
-
-  // Collect conditions
-  const conditions = [];
-  const conditionRows = document.querySelectorAll(".condition-row");
-
-  conditionRows.forEach((row, index) => {
-    const conditionId = row.dataset.conditionId;
-    const field = formData.get(`field_${conditionId}`);
-    const operator = formData.get(`operator_${conditionId}`);
-    const value = formData.get(`condition_value_${conditionId}`);
-    const logicalOperator =
-      index > 0 ? formData.get(`logical_operator_${conditionId}`) : null;
-
-    console.log(`Condition ${index}:`, {
-      conditionId,
-      field,
-      operator,
-      value,
-      logicalOperator,
-    }); // Debug log
-
-    if (field && operator && value) {
-      conditions.push({
-        field_name: field,
-        operator: operator,
-        value: value,
-        logical_operator: logicalOperator,
-      });
-    }
-  });
-
-  // Collect actions
-  const actions = [];
-  const actionRows = document.querySelectorAll(".action-row");
-  console.log("Found action rows:", actionRows.length); // Debug log
-
-  actionRows.forEach((row, index) => {
-    const actionId = row.dataset.actionId;
-    const actionType = formData.get(`action_type_${actionId}`);
-    const targetField = formData.get(`target_field_${actionId}`);
-    const value = formData.get(`action_value_${actionId}`);
-    const logoAssetId = formData.get(`logo_asset_id_${actionId}`);
-    const labelKey = formData.get(`label_key_${actionId}`);
-    const labelValue = formData.get(`label_value_${actionId}`);
-
-    console.log(`Action ${index}:`, {
-      actionId,
-      actionType,
-      targetField,
-      value,
-      logoAssetId,
-      labelKey,
-      labelValue,
-    }); // Debug log
-
-    if (actionType && targetField) {
-      const action = {
-        action_type: actionType,
-        target_field: targetField,
-        value:
-          actionType === "set_logo" || actionType === "set_label"
-            ? null
-            : value,
-        logo_asset_id: actionType === "set_logo" ? logoAssetId : null,
-        label_key: actionType === "set_label" ? labelKey : null,
-        label_value: actionType === "set_label" ? labelValue : null,
-      };
-      actions.push(action);
-    }
-  });
-
-  return {
-    name,
-    description,
-    source_type: sourceType,
-    is_active: isActive,
-    conditions,
-    actions,
-  };
 }
 
 // Save rule
 async function saveRule() {
-  const formData = collectRuleFormData();
-  if (!formData) return;
+  const form = document.getElementById("ruleForm");
+  if (!form.checkValidity()) {
+    form.reportValidity();
+    return;
+  }
+
+  const formData = new FormData(form);
+  const ruleData = {
+    name: formData.get("name"),
+    description: formData.get("description") || null,
+    source_type: formData.get("source_type"),
+    expression: formData.get("expression"),
+  };
+
+  // Add is_active for updates
+  if (editingRule) {
+    ruleData.is_active = formData.has("is_active");
+  }
 
   try {
     const url = editingRule
@@ -1307,513 +854,1713 @@ async function saveRule() {
     const method = editingRule ? "PUT" : "POST";
 
     const response = await fetch(url, {
-      method,
+      method: method,
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(formData),
+      body: JSON.stringify(ruleData),
     });
 
-    if (!response.ok) throw new Error("Failed to save rule");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
 
-    showSuccess(
-      editingRule ? "Rule updated successfully" : "Rule created successfully",
-    );
+    const action = editingRule ? "updated" : "created";
+    showAlert("success", `Rule ${action} successfully`);
     closeRuleModal();
-    loadRules();
+    await loadRules();
   } catch (error) {
-    console.error("Error saving rule:", error);
-    showError("Failed to save rule");
+    console.error("Failed to save rule:", error);
+    showAlert("error", "Failed to save rule");
   }
 }
 
-// Close rule modal
-function closeRuleModal() {
-  SharedUtils.hideStandardModal("ruleModal");
-  editingRule = null;
-}
+// Test rule expression
+async function runRuleTest() {
+  const expression = document.getElementById("ruleExpression").value.trim();
+  const sourceType = document.getElementById("ruleSourceType").value;
+  const sourceId = document.getElementById("testSourceSelect").value;
 
-// Delete rule
-async function deleteRule(ruleId) {
-  if (!confirm("Are you sure you want to delete this rule?")) return;
-
-  try {
-    const response = await fetch(`/api/data-mapping/${ruleId}`, {
-      method: "DELETE",
-    });
-
-    if (!response.ok) throw new Error("Failed to delete rule");
-
-    showSuccess("Rule deleted successfully");
-    loadRules();
-  } catch (error) {
-    console.error("Error deleting rule:", error);
-    showError("Failed to delete rule");
+  if (!expression || !sourceType || !sourceId) {
+    showAlert(
+      "warning",
+      "Please fill in expression, source type, and select a test source",
+    );
+    return;
   }
-}
 
-// Toggle rule active/inactive
-async function toggleRule(ruleId) {
-  const rule = currentRules.find((r) => r.id === ruleId);
-  if (!rule) return;
-
-  const updatedRule = {
-    name: rule.name,
-    description: rule.description,
-    source_type: rule.source_type,
-    scope: rule.scope,
-    conditions: rule.conditions.map((c) => ({
-      field_name: c.field_name,
-      operator: c.operator,
-      value: c.value,
-      logical_operator: c.logical_operator,
-    })),
-    actions: rule.actions.map((a) => ({
-      action_type: a.action_type,
-      target_field: a.target_field,
-      value: a.value,
-      logo_asset_id: a.logo_asset_id,
-      timeshift_minutes: a.timeshift_minutes,
-      similarity_threshold: a.similarity_threshold,
-    })),
-    is_active: !rule.is_active,
-  };
+  const testButton = document.getElementById("runTestBtn");
+  const originalText = testButton.textContent;
+  testButton.disabled = true;
+  testButton.textContent = "🧪 Testing...";
 
   try {
-    const response = await fetch(`/api/data-mapping/${ruleId}`, {
-      method: "PUT",
+    const response = await fetch("/api/data-mapping/test", {
+      method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(updatedRule),
+      body: JSON.stringify({
+        source_id: sourceId,
+        source_type: sourceType,
+        expression: expression,
+      }),
     });
 
-    if (!response.ok) throw new Error("Failed to toggle rule");
-
-    showSuccess(
-      `Rule ${updatedRule.is_active ? "enabled" : "disabled"} successfully`,
-    );
-    loadRules();
-  } catch (error) {
-    console.error("Error toggling rule:", error);
-    showError("Failed to toggle rule");
-  }
-}
-
-// Utility functions
-function escapeHtml(text) {
-  return SharedUtils.escapeHtml(text);
-}
-
-function formatFileSize(bytes) {
-  return SharedUtils.formatFileSize(bytes);
-}
-
-function showError(message) {
-  if (window.SharedUtils) {
-    SharedUtils.showError(message);
-  } else {
-    console.error(message);
-  }
-}
-
-function showSuccess(message) {
-  if (window.SharedUtils) {
-    SharedUtils.showSuccess(message);
-  } else {
-    console.log(message);
-  }
-}
-
-// Preview data mapping rules
-async function previewStreamRules() {
-  const button = document.querySelector('[onclick="previewStreamRules()"]');
-  const originalText = button.innerHTML;
-
-  try {
-    button.innerHTML = "🔄 Generating Preview...";
-    button.disabled = true;
-
-    const response = await fetch(
-      "/api/data-mapping/preview?source_type=stream&view=final",
-    );
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    const data = await response.json();
-
-    if (data.success) {
-      showPreviewModal(data, "Stream Rules Preview");
-    } else {
-      showError(`Stream preview failed: ${data.message || "Unknown error"}`);
-    }
+    const result = await response.json();
+    displayTestResults(result);
   } catch (error) {
-    console.error("Error previewing stream rules:", error);
-    showError(`Failed to generate stream preview: ${error.message}`);
+    console.error("Test failed:", error);
+    showAlert("error", "Failed to test rule");
   } finally {
-    button.innerHTML = originalText;
-    button.disabled = false;
+    testButton.disabled = false;
+    testButton.textContent = originalText;
   }
 }
 
-async function previewEpgRules() {
-  const button = document.querySelector('[onclick="previewEpgRules()"]');
-  const originalText = button.innerHTML;
+// Display test results
+function displayTestResults(result) {
+  const resultsDiv = document.getElementById("testResults");
+  const resultsContent = document.getElementById("testResultsContent");
 
-  try {
-    // Check if there are any active EPG rules first
-    const epgRules = currentRules.filter(
-      (rule) => rule.rule.source_type === "epg" && rule.rule.is_active,
-    );
-    if (epgRules.length === 0) {
-      showError(
-        "No active EPG data mapping rules found. Create some EPG rules first.",
-      );
-      return;
-    }
+  if (!resultsDiv || !resultsContent) return;
 
-    button.innerHTML = "🔄 Generating Preview...";
-    button.disabled = true;
-
-    const response = await fetch(
-      "/api/data-mapping/preview?source_type=epg&view=final",
-    );
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    if (data.success) {
-      showPreviewModal(data, "EPG Rules Preview");
-    } else {
-      showError(`EPG preview failed: ${data.message || "Unknown error"}`);
-    }
-  } catch (error) {
-    console.error("Error previewing EPG rules:", error);
-    showError(`Failed to generate EPG preview: ${error.message}`);
-  } finally {
-    button.innerHTML = originalText;
-    button.disabled = false;
-  }
-}
-
-// Legacy preview function for backward compatibility
-async function previewRules() {
-  await previewStreamRules();
-}
-
-// Show rule preview modal
-function showPreviewModal(data, title = "Data Mapping Preview") {
-  // Use final_channels from backend if available, otherwise aggregate manually
-  const finalChannels = data.final_channels || [];
-
-  // Create modal HTML with improved layout
-  const modalHtml = `
-    <div id="previewModal" class="modal">
-      <div class="modal-content standard-modal preview-modal-large">
-        <div class="modal-header">
-          <h3 class="modal-title">Data Mapping Rules Preview</h3>
-        </div>
-        <div class="modal-body preview-modal-body">
-          <div class="preview-summary mb-3">
-            <div class="d-flex justify-content-between align-items-center">
-              <div class="summary-text">
-                <strong>${data.total_rules}</strong> active rules affecting <strong>${finalChannels.length}</strong> channels
-              </div>
-              <div class="form-check">
-                <input class="form-check-input" type="checkbox" id="showPerRuleView">
-                <label class="form-check-label" for="showPerRuleView">
-                  Show per-rule breakdown
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <!-- Final Aggregated View (Default) -->
-          <div id="finalView" class="preview-content">
-            <div class="row">
-              <div class="col-md-6">
-                <h5>Rules Summary</h5>
-                <div class="rules-summary-horizontal">
-                  ${data.rules
-                    .map(
-                      (rule) => `
-                    <div class="rule-summary-card">
-                      <div class="rule-card-header">
-                        <div class="rule-name">${escapeHtml(rule.rule_name)}</div>
-                        <div class="rule-stats">${rule.affected_channels_count} ch</div>
-                      </div>
-                      <div class="rule-details">
-                        ${rule.conditions.length}c • ${rule.actions.length}a
-                      </div>
-                    </div>
-                  `,
-                    )
-                    .join("")}
-                </div>
-              </div>
-
-              <div class="col-md-6">
-                <h5>Final Channel Results (${finalChannels.length})</h5>
-                <div class="channels-list">
-                  ${finalChannels
-                    .map((channel) => {
-                      const hasChanges =
-                        channel.channel_name !==
-                          channel.original_channel_name ||
-                        (channel.tvg_id || "") !==
-                          (channel.original_tvg_id || "") ||
-                        (channel.tvg_name || "") !==
-                          (channel.original_tvg_name || "") ||
-                        (channel.tvg_logo || "") !==
-                          (channel.original_tvg_logo || "") ||
-                        (channel.tvg_shift || "") !==
-                          (channel.original_tvg_shift || "") ||
-                        (channel.group_title || "") !==
-                          (channel.original_group_title || "");
-
-                      return `
-                        <div class="channel-item">
-                          <div class="channel-header">
-                            <span class="channel-name">${escapeHtml(channel.channel_name)} • ${escapeHtml(channel.source_name)} • ${channel.tvg_id || "No TVG-ID"}</span>
-                          </div>
-                          ${
-                            hasChanges
-                              ? `
-                            <div class="channel-changes">
-                              ${
-                                channel.channel_name !==
-                                channel.original_channel_name
-                                  ? `
-                                <div class="change-item">
-                                  <span class="field-name">name:</span>
-                                  <span class="change-arrow">→</span>
-                                  <span class="new-value">${escapeHtml(channel.channel_name)}</span>
-                                </div>
-                              `
-                                  : ""
-                              }
-                              ${
-                                (channel.tvg_id || "") !==
-                                (channel.original_tvg_id || "")
-                                  ? `
-                                <div class="change-item">
-                                  <span class="field-name">tvg-id:</span>
-                                  <span class="change-arrow">→</span>
-                                  <span class="new-value">${escapeHtml(channel.tvg_id || "")}</span>
-                                </div>
-                              `
-                                  : ""
-                              }
-                              ${
-                                (channel.tvg_name || "") !==
-                                (channel.original_tvg_name || "")
-                                  ? `
-                                <div class="change-item">
-                                  <span class="field-name">tvg-name:</span>
-                                  <span class="change-arrow">→</span>
-                                  <span class="new-value">${escapeHtml(channel.tvg_name || "")}</span>
-                                </div>
-                              `
-                                  : ""
-                              }
-                              ${
-                                (channel.tvg_logo || "") !==
-                                (channel.original_tvg_logo || "")
-                                  ? `
-                                <div class="change-item">
-                                  <span class="field-name">tvg-logo:</span>
-                                  <span class="change-arrow">→</span>
-                                  <span class="new-value">${escapeHtml(channel.tvg_logo || "")}</span>
-                                </div>
-                              `
-                                  : ""
-                              }
-                              ${
-                                (channel.tvg_shift || "") !==
-                                (channel.original_tvg_shift || "")
-                                  ? `
-                                <div class="change-item">
-                                  <span class="field-name">tvg-shift:</span>
-                                  <span class="change-arrow">→</span>
-                                  <span class="new-value">${escapeHtml(channel.tvg_shift || "")}</span>
-                                </div>
-                              `
-                                  : ""
-                              }
-                              ${
-                                (channel.group_title || "") !==
-                                (channel.original_group_title || "")
-                                  ? `
-                                <div class="change-item">
-                                  <span class="field-name">group:</span>
-                                  <span class="change-arrow">→</span>
-                                  <span class="new-value">${escapeHtml(channel.group_title || "")}</span>
-                                </div>
-                              `
-                                  : ""
-                              }
-                            </div>
-                          `
-                              : `
-                            <div class="text-muted" style="font-size: 0.75rem;">No changes</div>
-                          `
-                          }
-                          <div class="applied-rules">
-                            Rules: ${Array.isArray(channel.applied_rules) ? channel.applied_rules.join(", ") : "None"}
-                          </div>
+  if (!result.is_valid) {
+    resultsContent.innerHTML = `
+      <div class="alert alert-danger">
+        <strong>Test Failed:</strong> ${escapeHtml(result.error)}
+      </div>
+    `;
+  } else {
+    resultsContent.innerHTML = `
+      <div class="alert alert-success">
+        <strong>Test Successful!</strong>
+        Matched ${result.matched_count} out of ${result.total_channels} channels
+      </div>
+      <div class="test-results-channels">
+        <h6>Matching Channels (${result.matching_channels.length}):</h6>
+        ${result.matching_channels
+          .map(
+            (channel) => `
+          <div class="test-result-channel">
+            <strong>${escapeHtml(channel.channel_name)}</strong>
+            ${channel.group_title ? `<span class="badge badge-secondary">${escapeHtml(channel.group_title)}</span>` : ""}
+            ${
+              channel.applied_actions && channel.applied_actions.length > 0
+                ? `
+              <div class="applied-actions">
+                <small>Applied actions: ${channel.applied_actions.length}</small>
+                <div class="action-details">
+                  ${channel.applied_actions
+                    .map((action) => {
+                      // Check if action contains a logo URL
+                      const logoUrlMatch = action.match(
+                        /\(http[s]?:\/\/[^\)]+\/api\/logos\/[^)]+\)/,
+                      );
+                      if (logoUrlMatch) {
+                        const logoUrl = logoUrlMatch[0].slice(1, -1); // Remove parentheses
+                        const actionText = action.replace(logoUrlMatch[0], "");
+                        return `
+                        <div class="action-item">
+                          <span>${escapeHtml(actionText)}</span>
+                          <a href="${logoUrl}" target="_blank" class="logo-link" title="View logo">
+                            <img src="${logoUrl}" alt="Logo" style="width: 24px; height: 24px; object-fit: contain; margin-left: 8px; border-radius: 2px; vertical-align: middle;">
+                          </a>
                         </div>
                       `;
+                      } else {
+                        return `<div class="action-item">${escapeHtml(action)}</div>`;
+                      }
                     })
                     .join("")}
                 </div>
               </div>
+            `
+                : `
+              <div class="applied-actions">
+                <small>Applied actions: 0</small>
+              </div>
+            `
+            }
+          </div>
+        `,
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  resultsDiv.style.display = "block";
+}
+
+// Show expression examples modal
+function showExpressionExamples() {
+  const modal = document.getElementById("expressionExamplesModal");
+  if (modal) {
+    modal.style.display = "flex";
+    modal.style.alignItems = "center";
+    modal.style.justifyContent = "center";
+    modal.style.zIndex = "1060"; // Ensure it's above other modals
+    modal.classList.add("show");
+    document.body.classList.add("modal-open");
+  }
+}
+
+// Close expression examples modal
+function closeExpressionExamples() {
+  const modal = document.getElementById("expressionExamplesModal");
+  if (modal) {
+    modal.classList.remove("show");
+    modal.style.display = "none";
+    modal.style.alignItems = "";
+    modal.style.justifyContent = "";
+  }
+  document.body.classList.remove("modal-open");
+}
+
+// Preview stream rules
+async function previewStreamRules() {
+  const button = document.querySelector(
+    'button[onclick="previewStreamRules()"]',
+  );
+  const originalText = button ? button.innerHTML : "";
+
+  try {
+    // Show loading state
+    if (button) {
+      button.disabled = true;
+      button.innerHTML = "⏳ Loading...";
+    }
+
+    // Show loading modal
+    showLoadingModal("Loading stream rules preview...");
+
+    const response = await fetch("/api/data-mapping/preview", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        source_type: "stream",
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    // Hide loading modal
+    hideLoadingModal();
+
+    displayPreviewResults("Stream Rules Preview", result);
+  } catch (error) {
+    console.error("Preview failed:", error);
+    hideLoadingModal();
+    showAlert(
+      "error",
+      "Failed to preview stream rules. Please check your configuration and try again.",
+    );
+  } finally {
+    // Restore button state
+    if (button) {
+      button.disabled = false;
+      button.innerHTML = originalText;
+    }
+  }
+}
+
+// Preview EPG rules
+async function previewEpgRules() {
+  const button = document.querySelector('button[onclick="previewEpgRules()"]');
+  const originalText = button ? button.innerHTML : "";
+
+  try {
+    // Show loading state
+    if (button) {
+      button.disabled = true;
+      button.innerHTML = "⏳ Loading...";
+    }
+
+    // Show loading modal
+    showLoadingModal("Loading EPG rules preview...");
+
+    const response = await fetch("/api/data-mapping/preview", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        source_type: "epg",
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    // Hide loading modal
+    hideLoadingModal();
+
+    displayPreviewResults("EPG Rules Preview", result);
+  } catch (error) {
+    console.error("Preview failed:", error);
+    hideLoadingModal();
+    showAlert(
+      "error",
+      "Failed to preview EPG rules. Please check your configuration and try again.",
+    );
+  } finally {
+    // Restore button state
+    if (button) {
+      button.disabled = false;
+      button.innerHTML = originalText;
+    }
+  }
+}
+
+// Display preview results with mutations
+function displayPreviewResults(title, result) {
+  const totalChannels = result.total_channels || 0;
+  const affectedChannels = result.final_channels?.length || 0;
+  const channels = result.final_channels || [];
+  const rules = result.rules || [];
+
+  // Initialize filter state - all rules selected by default
+  const selectedRules = new Set(rules.map((_, index) => index));
+
+  // Create rule filter cards
+  const ruleCardsHtml =
+    rules.length > 0
+      ? `
+    <div class="rule-filter-section">
+      <h6 class="rule-filter-title">Filter by Applied Rules:</h6>
+      <div class="rule-filter-cards">
+        ${rules
+          .map(
+            (rule, index) => `
+          <div class="rule-filter-card active" data-rule-index="${index}" data-rule-id="${rule.rule_id}" onclick="toggleRuleFilter(${index})">
+            <div class="rule-card-header">
+              <span class="rule-card-name" title="${escapeHtml(rule.rule_name)}">${truncateText(rule.rule_name, 25)}</span>
+              <span class="rule-card-badge">${rule.affected_channels_count}</span>
+            </div>
+            <div class="rule-card-stats">
+              <span class="rule-stat">📊 ${rule.affected_channels_count} channels</span>
+              <span class="rule-stat">📋 ${rule.condition_count || 0}C/${rule.action_count || 0}A</span>
+              <span class="rule-stat">⏱️ ${rule.avg_execution_time || "?"}μs/rec</span>
             </div>
           </div>
-
-          <!-- Per-Rule View (Hidden by default) -->
-          <div id="perRuleView" class="preview-content" style="display: none;">
-            ${data.rules
-              .map(
-                (rule) => `
-              <div class="card mb-3">
-                <div class="card-header">
-                  <h5>${escapeHtml(rule.rule_name)}</h5>
-                  <small class="text-muted">Affects ${rule.affected_channels_count} channels</small>
-                </div>
-                <div class="card-body">
-                  ${rule.rule_description ? `<p class="text-muted">${escapeHtml(rule.rule_description)}</p>` : ""}
-
-                  <div class="row">
-                    <div class="col-md-6">
-                      <h6>Conditions:</h6>
-                      <ul class="list-unstyled">
-                        ${rule.conditions
-                          .map(
-                            (condition) => `
-                          <li class="mb-1">
-                            <code>${condition.field_name}</code>
-                            <span class="badge badge-secondary">${condition.operator}</span>
-                            <code>"${escapeHtml(condition.value)}"</code>
-                          </li>
-                        `,
-                          )
-                          .join("")}
-                      </ul>
-
-                      <h6>Actions:</h6>
-                      <ul class="list-unstyled">
-                        ${rule.actions
-                          .map(
-                            (action) => `
-                          <li class="mb-1">
-                            <span class="badge badge-primary">${action.action_type}</span>
-                            <code>${action.target_field}</code>
-                            ${action.value ? `= "${escapeHtml(action.value)}"` : ""}
-                            ${action.logo_asset_id ? `= Custom Logo` : ""}
-                          </li>
-                        `,
-                          )
-                          .join("")}
-                      </ul>
-                    </div>
-
-                    <div class="col-md-6">
-                      ${
-                        rule.affected_channels_count > 0
-                          ? `
-                        <h6>Affected Channels (${rule.affected_channels_count})</h6>
-                        <div class="channels-list">
-                          ${rule.affected_channels
-                            .map(
-                              (channel) => `
-                            <div class="channel-item">
-                              <div class="channel-header">
-                                <span class="channel-name">${escapeHtml(channel.channel_name)} • ${escapeHtml(channel.source_name)} • ${channel.tvg_id || "No TVG-ID"}</span>
-                              </div>
-                              <div class="channel-changes">
-                                ${channel.actions_preview
-                                  .filter((a) => a.will_change)
-                                  .map(
-                                    (action) => `
-                                  <div class="change-item">
-                                    <span class="field-name">${action.target_field}:</span>
-                                    <span class="change-arrow">→</span>
-                                    <span class="new-value">${escapeHtml(action.new_value || "null")}</span>
-                                  </div>
-                                `,
-                                  )
-                                  .join("")}
-                              </div>
-                            </div>
-                          `,
-                            )
-                            .join("")}
-                        </div>
-                      `
-                          : `<p class="text-muted">No channels match this rule's conditions.</p>`
-                      }
-                    </div>
-                  </div>
-                </div>
-              </div>
-            `,
-              )
-              .join("")}
+        `,
+          )
+          .join("")}
+        <div class="rule-filter-card select-all active" onclick="toggleAllRules()">
+          <div class="rule-card-header">
+            <span class="rule-card-name">Deselect All</span>
+            <span class="rule-card-badge">${affectedChannels}</span>
+          </div>
+          <div class="rule-card-stats">
+            <span class="rule-stat">Toggle all rules</span>
           </div>
         </div>
+      </div>
+    </div>
+  `
+      : "";
+
+  // Create modal HTML using application's standard modal structure
+  const modalHtml = `
+    <div class="modal" id="globalPreviewModal" style="display: none">
+      <div class="modal-content standard-modal preview-modal-large">
+        <div class="modal-header">
+          <h3 class="modal-title">${title}</h3>
+        </div>
+        <div class="modal-body">
+          ${ruleCardsHtml}
+
+          ${
+            channels.length > 0
+              ? `
+            <div class="preview-channels-container">
+              <div class="channels-header">
+                <h6>Modified Channels:</h6>
+                <div class="channels-count-badge">${affectedChannels} channels</div>
+              </div>
+              <div class="preview-channels-list">
+                ${channels
+                  .map((channel, channelIndex) => {
+                    const mutations = [];
+
+                    // Check for changes between original and mapped values
+                    if (
+                      channel.original_channel_name !==
+                      channel.mapped_channel_name
+                    ) {
+                      mutations.push({
+                        field: "channel_name",
+                        before: channel.original_channel_name,
+                        after: channel.mapped_channel_name,
+                        type: "text",
+                      });
+                    }
+                    if (channel.original_tvg_id !== channel.mapped_tvg_id) {
+                      mutations.push({
+                        field: "tvg_id",
+                        before: channel.original_tvg_id || "null",
+                        after: channel.mapped_tvg_id || "null",
+                        type: "text",
+                      });
+                    }
+                    if (
+                      channel.original_tvg_shift !== channel.mapped_tvg_shift
+                    ) {
+                      mutations.push({
+                        field: "tvg_shift",
+                        before: channel.original_tvg_shift || "null",
+                        after: channel.mapped_tvg_shift || "null",
+                        type: "text",
+                      });
+                    }
+                    if (
+                      channel.original_group_title !==
+                      channel.mapped_group_title
+                    ) {
+                      mutations.push({
+                        field: "group_title",
+                        before: channel.original_group_title || "null",
+                        after: channel.mapped_group_title || "null",
+                        type: "text",
+                      });
+                    }
+                    if (channel.original_tvg_logo !== channel.mapped_tvg_logo) {
+                      mutations.push({
+                        field: "tvg_logo",
+                        before: channel.original_tvg_logo || "null",
+                        after: channel.mapped_tvg_logo || "null",
+                        type: "logo",
+                      });
+                    }
+
+                    const truncatedName = truncateText(
+                      channel.channel_name,
+                      40,
+                    );
+                    const needsTooltip = channel.channel_name.length > 40;
+                    const ruleCount = channel.applied_rules
+                      ? channel.applied_rules.length
+                      : 0;
+
+                    return `
+                    <div class="channel-preview-row" data-channel-index="${channelIndex}" data-applied-rules='${JSON.stringify(channel.applied_rules || [])}'>
+                      <div class="channel-header">
+                        <span class="channel-name" ${needsTooltip ? `title="${escapeHtml(channel.channel_name)}"` : ""}>
+                          ${escapeHtml(truncatedName)}
+                        </span>
+                        <span class="channel-stats">${ruleCount} rule${ruleCount !== 1 ? "s" : ""} applied</span>
+                      </div>
+                      <div class="channel-mutations">
+                        ${
+                          mutations.length > 0
+                            ? `
+                          <div class="mutations-container">
+                            <code class="mutations-code">
+${mutations
+  .filter((mut) => mut.type !== "logo")
+  .map((mut) => {
+    const beforeVal = mut.before;
+    const afterVal = mut.after;
+    return `${mut.field.padEnd(12)} ${beforeVal} → ${afterVal}`;
+  })
+  .join("\n")}
+                            </code>
+                            ${mutations
+                              .filter((mut) => mut.type === "logo")
+                              .map(
+                                (mut) => `
+                              <div class="logo-preview-container">
+                                <span class="logo-field-name">${mut.field}:</span>
+                                <div class="logo-before-after">
+                                  ${mut.before !== "null" && mut.before.startsWith("http") ? `<img src="${mut.before}" class="mutation-logo-preview before" alt="before" onerror="this.style.display='none'">` : `<div class="mutation-logo-placeholder before">∅</div>`}
+                                  <span class="logo-arrow">→</span>
+                                  ${mut.after !== "null" && mut.after.startsWith("http") ? `<img src="${mut.after}" class="mutation-logo-preview after" alt="after" onerror="this.style.display='none'">` : `<div class="mutation-logo-placeholder after">∅</div>`}
+                                </div>
+                              </div>
+                            `,
+                              )
+                              .join("")}
+                          </div>
+                        `
+                            : `
+                          <span class="no-mutations">No visible changes detected</span>
+                        `
+                        }
+                      </div>
+                    </div>
+                  `;
+                  })
+                  .join("")}
+              </div>
+            </div>
+          `
+              : `
+            <div class="empty-state">
+              <div class="empty-state-icon">📋</div>
+              <h5 class="empty-state-title">No Channels Modified</h5>
+              <p class="empty-state-message">
+                None of your current rules have modified any channels. This could mean:
+              </p>
+              <ul class="empty-state-suggestions">
+                <li>Your rules aren't matching any channel data</li>
+                <li>All rules are inactive</li>
+                <li>No stream sources are configured</li>
+              </ul>
+              <div class="empty-state-actions">
+                <button class="btn btn-primary btn-sm" onclick="closePreviewModal(); editRule ? editRule() : createRule()">
+                  📝 Create New Rule
+                </button>
+              </div>
+            </div>
+          `
+          }
+        </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" id="previewModalCloseBtn">
-            Close
-          </button>
+          <button type="button" class="btn btn-secondary" onclick="closePreviewModal()">Close</button>
         </div>
       </div>
     </div>
   `;
 
+  // Remove any existing modal
+  const existingModal = document.getElementById("globalPreviewModal");
+  if (existingModal) {
+    existingModal.remove();
+  }
+
   // Add modal to DOM
   document.body.insertAdjacentHTML("beforeend", modalHtml);
 
-  // Add event listener for the toggle
-  document
-    .getElementById("showPerRuleView")
-    .addEventListener("change", function () {
-      const finalView = document.getElementById("finalView");
-      const perRuleView = document.getElementById("perRuleView");
+  // Show modal using application's standard approach
+  const modal = document.getElementById("globalPreviewModal");
+  if (modal) {
+    modal.style.display = "flex";
+    modal.style.alignItems = "center";
+    modal.style.justifyContent = "center";
+    modal.classList.add("show");
+    document.body.classList.add("modal-open");
+  }
 
-      if (this.checked) {
-        finalView.style.display = "none";
-        perRuleView.style.display = "block";
-      } else {
-        finalView.style.display = "block";
-        perRuleView.style.display = "none";
+  // Store filter state globally for the modal
+  window.previewFilterState = {
+    selectedRules: selectedRules,
+    allChannels: channels,
+    allRules: rules,
+  };
+}
+
+// Close preview modal function
+function closePreviewModal() {
+  const modal = document.getElementById("globalPreviewModal");
+  if (modal) {
+    modal.classList.remove("show");
+    modal.style.display = "none";
+    modal.style.alignItems = "";
+    modal.style.justifyContent = "";
+    document.body.classList.remove("modal-open");
+    modal.remove();
+  }
+}
+
+// Helper functions for preview
+function truncateText(text, maxLength) {
+  if (!text || text.length <= maxLength) return text;
+  return text.substring(0, maxLength - 3) + "...";
+}
+
+function toggleRuleFilter(ruleIndex) {
+  const filterState = window.previewFilterState;
+  if (!filterState) return;
+
+  const card = document.querySelector(`[data-rule-index="${ruleIndex}"]`);
+  const selectAllCard = document.querySelector(".rule-filter-card.select-all");
+
+  if (filterState.selectedRules.has(ruleIndex)) {
+    filterState.selectedRules.delete(ruleIndex);
+    card.classList.remove("active");
+  } else {
+    filterState.selectedRules.add(ruleIndex);
+    card.classList.add("active");
+  }
+
+  // Update select all button state
+  const allSelected =
+    filterState.selectedRules.size === filterState.allRules.length;
+  const noneSelected = filterState.selectedRules.size === 0;
+
+  if (allSelected) {
+    selectAllCard.classList.add("active");
+    selectAllCard.querySelector(".rule-card-name").textContent = "Deselect All";
+  } else if (noneSelected) {
+    selectAllCard.classList.remove("active");
+    selectAllCard.querySelector(".rule-card-name").textContent = "Select All";
+  } else {
+    selectAllCard.classList.remove("active");
+    selectAllCard.querySelector(".rule-card-name").textContent = "Select All";
+  }
+
+  updateChannelVisibility();
+}
+
+function toggleAllRules() {
+  const filterState = window.previewFilterState;
+  if (!filterState) return;
+
+  const selectAllCard = document.querySelector(".rule-filter-card.select-all");
+  const ruleCards = document.querySelectorAll(
+    ".rule-filter-card:not(.select-all)",
+  );
+
+  const allSelected =
+    filterState.selectedRules.size === filterState.allRules.length;
+
+  if (allSelected) {
+    // Deselect all
+    filterState.selectedRules.clear();
+    ruleCards.forEach((card) => card.classList.remove("active"));
+    selectAllCard.classList.remove("active");
+    selectAllCard.querySelector(".rule-card-name").textContent = "Select All";
+  } else {
+    // Select all
+    filterState.selectedRules.clear();
+    filterState.allRules.forEach((_, index) =>
+      filterState.selectedRules.add(index),
+    );
+    ruleCards.forEach((card) => card.classList.add("active"));
+    selectAllCard.classList.add("active");
+    selectAllCard.querySelector(".rule-card-name").textContent = "Deselect All";
+  }
+
+  updateChannelVisibility();
+}
+
+function updateChannelVisibility() {
+  const filterState = window.previewFilterState;
+  if (!filterState) return;
+
+  const channelRows = document.querySelectorAll(".channel-preview-row");
+
+  // Create a mapping of rule IDs to selected indices
+  const selectedRuleIds = new Set();
+  filterState.selectedRules.forEach((ruleIndex) => {
+    const rule = filterState.allRules[ruleIndex];
+    if (rule && rule.rule_id) {
+      selectedRuleIds.add(rule.rule_id);
+    }
+  });
+
+  channelRows.forEach((row) => {
+    const appliedRules = JSON.parse(row.dataset.appliedRules || "[]");
+
+    // Show channel if any of its applied rules are selected, or if all rules are selected
+    const shouldShow =
+      filterState.selectedRules.size === 0 ||
+      filterState.selectedRules.size === filterState.allRules.length ||
+      appliedRules.some((ruleId) => selectedRuleIds.has(ruleId));
+
+    row.style.display = shouldShow ? "block" : "none";
+  });
+
+  // Update channel count badge
+  const visibleChannels = document.querySelectorAll(
+    '.channel-preview-row:not([style*="display: none"])',
+  ).length;
+  const countBadge = document.querySelector(".channels-count-badge");
+  if (countBadge) {
+    countBadge.textContent = `${visibleChannels} channels`;
+  }
+}
+
+// Utility functions
+// Loading modal functions
+function showLoadingModal(message = "Loading...") {
+  const loadingModalHtml = `
+    <div class="modal" id="loadingModal" style="display: flex; align-items: center; justify-content: center;">
+      <div class="modal-content" style="max-width: 400px; text-align: center; padding: 2rem; border-radius: 8px;">
+        <div class="loading" style="margin: 0 auto 1rem auto;"></div>
+        <p style="margin: 0; color: var(--text-muted); font-size: 0.9rem;">${escapeHtml(message)}</p>
+      </div>
+    </div>
+  `;
+
+  // Remove existing loading modal
+  const existing = document.getElementById("loadingModal");
+  if (existing) existing.remove();
+
+  // Add to DOM
+  document.body.insertAdjacentHTML("beforeend", loadingModalHtml);
+  document.body.classList.add("modal-open");
+}
+
+function hideLoadingModal() {
+  const modal = document.getElementById("loadingModal");
+  if (modal) {
+    modal.remove();
+    document.body.classList.remove("modal-open");
+  }
+}
+
+function escapeHtml(text) {
+  if (!text) return "";
+  const map = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  };
+  return text.replace(/[&<>"']/g, function (m) {
+    return map[m];
+  });
+}
+
+function showAlert(type, message) {
+  const alertsContainer = document.getElementById("alertsContainer");
+  if (!alertsContainer) return;
+
+  const alert = document.createElement("div");
+  alert.className = `alert alert-${type} alert-dismissible fade show`;
+  alert.innerHTML = `
+    ${message}
+    <button type="button" class="close" onclick="this.parentElement.remove()">
+      <span>&times;</span>
+    </button>
+  `;
+
+  alertsContainer.appendChild(alert);
+
+  // Auto-remove after 5 seconds
+  setTimeout(() => {
+    if (alert.parentElement) {
+      alert.remove();
+    }
+  }, 5000);
+}
+
+// Autocomplete for expression textarea with @ prefixes
+class ExpressionAutocomplete {
+  constructor(textareaElement) {
+    this.textarea = textareaElement;
+    this.dropdown = null;
+    this.currentQuery = "";
+    this.selectedIndex = -1;
+    this.items = [];
+    this.debounceTimeout = null;
+    this.currentPrefix = "";
+    this.currentPosition = -1;
+    this.prefixStart = -1;
+
+    // Define available autocomplete prefixes
+    this.prefixes = {
+      "@logo:": {
+        name: "Logo",
+        description: "Insert logo reference",
+        keepPrefix: true, // Keep @logo: prefix in result
+        searchFunction: this.searchLogos.bind(this),
+        renderItem: this.renderLogoItem.bind(this),
+        selectItem: this.selectItem.bind(this),
+      },
+      "@": {
+        name: "Helper",
+        description: "Available helpers",
+        keepPrefix: false, // Replace @ with the helper value
+        searchFunction: this.searchHelpers.bind(this),
+        renderItem: this.renderHelperItem.bind(this),
+        selectItem: this.selectItem.bind(this),
+      },
+    };
+
+    this.setupTextarea();
+  }
+
+  setupTextarea() {
+    // Create dropdown container
+    this.dropdown = document.createElement("div");
+    this.dropdown.className = "expression-autocomplete-dropdown";
+    this.dropdown.style.display = "none";
+    this.dropdown.style.position = "absolute";
+    this.dropdown.style.zIndex = "1070";
+
+    this.textarea.parentNode.style.position = "relative";
+    this.textarea.parentNode.appendChild(this.dropdown);
+
+    // Add event listeners
+    this.textarea.addEventListener("input", (e) => {
+      this.handleInput(e);
+    });
+
+    this.textarea.addEventListener("keydown", (e) => {
+      this.handleKeydown(e);
+    });
+
+    this.textarea.addEventListener("blur", () => {
+      setTimeout(() => this.hideDropdown(), 200);
+    });
+
+    this.textarea.addEventListener("click", (e) => {
+      this.handleCursorPosition();
+    });
+
+    this.textarea.addEventListener("keyup", (e) => {
+      // Handle cursor movement keys that don't trigger input events
+      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+        this.handleCursorPosition();
       }
     });
 
-  // Setup close handlers and show modal
-  SharedUtils.setupStandardModalCloseHandlers("previewModal");
+    this.textarea.addEventListener("focus", (e) => {
+      // Check cursor position when field gains focus (e.g., tabbing in)
+      setTimeout(() => this.handleCursorPosition(), 50);
+    });
+  }
 
-  // Add close button functionality to footer
-  document
-    .getElementById("previewModalCloseBtn")
-    .addEventListener("click", () => {
-      closePreviewModal();
+  handleInput(e) {
+    const cursorPos = this.textarea.selectionStart;
+    const text = this.textarea.value;
+
+    // Find any @ pattern before cursor
+    const beforeCursor = text.substring(0, cursorPos);
+
+    // Check for specific prefixes first (longest to shortest)
+    const sortedPrefixes = Object.keys(this.prefixes).sort(
+      (a, b) => b.length - a.length,
+    );
+    let matchFound = false;
+
+    for (const prefix of sortedPrefixes) {
+      if (prefix === "@") continue; // Handle @ last as fallback
+
+      const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(`${escapedPrefix}([^"\\s]*)$`);
+      const match = beforeCursor.match(regex);
+
+      if (match) {
+        const query = match[1];
+        this.currentQuery = query;
+        this.currentPrefix = prefix;
+        this.prefixStart = cursorPos - match[0].length;
+        this.currentPosition = cursorPos;
+
+        clearTimeout(this.debounceTimeout);
+        this.debounceTimeout = setTimeout(() => {
+          this.search(query);
+        }, 300);
+        matchFound = true;
+        break;
+      }
+    }
+
+    // Check for lone @ as fallback
+    if (!matchFound) {
+      const atMatch = beforeCursor.match(/@([^"\\s]*)$/);
+      if (atMatch && atMatch[0] === "@") {
+        // Just @ typed, show available helpers
+        this.currentQuery = "";
+        this.currentPrefix = "@";
+        this.prefixStart = cursorPos - 1;
+        this.currentPosition = cursorPos;
+
+        clearTimeout(this.debounceTimeout);
+        this.debounceTimeout = setTimeout(() => {
+          this.search("");
+        }, 300);
+        matchFound = true;
+      }
+    }
+
+    if (!matchFound) {
+      this.hideDropdown();
+    }
+  }
+
+  handleCursorPosition() {
+    const cursorPos = this.textarea.selectionStart;
+    const text = this.textarea.value;
+    const beforeCursor = text.substring(0, cursorPos);
+    const afterCursor = text.substring(cursorPos);
+
+    // Check if cursor is positioned at the end of or within a complete @logo:uuid pattern
+    const logoUuidMatch = beforeCursor.match(
+      /@logo:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+    );
+
+    // Also check if we're at the end of a UUID (not followed by more UUID characters)
+    if (logoUuidMatch) {
+      const nextChar = afterCursor.charAt(0);
+      // Only trigger if we're truly at the end (space, quote, newline, or end of text)
+      if (!nextChar || /[\s"'\n\r]/.test(nextChar)) {
+        const uuid = logoUuidMatch[1];
+        this.currentQuery = uuid;
+        this.currentPrefix = "@logo:";
+        this.prefixStart = cursorPos - logoUuidMatch[0].length;
+        this.currentPosition = cursorPos;
+
+        // Show autocomplete immediately without debounce for existing UUIDs
+        this.search(uuid);
+      }
+    }
+  }
+
+  async search(query) {
+    const prefixConfig = this.prefixes[this.currentPrefix];
+    if (!prefixConfig) {
+      this.hideDropdown();
+      return;
+    }
+
+    try {
+      this.items = await prefixConfig.searchFunction(query);
+      this.selectedIndex = -1;
+      this.renderDropdown();
+    } catch (error) {
+      console.error(`Search failed for ${this.currentPrefix}:`, error);
+      this.hideDropdown();
+    }
+  }
+
+  async searchLogos(query) {
+    // Check if query is a UUID (36 characters with dashes)
+    const uuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    if (query && uuidPattern.test(query)) {
+      // Query is a UUID - fetch specific logo and show alternatives
+      try {
+        const [specificResponse, allResponse] = await Promise.all([
+          fetch(`/api/logos/${encodeURIComponent(query)}/formats`),
+          fetch(`/api/logos/search?limit=9`), // Get 9 other logos
+        ]);
+
+        const results = [];
+
+        // Add the current UUID logo first (if found)
+        if (specificResponse.ok) {
+          const currentLogo = await specificResponse.json();
+          results.push({
+            type: "logo",
+            name: currentLogo.name,
+            url: `http://localhost:8080${currentLogo.url}`,
+            value: currentLogo.name,
+            uuid: currentLogo.id,
+            insertValue: currentLogo.id,
+            isCurrentUuid: true, // Flag to indicate this is the current UUID
+          });
+        }
+
+        // Add other available logos
+        if (allResponse.ok) {
+          const allLogos = await allResponse.json();
+          const otherLogos = allLogos.assets
+            .filter((logo) => logo && logo.name && logo.id && logo.id !== query)
+            .map((logo) => ({
+              type: "logo",
+              name: logo.name,
+              url: logo.url,
+              value: logo.name,
+              uuid: logo.id,
+              insertValue: logo.id,
+            }));
+          results.push(...otherLogos);
+        }
+
+        return results;
+      } catch (error) {
+        console.warn("Failed to fetch logo by UUID:", error);
+      }
+      // If UUID lookup fails, fall through to regular search
+    }
+
+    // Regular name-based search
+    let url = `/api/logos/search?limit=10`;
+    if (query && query.length > 0) {
+      url += `&query=${encodeURIComponent(query)}`;
+    }
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Logo search failed");
+    const result = await response.json();
+    return result.assets
+      .filter((logo) => logo && logo.name && logo.id)
+      .map((logo) => ({
+        type: "logo",
+        name: logo.name,
+        url: logo.url,
+        value: logo.name,
+        uuid: logo.id,
+        insertValue: logo.id, // Store UUID, not name
+      }));
+  }
+
+  async searchHelpers(query) {
+    // Return available helper prefixes
+    const helpers = [
+      {
+        type: "helper",
+        name: "logo:",
+        description: "Insert logo reference by UUID",
+        value: "logo:",
+        insertValue: "@logo:", // What gets inserted when selected
+      },
+      // Future helpers following the same UUID pattern:
+      // {
+      //   type: 'helper',
+      //   name: 'source:',
+      //   description: 'Insert source reference by UUID (e.g., @source:uuid)',
+      //   value: 'source:',
+      //   insertValue: '@source:'
+      // },
+      // {
+      //   type: 'helper',
+      //   name: 'filter:',
+      //   description: 'Insert filter reference by UUID (e.g., @filter:uuid)',
+      //   value: 'filter:',
+      //   insertValue: 'filter:'
+      // },
+      // {
+      //   type: 'helper',
+      //   name: 'field:',
+      //   description: 'Insert validated field name (e.g., @field:channel_name)',
+      //   value: 'field:',
+      //   insertValue: 'field:'
+      // },
+      // {
+      //   type: 'helper',
+      //   name: 'regex:',
+      //   description: 'Insert predefined regex pattern (e.g., @regex:email)',
+      //   value: 'regex:',
+      //   insertValue: 'regex:'
+      // }
+    ];
+
+    if (query.length === 0) {
+      return helpers;
+    } else {
+      return helpers.filter(
+        (helper) =>
+          helper.name.toLowerCase().includes(query.toLowerCase()) ||
+          helper.description.toLowerCase().includes(query.toLowerCase()),
+      );
+    }
+  }
+
+  renderDropdown() {
+    const prefixConfig = this.prefixes[this.currentPrefix];
+    if (!prefixConfig) return;
+
+    if (this.items.length === 0) {
+      this.dropdown.innerHTML = `
+        <div class="autocomplete-item no-results" style="padding: 8px 12px; color: #666;">
+          No ${prefixConfig.name.toLowerCase()} found for "${escapeHtml(this.currentQuery)}"
+        </div>
+      `;
+    } else {
+      this.dropdown.innerHTML = this.items
+        .map((item, index) =>
+          prefixConfig.renderItem(item, index, this.selectedIndex),
+        )
+        .join("");
+
+      // Add click handlers
+      this.dropdown
+        .querySelectorAll(".expression-autocomplete-item")
+        .forEach((item, index) => {
+          item.addEventListener("click", () => {
+            const value = item.dataset.value;
+            const insertValue = item.dataset.insertValue || value;
+            if (value) {
+              prefixConfig.selectItem(insertValue, value);
+            }
+          });
+        });
+    }
+
+    this.positionDropdown();
+    this.showDropdown();
+  }
+
+  renderLogoItem(item, index, selectedIndex) {
+    const isCurrentUuid = item.isCurrentUuid;
+    const currentUuidBadge = isCurrentUuid
+      ? '<span class="current-uuid-badge">CURRENT</span>'
+      : "";
+
+    return `
+      <div class="expression-autocomplete-item${index === selectedIndex ? " selected" : ""}"
+           data-index="${index}"
+           data-value="${escapeHtml(item.value)}"
+           data-insert-value="${escapeHtml(item.insertValue)}"
+           data-uuid="${escapeHtml(item.uuid)}"
+           data-current-uuid="${isCurrentUuid ? "true" : "false"}">
+        <img src="${item.url}" alt="${escapeHtml(item.name)}" style="width: 24px; height: 24px; object-fit: contain; border-radius: 2px;">
+        <div style="flex: 1;">
+          <div style="font-weight: 500;">${escapeHtml(item.name)}${currentUuidBadge}</div>
+          <div style="font-size: 0.75em; opacity: 0.7; font-family: monospace;">UUID: ${escapeHtml(item.uuid.substring(0, 8))}...</div>
+        </div>
+      </div>
+    `;
+  }
+
+  renderHelperItem(item, index, selectedIndex) {
+    return `
+      <div class="expression-autocomplete-item${index === selectedIndex ? " selected" : ""}"
+           data-index="${index}"
+           data-value="${escapeHtml(item.value)}"
+           data-insert-value="${escapeHtml(item.insertValue || item.value)}">
+        <span style="font-family: monospace; background: rgba(0,0,0,0.1); padding: 2px 6px; border-radius: 3px; font-size: 0.9em;">@${escapeHtml(item.name)}</span>
+        <div style="flex: 1;">
+          <div style="font-weight: 500;">${escapeHtml(item.name)}</div>
+          <div style="font-size: 0.85em; opacity: 0.8;">${escapeHtml(item.description)}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  positionDropdown() {
+    // Position dropdown near the cursor position
+    const rect = this.textarea.getBoundingClientRect();
+    const parentRect = this.textarea.parentNode.getBoundingClientRect();
+
+    // Calculate cursor position more accurately
+    const cursorPos = this.textarea.selectionStart;
+    const textBeforeCursor = this.textarea.value.substring(0, cursorPos);
+    const lines = textBeforeCursor.split("\n");
+    const currentLine = lines.length - 1;
+    const currentColumn = lines[lines.length - 1].length;
+
+    // Get computed styles for more accurate measurements
+    const computedStyle = window.getComputedStyle(this.textarea);
+    const fontSize = parseFloat(computedStyle.fontSize);
+    const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.2;
+    const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+    const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+
+    // Approximate character width based on font size (monospace assumption)
+    const charWidth = fontSize * 0.6;
+
+    // Calculate position within textarea
+    const cursorX = Math.min(
+      currentColumn * charWidth + paddingLeft,
+      rect.width - 200,
+    );
+    const cursorY = currentLine * lineHeight + paddingTop;
+
+    // Position dropdown
+    const dropdownTop = rect.top - parentRect.top + cursorY + lineHeight + 5;
+    const dropdownLeft = rect.left - parentRect.left + cursorX;
+
+    // Ensure dropdown doesn't go off-screen
+    const maxLeft = window.innerWidth - 320; // 300px width + 20px margin
+    const maxTop = window.innerHeight - 200; // Approximate dropdown height
+
+    this.dropdown.style.top = Math.min(dropdownTop, maxTop) + "px";
+    this.dropdown.style.left = Math.min(dropdownLeft, maxLeft) + "px";
+    this.dropdown.style.maxWidth = "300px";
+    this.dropdown.style.zIndex = "1000";
+  }
+
+  handleKeydown(e) {
+    if (
+      !this.dropdown.style.display ||
+      this.dropdown.style.display === "none"
+    ) {
+      return;
+    }
+
+    const items = this.dropdown.querySelectorAll(
+      ".expression-autocomplete-item:not(.no-results)",
+    );
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        this.selectedIndex = Math.min(this.selectedIndex + 1, items.length - 1);
+        this.updateSelection();
+        break;
+
+      case "ArrowUp":
+        e.preventDefault();
+        this.selectedIndex = Math.max(this.selectedIndex - 1, -1);
+        this.updateSelection();
+        break;
+
+      case "Enter":
+      case "Tab":
+        e.preventDefault();
+        if (this.selectedIndex >= 0 && items[this.selectedIndex]) {
+          const item = items[this.selectedIndex];
+          const value = item.dataset.value;
+          const insertValue = item.dataset.insertValue || value;
+          if (value) {
+            const prefixConfig = this.prefixes[this.currentPrefix];
+            if (prefixConfig) {
+              prefixConfig.selectItem(insertValue, value);
+            }
+          }
+        }
+        break;
+
+      case "Escape":
+        this.hideDropdown();
+        break;
+    }
+  }
+
+  updateSelection() {
+    const items = this.dropdown.querySelectorAll(
+      ".expression-autocomplete-item",
+    );
+    items.forEach((item, index) => {
+      if (index === this.selectedIndex) {
+        item.style.backgroundColor = "#007bff";
+        item.style.color = "white";
+        item.classList.add("selected");
+      } else {
+        item.style.backgroundColor = "transparent";
+        item.style.color = "inherit";
+        item.classList.remove("selected");
+      }
+    });
+  }
+
+  selectItem(insertValue, originalValue) {
+    const text = this.textarea.value;
+    const beforePrefix = text.substring(0, this.prefixStart);
+    const afterCursor = text.substring(this.currentPosition);
+    const prefixConfig = this.prefixes[this.currentPrefix];
+
+    let newText, newCursorPos;
+
+    if (prefixConfig.keepPrefix) {
+      // Keep the prefix (e.g., @logo:uuid)
+      if (this.currentPrefix === "@logo:") {
+        newText = beforePrefix + "@logo:" + insertValue + afterCursor;
+        newCursorPos = this.prefixStart + "@logo:".length + insertValue.length;
+      } else {
+        newText = beforePrefix + this.currentPrefix + insertValue + afterCursor;
+        newCursorPos =
+          this.prefixStart + this.currentPrefix.length + insertValue.length;
+      }
+    } else {
+      // Replace the prefix entirely (e.g., @ becomes logo:)
+      newText = beforePrefix + insertValue + afterCursor;
+      newCursorPos = this.prefixStart + insertValue.length;
+    }
+
+    this.textarea.value = newText;
+    this.textarea.setSelectionRange(newCursorPos, newCursorPos);
+
+    this.hideDropdown();
+
+    // Trigger change event for validation
+    this.textarea.dispatchEvent(new Event("input"));
+  }
+
+  showDropdown() {
+    this.dropdown.style.display = "block";
+  }
+
+  hideDropdown() {
+    this.dropdown.style.display = "none";
+    this.selectedIndex = -1;
+  }
+}
+
+// Original Logo autocomplete functionality for dedicated inputs
+class LogoAutocomplete {
+  constructor(inputElement, hiddenInputElement) {
+    this.input = inputElement;
+    this.hiddenInput = hiddenInputElement;
+    this.dropdown = null;
+    this.currentQuery = "";
+    this.selectedIndex = -1;
+    this.logos = [];
+    this.debounceTimeout = null;
+
+    this.setupInput();
+  }
+
+  setupInput() {
+    // Create dropdown container
+    this.dropdown = document.createElement("div");
+    this.dropdown.className = "logo-autocomplete-dropdown";
+    this.dropdown.style.display = "none";
+    this.input.parentNode.appendChild(this.dropdown);
+
+    // Add event listeners
+    this.input.addEventListener("input", (e) => {
+      this.debouncedSearch(e.target.value);
     });
 
-  // Show the modal
-  SharedUtils.showStandardModal("previewModal");
+    this.input.addEventListener("keydown", (e) => {
+      this.handleKeydown(e);
+    });
+
+    this.input.addEventListener("blur", () => {
+      // Delay hiding to allow click selection
+      setTimeout(() => this.hideDropdown(), 200);
+    });
+
+    this.input.addEventListener("focus", () => {
+      if (this.input.value.trim()) {
+        this.search(this.input.value.trim());
+      }
+    });
+  }
+
+  debouncedSearch(query) {
+    clearTimeout(this.debounceTimeout);
+    this.debounceTimeout = setTimeout(() => {
+      this.search(query);
+    }, 300);
+  }
+
+  async search(query) {
+    if (query.length < 2) {
+      this.hideDropdown();
+      return;
+    }
+
+    this.currentQuery = query;
+
+    try {
+      const response = await fetch(
+        `/api/logos/search?query=${encodeURIComponent(query)}&limit=10`,
+      );
+      if (!response.ok) throw new Error("Search failed");
+
+      const result = await response.json();
+      this.logos = result.assets;
+      this.selectedIndex = -1;
+      this.renderDropdown();
+    } catch (error) {
+      console.error("Logo search failed:", error);
+      this.hideDropdown();
+    }
+  }
+
+  renderDropdown() {
+    if (this.logos.length === 0) {
+      this.dropdown.innerHTML = `
+        <div class="logo-autocomplete-item no-results">
+          No logos found for "${escapeHtml(this.currentQuery)}"
+        </div>
+      `;
+    } else {
+      this.dropdown.innerHTML = this.logos
+        .map(
+          (logo, index) => `
+        <div class="logo-autocomplete-item${index === this.selectedIndex ? " selected" : ""}"
+             data-index="${index}"
+             data-logo-id="${logo.asset.id}"
+             data-logo-name="${escapeHtml(logo.asset.name)}">
+          <img src="${logo.url}" alt="${escapeHtml(logo.asset.name)}" class="logo-preview-tiny">
+          <span class="logo-name">${escapeHtml(logo.asset.name)}</span>
+        </div>
+      `,
+        )
+        .join("");
+
+      // Add click handlers
+      this.dropdown
+        .querySelectorAll(".logo-autocomplete-item")
+        .forEach((item) => {
+          item.addEventListener("click", () => {
+            const logoId = item.dataset.logoId;
+            const logoName = item.dataset.logoName;
+            if (logoId && logoName) {
+              this.selectLogo(logoId, logoName);
+            }
+          });
+        });
+    }
+
+    this.showDropdown();
+  }
+
+  handleKeydown(e) {
+    if (
+      !this.dropdown.style.display ||
+      this.dropdown.style.display === "none"
+    ) {
+      return;
+    }
+
+    const items = this.dropdown.querySelectorAll(
+      ".logo-autocomplete-item:not(.no-results)",
+    );
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        this.selectedIndex = Math.min(this.selectedIndex + 1, items.length - 1);
+        this.updateSelection();
+        break;
+
+      case "ArrowUp":
+        e.preventDefault();
+        this.selectedIndex = Math.max(this.selectedIndex - 1, -1);
+        this.updateSelection();
+        break;
+
+      case "Enter":
+        e.preventDefault();
+        if (this.selectedIndex >= 0 && items[this.selectedIndex]) {
+          const item = items[this.selectedIndex];
+          const logoId = item.dataset.logoId;
+          const logoName = item.dataset.logoName;
+          if (logoId && logoName) {
+            this.selectLogo(logoId, logoName);
+          }
+        }
+        break;
+
+      case "Escape":
+        this.hideDropdown();
+        break;
+    }
+  }
+
+  updateSelection() {
+    const items = this.dropdown.querySelectorAll(".logo-autocomplete-item");
+    items.forEach((item, index) => {
+      item.classList.toggle("selected", index === this.selectedIndex);
+    });
+  }
+
+  selectLogo(logoId, logoName) {
+    this.input.value = logoName;
+    this.hiddenInput.value = logoId;
+    this.hideDropdown();
+
+    // Trigger change event for validation
+    this.input.dispatchEvent(new Event("change"));
+  }
+
+  showDropdown() {
+    this.dropdown.style.display = "block";
+  }
+
+  hideDropdown() {
+    this.dropdown.style.display = "none";
+  }
+
+  clear() {
+    this.input.value = "";
+    this.hiddenInput.value = "";
+    this.hideDropdown();
+  }
 }
 
-// Close preview modal
-function closePreviewModal() {
-  SharedUtils.hideStandardModal("previewModal");
-  // Remove modal from DOM after hiding
-  setTimeout(() => {
-    const modal = document.getElementById("previewModal");
-    if (modal) {
-      modal.remove();
-    }
-  }, 300);
+// Drag and drop functionality
+let draggedElement = null;
+let draggedElementId = null;
+
+function enableDragAndDrop() {
+  const ruleItems = document.querySelectorAll(".rule-card");
+  ruleItems.forEach((item) => {
+    item.addEventListener("dragstart", handleDragStart);
+    item.addEventListener("dragend", handleDragEnd);
+    item.addEventListener("dragover", handleDragOver);
+    item.addEventListener("drop", handleDrop);
+    item.addEventListener("dragenter", handleDragEnter);
+    item.addEventListener("dragleave", handleDragLeave);
+  });
+
+  // Add global drag over handler for the rules container
+  const rulesContainer = document.getElementById("rulesContainer");
+  if (rulesContainer) {
+    rulesContainer.addEventListener("dragover", handleContainerDragOver);
+    rulesContainer.addEventListener("dragleave", handleContainerDragLeave);
+  }
 }
+
+function handleDragStart(e) {
+  draggedElement = this;
+  draggedElementId = this.dataset.ruleId;
+  this.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/html", this.outerHTML);
+}
+
+function handleDragOver(e) {
+  if (e.preventDefault) {
+    e.preventDefault();
+  }
+  e.dataTransfer.dropEffect = "move";
+
+  // Show insertion indicator based on mouse position
+  if (this !== draggedElement) {
+    showInsertionIndicator(this, e);
+  }
+
+  return false;
+}
+
+function handleDragEnter(e) {
+  if (this !== draggedElement) {
+    this.classList.add("drag-over");
+  }
+}
+
+function handleDragLeave(e) {
+  // Only remove drag-over class if we're actually leaving the element
+  // (not just moving to a child element)
+  const rect = this.getBoundingClientRect();
+  const x = e.clientX;
+  const y = e.clientY;
+
+  if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+    this.classList.remove("drag-over");
+  }
+}
+
+function handleContainerDragOver(e) {
+  if (e.preventDefault) {
+    e.preventDefault();
+  }
+  e.dataTransfer.dropEffect = "move";
+
+  // Find the closest rule card to show insertion indicator
+  const mouseY = e.clientY;
+  const ruleCards = Array.from(this.querySelectorAll(".rule-card")).filter(
+    (card) => card !== draggedElement,
+  );
+
+  if (ruleCards.length === 0) return;
+
+  let closestCard = null;
+  let closestDistance = Infinity;
+  let insertBefore = true;
+
+  ruleCards.forEach((card) => {
+    const rect = card.getBoundingClientRect();
+    const cardTop = rect.top;
+    const cardBottom = rect.bottom;
+    const cardMiddle = rect.top + rect.height / 2;
+
+    // Calculate distance to top edge (with extended zone)
+    const distanceToTop = Math.abs(mouseY - cardTop);
+    // Calculate distance to bottom edge (with extended zone)
+    const distanceToBottom = Math.abs(mouseY - cardBottom);
+
+    // Extended zones: 20px above and below each card
+    const extendedTop = cardTop - 20;
+    const extendedBottom = cardBottom + 20;
+
+    // Check if mouse is in the extended zone of this card
+    if (mouseY >= extendedTop && mouseY <= extendedBottom) {
+      if (mouseY < cardMiddle) {
+        // Closer to top - insert before
+        if (distanceToTop < closestDistance) {
+          closestDistance = distanceToTop;
+          closestCard = card;
+          insertBefore = true;
+        }
+      } else {
+        // Closer to bottom - insert after
+        if (distanceToBottom < closestDistance) {
+          closestDistance = distanceToBottom;
+          closestCard = card;
+          insertBefore = false;
+        }
+      }
+    }
+  });
+
+  if (closestCard) {
+    showInsertionIndicatorAtCard(closestCard, insertBefore);
+  }
+
+  return false;
+}
+
+function handleContainerDragLeave(e) {
+  // Check if we're leaving the container entirely
+  const rect = this.getBoundingClientRect();
+  const x = e.clientX;
+  const y = e.clientY;
+
+  if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+    hideInsertionIndicator();
+  }
+}
+
+function showInsertionIndicator(element, e) {
+  const rect = element.getBoundingClientRect();
+  const mouseY = e.clientY;
+  const elementMiddle = rect.top + rect.height / 2;
+
+  // Extended zones for better UX
+  const extendedTopZone = rect.top - 15;
+  const extendedBottomZone = rect.bottom + 15;
+
+  let insertBefore = false;
+
+  if (
+    mouseY <= extendedTopZone ||
+    (mouseY < elementMiddle && mouseY >= extendedTopZone)
+  ) {
+    insertBefore = true;
+  } else if (
+    mouseY >= extendedBottomZone ||
+    (mouseY >= elementMiddle && mouseY <= extendedBottomZone)
+  ) {
+    insertBefore = false;
+  } else {
+    // We're in the middle area, don't show indicator to avoid confusion
+    hideInsertionIndicator();
+    return;
+  }
+
+  showInsertionIndicatorAtCard(element, insertBefore);
+}
+
+function showInsertionIndicatorAtCard(element, insertBefore) {
+  // Remove existing indicator
+  hideInsertionIndicator();
+
+  const indicator = document.createElement("div");
+  indicator.className = "drag-insertion-indicator";
+  indicator.id = "drag-indicator";
+
+  if (insertBefore) {
+    // Insert before this element
+    element.parentNode.insertBefore(indicator, element);
+  } else {
+    // Insert after this element
+    element.parentNode.insertBefore(indicator, element.nextSibling);
+  }
+}
+
+function hideInsertionIndicator() {
+  const indicator = document.getElementById("drag-indicator");
+  if (indicator) {
+    indicator.remove();
+  }
+}
+
+function handleDrop(e) {
+  if (e.stopPropagation) {
+    e.stopPropagation();
+  }
+
+  if (this !== draggedElement) {
+    const dropTargetId = this.dataset.ruleId;
+    const rect = this.getBoundingClientRect();
+    const mouseY = e.clientY;
+    const elementMiddle = rect.top + rect.height / 2;
+
+    // Extended zones for drop detection
+    const extendedTopZone = rect.top - 15;
+    const extendedBottomZone = rect.bottom + 15;
+
+    let insertBefore = false;
+
+    if (
+      mouseY <= extendedTopZone ||
+      (mouseY < elementMiddle && mouseY >= extendedTopZone)
+    ) {
+      insertBefore = true;
+    } else if (
+      mouseY >= extendedBottomZone ||
+      (mouseY >= elementMiddle && mouseY <= extendedBottomZone)
+    ) {
+      insertBefore = false;
+    } else {
+      // Default to inserting after if in middle zone
+      insertBefore = false;
+    }
+
+    reorderRules(draggedElementId, dropTargetId, insertBefore);
+  }
+
+  return false;
+}
+
+function handleDragEnd(e) {
+  const ruleItems = document.querySelectorAll(".rule-card");
+  ruleItems.forEach((item) => {
+    item.classList.remove("dragging", "drag-over");
+  });
+
+  hideInsertionIndicator();
+  draggedElement = null;
+  draggedElementId = null;
+}
+
+async function reorderRules(draggedRuleId, targetRuleId, insertBefore = false) {
+  try {
+    // Find the rules in the current array
+    const draggedRule = currentRules.find((r) => r.id === draggedRuleId);
+    const targetRule = currentRules.find((r) => r.id === targetRuleId);
+
+    if (!draggedRule || !targetRule) return;
+
+    // Create new order array
+    const newOrder = [];
+    const draggedIndex = currentRules.findIndex((r) => r.id === draggedRuleId);
+    const targetIndex = currentRules.findIndex((r) => r.id === targetRuleId);
+
+    // Create a copy without the dragged item
+    const filteredRules = currentRules.filter((r) => r.id !== draggedRuleId);
+
+    // Calculate insertion position based on insertBefore flag
+    let insertPosition;
+    if (insertBefore) {
+      insertPosition =
+        targetIndex > draggedIndex ? targetIndex - 1 : targetIndex;
+    } else {
+      insertPosition =
+        targetIndex > draggedIndex ? targetIndex : targetIndex + 1;
+    }
+
+    // Insert dragged item at calculated position
+    filteredRules.splice(insertPosition, 0, draggedRule);
+
+    // Update sort_order for all rules
+    filteredRules.forEach((rule, index) => {
+      rule.sort_order = index + 1;
+      newOrder.push([rule.id, rule.sort_order]);
+    });
+
+    // Send reorder request to server
+    const response = await fetch("/api/data-mapping/reorder", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(newOrder),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    // Update local state and re-render
+    currentRules = filteredRules;
+    renderRules();
+
+    showAlert("success", "Rules reordered successfully");
+  } catch (error) {
+    console.error("Failed to reorder rules:", error);
+    showAlert("error", "Failed to reorder rules");
+    // Reload rules to reset to server state
+    await loadRules();
+  }
+}
+
+// Initialize when DOM is loaded
+document.addEventListener("DOMContentLoaded", init);

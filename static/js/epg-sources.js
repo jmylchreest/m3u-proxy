@@ -414,6 +414,7 @@ class EpgSourcesManager {
       document.getElementById("timezone").value = "UTC";
       document.getElementById("timeOffset").value = "0";
       document.getElementById("isActive").checked = true;
+      document.getElementById("epgSourceType").value = "xtream";
     }
 
     this.toggleSourceTypeFields(document.getElementById("epgSourceType").value);

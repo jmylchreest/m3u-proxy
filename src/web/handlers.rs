@@ -11,6 +11,36 @@ use crate::assets::StaticAssets;
 
 use crate::proxy::ProxyService;
 
+/// Serve favicon.ico
+pub async fn serve_favicon() -> impl IntoResponse {
+    // Try to serve favicon from static assets first
+    match StaticAssets::get_asset("static/favicon.ico") {
+        Some(asset) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "image/x-icon")
+            .header(header::CACHE_CONTROL, "public, max-age=86400")
+            .body(Body::from(asset.data.to_vec()))
+            .unwrap(),
+        None => {
+            // Return a minimal 1x1 transparent ICO file
+            let ico_data = vec![
+                0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+                0x16, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x01, 0x00,
+                0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+            ];
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "image/x-icon")
+                .header(header::CACHE_CONTROL, "public, max-age=86400")
+                .body(Body::from(ico_data))
+                .unwrap()
+        }
+    }
+}
+
 /// Serve proxy M3U files with on-demand generation
 /// This applies the complete pipeline: original data -> data mapping -> filtering -> M3U generation
 pub async fn serve_proxy_m3u(

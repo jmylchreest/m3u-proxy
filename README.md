@@ -588,6 +588,54 @@ Rules consist of **source type**, **conditions** (when to apply), and **actions*
 }
 ```
 
+### Data Mapping Rule Scopes
+
+Data mapping rules are processed in **sequential order** based on their `sort_order`. The scope determines how rules are applied:
+
+```mermaid
+graph TD
+    A[Channel/Program Data] --> B{Check Next Rule}
+    B --> C{Rule Scope Type}
+    
+    C -->|Individual| D[Apply to Single Item]
+    C -->|Stream-wide| E[Apply to All Stream Channels]
+    C -->|EPG-wide| F[Apply to All EPG Channels/Programs]
+    
+    D --> G{Conditions Met?}
+    E --> H{Conditions Met?}
+    F --> I{Conditions Met?}
+    
+    G -->|Yes| J[Execute Actions on Item]
+    G -->|No| K[Skip Rule for Item]
+    H -->|Yes| L[Execute Actions on All Stream Items]
+    H -->|No| K
+    I -->|Yes| M[Execute Actions on All EPG Items]
+    I -->|No| K
+    
+    J --> N{More Rules?}
+    L --> N
+    K --> N
+    M --> N
+    
+    N -->|Yes| B
+    N -->|No| O[Processing Complete]
+    
+    style D fill:#e1f5fe
+    style E fill:#f3e5f5
+    style F fill:#e8f5e8
+```
+
+**Scope Types:**
+- **Individual**: Rule applies to each channel/program independently
+- **Stream-wide**: Rule applies globally to all channels from stream sources  
+- **EPG-wide**: Rule applies globally to all channels/programs from EPG sources
+
+**Processing Order:**
+1. Rules are sorted by `sort_order` (ascending)
+2. Each rule is evaluated against all applicable items
+3. Actions are executed immediately when conditions match
+4. Modified data is passed to subsequent rules
+
 ### Available Fields by Source Type
 
 #### Stream Source Fields

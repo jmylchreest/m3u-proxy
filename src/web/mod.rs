@@ -39,6 +39,7 @@ impl WebServer {
             // API endpoints
             // Unified Sources API
             .route("/api/sources", get(api::list_all_sources))
+            .route("/api/sources/unified", get(api::list_all_sources))
             .route(
                 "/api/sources/stream",
                 get(api::list_stream_sources).post(api::create_stream_source),
@@ -150,10 +151,22 @@ impl WebServer {
                 "/api/data-mapping/reorder",
                 post(api::reorder_data_mapping_rules),
             )
+            .route(
+                "/api/data-mapping/validate",
+                post(api::validate_data_mapping_expression),
+            )
+            .route(
+                "/api/data-mapping/fields/stream",
+                get(api::get_data_mapping_stream_fields),
+            )
+            .route(
+                "/api/data-mapping/fields/epg",
+                get(api::get_data_mapping_epg_fields),
+            )
             .route("/api/data-mapping/test", post(api::test_data_mapping_rule))
             .route(
                 "/api/data-mapping/preview",
-                get(api::apply_data_mapping_rules),
+                get(api::apply_data_mapping_rules).post(api::apply_data_mapping_rules_post),
             )
             .route(
                 "/api/sources/stream/:id/data-mapping/preview",
@@ -205,6 +218,8 @@ impl WebServer {
             )
             // Health check endpoint
             .route("/health", get(api::health_check))
+            // Favicon
+            .route("/favicon.ico", get(handlers::serve_favicon))
             // Web interface
             .route("/", get(handlers::index))
             .route("/sources", get(handlers::sources_page))

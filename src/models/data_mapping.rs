@@ -25,6 +25,15 @@ pub enum DataMappingSourceType {
     Epg,
 }
 
+impl std::fmt::Display for DataMappingSourceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DataMappingSourceType::Stream => write!(f, "stream"),
+            DataMappingSourceType::Epg => write!(f, "epg"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "data_mapping_rule_scope", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
@@ -324,6 +333,7 @@ pub struct DataMappingRuleWithDetails {
     pub rule: DataMappingRule,
     pub conditions: Vec<DataMappingCondition>,
     pub actions: Vec<DataMappingAction>,
+    pub expression: Option<String>, // The parsed expression for this rule
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,8 +341,7 @@ pub struct DataMappingRuleCreateRequest {
     pub name: String,
     pub description: Option<String>,
     pub source_type: DataMappingSourceType,
-    pub conditions: Vec<DataMappingConditionRequest>,
-    pub actions: Vec<DataMappingActionRequest>,
+    pub expression: String, // Advanced conditional action expressions
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,11 +349,11 @@ pub struct DataMappingRuleUpdateRequest {
     pub name: String,
     pub description: Option<String>,
     pub source_type: DataMappingSourceType,
-    pub conditions: Vec<DataMappingConditionRequest>,
-    pub actions: Vec<DataMappingActionRequest>,
+    pub expression: String, // Advanced conditional action expressions
     pub is_active: bool,
 }
 
+// Helper structs for API compatibility and testing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingConditionRequest {
     pub field_name: String,
@@ -366,8 +375,7 @@ pub struct DataMappingActionRequest {
 pub struct DataMappingTestRequest {
     pub source_id: Uuid,
     pub source_type: DataMappingSourceType,
-    pub conditions: Vec<DataMappingConditionRequest>,
-    pub actions: Vec<DataMappingActionRequest>,
+    pub expression: String, // Advanced conditional action expressions
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -447,4 +455,85 @@ pub struct EpgDataMappingPreview {
     pub preview_channels: Vec<DataMappingTestEpgChannel>,
     pub clone_groups: std::collections::HashMap<String, CloneGroupInfo>,
     pub applied_rules: Vec<String>,
+}
+
+impl DataMappingRuleCreateRequest {
+    /// Create request from validated expression
+    pub fn from_expression(
+        name: String,
+        description: Option<String>,
+        source_type: DataMappingSourceType,
+        expression: String,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            source_type,
+            expression,
+        }
+    }
+
+    /// Validate expression syntax for the given source type
+    pub fn validate_expression(&self) -> Result<(), String> {
+        use crate::filter_parser::FilterParser;
+
+        // Get available fields for this source type
+        let available_fields = match self.source_type {
+            DataMappingSourceType::Stream => StreamMappingFields::available_fields()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
+            DataMappingSourceType::Epg => EpgMappingFields::available_fields()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
+        };
+
+        let parser = FilterParser::new().with_fields(available_fields);
+
+        // Parse and validate the expression
+        match parser.parse_extended(&self.expression) {
+            Ok(parsed) => {
+                // Additional validation can be added here
+                parser
+                    .validate_extended(&parsed)
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            Err(e) => Err(format!("Expression syntax error: {}", e)),
+        }
+    }
+}
+
+impl DataMappingRuleUpdateRequest {
+    /// Validate expression syntax for the given source type
+    pub fn validate_expression(&self) -> Result<(), String> {
+        use crate::filter_parser::FilterParser;
+
+        // Get available fields for this source type
+        let available_fields = match self.source_type {
+            DataMappingSourceType::Stream => StreamMappingFields::available_fields()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
+            DataMappingSourceType::Epg => EpgMappingFields::available_fields()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
+        };
+
+        let parser = FilterParser::new().with_fields(available_fields);
+
+        // Parse and validate the expression
+        match parser.parse_extended(&self.expression) {
+            Ok(parsed) => {
+                // Additional validation can be added here
+                parser
+                    .validate_extended(&parsed)
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            Err(e) => Err(format!("Expression syntax error: {}", e)),
+        }
+    }
 }

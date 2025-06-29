@@ -219,7 +219,7 @@ class SourcesManager {
 
     let refreshButtonContent;
     if (isIngesting) {
-      refreshButtonContent = `<button class="btn btn-sm btn-warning" onclick="sourcesManager.cancelSourceIngestion('${source.id}')" title="Cancel current operation">
+      refreshButtonContent = `<button class="btn btn-sm btn-warning" onclick="sourcesManager.cancelIngestion('${source.id}')" title="Cancel current operation">
                 🔄 Cancel
             </button>`;
     } else if (isInBackoff) {
@@ -244,6 +244,9 @@ class SourcesManager {
                 ✏️ Edit
             </button>
             ${refreshButtonContent}
+            <button class="btn btn-sm btn-info" onclick="sourcesManager.previewDataMapping('${source.id}', '${source.source_type}')" ${isIngesting ? "disabled" : ""} title="Preview data mapping rules for this source">
+                👁️ Preview Rules
+            </button>
             <button class="btn btn-sm btn-danger" onclick="sourcesManager.deleteSource('${source.id}')" ${isIngesting ? "disabled" : ""}>
                 🗑️ Delete
             </button>
@@ -274,6 +277,7 @@ class SourcesManager {
       document.getElementById("maxStreams").value = 1;
       document.getElementById("updateCron").value = "0 0 */6 * * * *";
       document.getElementById("isActive").checked = true;
+      document.getElementById("sourceType").value = "xtream";
       // Force the cron field to update by triggering an input event
       const cronField = document.getElementById("updateCron");
       cronField.dispatchEvent(new Event("input", { bubbles: true }));
@@ -694,6 +698,205 @@ class SourcesManager {
       this.showAlert("Failed to cancel ingestion: " + error.message, "danger");
       console.error("Error cancelling ingestion:", error);
       return false;
+    }
+  }
+
+  async previewDataMapping(sourceId, sourceType) {
+    // Find the preview button for this source
+    const button = document.querySelector(
+      `button[onclick="sourcesManager.previewDataMapping('${sourceId}', '${sourceType}')"]`,
+    );
+    const originalText = button ? button.innerHTML : "";
+
+    try {
+      // Show loading state
+      if (button) {
+        button.disabled = true;
+        button.innerHTML = "⏳ Loading...";
+      }
+
+      const response = await fetch(
+        `/api/sources/${sourceType}/${sourceId}/data-mapping/preview`,
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      this.displayPreviewResults(
+        `Data Mapping Preview - ${sourceType} Source`,
+        result,
+      );
+    } catch (error) {
+      console.error("Preview failed:", error);
+      this.showAlert(
+        "Failed to preview data mapping rules: " + error.message,
+        "danger",
+      );
+    } finally {
+      // Restore button state
+      if (button) {
+        button.disabled = false;
+        button.innerHTML = originalText;
+      }
+    }
+  }
+
+  displayPreviewResults(title, result) {
+    const totalChannels = result.original_count || 0;
+    const affectedChannels = result.mapped_count || 0;
+    const channels = result.final_channels || [];
+
+    // Create modal HTML using application's standard modal structure
+    const modalHtml = `
+      <div class="modal" id="previewModal" style="display: none">
+        <div class="modal-content standard-modal preview-modal-large">
+          <div class="modal-header">
+            <h3 class="modal-title">${title}</h3>
+          </div>
+            <div class="modal-body">
+              <div class="mb-3">
+                <div class="alert alert-info">
+                  <strong>Summary:</strong> ${affectedChannels} channels modified out of ${totalChannels} total channels
+                </div>
+              </div>
+
+              ${
+                channels.length > 0
+                  ? `
+              <div class="preview-channels">
+                <h6>Modified Channels:</h6>
+                <div class="table-responsive">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Channel Name</th>
+                        <th>Changes</th>
+                        <th>Applied Rules</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${channels
+                        .map((channel) => {
+                          const changes = [];
+
+                          // Check for changes between original and mapped values
+                          if (
+                            channel.original_channel_name !==
+                            channel.mapped_channel_name
+                          ) {
+                            changes.push(
+                              `Name: "${channel.original_channel_name}" → "${channel.mapped_channel_name}"`,
+                            );
+                          }
+                          if (
+                            channel.original_tvg_id !== channel.mapped_tvg_id
+                          ) {
+                            changes.push(
+                              `TVG ID: "${channel.original_tvg_id || "null"}" → "${channel.mapped_tvg_id || "null"}"`,
+                            );
+                          }
+                          if (
+                            channel.original_tvg_shift !==
+                            channel.mapped_tvg_shift
+                          ) {
+                            changes.push(
+                              `TVG Shift: "${channel.original_tvg_shift || "null"}" → "${channel.mapped_tvg_shift || "null"}"`,
+                            );
+                          }
+                          if (
+                            channel.original_group_title !==
+                            channel.mapped_group_title
+                          ) {
+                            changes.push(
+                              `Group: "${channel.original_group_title || "null"}" → "${channel.mapped_group_title || "null"}"`,
+                            );
+                          }
+                          if (
+                            channel.original_tvg_logo !==
+                            channel.mapped_tvg_logo
+                          ) {
+                            changes.push(
+                              `Logo: "${channel.original_tvg_logo || "null"}" → "${channel.mapped_tvg_logo || "null"}"`,
+                            );
+                          }
+
+                          return `
+                          <tr>
+                            <td><strong>${this.escapeHtml(channel.channel_name)}</strong></td>
+                            <td>
+                              ${
+                                changes.length > 0
+                                  ? changes
+                                      .map(
+                                        (change) =>
+                                          `<div class="small text-muted">${this.escapeHtml(change)}</div>`,
+                                      )
+                                      .join("")
+                                  : '<span class="text-muted">No visible changes</span>'
+                              }
+                            </td>
+                            <td>
+                              ${
+                                channel.applied_rules &&
+                                channel.applied_rules.length > 0
+                                  ? `<span class="badge badge-primary">${channel.applied_rules.length} rule(s)</span>`
+                                  : '<span class="text-muted">No rules</span>'
+                              }
+                            </td>
+                          </tr>
+                        `;
+                        })
+                        .join("")}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              `
+                  : `
+              <div class="alert alert-warning">
+                No channels were modified by the current rules.
+              </div>
+              `
+              }
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="sourcesManager.closePreviewModal()">Close</button>
+            </div>
+          </div>
+        </div>
+    `;
+
+    // Remove any existing modal
+    const existingModal = document.getElementById("previewModal");
+    if (existingModal) {
+      existingModal.remove();
+    }
+
+    // Add modal to DOM
+    document.body.insertAdjacentHTML("beforeend", modalHtml);
+
+    // Show modal using application's standard approach
+    const modal = document.getElementById("previewModal");
+    if (modal) {
+      modal.style.display = "flex";
+      modal.style.alignItems = "center";
+      modal.style.justifyContent = "center";
+      modal.classList.add("show");
+      document.body.classList.add("modal-open");
+    }
+  }
+
+  closePreviewModal() {
+    const modal = document.getElementById("previewModal");
+    if (modal) {
+      modal.classList.remove("show");
+      modal.style.display = "none";
+      modal.style.alignItems = "";
+      modal.style.justifyContent = "";
+      document.body.classList.remove("modal-open");
+      modal.remove();
     }
   }
 }

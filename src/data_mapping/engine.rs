@@ -8,6 +8,7 @@ use crate::models::{
     Channel, EpgChannel, EpgProgram, FilterOperator, LogicalOperator,
 };
 
+use chrono::Utc;
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -252,6 +253,29 @@ impl DataMappingEngine {
         self.rule_stats.clear();
 
         Ok(mapped_channels)
+    }
+
+    /// Get current rule performance statistics before they are cleared
+    pub fn get_rule_stats(&self) -> &HashMap<String, (u128, usize)> {
+        &self.rule_stats
+    }
+
+    /// Get rule performance statistics and calculate averages
+    pub fn get_rule_performance_summary(&self) -> HashMap<String, (u128, u128, usize)> {
+        self.rule_stats
+            .iter()
+            .map(|(rule_name, (total_time_micros, channels_processed))| {
+                let avg_time_micros = if *channels_processed > 0 {
+                    total_time_micros / (*channels_processed as u128)
+                } else {
+                    0
+                };
+                (
+                    rule_name.clone(),
+                    (*total_time_micros, avg_time_micros, *channels_processed),
+                )
+            })
+            .collect()
     }
 
     /// Check if a rule contains any regex conditions
@@ -1100,11 +1124,12 @@ impl DataMappingEngine {
                 scope: DataMappingRuleScope::Individual,
                 sort_order: 0,
                 is_active: true,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
             },
             conditions,
             actions,
+            expression: Some("test expression".to_string()),
         };
 
         let mut mapped_channels = Vec::new();
@@ -1935,6 +1960,7 @@ mod tests {
                 sort_order: 0,
                 created_at: chrono::Utc::now(),
             }],
+            expression: Some("test expression".to_string()),
         };
 
         // Apply the rule
@@ -2047,6 +2073,7 @@ mod tests {
                 sort_order: 1,
                 created_at: chrono::Utc::now(),
             }],
+            expression: Some("test expression".to_string()),
         };
 
         // Apply the rule
@@ -2156,6 +2183,7 @@ mod tests {
                 sort_order: 0,
                 created_at: chrono::Utc::now(),
             }],
+            expression: Some("test expression".to_string()),
         };
 
         // Apply the rule
@@ -2237,6 +2265,7 @@ mod tests {
                 sort_order: 0,
                 created_at: chrono::Utc::now(),
             }],
+            expression: Some("test expression".to_string()),
         };
 
         // Apply the rule using the test function
@@ -2375,13 +2404,15 @@ mod tests {
                     sort_order: 0,
                     created_at: chrono::Utc::now(),
                 }],
+                expression: Some("test expression".to_string()),
             };
 
-            let result = engine.test_mapping_rule(
+            // Apply the rule to the channels
+            let result = engine.apply_mapping_rules(
                 vec![test_channel.clone()],
-                test_rule.conditions.clone(),
-                test_rule.actions.clone(),
+                vec![test_rule.clone()],
                 HashMap::new(),
+                Uuid::new_v4(),
                 "http://localhost:8080",
             );
 
@@ -2527,6 +2558,7 @@ mod tests {
                 sort_order: 1,
                 created_at: chrono::Utc::now(),
             }],
+            expression: Some("test expression".to_string()),
         };
 
         // Apply the rule - this should trigger rule stats logging
@@ -2697,6 +2729,7 @@ mod tests {
                 sort_order: 1,
                 created_at: chrono::Utc::now(),
             }],
+            expression: Some("test expression".to_string()),
         };
 
         println!("=== PREVIEW DEMO: Using apply_mapping_rules ===");
@@ -2763,13 +2796,12 @@ mod tests {
 
         let mut engine = DataMappingEngine::new();
 
-        // Test channels with various timeshift patterns
         let test_channels = vec![
             Channel {
                 id: Uuid::new_v4(),
                 source_id: Uuid::new_v4(),
-                channel_name: "UK: ITV 1 +1 ◉".to_string(),
-                tvg_id: Some("ITV1.uk".to_string()),
+                channel_name: "BE: BE 1 +1 4K".to_string(),
+                tvg_id: Some("be1plus1.be".to_string()),
                 tvg_name: None,
                 tvg_logo: None,
                 tvg_shift: None,
@@ -2781,8 +2813,8 @@ mod tests {
             Channel {
                 id: Uuid::new_v4(),
                 source_id: Uuid::new_v4(),
-                channel_name: "DE: TEST -6 HEVC".to_string(),
-                tvg_id: Some("test.de".to_string()),
+                channel_name: "UK: ITV +3".to_string(),
+                tvg_id: Some("itvplus3.uk".to_string()),
                 tvg_name: None,
                 tvg_logo: None,
                 tvg_shift: None,
@@ -2794,8 +2826,8 @@ mod tests {
             Channel {
                 id: Uuid::new_v4(),
                 source_id: Uuid::new_v4(),
-                channel_name: "FR: NEWS +6h HD".to_string(),
-                tvg_id: Some("news.fr".to_string()),
+                channel_name: "DE: ARD -2".to_string(),
+                tvg_id: Some("ardminus2.de".to_string()),
                 tvg_name: None,
                 tvg_logo: None,
                 tvg_shift: None,
@@ -2807,7 +2839,7 @@ mod tests {
             Channel {
                 id: Uuid::new_v4(),
                 source_id: Uuid::new_v4(),
-                channel_name: "DE: DATELINE 24-7 HD".to_string(),
+                channel_name: "DE: DATELINE 24-7 ᴴᴰ ᵃᵐᶻ".to_string(),
                 tvg_id: Some("dateline.de".to_string()),
                 tvg_name: None,
                 tvg_logo: None,
@@ -2817,14 +2849,40 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             },
+            Channel {
+                id: Uuid::new_v4(),
+                source_id: Uuid::new_v4(),
+                channel_name: "US: CNN +1h".to_string(),
+                tvg_id: Some("cnnplus1h.us".to_string()),
+                tvg_name: None,
+                tvg_logo: None,
+                tvg_shift: None,
+                group_title: None,
+                stream_url: "http://example.com/stream5".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+            Channel {
+                id: Uuid::new_v4(),
+                source_id: Uuid::new_v4(),
+                channel_name: "FR: TF1-2".to_string(),
+                tvg_id: Some("tf1dash2.fr".to_string()),
+                tvg_name: None,
+                tvg_logo: None,
+                tvg_shift: None,
+                group_title: None,
+                stream_url: "http://example.com/stream6".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
         ];
 
-        // Create timeshift rule with updated regex
+        // Create timeshift rule with updated regex that requires spaces before +/-
         let timeshift_rule = DataMappingRuleWithDetails {
             rule: DataMappingRule {
                 id: Uuid::new_v4(),
-                name: "Timeshift Detection with Signs".to_string(),
-                description: Some("Test regex with proper sign handling".to_string()),
+                name: "Fixed Timeshift Detection".to_string(),
+                description: Some("Timeshift detection that requires spaces before +/- to avoid false matches like '24-7'".to_string()),
                 source_type: DataMappingSourceType::Stream,
                 scope: DataMappingRuleScope::Individual,
                 sort_order: 1,
@@ -2866,9 +2924,10 @@ mod tests {
                 sort_order: 0,
                 created_at: chrono::Utc::now(),
             }],
+            expression: Some("test expression".to_string()),
         };
 
-        println!("=== TIMESHIFT REGEX SIGN TEST ===");
+        println!("=== TESTING FIXED TIMESHIFT REGEX ===");
 
         let logo_assets = std::collections::HashMap::new();
         let source_id = Uuid::new_v4();
@@ -2894,39 +2953,81 @@ mod tests {
             }
         }
 
-        // Verify expected results
+        // Verify expected results - should match 4 channels with proper timeshift indicators
         let matched: Vec<_> = result
             .iter()
             .filter(|m| !m.applied_rules.is_empty())
             .collect();
-        assert_eq!(matched.len(), 3, "Should match 3 channels");
+        assert_eq!(
+            matched.len(),
+            4,
+            "Should match 4 channels with valid timeshift patterns"
+        );
 
-        // Check specific timeshift values
+        // Check BE: BE 1 +1 4K - should match +1
+        let be_result = matched
+            .iter()
+            .find(|m| m.original.channel_name.contains("BE 1 +1"));
+        assert!(be_result.is_some(), "Should find BE 1 +1 channel");
+        assert_eq!(be_result.unwrap().mapped_tvg_shift, Some("1".to_string()));
+
+        // Check UK: ITV +3 - should match +3
         let itv_result = matched
             .iter()
-            .find(|m| m.original.channel_name.contains("ITV"));
-        assert!(itv_result.is_some(), "Should find ITV channel");
-        assert_eq!(itv_result.unwrap().mapped_tvg_shift, Some("1".to_string()));
+            .find(|m| m.original.channel_name.contains("ITV +3"));
+        assert!(itv_result.is_some(), "Should find ITV +3 channel");
+        assert_eq!(itv_result.unwrap().mapped_tvg_shift, Some("3".to_string()));
 
-        // Check negative timeshift
-        let negative_result = matched
+        // Check DE: ARD -2 - should match -2
+        let ard_result = matched
             .iter()
-            .find(|m| m.original.channel_name.contains("TEST -6"));
-        assert!(
-            negative_result.is_some(),
-            "Should find negative timeshift channel"
-        );
+            .find(|m| m.original.channel_name.contains("ARD -2"));
+        assert!(ard_result.is_some(), "Should find ARD -2 channel");
+        assert_eq!(ard_result.unwrap().mapped_tvg_shift, Some("-2".to_string()));
+
+        // Check US: CNN +1h - should match +1h
+        let cnn_result = matched
+            .iter()
+            .find(|m| m.original.channel_name.contains("CNN +1h"));
+        assert!(cnn_result.is_some(), "Should find CNN +1h channel");
+        assert_eq!(cnn_result.unwrap().mapped_tvg_shift, Some("1".to_string()));
+
+        // Verify channels that should NOT match
+        let not_matched: Vec<_> = result
+            .iter()
+            .filter(|m| m.applied_rules.is_empty())
+            .collect();
         assert_eq!(
-            negative_result.unwrap().mapped_tvg_shift,
-            Some("-6".to_string())
+            not_matched.len(),
+            2,
+            "Should have 2 channels that don't match"
         );
 
-        // Check hour suffix timeshift
-        let hour_result = matched
+        // Check DATELINE 24-7 should NOT match (false positive avoided)
+        let dateline_result = not_matched
             .iter()
-            .find(|m| m.original.channel_name.contains("NEWS +6h"));
-        assert!(hour_result.is_some(), "Should find hour suffix channel");
-        assert_eq!(hour_result.unwrap().mapped_tvg_shift, Some("6".to_string()));
+            .find(|m| m.original.channel_name.contains("24-7"));
+        assert!(
+            dateline_result.is_some(),
+            "DATELINE 24-7 should NOT match timeshift pattern"
+        );
+        assert!(
+            dateline_result.unwrap().mapped_tvg_shift.is_none(),
+            "DATELINE 24-7 should have no tvg_shift"
+        );
+
+        // Check TF1-2 should NOT match (dash without space)
+        let tf1_result = not_matched
+            .iter()
+            .find(|m| m.original.channel_name.contains("TF1-2"));
+        assert!(
+            tf1_result.is_some(),
+            "TF1-2 should NOT match timeshift pattern"
+        );
+        assert!(
+            tf1_result.unwrap().mapped_tvg_shift.is_none(),
+            "TF1-2 should have no tvg_shift"
+        );
     }
 
     #[test]
@@ -3048,6 +3149,7 @@ mod tests {
                 sort_order: 0,
                 created_at: chrono::Utc::now(),
             }],
+            expression: Some("test expression".to_string()),
         };
 
         println!("=== DEBUG: Rule Matching Investigation ===");

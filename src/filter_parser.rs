@@ -6,6 +6,7 @@ use crate::models::{
     FilterOperator, LogicalOperator,
 };
 use anyhow::{anyhow, Result};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct FilterParser {
@@ -52,11 +53,52 @@ impl FilterParser {
 
     /// Parse a text expression into an ExtendedExpression (supports actions)
     /// Example: "channel_name contains \"sport\" SET group_title = \"Sports\""
+    /// Advanced: "(channel_name matches \"regex\" SET tvg_shift = $1$2 AND channel_name not matches \"regex\" AND tvg_id matches \"regex\")"
     pub fn parse_extended(&self, expression: &str) -> Result<ExtendedExpression> {
+        info!(
+            "Parsing extended expression: '{}' (length: {} chars)",
+            expression,
+            expression.len()
+        );
+
         let tokens = self.tokenize(expression)?;
+        debug!("Tokenized into {} tokens", tokens.len());
+
         let mut pos = 0;
 
-        // Parse condition expression first
+        // Try to parse as conditional action groups first
+        if let Ok(groups) = self.parse_conditional_action_groups(&tokens, &mut 0) {
+            info!(
+                "Successfully parsed as conditional action groups:\n\
+                 │ Expression: '{}'\n\
+                 │ Groups: {}\n\
+                 │ Total conditions: {}\n\
+                 │ Total actions: {}\n\
+                 └─ Group breakdown: {}",
+                expression,
+                groups.len(),
+                groups
+                    .iter()
+                    .map(|g| self.count_conditions(&g.conditions))
+                    .sum::<usize>(),
+                groups.iter().map(|g| g.actions.len()).sum::<usize>(),
+                groups
+                    .iter()
+                    .enumerate()
+                    .map(|(i, g)| format!(
+                        "G{}: {}c/{}a",
+                        i + 1,
+                        self.count_conditions(&g.conditions),
+                        g.actions.len()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return Ok(ExtendedExpression::ConditionalActionGroups(groups));
+        }
+
+        // Fall back to original parsing
+        debug!("Conditional groups parsing failed, trying simple condition-action format");
         let condition_root = self.parse_expression(&tokens, &mut pos)?;
         let condition = ConditionTree {
             root: condition_root,
@@ -75,6 +117,22 @@ impl FilterParser {
                 ));
             }
 
+            info!(
+                "Successfully parsed as condition with actions:\n\
+                 │ Expression: '{}'\n\
+                 │ Conditions: {}\n\
+                 │ Actions: {}\n\
+                 └─ Action targets: [{}]",
+                expression,
+                self.count_conditions(&condition),
+                actions.len(),
+                actions
+                    .iter()
+                    .map(|a| a.field.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+
             Ok(ExtendedExpression::ConditionWithActions { condition, actions })
         } else {
             // Ensure we've consumed all tokens
@@ -85,8 +143,195 @@ impl FilterParser {
                 ));
             }
 
+            info!(
+                "Successfully parsed as condition only:\n\
+                 │ Expression: '{}'\n\
+                 └─ Conditions: {}",
+                expression,
+                self.count_conditions(&condition)
+            );
+
             Ok(ExtendedExpression::ConditionOnly(condition))
         }
+    }
+
+    /// Parse conditional action groups
+    /// Example: "(condition1 SET action1) AND (condition2 SET action2)"
+    fn parse_conditional_action_groups(
+        &self,
+        tokens: &[Token],
+        pos: &mut usize,
+    ) -> Result<Vec<crate::models::ConditionalActionGroup>> {
+        debug!(
+            "Attempting to parse conditional action groups from {} tokens",
+            tokens.len()
+        );
+        let mut groups = Vec::new();
+        let start_pos = *pos;
+
+        // Parse first group
+        if let Ok(group) = self.parse_single_conditional_group(tokens, pos) {
+            debug!(
+                "Parsed first conditional group with {} conditions and {} actions",
+                self.count_conditions(&group.conditions),
+                group.actions.len()
+            );
+            groups.push(group);
+        } else {
+            debug!("Failed to parse first conditional group, not a conditional action groups expression");
+            *pos = start_pos; // Reset position on failure
+            return Err(anyhow!("Failed to parse conditional action groups"));
+        }
+
+        // Parse additional groups with logical operators
+        while *pos < tokens.len() {
+            // Look for logical operator
+            if let Some(Token::LogicalOp(op)) = tokens.get(*pos) {
+                let logical_op = op.clone();
+                debug!(
+                    "Found logical operator: {:?} at position {}",
+                    logical_op, *pos
+                );
+                *pos += 1; // consume logical operator
+
+                // Parse next group
+                if let Ok(group) = self.parse_single_conditional_group(tokens, pos) {
+                    debug!(
+                        "Parsed additional conditional group with {} conditions and {} actions",
+                        self.count_conditions(&group.conditions),
+                        group.actions.len()
+                    );
+                    // Set the logical operator on the previous group
+                    if let Some(prev_group) = groups.last_mut() {
+                        prev_group.logical_operator = Some(logical_op);
+                    }
+                    groups.push(group);
+                } else {
+                    warn!(
+                        "Expected conditional group after logical operator {:?} at position {}",
+                        op, *pos
+                    );
+                    return Err(anyhow!("Expected conditional group after logical operator"));
+                }
+            } else {
+                debug!("No more logical operators found, finished parsing groups");
+                break;
+            }
+        }
+
+        if groups.is_empty() {
+            return Err(anyhow!("No conditional action groups found"));
+        }
+
+        debug!(
+            "Successfully parsed {} conditional action groups",
+            groups.len()
+        );
+        Ok(groups)
+    }
+
+    /// Parse a single conditional group: (conditions SET actions)
+    fn parse_single_conditional_group(
+        &self,
+        tokens: &[Token],
+        pos: &mut usize,
+    ) -> Result<crate::models::ConditionalActionGroup> {
+        debug!(
+            "Parsing single conditional group starting at position {}",
+            *pos
+        );
+
+        // Expect opening parenthesis
+        if !matches!(tokens.get(*pos), Some(Token::LeftParen)) {
+            debug!("No opening parenthesis found at position {}", *pos);
+            return Err(anyhow!(
+                "Expected opening parenthesis for conditional group"
+            ));
+        }
+        *pos += 1; // consume '('
+        debug!("Consumed opening parenthesis");
+
+        // Parse conditions until we hit SET
+        let mut condition_tokens = Vec::new();
+        let mut paren_depth = 0;
+        let mut found_set = false;
+
+        while *pos < tokens.len() {
+            match &tokens[*pos] {
+                Token::LeftParen => {
+                    condition_tokens.push(tokens[*pos].clone());
+                    paren_depth += 1;
+                    *pos += 1;
+                }
+                Token::RightParen if paren_depth > 0 => {
+                    condition_tokens.push(tokens[*pos].clone());
+                    paren_depth -= 1;
+                    *pos += 1;
+                }
+                Token::RightParen if paren_depth == 0 => {
+                    // This is the closing paren for our group, but we should have found SET first
+                    if !found_set {
+                        debug!("Found closing parenthesis before SET keyword");
+                        return Err(anyhow!("Expected SET keyword before closing parenthesis"));
+                    }
+                    break;
+                }
+                Token::SetKeyword if paren_depth == 0 => {
+                    debug!(
+                        "Found SET keyword at position {}, collected {} condition tokens",
+                        *pos,
+                        condition_tokens.len()
+                    );
+                    found_set = true;
+                    *pos += 1; // consume SET
+                    break;
+                }
+                _ => {
+                    condition_tokens.push(tokens[*pos].clone());
+                    *pos += 1;
+                }
+            }
+        }
+
+        if !found_set {
+            debug!("No SET keyword found in conditional group");
+            return Err(anyhow!("Expected SET keyword in conditional group"));
+        }
+
+        // Parse conditions from collected tokens
+        let mut condition_pos = 0;
+        let condition_root = self.parse_expression(&condition_tokens, &mut condition_pos)?;
+        let conditions = ConditionTree {
+            root: condition_root,
+        };
+        debug!(
+            "Parsed conditions with {} total condition nodes",
+            self.count_conditions(&conditions)
+        );
+
+        // Parse actions until closing parenthesis
+        let actions = self.parse_action_list(tokens, pos)?;
+        debug!("Parsed {} actions", actions.len());
+
+        // Expect closing parenthesis
+        if !matches!(tokens.get(*pos), Some(Token::RightParen)) {
+            warn!(
+                "Expected closing parenthesis at position {}, found: {:?}",
+                *pos,
+                tokens.get(*pos)
+            );
+            return Err(anyhow!(
+                "Expected closing parenthesis for conditional group"
+            ));
+        }
+        *pos += 1; // consume ')'
+        debug!("Consumed closing parenthesis, conditional group complete");
+
+        Ok(crate::models::ConditionalActionGroup {
+            conditions,
+            actions,
+            logical_operator: None, // Will be set by caller if needed
+        })
     }
 
     /// Tokenize the input string into components
@@ -563,15 +808,49 @@ impl FilterParser {
 
     /// Validate an extended expression for semantic correctness
     pub fn validate_extended(&self, expression: &ExtendedExpression) -> Result<()> {
+        debug!("Validating extended expression");
+
         match expression {
-            ExtendedExpression::ConditionOnly(_) => {
-                // Condition-only expressions use existing validation
+            ExtendedExpression::ConditionOnly(condition) => {
+                debug!(
+                    "Validating condition-only expression with {} conditions",
+                    self.count_conditions(condition)
+                );
+                // Validate condition field names
+                self.validate_condition_tree_fields(condition)
+            }
+            ExtendedExpression::ConditionWithActions { condition, actions } => {
+                debug!(
+                    "Validating condition-with-actions expression: {} conditions, {} actions",
+                    self.count_conditions(condition),
+                    actions.len()
+                );
+                // Validate both condition fields and actions
+                self.validate_condition_tree_fields(condition)?;
+                self.validate_actions(actions)
+            }
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                debug!(
+                    "Validating conditional action groups: {} groups",
+                    groups.len()
+                );
+                // Validate each group's conditions and actions
+                for (i, group) in groups.iter().enumerate() {
+                    debug!(
+                        "Validating group {}: {} conditions, {} actions",
+                        i + 1,
+                        self.count_conditions(&group.conditions),
+                        group.actions.len()
+                    );
+                    self.validate_condition_tree_fields(&group.conditions)?;
+                    self.validate_actions(&group.actions)?;
+                }
+                info!(
+                    "Successfully validated all {} conditional action groups",
+                    groups.len()
+                );
                 Ok(())
             }
-            ExtendedExpression::ConditionWithActions {
-                condition: _,
-                actions,
-            } => self.validate_actions(actions),
         }
     }
 
@@ -613,6 +892,24 @@ impl FilterParser {
         }
 
         Ok(())
+    }
+
+    /// Validate field names in condition tree
+    fn validate_condition_tree_fields(&self, condition_tree: &ConditionTree) -> Result<()> {
+        self.validate_condition_node_fields(&condition_tree.root)
+    }
+
+    /// Validate field names in condition nodes
+    fn validate_condition_node_fields(&self, condition: &ConditionNode) -> Result<()> {
+        match condition {
+            ConditionNode::Condition { field, .. } => self.validate_field_name(field),
+            ConditionNode::Group { children, .. } => {
+                for child in children {
+                    self.validate_condition_node_fields(child)?;
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Validate operator compatibility with field type
@@ -723,6 +1020,23 @@ enum Token {
 impl Default for FilterParser {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl FilterParser {
+    /// Helper method to count conditions in a condition tree
+    fn count_conditions(&self, tree: &ConditionTree) -> usize {
+        self.count_condition_nodes(&tree.root)
+    }
+
+    fn count_condition_nodes(&self, node: &ConditionNode) -> usize {
+        match node {
+            ConditionNode::Condition { .. } => 1,
+            ConditionNode::Group { children, .. } => children
+                .iter()
+                .map(|child| self.count_condition_nodes(child))
+                .sum(),
+        }
     }
 }
 
@@ -1182,5 +1496,519 @@ mod tests {
             }
             _ => panic!("Expected condition with actions"),
         }
+    }
+
+    #[test]
+    fn test_basic_conditional_action_groups() {
+        let parser = FilterParser::new();
+
+        // Basic conditional action groups syntax
+        let result = parser.parse_extended("(channel_name matches \"BBC\" SET group_title = \"BBC\") AND (channel_name matches \"ITV\" SET group_title = \"ITV\")").unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 2);
+
+                // First group: BBC condition and action
+                match &groups[0].conditions.root {
+                    ConditionNode::Condition {
+                        field,
+                        operator,
+                        value,
+                        ..
+                    } => {
+                        assert_eq!(field, "channel_name");
+                        assert!(matches!(operator, crate::models::FilterOperator::Matches));
+                        assert_eq!(value, "BBC");
+                    }
+                    _ => panic!("Expected simple condition for first group"),
+                }
+                assert_eq!(groups[0].actions.len(), 1);
+                assert_eq!(groups[0].actions[0].field, "group_title");
+                assert_eq!(groups[0].logical_operator, Some(LogicalOperator::And));
+
+                // Second group: ITV condition and action
+                match &groups[1].conditions.root {
+                    ConditionNode::Condition {
+                        field,
+                        operator,
+                        value,
+                        ..
+                    } => {
+                        assert_eq!(field, "channel_name");
+                        assert!(matches!(operator, crate::models::FilterOperator::Matches));
+                        assert_eq!(value, "ITV");
+                    }
+                    _ => panic!("Expected simple condition for second group"),
+                }
+                assert_eq!(groups[1].actions.len(), 1);
+                assert_eq!(groups[1].actions[0].field, "group_title");
+                assert_eq!(groups[1].logical_operator, None);
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    #[test]
+    fn test_complex_conditional_groups_with_regex() {
+        let parser = FilterParser::new();
+
+        // Complex example with regex capture groups
+        let result = parser.parse_extended("(channel_name matches \"(.+) \\+([0-9]+)\" SET tvg_shift = \"$2\", channel_name = \"$1\") AND (channel_name not matches \".*HD.*\" SET group_title = \"SD Channels\")").unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 2);
+
+                // First group with multiple actions
+                assert_eq!(groups[0].actions.len(), 2);
+                assert_eq!(groups[0].actions[0].field, "tvg_shift");
+                assert_eq!(groups[0].actions[1].field, "channel_name");
+                match &groups[0].actions[0].value {
+                    ActionValue::Literal(v) => assert_eq!(v, "$2"),
+                    _ => panic!("Expected literal value"),
+                }
+
+                // Second group with NOT operator
+                match &groups[1].conditions.root {
+                    ConditionNode::Condition {
+                        operator, negate, ..
+                    } => {
+                        assert!(matches!(operator, crate::models::FilterOperator::Matches));
+                        assert!(*negate); // Should be negated for not_matches
+                    }
+                    _ => panic!("Expected negated condition"),
+                }
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    #[test]
+    fn test_nested_conditions_in_groups() {
+        let parser = FilterParser::new();
+
+        // Groups with nested conditions
+        let result = parser.parse_extended("(channel_name contains \"sport\" AND group_title equals \"HD\" SET group_title = \"Sports HD\") OR (tvg_id starts_with \"uk.\" SET tvg_logo = \"uk-logo.png\")").unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 2);
+
+                // First group should have nested AND condition
+                match &groups[0].conditions.root {
+                    ConditionNode::Group { operator, children } => {
+                        assert!(matches!(operator, LogicalOperator::All));
+                        assert_eq!(children.len(), 2);
+                    }
+                    _ => panic!("Expected group condition with AND"),
+                }
+                assert_eq!(groups[0].logical_operator, Some(LogicalOperator::Or));
+
+                // Second group should have simple condition
+                match &groups[1].conditions.root {
+                    ConditionNode::Condition { field, .. } => {
+                        assert_eq!(field, "tvg_id");
+                    }
+                    _ => panic!("Expected simple condition"),
+                }
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    #[test]
+    fn test_conditional_groups_syntax_errors() {
+        let parser = FilterParser::new();
+
+        // Missing SET keyword
+        assert!(parser
+            .parse_extended("(channel_name contains \"test\" group_title = \"Test\")")
+            .is_err());
+
+        // Missing closing parenthesis
+        assert!(parser
+            .parse_extended("(channel_name contains \"test\" SET group_title = \"Test\"")
+            .is_err());
+
+        // Missing opening parenthesis
+        assert!(parser
+            .parse_extended("channel_name contains \"test\" SET group_title = \"Test\")")
+            .is_err());
+
+        // Empty group
+        assert!(parser
+            .parse_extended("() AND (channel_name contains \"test\" SET group_title = \"Test\")")
+            .is_err());
+
+        // Missing action after SET
+        assert!(parser
+            .parse_extended("(channel_name contains \"test\" SET)")
+            .is_err());
+    }
+
+    #[test]
+    fn test_mixed_simple_and_conditional_groups() {
+        let parser = FilterParser::new();
+
+        // Should parse as simple expression if no parentheses around conditions
+        let result = parser
+            .parse_extended("channel_name contains \"test\" SET group_title = \"Test\"")
+            .unwrap();
+        match result {
+            ExtendedExpression::ConditionWithActions { .. } => {
+                // This is expected - falls back to simple mode
+            }
+            _ => panic!("Expected simple condition with actions"),
+        }
+
+        // Should parse as conditional groups if parentheses are used
+        let result = parser
+            .parse_extended("(channel_name contains \"test\" SET group_title = \"Test\")")
+            .unwrap();
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 1);
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    #[test]
+    fn test_user_example_syntax() {
+        let parser = FilterParser::new();
+
+        // Test the exact example from the user's request
+        let result = parser.parse_extended("(channel_name matches \"regex\" SET tvg_shift = \"$1$2\" AND channel_name not matches \"regex\" AND tvg_id matches \"regex\")").unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 1);
+
+                // Should have complex nested conditions
+                match &groups[0].conditions.root {
+                    ConditionNode::Group { operator, children } => {
+                        assert!(matches!(operator, LogicalOperator::All));
+                        assert_eq!(children.len(), 3); // Three conditions joined by AND
+                    }
+                    _ => panic!("Expected group condition with multiple ANDs"),
+                }
+
+                // Should have one action with capture group reference
+                assert_eq!(groups[0].actions.len(), 1);
+                assert_eq!(groups[0].actions[0].field, "tvg_shift");
+                match &groups[0].actions[0].value {
+                    ActionValue::Literal(v) => assert_eq!(v, "$1$2"),
+                    _ => panic!("Expected literal value with capture groups"),
+                }
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    // Tests for extended expressions examples from documentation
+
+    #[test]
+    fn test_simple_examples() {
+        let parser = FilterParser::new();
+
+        // Example 1: Basic group assignment
+        let result = parser
+            .parse_extended("channel_name contains \"sport\" SET group_title = \"Sports\"")
+            .unwrap();
+        match result {
+            ExtendedExpression::ConditionWithActions { condition, actions } => {
+                assert_eq!(actions.len(), 1);
+                assert_eq!(actions[0].field, "group_title");
+                match &actions[0].value {
+                    ActionValue::Literal(v) => assert_eq!(v, "Sports"),
+                    _ => panic!("Expected literal value"),
+                }
+            }
+            _ => panic!("Expected condition with actions"),
+        }
+
+        // Example 4: Multiple actions
+        let result = parser.parse_extended("channel_name contains \"HD\" SET group_title = \"HD Channels\", tvg_logo = \"https://example.com/hd.png\"").unwrap();
+        match result {
+            ExtendedExpression::ConditionWithActions { actions, .. } => {
+                assert_eq!(actions.len(), 2);
+                assert_eq!(actions[0].field, "group_title");
+                assert_eq!(actions[1].field, "tvg_logo");
+            }
+            _ => panic!("Expected condition with multiple actions"),
+        }
+    }
+
+    #[test]
+    fn test_intermediate_examples() {
+        let parser = FilterParser::new();
+
+        // Example 7: Multiple condition matching
+        let result = parser.parse_extended("channel_name contains \"BBC\" AND channel_name contains \"HD\" SET group_title = \"BBC HD\"").unwrap();
+        match result {
+            ExtendedExpression::ConditionWithActions { condition, actions } => {
+                match &condition.root {
+                    ConditionNode::Group { operator, children } => {
+                        assert!(matches!(operator, LogicalOperator::All));
+                        assert_eq!(children.len(), 2);
+                    }
+                    _ => panic!("Expected AND group"),
+                }
+                assert_eq!(actions.len(), 1);
+                assert_eq!(actions[0].field, "group_title");
+            }
+            _ => panic!("Expected condition with actions"),
+        }
+
+        // Example 9: Regex with capture groups
+        let result = parser
+            .parse_extended("channel_name matches \"^([A-Z]+) .*\" SET tvg_id = \"$1\"")
+            .unwrap();
+        match result {
+            ExtendedExpression::ConditionWithActions { actions, .. } => {
+                assert_eq!(actions.len(), 1);
+                assert_eq!(actions[0].field, "tvg_id");
+                match &actions[0].value {
+                    ActionValue::Literal(v) => assert_eq!(v, "$1"),
+                    _ => panic!("Expected capture group reference"),
+                }
+            }
+            _ => panic!("Expected condition with actions"),
+        }
+
+        // Example 10: Timeshift extraction with multiple actions
+        let result = parser.parse_extended("channel_name matches \"(.+) \\\\+([0-9]+)\" SET channel_name = \"$1\", tvg_shift = \"$2\"").unwrap();
+        match result {
+            ExtendedExpression::ConditionWithActions { actions, .. } => {
+                assert_eq!(actions.len(), 2);
+                assert_eq!(actions[0].field, "channel_name");
+                assert_eq!(actions[1].field, "tvg_shift");
+                match &actions[1].value {
+                    ActionValue::Literal(v) => assert_eq!(v, "$2"),
+                    _ => panic!("Expected capture group reference"),
+                }
+            }
+            _ => panic!("Expected condition with actions"),
+        }
+    }
+
+    #[test]
+    fn test_complex_conditional_groups() {
+        let parser = FilterParser::new();
+
+        // Example 12: Advanced regional grouping with OR logic
+        let expr = "(tvg_id matches \"^(uk|gb)\\.\" SET group_title = \"United Kingdom\") OR (tvg_id matches \"^us\\.\" SET group_title = \"United States\")";
+        let result = parser.parse_extended(expr).unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 2);
+
+                // First group
+                assert_eq!(groups[0].actions.len(), 1);
+                assert_eq!(groups[0].actions[0].field, "group_title");
+                assert_eq!(groups[0].logical_operator, Some(LogicalOperator::Or));
+
+                // Second group
+                assert_eq!(groups[1].actions.len(), 1);
+                assert_eq!(groups[1].actions[0].field, "group_title");
+                assert_eq!(groups[1].logical_operator, None);
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    #[test]
+    fn test_deeply_nested_conditions() {
+        let parser = FilterParser::new();
+
+        // Example 16: Nested conditional logic
+        let expr = "((channel_name matches \"^(BBC|ITV|Channel [45])\" AND tvg_id not_equals \"\") OR (channel_name matches \"Sky (Sports|Movies|News)\" AND group_title equals \"\")) SET group_title = \"Premium UK\"";
+        let result = parser.parse_extended(expr).unwrap();
+
+        match result {
+            ExtendedExpression::ConditionWithActions { condition, actions } => {
+                // Should have deeply nested structure
+                match &condition.root {
+                    ConditionNode::Group { operator, children } => {
+                        assert!(matches!(operator, LogicalOperator::Any)); // OR at top level
+                        assert_eq!(children.len(), 2);
+
+                        // Each child should be an AND group
+                        for child in children {
+                            match child {
+                                ConditionNode::Group { operator, children } => {
+                                    assert!(matches!(operator, LogicalOperator::All)); // AND groups
+                                    assert_eq!(children.len(), 2);
+                                }
+                                _ => panic!("Expected AND groups as children"),
+                            }
+                        }
+                    }
+                    _ => panic!("Expected top-level OR group"),
+                }
+
+                assert_eq!(actions.len(), 1);
+                assert_eq!(actions[0].field, "group_title");
+            }
+            _ => panic!("Expected condition with actions"),
+        }
+    }
+
+    #[test]
+    fn test_multi_stage_processing() {
+        let parser = FilterParser::new();
+
+        // Example 17: Multi-stage processing with sequential operations
+        let expr = "(channel_name matches \"^\\\\[([A-Z]{2,3})\\\\] (.+)\" SET tvg_id = \"$1\", channel_name = \"$2\") AND (tvg_id matches \"^(BBC|ITV|C4|C5)$\" SET group_title = \"UK Terrestrial\")";
+        let result = parser.parse_extended(expr).unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 2);
+
+                // First stage: Extract and set multiple fields
+                assert_eq!(groups[0].actions.len(), 2);
+                assert_eq!(groups[0].actions[0].field, "tvg_id");
+                assert_eq!(groups[0].actions[1].field, "channel_name");
+
+                // Second stage: Categorize based on extracted TVG ID
+                assert_eq!(groups[1].actions.len(), 1);
+                assert_eq!(groups[1].actions[0].field, "group_title");
+
+                assert_eq!(groups[0].logical_operator, Some(LogicalOperator::And));
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    #[test]
+    fn test_logo_assignment_patterns() {
+        let parser = FilterParser::new();
+
+        // Example 18: Dynamic logo assignment with capture groups
+        let expr = "(channel_name matches \"^(BBC One|BBC Two|BBC Three)\" SET tvg_logo = \"@logo:bbc-$1\") AND (channel_name matches \"^(ITV|ITV2|ITV3)\" SET tvg_logo = \"@logo:itv-$1\")";
+        let result = parser.parse_extended(expr).unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 2);
+
+                for group in &groups {
+                    assert_eq!(group.actions.len(), 1);
+                    assert_eq!(group.actions[0].field, "tvg_logo");
+                    match &group.actions[0].value {
+                        ActionValue::Literal(v) => {
+                            assert!(v.starts_with("@logo:"));
+                            assert!(v.contains("$1"));
+                        }
+                        _ => panic!("Expected logo reference with capture group"),
+                    }
+                }
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    #[test]
+    fn test_comprehensive_normalization() {
+        let parser = FilterParser::new();
+
+        // Example 19: Comprehensive channel normalization with multiple stages
+        let expr = "(channel_name matches \"^(.+?) *(?:\\\\|| - |: ).*(?:HD|FHD|4K|UHD)\" SET channel_name = \"$1\", group_title = \"High Definition\") AND (channel_name matches \"^(.+?) *\\\\+([0-9]+)h?$\" SET channel_name = \"$1\", tvg_shift = \"$2\")";
+        let result = parser.parse_extended(expr).unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 2);
+
+                // First stage: HD cleanup
+                assert_eq!(groups[0].actions.len(), 2);
+                assert_eq!(groups[0].actions[0].field, "channel_name");
+                assert_eq!(groups[0].actions[1].field, "group_title");
+
+                // Second stage: Timeshift extraction
+                assert_eq!(groups[1].actions.len(), 2);
+                assert_eq!(groups[1].actions[0].field, "channel_name");
+                assert_eq!(groups[1].actions[1].field, "tvg_shift");
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    #[test]
+    fn test_real_world_provider_examples() {
+        let parser = FilterParser::new();
+
+        // Sky UK Channel Normalization
+        let expr = "(channel_name matches \"Sky (Sports|Movies|News) (.+)\" SET channel_name = \"Sky $1 $2\", group_title = \"Sky\") AND (channel_name starts_with \"Sky Sports\" SET group_title = \"Sky Sports\")";
+        let result = parser.parse_extended(expr).unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 2);
+
+                // First group has multiple actions
+                assert_eq!(groups[0].actions.len(), 2);
+                assert_eq!(groups[0].actions[0].field, "channel_name");
+                assert_eq!(groups[0].actions[1].field, "group_title");
+
+                // Second group is more specific categorization
+                assert_eq!(groups[1].actions.len(), 1);
+                assert_eq!(groups[1].actions[0].field, "group_title");
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+
+        // US Cable Provider with timeshift
+        let expr = "(channel_name matches \"^([A-Z]+) East \\\\+([0-9]+)\" SET channel_name = \"$1 East\", tvg_shift = \"$2\") AND (channel_name contains \"ESPN\" SET group_title = \"ESPN Family\")";
+        let result = parser.parse_extended(expr).unwrap();
+
+        match result {
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                assert_eq!(groups.len(), 2);
+
+                // Timeshift extraction
+                assert_eq!(groups[0].actions.len(), 2);
+                assert_eq!(groups[0].actions[1].field, "tvg_shift");
+
+                // ESPN grouping
+                assert_eq!(groups[1].actions.len(), 1);
+                assert_eq!(groups[1].actions[0].field, "group_title");
+            }
+            _ => panic!("Expected conditional action groups"),
+        }
+    }
+
+    #[test]
+    fn test_error_cases_for_examples() {
+        let parser = FilterParser::new();
+
+        // Test malformed regex
+        assert!(parser
+            .parse_extended("channel_name matches \"[unclosed\" SET group_title = \"Test\"")
+            .is_err());
+
+        // Test missing SET keyword
+        assert!(parser
+            .parse_extended("channel_name contains \"test\" group_title = \"Test\"")
+            .is_err());
+
+        // Test unbalanced parentheses in conditional groups
+        assert!(parser
+            .parse_extended("(channel_name contains \"test\" SET group_title = \"Test\" AND")
+            .is_err());
+
+        // Test empty action value
+        assert!(parser
+            .parse_extended("channel_name contains \"test\" SET group_title = \"\"")
+            .is_ok());
+
+        // Test invalid field reference
+        let result =
+            parser.parse_extended("invalid_field contains \"test\" SET group_title = \"Test\"");
+        // This should parse syntactically but fail validation if field validation is enabled
+        assert!(result.is_ok());
     }
 }

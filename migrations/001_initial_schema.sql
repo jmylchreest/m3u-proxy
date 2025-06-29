@@ -159,6 +159,7 @@ CREATE TABLE data_mapping_rules (
     scope TEXT NOT NULL DEFAULT 'individual' CHECK (scope IN ('individual', 'streamwide', 'epgwide')),
     sort_order INTEGER NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    expression TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -256,6 +257,7 @@ CREATE INDEX idx_proxy_filters_sort_order ON proxy_filters(proxy_id, sort_order)
 CREATE INDEX idx_data_mapping_rules_sort_order ON data_mapping_rules(sort_order);
 CREATE INDEX idx_data_mapping_rules_active ON data_mapping_rules(is_active);
 CREATE INDEX idx_data_mapping_rules_source_type ON data_mapping_rules(source_type);
+CREATE INDEX idx_data_mapping_rules_expression ON data_mapping_rules(expression);
 
 -- Data Mapping Conditions
 CREATE INDEX idx_data_mapping_conditions_rule_id ON data_mapping_conditions(rule_id);

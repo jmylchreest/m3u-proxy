@@ -4,10 +4,13 @@ use async_trait::async_trait;
 
 pub mod ingest_epg;
 pub mod ingest_m3u;
+pub mod ingest_stream;
 pub mod ingest_xtream;
 pub mod scheduler;
 pub mod state_manager;
 
+pub use ingest_epg::EpgIngestor;
+pub use ingest_stream::StreamIngestor;
 pub use state_manager::{IngestionStateManager, ProcessingTrigger};
 
 #[async_trait]
@@ -19,6 +22,7 @@ pub trait SourceIngestor {
     ) -> Result<Vec<Channel>>;
 }
 
+/// Generic orchestrator service that delegates to specific ingestors
 pub struct IngestorService {
     state_manager: IngestionStateManager,
 }
@@ -28,59 +32,46 @@ impl IngestorService {
         Self { state_manager }
     }
 
-    pub async fn ingest_source(&self, source: &StreamSource) -> Result<Vec<Channel>> {
-        self.ingest_source_with_trigger(source, ProcessingTrigger::Manual)
-            .await
+    pub fn get_state_manager(&self) -> &IngestionStateManager {
+        &self.state_manager
     }
 
+    /// Delegate stream source ingestion to StreamIngestor
+    pub async fn ingest_source(&self, source: &StreamSource) -> Result<Vec<Channel>> {
+        let stream_ingestor = StreamIngestor::new(self.state_manager.clone());
+        stream_ingestor.ingest_stream_source(source).await
+    }
+
+    /// Delegate stream source ingestion with trigger to StreamIngestor
     pub async fn ingest_source_with_trigger(
         &self,
         source: &StreamSource,
         trigger: ProcessingTrigger,
     ) -> Result<Vec<Channel>> {
-        // Check if we can start processing this source
-        if !self
-            .state_manager
-            .try_start_processing(source.id, trigger)
+        let stream_ingestor = StreamIngestor::new(self.state_manager.clone());
+        stream_ingestor
+            .ingest_stream_source_with_trigger(source, trigger)
             .await
-        {
-            return Err(anyhow::anyhow!(
-                "Source '{}' is already being processed or is in backoff period",
-                source.name
-            ));
-        }
-
-        self.state_manager.start_ingestion(source.id).await;
-
-        let result = match source.source_type {
-            StreamSourceType::M3u => {
-                let parser = ingest_m3u::M3uIngestor::new();
-                parser.ingest(source, &self.state_manager).await
-            }
-            StreamSourceType::Xtream => {
-                let parser = ingest_xtream::XtreamIngestor::new();
-                parser.ingest(source, &self.state_manager).await
-            }
-        };
-
-        let success = result.is_ok();
-
-        // Always finish processing to update failure state
-        self.state_manager
-            .finish_processing(source.id, success)
-            .await;
-
-        match result {
-            Ok(channels) => Ok(channels),
-            Err(e) => {
-                self.state_manager.set_error(source.id, e.to_string()).await;
-                Err(e)
-            }
-        }
     }
 
-    #[allow(dead_code)]
-    pub fn get_state_manager(&self) -> &IngestionStateManager {
-        &self.state_manager
+    /// Delegate EPG source ingestion to EpgIngestor
+    pub async fn ingest_epg_source(
+        &self,
+        database: crate::database::Database,
+        source: &EpgSource,
+        trigger: ProcessingTrigger,
+    ) -> Result<(usize, usize), Box<dyn std::error::Error + Send + Sync>> {
+        EpgIngestor::refresh_epg_source(database, self.state_manager.clone(), source, trigger).await
+    }
+
+    /// Delegate stream source refresh to StreamIngestor
+    pub async fn refresh_stream_source(
+        &self,
+        database: crate::database::Database,
+        source: &StreamSource,
+        trigger: ProcessingTrigger,
+    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+        StreamIngestor::refresh_stream_source(database, self.state_manager.clone(), source, trigger)
+            .await
     }
 }

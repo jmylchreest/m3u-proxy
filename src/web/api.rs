@@ -24,6 +24,12 @@ pub struct ChannelQueryParams {
     pub filter: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DataMappingPreviewRequest {
+    pub source_type: String,
+    pub limit: Option<u32>,
+}
+
 // Helper function to convert MappedChannel to test format
 fn mapped_channel_to_test_format(
     mc: &crate::models::data_mapping::MappedChannel,
@@ -54,6 +60,22 @@ fn mapped_channel_to_test_format(
     mapped_values.insert("group_title".to_string(), mc.mapped_group_title.clone());
 
     (original_values, mapped_values)
+}
+
+// Helper function to get the resolved value for a field from a MappedChannel
+fn get_resolved_value(
+    mc: &crate::models::data_mapping::MappedChannel,
+    field: &str,
+) -> Option<String> {
+    match field {
+        "channel_name" => Some(mc.mapped_channel_name.clone()),
+        "tvg_id" => mc.mapped_tvg_id.clone(),
+        "tvg_name" => mc.mapped_tvg_name.clone(),
+        "tvg_logo" => mc.mapped_tvg_logo.clone(),
+        "tvg_shift" => mc.mapped_tvg_shift.clone(),
+        "group_title" => mc.mapped_group_title.clone(),
+        _ => None,
+    }
 }
 
 // Helper function to transform MappedChannel to frontend-compatible format
@@ -750,11 +772,131 @@ pub async fn reorder_data_mapping_rules(
     }
 }
 
+pub async fn validate_data_mapping_expression(
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use crate::filter_parser::FilterParser;
+    use crate::models::data_mapping::{EpgMappingFields, StreamMappingFields};
+
+    let expression = payload
+        .get("expression")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    let source_type = payload
+        .get("source_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("stream");
+
+    if expression.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "isValid": false,
+            "error": "Expression cannot be empty"
+        })));
+    }
+
+    // Get available fields for this source type
+    let available_fields = match source_type {
+        "stream" => StreamMappingFields::available_fields()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        "epg" => EpgMappingFields::available_fields()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        _ => {
+            return Ok(Json(serde_json::json!({
+                "isValid": false,
+                "error": "Invalid source type"
+            })));
+        }
+    };
+
+    let parser = FilterParser::new().with_fields(available_fields);
+
+    // Parse and validate the expression
+    match parser.parse_extended(expression) {
+        Ok(parsed) => match parser.validate_extended(&parsed) {
+            Ok(_) => Ok(Json(serde_json::json!({
+                "isValid": true
+            }))),
+            Err(e) => Ok(Json(serde_json::json!({
+                "isValid": false,
+                "error": format!("Validation error: {}", e)
+            }))),
+        },
+        Err(e) => Ok(Json(serde_json::json!({
+            "isValid": false,
+            "error": format!("Syntax error: {}", e)
+        }))),
+    }
+}
+
+pub async fn get_data_mapping_stream_fields() -> Result<Json<serde_json::Value>, StatusCode> {
+    use crate::models::data_mapping::StreamMappingFields;
+
+    let fields = StreamMappingFields::available_fields()
+        .into_iter()
+        .map(|field| {
+            serde_json::json!({
+                "name": field,
+                "description": get_field_description(&field),
+                "type": "string"
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "fields": fields
+    })))
+}
+
+pub async fn get_data_mapping_epg_fields() -> Result<Json<serde_json::Value>, StatusCode> {
+    use crate::models::data_mapping::EpgMappingFields;
+
+    let fields = EpgMappingFields::available_fields()
+        .into_iter()
+        .map(|field| {
+            serde_json::json!({
+                "name": field,
+                "description": get_field_description(&field),
+                "type": "string"
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "fields": fields
+    })))
+}
+
+fn get_field_description(field: &str) -> &'static str {
+    match field {
+        "channel_name" => "The name/title of the channel",
+        "tvg_id" => "Electronic program guide identifier",
+        "tvg_name" => "Name for EPG matching",
+        "tvg_logo" => "URL to channel logo image",
+        "tvg_shift" => "Time shift in hours for EPG data",
+        "group_title" => "Category/group name for the channel",
+        "stream_url" => "Direct URL to the media stream",
+        "channel_id" => "Unique channel identifier",
+        "channel_logo" => "Channel logo URL",
+        "channel_group" => "Channel category/group",
+        "language" => "Channel language",
+        _ => "Channel data field",
+    }
+}
+
 pub async fn test_data_mapping_rule(
     State(state): State<AppState>,
     Json(payload): Json<crate::models::data_mapping::DataMappingTestRequest>,
 ) -> Result<Json<crate::models::data_mapping::DataMappingTestResult>, StatusCode> {
     use crate::data_mapping::DataMappingEngine;
+    use crate::filter_parser::FilterParser;
 
     // Get channels from the source
     let channels = match state
@@ -772,9 +914,76 @@ pub async fn test_data_mapping_rule(
         }
     };
 
-    // Convert request to internal types
-    let conditions: Vec<crate::models::data_mapping::DataMappingCondition> = payload
-        .conditions
+    let total_channels_count = channels.len();
+
+    // Parse the expression to get conditions and actions
+    let available_fields = match payload.source_type {
+        crate::models::data_mapping::DataMappingSourceType::Stream => {
+            crate::models::data_mapping::StreamMappingFields::available_fields()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect()
+        }
+        crate::models::data_mapping::DataMappingSourceType::Epg => {
+            crate::models::data_mapping::EpgMappingFields::available_fields()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect()
+        }
+    };
+
+    let parser = FilterParser::new().with_fields(available_fields);
+    let parsed_expression = match parser.parse_extended(&payload.expression) {
+        Ok(expr) => expr,
+        Err(e) => {
+            return Ok(Json(crate::models::data_mapping::DataMappingTestResult {
+                is_valid: false,
+                error: Some(format!("Expression parsing error: {}", e)),
+                matching_channels: vec![],
+                total_channels: total_channels_count,
+                matched_count: 0,
+            }));
+        }
+    };
+
+    // For testing, create temporary conditions and actions from the parsed expression
+    let (conditions, actions) = match parsed_expression {
+        crate::models::ExtendedExpression::ConditionOnly(_) => {
+            // No actions to test
+            return Ok(Json(crate::models::data_mapping::DataMappingTestResult {
+                is_valid: true,
+                error: None,
+                matching_channels: vec![],
+                total_channels: total_channels_count,
+                matched_count: 0,
+            }));
+        }
+        crate::models::ExtendedExpression::ConditionWithActions { condition, actions } => {
+            // Convert condition tree to flat conditions for testing
+            let flat_conditions = flatten_condition_tree_for_test(&condition);
+            let test_actions = convert_actions_for_test(&actions);
+            (flat_conditions, test_actions)
+        }
+        crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
+            // For testing, use the first group
+            if let Some(first_group) = groups.first() {
+                let flat_conditions = flatten_condition_tree_for_test(&first_group.conditions);
+                let test_actions = convert_actions_for_test(&first_group.actions);
+                (flat_conditions, test_actions)
+            } else {
+                return Ok(Json(crate::models::data_mapping::DataMappingTestResult {
+                    is_valid: false,
+                    error: Some("No conditional action groups found".to_string()),
+                    matching_channels: vec![],
+                    total_channels: total_channels_count,
+                    matched_count: 0,
+                }));
+            }
+        }
+    };
+
+    // Convert to internal types for testing
+    let test_conditions: Vec<crate::models::data_mapping::DataMappingCondition> = conditions
         .into_iter()
         .enumerate()
         .map(|(i, c)| crate::models::data_mapping::DataMappingCondition {
@@ -789,8 +998,7 @@ pub async fn test_data_mapping_rule(
         })
         .collect();
 
-    let actions: Vec<crate::models::data_mapping::DataMappingAction> = payload
-        .actions
+    let test_actions: Vec<crate::models::data_mapping::DataMappingAction> = actions
         .into_iter()
         .enumerate()
         .map(|(i, a)| crate::models::data_mapping::DataMappingAction {
@@ -806,12 +1014,22 @@ pub async fn test_data_mapping_rule(
         })
         .collect();
 
-    // Get logo assets for the actions
+    // Get logo assets for the actions (including those from @logo: references)
     let mut logo_assets = HashMap::new();
-    for action in &actions {
+    for action in &test_actions {
         if let Some(logo_id) = action.logo_asset_id {
             if let Ok(asset) = state.logo_asset_service.get_asset(logo_id).await {
                 logo_assets.insert(logo_id, asset);
+            }
+        }
+        // Also check for @logo: references in values
+        if let Some(value) = &action.value {
+            if value.starts_with("@logo:") {
+                if let Ok(logo_uuid) = uuid::Uuid::parse_str(&value[6..]) {
+                    if let Ok(asset) = state.logo_asset_service.get_asset(logo_uuid).await {
+                        logo_assets.insert(logo_uuid, asset);
+                    }
+                }
             }
         }
     }
@@ -819,9 +1037,9 @@ pub async fn test_data_mapping_rule(
     let mut engine = DataMappingEngine::new();
     match engine.test_mapping_rule(
         channels,
-        conditions,
-        actions,
-        logo_assets,
+        test_conditions.clone(),
+        test_actions.clone(),
+        logo_assets.clone(),
         &state.config.web.base_url,
     ) {
         Ok(mapped_channels) => {
@@ -831,12 +1049,95 @@ pub async fn test_data_mapping_rule(
                     .map(|mc| {
                         let (original_values, mapped_values) = mapped_channel_to_test_format(&mc);
 
+                        // Create meaningful action descriptions with resolved values
+                        let applied_actions = if mc.applied_rules.is_empty() {
+                            vec![]
+                        } else {
+                            test_actions.iter().map(|action| {
+                                match action.action_type {
+                                    crate::models::data_mapping::DataMappingActionType::SetValue => {
+                                        let template = action.value.as_deref().unwrap_or("");
+                                        let resolved_value = get_resolved_value(&mc, &action.target_field);
+
+                                        // Check if template contains @logo: reference
+                                        let display_template = if template.starts_with("@logo:") {
+                                            if let Ok(logo_uuid) = uuid::Uuid::parse_str(&template[6..]) {
+                                                if let Some(logo_asset) = logo_assets.get(&logo_uuid) {
+                                                    let logo_url = crate::utils::generate_logo_url(&state.config.web.base_url, logo_uuid);
+                                                    format!("@logo:{} ({})", &logo_asset.name, logo_url)
+                                                } else {
+                                                    format!("{} (logo not found)", template)
+                                                }
+                                            } else {
+                                                template.to_string()
+                                            }
+                                        } else {
+                                            template.to_string()
+                                        };
+
+                                        if template.contains('$') && resolved_value.is_some() {
+                                            format!("Set {} = {} ('{}')", action.target_field, display_template, resolved_value.unwrap())
+                                        } else {
+                                            format!("Set {} = {}", action.target_field, display_template)
+                                        }
+                                    },
+                                    crate::models::data_mapping::DataMappingActionType::SetDefaultIfEmpty => {
+                                        let template = action.value.as_deref().unwrap_or("");
+                                        let resolved_value = get_resolved_value(&mc, &action.target_field);
+
+                                        // Check if template contains @logo: reference
+                                        let display_template = if template.starts_with("@logo:") {
+                                            if let Ok(logo_uuid) = uuid::Uuid::parse_str(&template[6..]) {
+                                                if let Some(logo_asset) = logo_assets.get(&logo_uuid) {
+                                                    let logo_url = crate::utils::generate_logo_url(&state.config.web.base_url, logo_uuid);
+                                                    format!("@logo:{} ({})", &logo_asset.name, logo_url)
+                                                } else {
+                                                    format!("{} (logo not found)", template)
+                                                }
+                                            } else {
+                                                template.to_string()
+                                            }
+                                        } else {
+                                            template.to_string()
+                                        };
+
+                                        if template.contains('$') && resolved_value.is_some() {
+                                            format!("Set default {} = {} ('{}')", action.target_field, display_template, resolved_value.unwrap())
+                                        } else {
+                                            format!("Set default {} = {}", action.target_field, display_template)
+                                        }
+                                    },
+                                    crate::models::data_mapping::DataMappingActionType::SetLogo => {
+                                        if let Some(logo_id) = action.logo_asset_id {
+                                            if let Some(logo_asset) = logo_assets.get(&logo_id) {
+                                                let logo_url = crate::utils::generate_logo_url(&state.config.web.base_url, logo_id);
+                                                format!("Set logo for {} = {} ({})", action.target_field, logo_asset.name, logo_url)
+                                            } else {
+                                                format!("Set logo for {} (logo not found)", action.target_field)
+                                            }
+                                        } else {
+                                            format!("Set logo for {}", action.target_field)
+                                        }
+                                    },
+                                    crate::models::data_mapping::DataMappingActionType::TimeshiftEpg => {
+                                        format!("Timeshift EPG by {} minutes", action.timeshift_minutes.unwrap_or(0))
+                                    },
+                                    crate::models::data_mapping::DataMappingActionType::DeduplicateStreamUrls => {
+                                        "Deduplicate stream URLs".to_string()
+                                    },
+                                    crate::models::data_mapping::DataMappingActionType::RemoveChannel => {
+                                        "Remove channel".to_string()
+                                    },
+                                }
+                            }).collect()
+                        };
+
                         crate::models::data_mapping::DataMappingTestChannel {
                             channel_name: mc.original.channel_name,
                             group_title: mc.original.group_title,
                             original_values,
                             mapped_values,
-                            applied_actions: vec!["Test Rule".to_string()],
+                            applied_actions,
                         }
                     })
                     .collect();
@@ -845,7 +1146,7 @@ pub async fn test_data_mapping_rule(
                 is_valid: true,
                 error: None,
                 matching_channels: test_channels.clone(),
-                total_channels: test_channels.len(),
+                total_channels: total_channels_count,
                 matched_count: test_channels.len(),
             };
 
@@ -856,7 +1157,7 @@ pub async fn test_data_mapping_rule(
                 is_valid: false,
                 error: Some(e.to_string()),
                 matching_channels: vec![],
-                total_channels: 0,
+                total_channels: total_channels_count,
                 matched_count: 0,
             };
             Ok(Json(result))
@@ -911,7 +1212,7 @@ pub async fn apply_stream_source_data_mapping(
     }
 
     // Apply data mapping and get channels with metadata
-    let mapped_channels = match state
+    let (mapped_channels, rule_performance) = match state
         .data_mapping_service
         .apply_mapping_with_metadata(
             channels.clone(),
@@ -922,7 +1223,7 @@ pub async fn apply_stream_source_data_mapping(
         )
         .await
     {
-        Ok(mapped) => mapped,
+        Ok(result) => result,
         Err(e) => {
             error!("Data mapping failed for source '{}': {}", source.name, e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -947,15 +1248,41 @@ pub async fn apply_stream_source_data_mapping(
                         == crate::models::data_mapping::DataMappingSourceType::Stream
             })
             .map(|rule| {
+                let affected_count = modified_channels
+                    .iter()
+                    .filter(|mc| mc.applied_rules.contains(&rule.rule.id))
+                    .count();
+                let condition_count = rule.conditions.len();
+                let action_count = rule.actions.len();
+
+                // Get performance stats for this rule
+                let avg_execution_time = rule_performance
+                    .get(&rule.rule.name)
+                    .map(|(_, avg_micros, _)| *avg_micros)
+                    .unwrap_or(0);
+
                 serde_json::json!({
+                    "rule_id": rule.rule.id,
                     "rule_name": rule.rule.name,
                     "rule_description": rule.rule.description,
-                    "affected_channels_count": modified_channels.iter()
-                        .filter(|mc| mc.applied_rules.contains(&rule.rule.id))
-                        .count(),
-                    "conditions": [],
-                    "actions": [],
-                    "affected_channels": []
+                    "affected_channels_count": affected_count,
+                    "condition_count": condition_count,
+                    "action_count": action_count,
+                    "avg_execution_time": avg_execution_time,
+                    "sort_order": rule.rule.sort_order,
+                    "conditions": rule.conditions.iter().map(|c| {
+                        serde_json::json!({
+                            "field": c.field_name,
+                            "operator": format!("{:?}", c.operator),
+                            "value": c.value
+                        })
+                    }).collect::<Vec<_>>(),
+                    "actions": rule.actions.iter().map(|a| {
+                        serde_json::json!({
+                            "field": a.target_field,
+                            "value": a.value
+                        })
+                    }).collect::<Vec<_>>()
                 })
             })
             .collect::<Vec<_>>(),
@@ -1041,7 +1368,7 @@ pub async fn apply_epg_source_data_mapping(
         "source_type": "epg",
         "original_count": channels.len(),
         "mapped_count": channels.len(),
-        "preview_channels": channels.iter().take(10).collect::<Vec<_>>()
+        "preview_channels": channels
     });
 
     info!(
@@ -1054,6 +1381,13 @@ pub async fn apply_epg_source_data_mapping(
 }
 
 // Global data mapping application endpoints for "Preview All Rules" functionality
+pub async fn apply_data_mapping_rules_post(
+    State(state): State<AppState>,
+    Json(payload): Json<DataMappingPreviewRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    apply_data_mapping_rules_impl(state, &payload.source_type, payload.limit).await
+}
+
 pub async fn apply_data_mapping_rules(
     Query(params): Query<std::collections::HashMap<String, String>>,
     State(state): State<AppState>,
@@ -1063,7 +1397,17 @@ pub async fn apply_data_mapping_rules(
         .unwrap_or(&"stream".to_string())
         .clone();
 
-    match source_type.as_str() {
+    let limit = params.get("limit").and_then(|s| s.parse::<u32>().ok());
+
+    apply_data_mapping_rules_impl(state, &source_type, limit).await
+}
+
+async fn apply_data_mapping_rules_impl(
+    state: AppState,
+    source_type: &str,
+    limit: Option<u32>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match source_type {
         "stream" => {
             // Get all active stream sources
             let sources = match state.database.list_stream_sources().await {
@@ -1100,7 +1444,7 @@ pub async fn apply_data_mapping_rules(
                 total_channels += channels.len();
 
                 if !channels.is_empty() {
-                    let mapped_channels = match state
+                    let (mapped_channels, _) = match state
                         .data_mapping_service
                         .apply_mapping_with_metadata(
                             channels.clone(),
@@ -1111,7 +1455,7 @@ pub async fn apply_data_mapping_rules(
                         )
                         .await
                     {
-                        Ok(mapped) => mapped,
+                        Ok(result) => result,
                         Err(_) => continue,
                     };
 
@@ -1122,7 +1466,17 @@ pub async fn apply_data_mapping_rules(
                 }
             }
 
-            let transformed_channels: Vec<serde_json::Value> = all_preview_channels
+            // Apply limit if specified
+            let limited_channels = if let Some(limit) = limit {
+                all_preview_channels
+                    .into_iter()
+                    .take(limit as usize)
+                    .collect()
+            } else {
+                all_preview_channels
+            };
+
+            let transformed_channels: Vec<serde_json::Value> = limited_channels
                 .iter()
                 .map(|mc| mapped_channel_to_frontend_format(mc))
                 .collect();
@@ -1137,15 +1491,39 @@ pub async fn apply_data_mapping_rules(
                                 == crate::models::data_mapping::DataMappingSourceType::Stream
                     })
                     .map(|rule| {
+                        let affected_count = limited_channels
+                            .iter()
+                            .filter(|mc| mc.applied_rules.contains(&rule.rule.id))
+                            .count();
+                        let condition_count = rule.conditions.len();
+                        let action_count = rule.actions.len();
+
+                        // For global preview, we don't have individual rule performance data
+                        // So we'll use a placeholder for now
+                        let avg_execution_time = 0;
+
                         serde_json::json!({
+                            "rule_id": rule.rule.id,
                             "rule_name": rule.rule.name,
                             "rule_description": rule.rule.description,
-                            "affected_channels_count": all_preview_channels.iter()
-                                .filter(|mc| mc.applied_rules.contains(&rule.rule.id))
-                                .count(),
-                            "conditions": [],
-                            "actions": [],
-                            "affected_channels": []
+                            "affected_channels_count": affected_count,
+                            "condition_count": condition_count,
+                            "action_count": action_count,
+                            "avg_execution_time": avg_execution_time,
+                            "sort_order": rule.rule.sort_order,
+                            "conditions": rule.conditions.iter().map(|c| {
+                                serde_json::json!({
+                                    "field": c.field_name,
+                                    "operator": format!("{:?}", c.operator),
+                                    "value": c.value
+                                })
+                            }).collect::<Vec<_>>(),
+                            "actions": rule.actions.iter().map(|a| {
+                                serde_json::json!({
+                                    "field": a.target_field,
+                                    "value": a.value
+                                })
+                            }).collect::<Vec<_>>()
                         })
                     })
                     .collect::<Vec<_>>(),
@@ -1661,48 +2039,31 @@ pub async fn refresh_stream_source(
                 let state_manager = state.state_manager.clone();
                 async move {
                     use crate::ingestor::IngestorService;
-                    let ingestor = IngestorService::new(state_manager.clone());
+                    use crate::ingestor::ProcessingTrigger;
 
-                    match ingestor.ingest_source(&source).await {
-                        Ok(channels) => {
-                            info!(
-                                "Manual refresh completed for '{}': {} channels",
-                                source.name,
-                                channels.len()
-                            );
-                            if let Err(e) = database
-                                .update_source_channels(id, &channels, Some(&state_manager))
-                                .await
-                            {
-                                error!(
-                                    "Failed to save refreshed data for source '{}': {}",
-                                    source.name, e
-                                );
-                            } else if let Err(e) = database.update_source_last_ingested(id).await {
-                                error!(
-                                    "Failed to update last_ingested_at for source '{}': {}",
-                                    source.name, e
-                                );
-                            } else {
-                                // Mark ingestion as completed with final channel count
-                                state_manager
-                                    .complete_ingestion(source.id, channels.len())
-                                    .await;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Manual refresh failed for '{}': {}", source.name, e);
-                        }
-                    }
+                    let ingestor = IngestorService::new(state_manager);
+                    let _ = ingestor
+                        .refresh_stream_source(database, &source, ProcessingTrigger::Manual)
+                        .await;
                 }
             });
 
-            Ok(Json(json!({"message": "Refresh started"})))
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": "Stream source refresh started",
+                "source_id": id
+            })))
         }
-        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Ok(None) => Ok(Json(serde_json::json!({
+            "success": false,
+            "message": "Stream source not found"
+        }))),
         Err(e) => {
-            error!("Failed to get stream source for refresh {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            error!("Failed to get stream source {}: {}", id, e);
+            Ok(Json(serde_json::json!({
+                "success": false,
+                "message": "Failed to get stream source"
+            })))
         }
     }
 }
@@ -1990,82 +2351,33 @@ pub async fn refresh_epg_source_unified(
             tokio::spawn({
                 let database = state.database.clone();
                 let state_manager = state.state_manager.clone();
-                let source_id = source.id;
-                let source_name = source.name.clone();
                 async move {
-                    use crate::ingestor::ingest_epg::EpgIngestor;
-                    use crate::ingestor::state_manager::ProcessingTrigger;
+                    use crate::ingestor::IngestorService;
+                    use crate::ingestor::ProcessingTrigger;
 
-                    info!(
-                        "Starting EPG refresh for source '{}' ({})",
-                        source_name, source_id
-                    );
-
-                    let ingestor = EpgIngestor::new_with_state_manager(
-                        database.clone(),
-                        state_manager.clone(),
-                    );
-
-                    match ingestor
-                        .ingest_epg_source_with_trigger(&source, ProcessingTrigger::Manual)
-                        .await
-                    {
-                        Ok((channels, mut programs, detected_timezone)) => {
-                            // Update channel names in programs
-                            ingestor.update_channel_names(&channels, &mut programs);
-
-                            // Update detected timezone if found
-                            if let Some(ref detected_tz) = detected_timezone {
-                                if detected_tz != &source.timezone && !source.timezone_detected {
-                                    info!(
-                                        "Updating EPG source '{}' timezone from '{}' to detected '{}'",
-                                        source_name, source.timezone, detected_tz
-                                    );
-                                    let _ = database
-                                        .update_epg_source_detected_timezone(source_id, detected_tz)
-                                        .await;
-                                }
-                            }
-
-                            // Save to database using cancellation-aware method
-                            match ingestor
-                                .save_epg_data_with_cancellation(source_id, channels, programs)
-                                .await
-                            {
-                                Ok((channel_count, program_count)) => {
-                                    // Update last ingested timestamp
-                                    if let Err(e) =
-                                        database.update_epg_source_last_ingested(source_id).await
-                                    {
-                                        error!("Failed to update last_ingested_at for EPG source '{}': {}", source_name, e);
-                                    }
-
-                                    info!(
-                                        "Manual EPG refresh completed for '{}': {} channels, {} programs",
-                                        source_name, channel_count, program_count
-                                    );
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to save EPG data for source '{}': {}",
-                                        source_name, e
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("EPG refresh failed for source '{}': {}", source_name, e);
-                        }
-                    }
+                    let ingestor = IngestorService::new(state_manager);
+                    let _ = ingestor
+                        .ingest_epg_source(database, &source, ProcessingTrigger::Manual)
+                        .await;
                 }
             });
 
-            Ok(Json(json!({"message": "EPG refresh started"})))
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": "EPG source refresh started",
+                "source_id": id
+            })))
         }
-        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Ok(None) => Ok(Json(serde_json::json!({
+            "success": false,
+            "message": "EPG source not found"
+        }))),
         Err(e) => {
-            error!("Failed to get EPG source for refresh {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            error!("Failed to get EPG source {}: {}", id, e);
+            Ok(Json(serde_json::json!({
+                "success": false,
+                "message": "Failed to get EPG source"
+            })))
         }
     }
 }
@@ -2472,4 +2784,116 @@ pub async fn auto_map_channels(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+// Helper function to flatten condition tree for testing
+fn flatten_condition_tree_for_test(
+    condition_tree: &crate::models::ConditionTree,
+) -> Vec<crate::models::data_mapping::DataMappingConditionRequest> {
+    let mut conditions = vec![];
+    flatten_condition_node_for_test(&condition_tree.root, &mut conditions, None);
+    conditions
+}
+
+fn flatten_condition_node_for_test(
+    node: &crate::models::ConditionNode,
+    conditions: &mut Vec<crate::models::data_mapping::DataMappingConditionRequest>,
+    logical_op: Option<crate::models::LogicalOperator>,
+) {
+    match node {
+        crate::models::ConditionNode::Condition {
+            field,
+            operator,
+            value,
+            case_sensitive: _,
+            negate,
+        } => {
+            let final_operator = if *negate {
+                match operator {
+                    crate::models::FilterOperator::Equals => {
+                        crate::models::FilterOperator::NotEquals
+                    }
+                    crate::models::FilterOperator::Contains => {
+                        crate::models::FilterOperator::NotContains
+                    }
+                    crate::models::FilterOperator::Matches => {
+                        crate::models::FilterOperator::NotMatches
+                    }
+                    crate::models::FilterOperator::NotEquals => {
+                        crate::models::FilterOperator::Equals
+                    }
+                    crate::models::FilterOperator::NotContains => {
+                        crate::models::FilterOperator::Contains
+                    }
+                    crate::models::FilterOperator::NotMatches => {
+                        crate::models::FilterOperator::Matches
+                    }
+                    _ => operator.clone(),
+                }
+            } else {
+                operator.clone()
+            };
+
+            conditions.push(crate::models::data_mapping::DataMappingConditionRequest {
+                field_name: field.clone(),
+                operator: final_operator,
+                value: value.clone(),
+                logical_operator: logical_op,
+            });
+        }
+        crate::models::ConditionNode::Group { operator, children } => {
+            for (i, child) in children.iter().enumerate() {
+                let child_logical_op = if i == 0 {
+                    logical_op.clone()
+                } else {
+                    Some(operator.clone())
+                };
+                flatten_condition_node_for_test(child, conditions, child_logical_op);
+            }
+        }
+    }
+}
+
+// Helper function to convert actions for testing
+fn convert_actions_for_test(
+    actions: &[crate::models::Action],
+) -> Vec<crate::models::data_mapping::DataMappingActionRequest> {
+    actions
+        .iter()
+        .filter_map(|action| {
+            let action_type = match action.operator {
+                crate::models::ActionOperator::Set => {
+                    crate::models::data_mapping::DataMappingActionType::SetValue
+                }
+                crate::models::ActionOperator::SetIfEmpty => {
+                    crate::models::data_mapping::DataMappingActionType::SetDefaultIfEmpty
+                }
+                _ => return None, // Skip unsupported operators for now
+            };
+
+            let (value, logo_asset_id) = match &action.value {
+                crate::models::ActionValue::Literal(v) => {
+                    // Check if this is a @logo: reference
+                    if v.starts_with("@logo:") {
+                        if let Ok(logo_uuid) = uuid::Uuid::parse_str(&v[6..]) {
+                            (Some(v.clone()), Some(logo_uuid))
+                        } else {
+                            (Some(v.clone()), None)
+                        }
+                    } else {
+                        (Some(v.clone()), None)
+                    }
+                }
+                _ => (None, None), // Skip complex values for testing
+            };
+
+            Some(crate::models::data_mapping::DataMappingActionRequest {
+                action_type,
+                target_field: action.field.clone(),
+                value,
+                logo_asset_id,
+                timeshift_minutes: None,
+            })
+        })
+        .collect()
 }

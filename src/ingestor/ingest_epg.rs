@@ -63,6 +63,84 @@ impl EpgIngestor {
         }
     }
 
+    /// Shared EPG refresh function used by both manual refresh and scheduler
+    /// This ensures identical behavior and eliminates code duplication
+    pub async fn refresh_epg_source(
+        database: Database,
+        state_manager: crate::ingestor::state_manager::IngestionStateManager,
+        source: &EpgSource,
+        trigger: crate::ingestor::state_manager::ProcessingTrigger,
+    ) -> Result<(usize, usize), Box<dyn std::error::Error + Send + Sync>> {
+        use tracing::{error, info};
+
+        let source_id = source.id;
+        let source_name = source.name.clone();
+
+        info!(
+            "Starting EPG refresh for source '{}' ({}) - trigger: {:?}",
+            source_name, source_id, trigger
+        );
+
+        let ingestor = EpgIngestor::new_with_state_manager(database.clone(), state_manager.clone());
+
+        match ingestor
+            .ingest_epg_source_with_trigger(source, trigger.clone())
+            .await
+        {
+            Ok((channels, mut programs, detected_timezone)) => {
+                // Update channel names in programs
+                ingestor.update_channel_names(&channels, &mut programs);
+
+                // Update detected timezone if found
+                if let Some(ref detected_tz) = detected_timezone {
+                    if detected_tz != &source.timezone && !source.timezone_detected {
+                        info!(
+                            "Updating EPG source '{}' timezone from '{}' to detected '{}'",
+                            source_name, source.timezone, detected_tz
+                        );
+                        let _ = database
+                            .update_epg_source_detected_timezone(source_id, detected_tz)
+                            .await;
+                    }
+                }
+
+                // Save to database using cancellation-aware method
+                match ingestor
+                    .save_epg_data_with_cancellation(source_id, channels, programs)
+                    .await
+                {
+                    Ok((channel_count, program_count)) => {
+                        // Update last ingested timestamp
+                        if let Err(e) = database.update_epg_source_last_ingested(source_id).await {
+                            error!(
+                                "Failed to update last_ingested_at for EPG source '{}': {}",
+                                source_name, e
+                            );
+                        }
+
+                        info!(
+                            "EPG refresh completed for '{}': {} channels, {} programs - trigger: {:?}",
+                            source_name, channel_count, program_count, trigger
+                        );
+
+                        Ok((channel_count, program_count))
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to save EPG data for source '{}': {}",
+                            source_name, e
+                        );
+                        Err(e.into())
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to refresh EPG source '{}': {}", source_name, e);
+                Err(e.into())
+            }
+        }
+    }
+
     #[allow(dead_code)]
     pub fn get_state_manager(
         &self,

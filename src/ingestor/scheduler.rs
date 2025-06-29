@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 use super::{IngestionStateManager, IngestorService};
 use crate::database::Database;
-use crate::ingestor::ingest_epg::EpgIngestor;
 use crate::ingestor::state_manager::ProcessingTrigger;
 use crate::models::*;
 
@@ -74,7 +73,6 @@ struct CachedSource {
 
 pub struct SchedulerService {
     ingestor: IngestorService,
-    epg_ingestor: EpgIngestor,
     database: Database,
     run_missed_immediately: bool,
     cached_sources: Arc<RwLock<HashMap<Uuid, CachedSource>>>,
@@ -90,10 +88,8 @@ impl SchedulerService {
         cache_invalidation_rx: Option<CacheInvalidationReceiver>,
     ) -> Self {
         let ingestor = IngestorService::new(state_manager.clone());
-        let epg_ingestor = EpgIngestor::new(database.clone());
         Self {
             ingestor,
-            epg_ingestor,
             database,
             run_missed_immediately,
             cached_sources: Arc::new(RwLock::new(HashMap::new())),
@@ -355,190 +351,107 @@ impl SchedulerService {
     }
 
     async fn process_stream_source_update(&self, source: &StreamSource) {
-        info!(
-            "Triggering scheduled refresh for stream source '{}' (ID: {}, URL: {}, Cron: {})",
-            source.name, source.id, source.url, source.update_cron
-        );
-
-        let _success = match self
+        // Use the IngestorService orchestrator to ensure identical behavior
+        let success = match self
             .ingestor
-            .ingest_source_with_trigger(source, ProcessingTrigger::Scheduler)
+            .refresh_stream_source(self.database.clone(), source, ProcessingTrigger::Scheduler)
             .await
         {
-            Ok(channels) => {
-                info!(
-                    "Stream ingestion completed for '{}': {} channels",
-                    source.name,
-                    channels.len()
-                );
-
-                // Update the channels in database
-                match self
-                    .database
-                    .update_source_channels(
-                        source.id,
-                        &channels,
-                        Some(self.ingestor.get_state_manager()),
-                    )
-                    .await
+            Ok(_channel_count) => {
+                // Update cached source data - the timestamp was already updated by the shared function
                 {
-                    Ok(_) => {
-                        // Update last_ingested_at timestamp AFTER successful database write
-                        match self.database.update_source_last_ingested(source.id).await {
-                            Ok(last_ingested_timestamp) => {
-                                // Update cached source data with exact timestamp from database
-                                {
-                                    let mut cache = self.cached_sources.write().await;
-                                    if let Some(cached_source) = cache.get_mut(&source.id) {
-                                        if let SchedulableSource::Stream(ref mut stream_src) =
-                                            &mut cached_source.source
-                                        {
-                                            stream_src.last_ingested_at =
-                                                Some(last_ingested_timestamp);
-                                            debug!(
-                                                "Updated cached last_ingested_at for stream source '{}' to {}",
-                                                source.name,
-                                                last_ingested_timestamp.format("%Y-%m-%d %H:%M:%S UTC")
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to update last_ingested_at for stream source '{}': {}",
-                                    source.name, e
+                    let mut cache = self.cached_sources.write().await;
+                    if let Some(cached_source) = cache.get_mut(&source.id) {
+                        if let SchedulableSource::Stream(ref mut stream_src) =
+                            &mut cached_source.source
+                        {
+                            // Refresh the cached timestamp from database
+                            if let Ok(Some(updated_source)) =
+                                self.database.get_stream_source(source.id).await
+                            {
+                                stream_src.last_ingested_at = updated_source.last_ingested_at;
+                                debug!(
+                                    "Updated cached last_ingested_at for stream source '{}' to {:?}",
+                                    source.name, updated_source.last_ingested_at
                                 );
                             }
                         }
-
-                        // Mark ingestion as completed with final channel count
-                        self.ingestor
-                            .get_state_manager()
-                            .complete_ingestion(source.id, channels.len())
-                            .await;
-
-                        // Calculate next update time
-                        if let Ok(schedule) = Schedule::from_str(&source.update_cron) {
-                            if let Some(next_time) = schedule.upcoming(Utc).next() {
-                                info!(
-                                    "Scheduled refresh completed for stream source '{}' - Next update: {}",
-                                    source.name,
-                                    next_time.format("%Y-%m-%d %H:%M:%S UTC")
-                                );
-                            }
-                        }
-                        true
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to save channels to database for stream source '{}': {}",
-                            source.name, e
-                        );
-                        false
                     }
                 }
+
+                // Calculate next update time
+                if let Ok(schedule) = Schedule::from_str(&source.update_cron) {
+                    if let Some(next_time) = schedule.upcoming(Utc).next() {
+                        info!(
+                            "Scheduled refresh completed for stream source '{}' - Next update: {}",
+                            source.name,
+                            next_time.format("%Y-%m-%d %H:%M:%S UTC")
+                        );
+                    }
+                }
+                true
             }
             Err(e) => {
-                error!("Failed to refresh stream source '{}': {}", source.name, e);
+                error!(
+                    "Scheduled stream source refresh failed for source '{}': {}",
+                    source.name, e
+                );
                 false
             }
         };
+
+        let _ = success;
     }
 
     async fn process_epg_source_update(&self, source: &EpgSource) {
-        info!(
-            "Triggering scheduled refresh for EPG source '{}' (ID: {}, URL: {}, Cron: {})",
-            source.name, source.id, source.url, source.update_cron
-        );
-
-        let _success = match self
-            .epg_ingestor
-            .ingest_epg_source_with_trigger(source, ProcessingTrigger::Scheduler)
+        // Use the IngestorService orchestrator to ensure identical behavior
+        let success = match self
+            .ingestor
+            .ingest_epg_source(self.database.clone(), source, ProcessingTrigger::Scheduler)
             .await
         {
-            Ok((channels, programs, _detected_timezone)) => {
-                let total_items = channels.len() + programs.len();
-                info!(
-                    "EPG ingestion completed for '{}': {} channels, {} programs",
-                    source.name,
-                    channels.len(),
-                    programs.len()
-                );
-
-                // Update the EPG data in database with cancellation support
-                match self
-                    .epg_ingestor
-                    .save_epg_data_with_cancellation(source.id, channels, programs)
-                    .await
+            Ok((_channel_count, _program_count)) => {
+                // Update cached source data - the timestamp was already updated by the shared function
                 {
-                    Ok(_) => {
-                        // Update last_ingested_at timestamp AFTER successful database write
-                        match self
-                            .database
-                            .update_epg_source_last_ingested(source.id)
-                            .await
-                        {
-                            Ok(last_ingested_timestamp) => {
-                                // Update cached source data with exact timestamp from database
-                                {
-                                    let mut cache = self.cached_sources.write().await;
-                                    if let Some(cached_source) = cache.get_mut(&source.id) {
-                                        if let SchedulableSource::Epg(ref mut epg_src) =
-                                            &mut cached_source.source
-                                        {
-                                            epg_src.last_ingested_at =
-                                                Some(last_ingested_timestamp);
-                                            debug!(
-                                                "Updated cached last_ingested_at for EPG source '{}' to {}",
-                                                source.name,
-                                                last_ingested_timestamp.format("%Y-%m-%d %H:%M:%S UTC")
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to update last_ingested_at for EPG source '{}': {}",
-                                    source.name, e
+                    let mut cache = self.cached_sources.write().await;
+                    if let Some(cached_source) = cache.get_mut(&source.id) {
+                        if let SchedulableSource::Epg(ref mut epg_src) = &mut cached_source.source {
+                            // Refresh the cached timestamp from database
+                            if let Ok(Some(updated_source)) =
+                                self.database.get_epg_source(source.id).await
+                            {
+                                epg_src.last_ingested_at = updated_source.last_ingested_at;
+                                debug!(
+                                    "Updated cached last_ingested_at for EPG source '{}' to {:?}",
+                                    source.name, updated_source.last_ingested_at
                                 );
                             }
                         }
-
-                        // Mark ingestion as completed with final channel and program count
-                        if let Some(state_manager) = self.epg_ingestor.get_state_manager() {
-                            state_manager
-                                .complete_ingestion(source.id, total_items)
-                                .await;
-                        }
-
-                        // Calculate next update time
-                        if let Ok(schedule) = Schedule::from_str(&source.update_cron) {
-                            if let Some(next_time) = schedule.upcoming(Utc).next() {
-                                info!(
-                                    "Scheduled refresh completed for EPG source '{}' - Next update: {}",
-                                    source.name,
-                                    next_time.format("%Y-%m-%d %H:%M:%S UTC")
-                                );
-                            }
-                        }
-                        true
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to save EPG data to database for source '{}': {}",
-                            source.name, e
-                        );
-                        false
                     }
                 }
+
+                // Calculate next update time
+                if let Ok(schedule) = Schedule::from_str(&source.update_cron) {
+                    if let Some(next_time) = schedule.upcoming(Utc).next() {
+                        info!(
+                            "Scheduled refresh completed for EPG source '{}' - Next update: {}",
+                            source.name,
+                            next_time.format("%Y-%m-%d %H:%M:%S UTC")
+                        );
+                    }
+                }
+                true
             }
             Err(e) => {
-                error!("Failed to refresh EPG source '{}': {}", source.name, e);
+                error!(
+                    "Scheduled EPG refresh failed for source '{}': {}",
+                    source.name, e
+                );
                 false
             }
         };
+
+        let _ = success;
     }
 
     fn should_update_cached(

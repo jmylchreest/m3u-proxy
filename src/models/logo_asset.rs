@@ -96,7 +96,7 @@ pub struct LogoAssetWithLinked {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogoAssetSearchRequest {
-    pub query: String,
+    pub query: Option<String>,
     pub limit: Option<u32>,
 }
 

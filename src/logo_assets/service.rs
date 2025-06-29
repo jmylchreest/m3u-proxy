@@ -271,9 +271,10 @@ impl LogoAssetService {
     ) -> Result<LogoAssetSearchResult, sqlx::Error> {
         let limit = request.limit.unwrap_or(20);
 
+        let search_query = request.query.unwrap_or_default();
         let query = format!(
             "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original' AND name LIKE '%{}%' ORDER BY name LIMIT {}",
-            request.query, limit
+            search_query, limit
         );
 
         let rows = sqlx::query(&query).fetch_all(&self.pool).await?;

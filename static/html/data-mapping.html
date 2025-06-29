@@ -96,7 +96,12 @@
 
                         <div class="form-group">
                             <label for="ruleSourceType">Source Type *</label>
-                            <select id="ruleSourceType" name="source_type" required onchange="updateFieldsAndActions()">
+                            <select
+                                id="ruleSourceType"
+                                name="source_type"
+                                required
+                                onchange="updateFieldsAndActions()"
+                            >
                                 <option value="">Select source type...</option>
                                 <option value="stream">Stream Sources</option>
                                 <option value="epg">EPG Sources</option>
@@ -105,14 +110,27 @@
 
                         <div class="form-group">
                             <label for="ruleScope">Rule Scope *</label>
-                            <select id="ruleScope" name="scope" required onchange="updateRuleScope()">
+                            <select
+                                id="ruleScope"
+                                name="scope"
+                                required
+                                onchange="updateRuleScope()"
+                            >
                                 <option value="">Select rule scope...</option>
-                                <option value="individual">Individual Items (per channel/program)</option>
-                                <option value="streamwide">Stream-wide (applies to entire source)</option>
-                                <option value="epgwide">EPG-wide (applies to entire source)</option>
+                                <option value="individual">
+                                    Individual Items (per channel/program)
+                                </option>
+                                <option value="streamwide">
+                                    Stream-wide (applies to entire source)
+                                </option>
+                                <option value="epgwide">
+                                    EPG-wide (applies to entire source)
+                                </option>
                             </select>
                             <small class="form-text text-muted">
-                                Individual rules apply to each item separately. Stream-wide/EPG-wide rules apply globally to all items from a source.
+                                Individual rules apply to each item separately.
+                                Stream-wide/EPG-wide rules apply globally to all
+                                items from a source.
                             </small>
                         </div>
 
@@ -130,37 +148,46 @@
 
                         <hr />
 
-                        <h4>Conditions</h4>
+                        <!-- Expression Definition -->
+                        <h4>Rule Expression</h4>
                         <p class="text-muted small">
-                            Define when this rule should apply
+                            Define conditions and actions using advanced syntax.
+                            Examples:<br />
+                            <code
+                                >channel_name contains "sport" SET group_title =
+                                "Sports"</code
+                            ><br />
+                            <code
+                                >(channel_name matches "(.+) \\+([0-9]+)" SET
+                                tvg_shift = "$2", channel_name = "$1")</code
+                            >
                         </p>
-                        <div id="conditionsContainer">
-                            <!-- Conditions will be added here -->
-                        </div>
-                        <button
-                            type="button"
-                            class="btn btn-outline-primary btn-sm"
-                            onclick="addCondition()"
-                        >
-                            ➕ Add Condition
-                        </button>
 
-                        <hr />
-
-                        <h4>Actions</h4>
-                        <p class="text-muted small">
-                            Define what changes to make when conditions match
-                        </p>
-                        <div id="actionsContainer">
-                            <!-- Actions will be added here -->
+                        <div class="form-group">
+                            <label for="ruleExpression">Expression *</label>
+                            <textarea
+                                id="ruleExpression"
+                                name="expression"
+                                rows="4"
+                                class="form-control"
+                                required
+                                placeholder='Example: channel_name contains "sport" SET group_title = "Sports"'
+                                onchange="validateExpression()"
+                                oninput="debouncedValidateExpression()"
+                            ></textarea>
+                            <div id="expressionValidation" class="mt-2"></div>
                         </div>
-                        <button
-                            type="button"
-                            class="btn btn-outline-primary btn-sm"
-                            onclick="addAction()"
-                        >
-                            ➕ Add Action
-                        </button>
+
+                        <div class="expression-help">
+                            <button
+                                type="button"
+                                class="btn btn-outline-primary btn-sm"
+                                onclick="showExpressionExamples()"
+                                style="text-decoration: none"
+                            >
+                                📖 Show Examples & Syntax Help
+                            </button>
+                        </div>
 
                         <hr />
 
@@ -170,12 +197,20 @@
                         </p>
 
                         <div class="form-group">
-                            <label for="testSourceSelect">Source</label>
-                            <select id="testSourceSelect" class="form-control">
-                                <option value="">
-                                    Select a source to test against...
-                                </option>
-                            </select>
+                            <div id="testSourceContainer">
+                                <label for="testSourceSelect"
+                                    >Test Source</label
+                                >
+                                <select
+                                    id="testSourceSelect"
+                                    class="form-control"
+                                    onchange="updateTestButton()"
+                                >
+                                    <option value="">
+                                        Select a source to test against...
+                                    </option>
+                                </select>
+                            </div>
                             <button
                                 type="button"
                                 class="btn btn-outline-primary btn-sm mt-2"
@@ -183,7 +218,7 @@
                                 id="runTestBtn"
                                 disabled
                             >
-                                🧪 Run Test
+                                🧪 Test Expression
                             </button>
                         </div>
 
@@ -211,6 +246,429 @@
                         onclick="closeRuleModal()"
                     >
                         Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Expression Examples Modal -->
+        <div
+            id="expressionExamplesModal"
+            class="modal"
+            style="display: none; z-index: 1060"
+        >
+            <div class="modal-content standard-modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">Advanced Expression Examples</h3>
+                </div>
+                <div class="modal-body">
+                    <!-- Basic Syntax -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h5 class="text-primary mb-3">📝 Basic Syntax</h5>
+                            <div class="card">
+                                <div class="card-body">
+                                    <code class="d-block mb-2"
+                                        >field operator "value" SET target_field
+                                        = "new_value"</code
+                                    >
+                                    <small class="text-muted"
+                                        >Basic pattern: condition followed by
+                                        action</small
+                                    >
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Operators Table -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h5 class="text-primary mb-3">
+                                🎯 Available Operators
+                            </h5>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-striped">
+                                    <thead class="table-dark">
+                                        <tr>
+                                            <th>Operator</th>
+                                            <th>Description</th>
+                                            <th>Example</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><code>equals</code></td>
+                                            <td>
+                                                Exact match (case-insensitive)
+                                            </td>
+                                            <td>
+                                                <code
+                                                    >channel_name equals "BBC
+                                                    One"</code
+                                                >
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>contains</code></td>
+                                            <td>Contains substring</td>
+                                            <td>
+                                                <code
+                                                    >channel_name contains
+                                                    "sport"</code
+                                                >
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>starts_with</code></td>
+                                            <td>Starts with text</td>
+                                            <td>
+                                                <code
+                                                    >tvg_id starts_with
+                                                    "uk."</code
+                                                >
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>ends_with</code></td>
+                                            <td>Ends with text</td>
+                                            <td>
+                                                <code
+                                                    >channel_name ends_with "
+                                                    HD"</code
+                                                >
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>matches</code></td>
+                                            <td>Regex pattern match</td>
+                                            <td>
+                                                <code
+                                                    >channel_name matches
+                                                    "BBC.*"</code
+                                                >
+                                            </td>
+                                        </tr>
+                                        <tr class="table-warning">
+                                            <td>
+                                                <code>not equals</code
+                                                ><br /><code>not contains</code
+                                                ><br /><code>not matches</code>
+                                            </td>
+                                            <td>
+                                                Negated versions using 'not'
+                                                modifier
+                                            </td>
+                                            <td>
+                                                <code
+                                                    >channel_name not contains
+                                                    "adult"</code
+                                                >
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Modifiers -->
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <h5 class="text-primary mb-3">
+                                🚫 Negation Modifiers
+                            </h5>
+                            <div class="card">
+                                <div class="card-body">
+                                    <code class="d-block"
+                                        >channel_name not matches
+                                        "pattern"</code
+                                    >
+                                    <code class="d-block"
+                                        >channel_name not contains "text"</code
+                                    >
+                                    <code class="d-block mb-2"
+                                        >channel_name not equals "exact"</code
+                                    >
+                                    <small class="text-muted"
+                                        >Use <code>not</code> modifier before
+                                        any operator to negate the
+                                        condition.</small
+                                    >
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h5 class="text-primary mb-3">
+                                🔤 Case Sensitivity
+                            </h5>
+                            <div class="card">
+                                <div class="card-body">
+                                    <code class="d-block"
+                                        >channel_name case_sensitive matches
+                                        "BBC"</code
+                                    >
+                                    <code class="d-block"
+                                        >channel_name case_sensitive not matches
+                                        "bbc"</code
+                                    >
+                                    <code class="d-block mb-2"
+                                        >channel_name case_sensitive not equals
+                                        "bbc one"</code
+                                    >
+                                    <small class="text-muted"
+                                        >Add
+                                        <code>case_sensitive</code> modifier for
+                                        exact case matching. Can be combined
+                                        with <code>not</code>.</small
+                                    >
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Available Fields -->
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <h5 class="text-primary mb-3">📺 Stream Fields</h5>
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <tbody>
+                                        <tr>
+                                            <td><code>channel_name</code></td>
+                                            <td>Channel display name</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>tvg_id</code></td>
+                                            <td>Unique channel identifier</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>tvg_name</code></td>
+                                            <td>EPG name</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>tvg_logo</code></td>
+                                            <td>Channel logo URL</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>tvg_shift</code></td>
+                                            <td>Timeshift offset</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>group_title</code></td>
+                                            <td>Channel group/category</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>stream_url</code></td>
+                                            <td>Stream URL</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h5 class="text-primary mb-3">📅 EPG Fields</h5>
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <tbody>
+                                        <tr>
+                                            <td><code>channel_id</code></td>
+                                            <td>EPG channel identifier</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>channel_name</code></td>
+                                            <td>Channel name in EPG</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>channel_logo</code></td>
+                                            <td>Channel logo from EPG</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>channel_group</code></td>
+                                            <td>EPG channel group</td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>language</code></td>
+                                            <td>Channel language</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Autocomplete Helpers -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h5 class="text-primary mb-3">
+                                🔮 Autocomplete Helpers
+                            </h5>
+                            <div class="card">
+                                <div class="card-body">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <h6 class="text-success">
+                                                🎯 Quick Start
+                                            </h6>
+                                            <p class="mb-2">
+                                                <strong
+                                                    >Type <code>@</code></strong
+                                                >
+                                                in the expression to see
+                                                available helpers:
+                                            </p>
+                                            <ul class="small">
+                                                <li>
+                                                    <code>@logo:</code> - Logo
+                                                    references with autocomplete
+                                                </li>
+                                                <li>
+                                                    More helpers coming soon...
+                                                </li>
+                                            </ul>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <h6 class="text-info">
+                                                💡 Logo Autocomplete
+                                            </h6>
+                                            <p class="mb-2">
+                                                <strong
+                                                    >Type
+                                                    <code>@logo:</code></strong
+                                                >
+                                                to search and select logos:
+                                            </p>
+                                            <ul class="small">
+                                                <li>
+                                                    Shows logo thumbnails and
+                                                    names with UUID preview
+                                                </li>
+                                                <li>
+                                                    Use arrow keys or mouse to
+                                                    select
+                                                </li>
+                                                <li>
+                                                    Selected logo stores UUID
+                                                    reference (e.g.,
+                                                    <code
+                                                        >@logo:550e8400-e29b-41d4-a716-446655440000</code
+                                                    >)
+                                                </li>
+                                                <li>
+                                                    UUID references remain valid
+                                                    even if logo is renamed
+                                                </li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Advanced Examples -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h5 class="text-primary mb-3">
+                                🔍 Advanced Examples
+                            </h5>
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <strong>🏷️ Logo Assignment</strong>
+                                        </div>
+                                        <div class="card-body">
+                                            <code class="d-block mb-2"
+                                                >channel_name equals "BBC One"
+                                                SET tvg_logo =
+                                                "@logo:550e8400-e29b-41d4-a716-446655440000"</code
+                                            >
+                                            <small class="text-muted"
+                                                >Type <code>@logo:</code> and
+                                                select "BBC One" logo. The
+                                                autocomplete resolves to a UUID
+                                                reference that remains valid
+                                                even if the logo is renamed or
+                                                updated.</small
+                                            >
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <strong
+                                                >🔍 Regex Capture Groups</strong
+                                            >
+                                        </div>
+                                        <div class="card-body">
+                                            <code class="d-block mb-2"
+                                                >channel_name matches "(.+)
+                                                \\+([0-9]+)" SET tvg_shift =
+                                                "$2", channel_name = "$1"</code
+                                            >
+                                            <small class="text-muted"
+                                                >Use $1, $2, etc. to reference
+                                                regex capture groups</small
+                                            >
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <strong>🔗 Multiple Actions</strong>
+                                        </div>
+                                        <div class="card-body">
+                                            <code class="d-block mb-2"
+                                                >tvg_id starts_with "uk." SET
+                                                tvg_logo =
+                                                "https://logos.com/uk.png",
+                                                group_title = "UK
+                                                Channels"</code
+                                            >
+                                            <small class="text-muted"
+                                                >Separate multiple actions with
+                                                commas</small
+                                            >
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <strong
+                                                >🎭 Complex Conditional
+                                                Logic</strong
+                                            >
+                                        </div>
+                                        <div class="card-body">
+                                            <code class="d-block mb-2"
+                                                >(channel_name matches "BBC" SET
+                                                group_title = "BBC") AND
+                                                (channel_name matches "ITV" SET
+                                                group_title = "ITV")</code
+                                            >
+                                            <small class="text-muted"
+                                                >Use parentheses and AND/OR for
+                                                complex conditional
+                                                actions</small
+                                            >
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        onclick="closeExpressionExamples()"
+                    >
+                        Close
                     </button>
                 </div>
             </div>

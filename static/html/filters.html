@@ -81,7 +81,7 @@
                                 autocomplete="off"
                                 autocorrect="off"
                                 autocapitalize="off"
-                                placeholder='Enter filter pattern... (e.g., channel_name contains "sport" AND group_title not contains "adult" OR channel_name case_sensitive equals "BBC One")'
+                                placeholder='Enter filter pattern... (e.g., channel_name contains "sport" OR (tvg_id contains "BBC" AND group_title not_contains "adult"))'
                             ></textarea>
                             <small class="text-muted">
                                 Use natural language patterns with operators
@@ -89,8 +89,7 @@
                                 <code>matches</code>, <code>starts_with</code>,
                                 <code>ends_with</code>. Add <code>not</code> or
                                 <code>case_sensitive</code> before operators as
-                                needed. Use <code>AND</code> for AND logic,
-                                <code>OR</code> for OR logic.
+                                needed. Use <code>AND</code>/<code>OR</code> for logic.
                                 <a
                                     href="#"
                                     onclick="filtersManager.showExamplesModal()"
@@ -212,6 +211,16 @@
                             >
                                 Test Filter
                             </button>
+                            
+                            <!-- Test Results Container -->
+                            <div id="testResults" class="test-results-container mt-3" style="display: none;">
+                                <div class="test-results-header">
+                                    <h5>Test Results</h5>
+                                </div>
+                                <div id="testResultsContent" class="test-results-content">
+                                    <!-- Results will be displayed here -->
+                                </div>
+                            </div>
                         </div>
                     </form>
                 </div>
@@ -272,7 +281,7 @@
                         <div class="modifier-list">
                             <div class="modifier-item">
                                 <code>not</code> - Negates the operator (e.g.,
-                                <code>not contains</code>)
+                                <code>not contains</code>, or use <code>not_contains</code>)
                             </div>
                             <div class="modifier-item">
                                 <code>case_sensitive</code> - Makes the match
@@ -338,8 +347,8 @@
                                 Multiple NOT Conditions
                             </div>
                             <div class="example-pattern">
-                                channel_name not contains "adult" AND
-                                group_title not contains "xxx"
+                                channel_name not_contains "adult" AND
+                                group_title not_contains "xxx"
                             </div>
                             <div class="example-description">
                                 Excludes channels containing "adult" or in
@@ -433,6 +442,27 @@
                                 with "HD"
                             </div>
                         </div>
+
+                        <div class="example-item">
+                            <div class="example-title">Advanced Grouping with Parentheses</div>
+                            <div class="example-pattern">
+                                channel_name contains "BBC" OR (tvg_id contains "BBC" AND group_title contains "HD")
+                            </div>
+                            <div class="example-description">
+                                Matches channels with "BBC" in name, OR channels that have both "BBC" in TVG ID and "HD" in group
+                            </div>
+                        </div>
+
+                        <div class="example-item">
+                            <div class="example-title">Complex Nested Groups</div>
+                            <div class="example-pattern">
+                                (channel_name contains "Sport" OR channel_name contains "Football") AND (group_title not_contains "Adult" AND group_title not_contains "XXX")
+                            </div>
+                            <div class="example-description">
+                                Matches sports channels while excluding adult content using nested logical groups
+                            </div>
+                        </div>
+
                     </div>
                 </div>
                 <div class="modal-footer">

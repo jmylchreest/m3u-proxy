@@ -6,6 +6,8 @@ class FiltersManager {
     this.isEditing = false;
     this.currentFilter = null;
     this.availableFields = [];
+    this.validationTimeout = null;
+    this.lastValidationPattern = "";
   }
 
   async init() {
@@ -27,7 +29,7 @@ class FiltersManager {
       this.hideFilterModal();
     });
 
-    // Optional close button (may not exist after removing visual builder)
+    // Optional close button (may not exist in current implementation)
     const closeButton = document.getElementById("closeFilterModal");
     if (closeButton) {
       closeButton.addEventListener("click", () => {
@@ -48,13 +50,19 @@ class FiltersManager {
     // Test source change
     document.getElementById("testSource").addEventListener("change", (e) => {
       this.updateTestButton();
+      this.clearTestResults(); // Clear test results when source changes
+      // Re-validate with new source
+      if (document.getElementById("filterPattern").value.trim()) {
+        this.debouncedValidatePattern();
+      }
     });
 
     // Pattern textarea change
     document.getElementById("filterPattern").addEventListener("input", () => {
       this.updateTestButton();
       this.updateFilterPreview();
-      this.validatePattern();
+      this.debouncedValidatePattern();
+      this.clearTestResults(); // Clear test results when pattern changes
     });
 
     // Also handle paste events in pattern textarea
@@ -62,7 +70,8 @@ class FiltersManager {
       setTimeout(() => {
         this.updateTestButton();
         this.updateFilterPreview();
-        this.validatePattern();
+        this.debouncedValidatePattern();
+        this.clearTestResults(); // Clear test results when pattern changes
       }, 10);
     });
 
@@ -83,6 +92,7 @@ class FiltersManager {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       this.availableFields = await response.json();
+      console.log("Loaded available fields from API:", this.availableFields);
     } catch (error) {
       console.error("Failed to load filter fields:", error);
       // Fallback to basic fields if API fails
@@ -118,60 +128,91 @@ class FiltersManager {
           nullable: false,
         },
       ];
+      console.log("Using fallback fields:", this.availableFields);
     }
   }
 
   async loadSources() {
     try {
-      const response = await fetch("/api/sources");
+      const response = await fetch("/api/sources/stream");
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       this.sources = await response.json();
       this.populateSourceSelect();
     } catch (error) {
-      console.error("Failed to load sources:", error);
-      this.showAlert("Failed to load sources", "danger");
+      console.error("Failed to load stream sources:", error);
+      this.showAlert("Failed to load stream sources", "danger");
     }
   }
 
   populateSourceSelect() {
     const select = document.getElementById("testSource");
+    const label = document.querySelector('label[for="testSource"]');
+
     if (!select) {
       console.warn("testSource element not found");
       return;
     }
 
-    select.innerHTML =
-      '<option value="">Select a source to test the pattern...</option>';
+    // Clear existing options
+    select.innerHTML = "";
 
-    this.sources.forEach((sourceData) => {
+    if (this.sources.length === 0) {
+      select.innerHTML =
+        '<option value="">No stream sources available</option>';
+      select.disabled = true;
+      return;
+    }
+
+    if (this.sources.length === 1) {
+      // Only one source - hide the label and dropdown, auto-select it
+      const sourceData = this.sources[0];
       const option = document.createElement("option");
       option.value = sourceData.id;
       option.textContent = `${sourceData.name} (${sourceData.channel_count} channels)`;
+      option.selected = true;
       select.appendChild(option);
-    });
+
+      // Hide just the label and dropdown, not the test button
+      if (label) {
+        label.style.display = "none";
+      }
+      select.style.display = "none";
+    } else {
+      // Multiple sources - show dropdown with default option
+      select.innerHTML =
+        '<option value="">Select a source to test the pattern...</option>';
+
+      this.sources.forEach((sourceData) => {
+        const option = document.createElement("option");
+        option.value = sourceData.id;
+        option.textContent = `${sourceData.name} (${sourceData.channel_count} channels)`;
+        select.appendChild(option);
+      });
+
+      // Make sure the label and dropdown are visible
+      if (label) {
+        label.style.display = "block";
+      }
+      select.style.display = "block";
+    }
+
+    select.disabled = false;
+
+    // Update test button state after populating
+    this.updateTestButton();
   }
 
   async loadFilters() {
     this.showLoading();
     try {
-      console.log("Loading filters..."); // Debug log
       const response = await fetch("/api/filters?" + new Date().getTime());
-      console.log("Filters API response status:", response.status); // Debug log
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
-      console.log("Filters data:", data); // Debug log
-      console.log(
-        "Filters data type:",
-        typeof data,
-        "Array?",
-        Array.isArray(data),
-      ); // Debug log
       this.filters = Array.isArray(data) ? data : [];
-      console.log("Processed filters count:", this.filters.length); // Debug log
       this.renderFilters();
     } catch (error) {
       console.error("Failed to load filters:", error);
@@ -207,21 +248,25 @@ class FiltersManager {
 
     tbody.innerHTML = sortedFilters
       .map((filterData, index) => {
+        // Handle FilterWithUsage structure - check if filter data is nested
+        const filter = filterData.filter || filterData;
+        const usageCount = filterData.usage_count || 0;
+
         // Generate filter preview from condition_tree or conditions
-        let filterPreview = "No conditions";
+        let filterPreview = "No conditions defined";
         try {
-          if (filterData.condition_tree) {
-            const tree = JSON.parse(filterData.condition_tree);
+          if (filter.condition_tree && filter.condition_tree.trim() !== "") {
+            const tree = JSON.parse(filter.condition_tree);
             filterPreview = this.convertTreeToPattern(tree);
-          } else if (
-            filterData.conditions &&
-            filterData.conditions.length > 0
-          ) {
-            filterPreview = this.generateFilterPreview(filterData);
+          } else if (filter.conditions && filter.conditions.length > 0) {
+            filterPreview = this.generateFilterPreview(filter);
+          } else {
+            // Handle legacy filters with missing condition data
+            filterPreview = "⚠️ Legacy filter - click Edit to reconfigure";
           }
         } catch (e) {
           console.warn("Failed to parse filter for preview:", e);
-          filterPreview = "Invalid filter pattern";
+          filterPreview = "⚠️ Invalid filter pattern - click Edit to fix";
         }
 
         return `
@@ -229,25 +274,25 @@ class FiltersManager {
                     <div class="filter-header">
                         <div class="filter-info">
                             <div class="filter-name">
-                                <strong>${this.escapeHtml(filterData.name)}</strong>
+                                <strong>${this.escapeHtml(filter.name)}</strong>
                             </div>
                             <div class="filter-meta">
-                                <span class="badge ${filterData.is_inverse ? "badge-danger" : "badge-success"}">
-                                    ${filterData.is_inverse ? "Exclude" : "Include"}
+                                <span class="badge ${filter.is_inverse ? "badge-danger" : "badge-success"}">
+                                    ${filter.is_inverse ? "Exclude" : "Include"}
                                 </span>
-                                <span class="filter-starting-number">Start: ${filterData.starting_channel_number}</span>
-                                <span class="badge ${filterData.usage_count > 0 ? "badge-primary" : "badge-secondary"}">
-                                    ${filterData.usage_count} ${filterData.usage_count === 1 ? "proxy" : "proxies"}
+                                <span class="filter-starting-number">Start: ${filter.starting_channel_number}</span>
+                                <span class="badge ${usageCount > 0 ? "badge-primary" : "badge-secondary"}">
+                                    ${usageCount} ${usageCount === 1 ? "proxy" : "proxies"}
                                 </span>
                             </div>
                         </div>
                         <div class="filter-actions">
-                            ${this.renderActionsCell(filterData, filterData.usage_count)}
+                            ${this.renderActionsCell(filter, usageCount)}
                         </div>
                     </div>
                     <div class="filter-pattern">
                         <div class="pattern-label">Filter:</div>
-                        <pre class="pattern-code"><code>${this.escapeHtml(filterPreview)}</code></pre>
+                        <pre class="pattern-code ${filterPreview.includes("⚠️") ? "pattern-warning" : ""}"><code>${this.escapeHtml(filterPreview)}</code></pre>
                     </div>
                 </div>
             `;
@@ -284,7 +329,10 @@ class FiltersManager {
     // Reset form
     form.reset();
 
-    // Filter builder state removed - only pattern mode remains
+    // Clear any previous test results
+    this.clearTestResults();
+
+    // Using pattern-based filter editing
 
     if (filter) {
       document.getElementById("filterName").value = filter.name;
@@ -292,8 +340,21 @@ class FiltersManager {
       document.getElementById("startingChannelNumber").value =
         filter.starting_channel_number;
 
-      // Populate the pattern field with text representation from conditions
-      this.populateAdvancedTabFromConditions(filter);
+      // Populate the pattern field with text representation from filter data
+      this.populatePatternFromFilter(filter);
+
+      // Show a warning for legacy filters
+      if (
+        (!filter.condition_tree || filter.condition_tree.trim() === "") &&
+        (!filter.conditions || filter.conditions.length === 0)
+      ) {
+        setTimeout(() => {
+          this.showAlert(
+            "⚠️ Legacy Filter Detected: This filter was created in an older version and has no pattern data. Please define a new filter pattern below and save to restore functionality.",
+            "warning",
+          );
+        }, 500);
+      }
     } else {
       document.getElementById("startingChannelNumber").value = 1;
       // Clear the pattern field and ensure placeholder is visible
@@ -367,29 +428,14 @@ class FiltersManager {
   }
 
   getFormData() {
-    const advancedFilter = this.convertPatternToAdvancedFilter();
-
-    // Extract conditions and logical operator from the advanced filter structure
-    let conditions = [];
-    let logicalOperator = "AND";
-
-    if (advancedFilter && advancedFilter.root_group) {
-      conditions = advancedFilter.root_group.conditions.map((condition) => ({
-        field_name: condition.field,
-        operator: condition.operator,
-        value: condition.value,
-      }));
-      logicalOperator = advancedFilter.root_group.logical_operator;
-    }
-
     return {
       name: document.getElementById("filterName").value.trim(),
+      source_type: "stream", // Filters only apply to stream sources
       starting_channel_number: parseInt(
         document.getElementById("startingChannelNumber").value,
       ),
       is_inverse: document.getElementById("isInverse").checked,
-      conditions: conditions,
-      logical_operator: logicalOperator,
+      filter_expression: document.getElementById("filterPattern").value.trim(),
     };
   }
 
@@ -419,22 +465,33 @@ class FiltersManager {
       return false;
     }
 
+    // Pattern validation will be done by the backend
+    // Frontend just ensures it's not empty
+
     return true;
   }
 
   async editFilter(filterId) {
-    const filterData = this.filters.find((f) => f.id === filterId);
+    const filterData = this.filters.find(
+      (f) => (f.filter || f).id === filterId,
+    );
     if (filterData) {
-      this.showFilterModal(filterData);
+      // Handle FilterWithUsage structure - extract filter if nested
+      const filter = filterData.filter || filterData;
+      this.showFilterModal(filter);
     }
   }
 
   async duplicateFilter(filterId) {
-    const filterData = this.filters.find((f) => f.id === filterId);
+    const filterData = this.filters.find(
+      (f) => (f.filter || f).id === filterId,
+    );
     if (filterData) {
+      // Handle FilterWithUsage structure - extract filter if nested
+      const filter = filterData.filter || filterData;
       const duplicateFilter = {
-        ...filterData,
-        name: `${filterData.name} (Copy)`,
+        ...filter,
+        name: `${filter.name} (Copy)`,
         id: null,
       };
       this.showFilterModal(duplicateFilter);
@@ -442,12 +499,18 @@ class FiltersManager {
   }
 
   async deleteFilter(filterId) {
-    const filterData = this.filters.find((f) => f.id === filterId);
+    const filterData = this.filters.find(
+      (f) => (f.filter || f).id === filterId,
+    );
     if (!filterData) return;
 
-    if (filterData.usage_count > 0) {
+    // Handle FilterWithUsage structure - extract filter and usage count
+    const filter = filterData.filter || filterData;
+    const usageCount = filterData.usage_count || 0;
+
+    if (usageCount > 0) {
       this.showAlert(
-        `Cannot delete filter "${filterData.name}" as it is being used by ${filterData.usage_count} ${filterData.usage_count === 1 ? "proxy" : "proxies"}`,
+        `Cannot delete filter "${filter.name}" as it is being used by ${usageCount} ${usageCount === 1 ? "proxy" : "proxies"}`,
         "danger",
       );
       return;
@@ -455,14 +518,14 @@ class FiltersManager {
 
     if (
       !confirm(
-        `Are you sure you want to delete the filter "${filterData.name}"? This action cannot be undone.`,
+        `Are you sure you want to delete the filter "${filter.name}"? This action cannot be undone.`,
       )
     ) {
       return;
     }
 
     try {
-      const response = await fetch(`/api/filters/${filterData.id}`, {
+      const response = await fetch(`/api/filters/${filter.id}`, {
         method: "DELETE",
       });
 
@@ -482,8 +545,6 @@ class FiltersManager {
     const sourceId = document.getElementById("testSource").value;
     const isInverse = document.getElementById("isInverse").checked;
 
-    const advancedFilter = this.convertPatternToAdvancedFilter();
-
     const pattern = document.getElementById("filterPattern").value.trim();
     if (!sourceId || !pattern) {
       this.showAlert(
@@ -493,25 +554,16 @@ class FiltersManager {
       return;
     }
 
-    // Extract conditions and logical operator from the advanced filter structure
-    let conditions = [];
-    let logicalOperator = "AND";
-
-    if (advancedFilter && advancedFilter.root_group) {
-      conditions = advancedFilter.root_group.conditions.map((condition) => ({
-        field_name: condition.field,
-        operator: condition.operator,
-        value: condition.value,
-      }));
-      logicalOperator = advancedFilter.root_group.logical_operator;
-    }
+    // Send raw pattern directly to backend - it will parse everything
 
     const testData = {
       source_id: sourceId,
-      conditions: conditions,
-      logical_operator: logicalOperator,
+      source_type: "stream",
+      filter_expression: pattern,
       is_inverse: isInverse,
     };
+
+    console.log("Test request data:", JSON.stringify(testData, null, 2));
 
     const testBtn = document.getElementById("testPatternBtn");
     const originalText = testBtn.textContent;
@@ -543,13 +595,21 @@ class FiltersManager {
   }
 
   displayTestResults(result) {
+    const testResultsContainer = document.getElementById("testResults");
+    const testResultsContent = document.getElementById("testResultsContent");
+
     if (!result.is_valid) {
-      this.showAlert(result.error || "Filter test failed", "danger");
+      // Show error in the test results container
+      testResultsContent.innerHTML = `
+        <div class="alert alert-danger">
+          <strong>Test Failed:</strong> ${this.escapeHtml(result.error || "Filter test failed")}
+        </div>
+      `;
+      testResultsContainer.style.display = "block";
       return;
     }
 
     // Get source name for display
-    const sourceId = document.getElementById("testSource").value;
     const sourceSelect = document.getElementById("testSource");
     const sourceName =
       sourceSelect.options[sourceSelect.selectedIndex]?.text ||
@@ -560,28 +620,54 @@ class FiltersManager {
         ? Math.round((result.matched_count / result.total_channels) * 100)
         : 0;
 
-    // Show success message with summary
-    this.showAlert(
-      `Filter test completed: ${result.matched_count} of ${result.total_channels} channels matched (${percentage}%)`,
-      "success",
-    );
+    // Build the results HTML
+    let resultsHtml = `
+      <div class="alert alert-success">
+        <strong>Test Completed:</strong> ${result.matched_count} of ${result.total_channels} channels matched (${percentage}%) from ${this.escapeHtml(sourceName)}
+      </div>
+    `;
 
-    // Use shared channel browser to display filtered results
     if (result.matching_channels && result.matching_channels.length > 0) {
-      // Format the channels for the shared viewer
-      const formattedChannels = result.matching_channels.map((channel) => ({
-        channel_name: channel.channel_name,
-        tvg_name: channel.tvg_name || channel.channel_name,
-        group_title: channel.group_title || null,
-        tvg_id: channel.tvg_id || null,
-        tvg_logo: channel.tvg_logo || null,
-      }));
+      resultsHtml += `
+        <div class="test-results-channels">
+          <h6>Matching Channels (showing first ${Math.min(result.matching_channels.length, 20)}):</h6>
+          <div class="channels-list">
+      `;
 
-      // Show channels in the shared modal with a descriptive title
-      const modalTitle = `Filter Test Results - ${sourceName} (${result.matched_count} matches)`;
-      channelsViewer.showChannels(sourceId, modalTitle, formattedChannels);
+      // Show up to 20 channels to avoid overwhelming the modal
+      const channelsToShow = result.matching_channels.slice(0, 20);
+      for (const channel of channelsToShow) {
+        resultsHtml += `
+          <div class="channel-item">
+            <div class="channel-name">${this.escapeHtml(channel.channel_name)}</div>
+            ${channel.group_title ? `<div class="channel-group text-muted">${this.escapeHtml(channel.group_title)}</div>` : ""}
+          </div>
+        `;
+      }
+
+      resultsHtml += `</div>`;
+
+      if (result.matching_channels.length > 20) {
+        resultsHtml += `<div class="text-muted mt-2">... and ${result.matching_channels.length - 20} more channels</div>`;
+      }
+
+      resultsHtml += `</div>`;
     } else {
-      this.showAlert("No channels matched the filter criteria", "info");
+      resultsHtml += `
+        <div class="alert alert-info">
+          No channels matched the filter criteria.
+        </div>
+      `;
+    }
+
+    testResultsContent.innerHTML = resultsHtml;
+    testResultsContainer.style.display = "block";
+  }
+
+  clearTestResults() {
+    const testResultsContainer = document.getElementById("testResults");
+    if (testResultsContainer) {
+      testResultsContainer.style.display = "none";
     }
   }
 
@@ -664,9 +750,7 @@ class FiltersManager {
       const field = this.availableFields.find(
         (f) => f.name === condition.field_name,
       );
-      const fieldName = field
-        ? field.display_name || field.name
-        : condition.field_name;
+      const fieldName = field ? field.name : condition.field_name;
       const operatorDisplay = this.formatOperatorDisplay(condition.operator);
 
       return `${fieldName} ${operatorDisplay} "${this.truncateTextSmart(condition.value, singleConditionMaxLength)}"`;
@@ -684,9 +768,7 @@ class FiltersManager {
       const field = this.availableFields.find(
         (f) => f.name === condition.field_name,
       );
-      const fieldName = field
-        ? field.display_name || field.name
-        : condition.field_name;
+      const fieldName = field ? field.name : condition.field_name;
       const operatorDisplay = this.formatOperatorDisplay(condition.operator);
 
       // Calculate dynamic truncation based on remaining space and line length
@@ -751,18 +833,23 @@ class FiltersManager {
   }
 
   formatOperatorDisplay(operator) {
-    const operatorMap = {
-      matches: "matches pattern",
-      notmatches: "does not match pattern",
-      equals: "equals",
-      not_equals: "does not equal",
-      contains: "contains",
-      not_contains: "does not contain",
-      starts_with: "starts with",
-      ends_with: "ends with",
-    };
+    // Convert database format to modifier syntax for consistency
+    let displayOperator = operator;
 
-    return operatorMap[operator] || operator.replace(/_/g, " ").toLowerCase();
+    // Handle not_ prefix
+    if (operator.startsWith("not_")) {
+      displayOperator = `not ${operator.substring(4)}`;
+    }
+    // Handle case_sensitive_ prefix
+    else if (operator.startsWith("case_sensitive_")) {
+      displayOperator = `case_sensitive ${operator.substring(15)}`;
+    }
+    // Handle not_case_sensitive_ prefix (both modifiers)
+    else if (operator.startsWith("not_case_sensitive_")) {
+      displayOperator = `not case_sensitive ${operator.substring(19)}`;
+    }
+
+    return displayOperator;
   }
 
   escapeHtml(text) {
@@ -779,7 +866,7 @@ class FiltersManager {
     }
   }
 
-  // Visual builder methods removed - only text pattern mode remains
+  // Pattern preview and validation methods
 
   updateFilterPreview() {
     const preview = document.getElementById("filterPreview");
@@ -812,136 +899,370 @@ class FiltersManager {
     testBtn.disabled = !hasValidFilter || !sourceSelect.value;
   }
 
-  convertPatternToAdvancedFilter() {
-    const pattern = document.getElementById("filterPattern").value.trim();
-    if (!pattern) {
-      return null;
-    }
+  // ===== CLIENT-SIDE VALIDATION FOR REAL-TIME FEEDBACK =====
 
-    // Try to parse as text pattern first, fallback to regex
-    const textFilter = this.parseTextPattern(pattern);
-    if (textFilter) {
-      return textFilter;
-    }
-
-    // Fallback: treat as raw regex for channel_name
-    return {
-      root_group: {
-        conditions: [
-          {
-            field: "channel_name",
-            operator: "matches",
-            value: pattern,
-          },
-        ],
-        groups: [],
-        logical_operator: "and",
-      },
-    };
+  /**
+   * Debounced validation to avoid excessive API calls
+   */
+  debouncedValidatePattern() {
+    clearTimeout(this.validationTimeout);
+    this.validationTimeout = setTimeout(() => {
+      this.validatePattern();
+    }, 300); // 300ms delay for more responsive validation
   }
 
-  // Convert visual conditions to text representation
-  convertAdvancedFilterToText(advancedFilter) {
-    if (!advancedFilter || !advancedFilter.root_group) {
-      return "";
+  /**
+   * Validate the current filter pattern with server-side validation
+   */
+  async validatePattern() {
+    const textarea = document.getElementById("filterPattern");
+    const pattern = textarea.value.trim();
+
+    if (!pattern) {
+      this.clearValidationHighlights(textarea);
+      this.updateValidationUI({
+        valid: true,
+        errors: [],
+        serverValidation: null,
+      });
+      this.lastValidationPattern = "";
+      return;
     }
 
-    const group = advancedFilter.root_group;
-    const conditions = group.conditions || [];
+    // Skip validation if pattern hasn't changed
+    if (pattern === this.lastValidationPattern) {
+      return;
+    }
+    this.lastValidationPattern = pattern;
 
-    if (conditions.length === 0) {
-      return "";
+    // Start with client-side validation for immediate feedback
+    const clientValidation = this.validatePatternSyntax(pattern);
+    this.updateValidationHighlights(textarea, clientValidation);
+
+    // Skip server validation if client-side validation already found errors
+    if (!clientValidation.valid) {
+      this.updateValidationUI({
+        ...clientValidation,
+        serverValidation: null,
+      });
+      return;
     }
 
-    const conditionTexts = conditions.map((condition) => {
-      const field = condition.field;
-      const operator = condition.operator;
-      const value = condition.value;
-
-      // Quote the value if it contains spaces or special characters
-      const quotedValue =
-        value.includes(" ") || value.includes('"') || value.includes("'")
-          ? `"${value.replace(/"/g, '\\"')}"`
-          : `"${value}"`;
-
-      return `${field} ${operator} ${quotedValue}`;
+    // Show loading state for server validation
+    this.updateValidationUI({
+      ...clientValidation,
+      serverValidation: { loading: true },
     });
 
-    const logicalOp = group.logical_operator.toUpperCase();
-    return conditionTexts.join(` ${logicalOp} `);
-  }
-
-  // Parse text pattern into advanced filter
-  parseTextPattern(text) {
+    // Then do server-side validation
     try {
-      // Split by AND/OR while preserving the operators
-      const tokens = text.split(/\s+(AND|OR)\s+/i);
-      const conditions = [];
-      let currentLogicalOp = "and";
+      const serverValidation = await this.validatePatternOnServer(pattern);
 
-      for (let i = 0; i < tokens.length; i += 2) {
-        const conditionText = tokens[i].trim();
-        if (!conditionText) continue;
-
-        const condition = this.parseCondition(conditionText);
-        if (condition) {
-          conditions.push(condition);
-        }
-
-        // Get the logical operator for next iteration
-        if (i + 1 < tokens.length) {
-          const nextOp = tokens[i + 1].toLowerCase();
-          if (nextOp === "or") {
-            currentLogicalOp = "or";
-          }
-          // Note: Mixed AND/OR not supported in current structure
-        }
-      }
-
-      if (conditions.length === 0) {
-        return null;
-      }
-
-      return {
-        root_group: {
-          conditions: conditions,
-          groups: [],
-          logical_operator: currentLogicalOp,
-        },
-      };
+      // Combine client and server validation
+      const combinedValidation = this.combineValidationResults(
+        clientValidation,
+        serverValidation,
+      );
+      this.updateValidationHighlights(textarea, combinedValidation);
+      this.updateValidationUI(combinedValidation);
     } catch (error) {
-      console.warn("Failed to parse text pattern:", error);
-      return null;
+      console.error("Server validation failed:", error);
+      // Fall back to client-side validation only
+      this.updateValidationUI({
+        ...clientValidation,
+        serverValidation: { error: error.message },
+      });
     }
   }
 
-  // Parse individual condition like "channel_name contains 'sport'"
-  parseCondition(conditionText) {
-    // Match pattern: field operator "value" or field operator 'value'
-    const match = conditionText.match(
-      /^(\w+)\s+(\w+(?:_\w+)*)\s+["']([^"']+)["']$/,
-    );
-    if (!match) {
-      console.warn("Could not parse condition:", conditionText);
-      return null;
+  /**
+   * Validate pattern on server using the test API
+   */
+  async validatePatternOnServer(pattern) {
+    const sourceId = document.getElementById("testSource").value;
+
+    if (!sourceId) {
+      // Can't validate without a source, return neutral result
+      return {
+        valid: true,
+        is_valid: true,
+        error: null,
+        syntax_valid: true,
+        fields_valid: true,
+        operators_valid: true,
+      };
     }
 
-    const [, field, operator, value] = match;
+    const testData = {
+      source_id: sourceId,
+      source_type: "stream",
+      filter_expression: pattern,
+      is_inverse: false,
+    };
 
-    // Validate field
-    const validFields = [
-      "channel_name",
-      "group_title",
-      "tvg_id",
-      "tvg_name",
-      "stream_url",
+    const response = await fetch("/api/filters/test", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(testData),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Server validation failed: ${errorText}`);
+    }
+
+    const result = await response.json();
+    return result;
+  }
+
+  /**
+   * Combine client-side and server-side validation results
+   */
+  combineValidationResults(clientValidation, serverValidation) {
+    const combined = { ...clientValidation };
+
+    // If server validation failed, add server errors
+    if (!serverValidation.is_valid && serverValidation.error) {
+      combined.valid = false;
+      combined.serverValidation = {
+        valid: false,
+        error: serverValidation.error,
+      };
+
+      // Try to extract useful information from server error
+      const errorLower = serverValidation.error.toLowerCase();
+      if (errorLower.includes("syntax")) {
+        combined.syntax.valid = false;
+        combined.syntax.errors.push(`Server: ${serverValidation.error}`);
+      } else if (
+        errorLower.includes("field") ||
+        errorLower.includes("unknown")
+      ) {
+        combined.fields.valid = false;
+        combined.fields.errors.push(`Server: ${serverValidation.error}`);
+      } else if (errorLower.includes("operator")) {
+        combined.operators.valid = false;
+        combined.operators.errors.push(`Server: ${serverValidation.error}`);
+      } else {
+        // General server error
+        combined.syntax.valid = false;
+        combined.syntax.errors.push(`Server: ${serverValidation.error}`);
+      }
+    } else {
+      combined.serverValidation = {
+        valid: true,
+        matchedChannels: serverValidation.matched_count || 0,
+        totalChannels: serverValidation.total_channels || 0,
+      };
+    }
+
+    return combined;
+  }
+
+  /**
+   * Perform comprehensive client-side validation
+   */
+  validatePatternSyntax(pattern) {
+    const result = {
+      valid: true,
+      errors: [],
+      warnings: [],
+      syntax: { valid: true, errors: [] },
+      fields: { valid: true, errors: [] },
+      operators: { valid: true, errors: [] },
+      values: { valid: true, errors: [] },
+      highlights: [], // Array of {start, end, type, message}
+    };
+
+    try {
+      // 1. Basic syntax validation
+      this.validateBasicSyntax(pattern, result);
+
+      // 2. Field validation
+      this.validateFields(pattern, result);
+
+      // 3. Operator validation
+      this.validateOperators(pattern, result);
+
+      // 4. Value validation (quotes, escaping)
+      this.validateValues(pattern, result);
+
+      // 5. Parentheses matching
+      this.validateParentheses(pattern, result);
+
+      // Determine overall validity
+      result.valid =
+        result.syntax.valid &&
+        result.fields.valid &&
+        result.operators.valid &&
+        result.values.valid;
+    } catch (error) {
+      result.valid = false;
+      result.syntax.valid = false;
+      result.syntax.errors.push(`Parse error: ${error.message}`);
+    }
+
+    return result;
+  }
+
+  /**
+   * Validate basic syntax structure
+   */
+  validateBasicSyntax(pattern, result) {
+    // Check for empty conditions
+    if (/\(\s*\)/.test(pattern)) {
+      const match = pattern.match(/\(\s*\)/);
+      result.syntax.valid = false;
+      result.syntax.errors.push("Empty parentheses are not allowed");
+      result.highlights.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        type: "error",
+        message: "Empty parentheses",
+      });
+    }
+
+    // Check for orphaned logical operators
+    const orphanedOps = pattern.match(/\b(AND|OR)\s+(AND|OR)\b/gi);
+    if (orphanedOps) {
+      orphanedOps.forEach((match) => {
+        const index = pattern.indexOf(match);
+        result.syntax.valid = false;
+        result.syntax.errors.push(`Consecutive logical operators: ${match}`);
+        result.highlights.push({
+          start: index,
+          end: index + match.length,
+          type: "error",
+          message: "Consecutive logical operators",
+        });
+      });
+    }
+
+    // Check for unmatched quotes
+    const quotes = pattern.match(/"/g);
+    if (quotes && quotes.length % 2 !== 0) {
+      const lastQuoteIndex = pattern.lastIndexOf('"');
+      result.syntax.valid = false;
+      result.syntax.errors.push("Unmatched quote - missing closing quote");
+      result.highlights.push({
+        start: lastQuoteIndex,
+        end: lastQuoteIndex + 1,
+        type: "error",
+        message: "Unmatched quote",
+      });
+    }
+
+    // Check for patterns that look like typos or common mistakes
+    const typoPatterns = [
+      { regex: /\b(contans|conatins|cotains)\b/gi, correct: "contains" },
+      { regex: /\b(equels|eqals|euals)\b/gi, correct: "equals" },
+      { regex: /\b(matchs|matche)\b/gi, correct: "matches" },
+      { regex: /\b(starts_whith|start_with)\b/gi, correct: "starts_with" },
+      { regex: /\b(ends_whith|end_with)\b/gi, correct: "ends_with" },
     ];
-    if (!validFields.includes(field)) {
-      console.warn("Invalid field:", field);
-      return null;
-    }
 
-    // Validate operator
+    typoPatterns.forEach(({ regex, correct }) => {
+      let match;
+      while ((match = regex.exec(pattern)) !== null) {
+        // Only add typo error if this word hasn't already been flagged as an invalid operator
+        const existingOperatorError = result.highlights.find(
+          (h) =>
+            h.start === match.index &&
+            h.end === match.index + match[0].length &&
+            h.message.includes("Invalid operator"),
+        );
+
+        if (!existingOperatorError) {
+          result.syntax.valid = false;
+          result.syntax.errors.push(
+            `Possible typo: "${match[0]}" - did you mean "${correct}"?`,
+          );
+          result.highlights.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            type: "error",
+            message: `Possible typo - did you mean "${correct}"?`,
+          });
+        }
+      }
+    });
+
+    // Check for missing conditions around operators
+    const invalidPatterns = [
+      /^\s*(AND|OR)/i, // Starting with operator
+      /(AND|OR)\s*$/i, // Ending with operator
+    ];
+
+    invalidPatterns.forEach((regex) => {
+      const match = pattern.match(regex);
+      if (match) {
+        result.syntax.valid = false;
+        result.syntax.errors.push(
+          `Invalid operator placement: ${match[0].trim()}`,
+        );
+        result.highlights.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          type: "error",
+          message: "Invalid operator placement",
+        });
+      }
+    });
+  }
+
+  /**
+   * Validate field names against available fields
+   */
+  validateFields(pattern, result) {
+    if (this.availableFields.length === 0) return; // Skip if fields not loaded
+
+    const validFieldNames = this.availableFields.map((f) => f.name);
+
+    // Match field names in conditions: word followed by any operator-like word
+    const fieldRegex = /\b(\w+)\s+(?:not\s+)?(?:case_sensitive\s+)?(\w+)/gi;
+    let match;
+
+    while ((match = fieldRegex.exec(pattern)) !== null) {
+      const fieldName = match[1];
+      const operator = match[2];
+
+      // Skip logical operators
+      if (
+        ["and", "or"].includes(fieldName.toLowerCase()) ||
+        ["and", "or"].includes(operator.toLowerCase())
+      ) {
+        continue;
+      }
+
+      if (!validFieldNames.includes(fieldName)) {
+        result.fields.valid = false;
+        result.fields.errors.push(`Unknown field: ${fieldName}`);
+
+        // Find the best suggestion for the field name
+        const suggestion = this.findClosestFieldName(
+          fieldName,
+          validFieldNames,
+        );
+        const suggestionText = suggestion
+          ? ` Did you mean '${suggestion}'?`
+          : "";
+
+        result.highlights.push({
+          start: match.index,
+          end: match.index + fieldName.length,
+          type: "error",
+          message: `Unknown field '${fieldName}'.${suggestionText} Valid fields: ${validFieldNames.join(", ")}`,
+        });
+      }
+    }
+  }
+
+  /**
+   * Validate operators
+   */
+  validateOperators(pattern, result) {
     const validOperators = [
       "contains",
       "equals",
@@ -950,51 +1271,425 @@ class FiltersManager {
       "ends_with",
       "not_contains",
       "not_equals",
-      "not matches",
+      "not_matches",
     ];
-    if (!validOperators.includes(operator)) {
-      console.warn("Invalid operator:", operator);
-      return null;
+
+    // Match the complete field + operator + value pattern to validate operators
+    const operatorRegex =
+      /(\w+)\s+((?:not\s+)?(?:case_sensitive\s+)?(\w+))\s+["'][^"']*["']/gi;
+    let match;
+
+    while ((match = operatorRegex.exec(pattern)) !== null) {
+      const fieldName = match[1];
+      const fullOperator = match[2];
+      const baseOperator = match[3].toLowerCase();
+
+      // Skip if this looks like a logical operator context
+      if (
+        ["and", "or"].includes(fieldName.toLowerCase()) ||
+        ["and", "or"].includes(baseOperator)
+      ) {
+        continue;
+      }
+
+      if (
+        !validOperators.includes(baseOperator) &&
+        !validOperators.includes(`not_${baseOperator}`)
+      ) {
+        result.operators.valid = false;
+        result.operators.errors.push(`Invalid operator: ${baseOperator}`);
+
+        // Find the position of just the base operator within the full operator
+        const operatorStart = match.index + match[0].indexOf(fullOperator);
+        const baseOperatorStart =
+          operatorStart + fullOperator.indexOf(match[3]);
+
+        result.highlights.push({
+          start: baseOperatorStart,
+          end: baseOperatorStart + match[3].length,
+          type: "error",
+          message: `Invalid operator '${baseOperator}'. Valid operators: ${validOperators.join(", ")}`,
+        });
+      }
     }
 
-    return {
-      field: field,
-      operator: operator,
-      value: value,
-    };
+    // Check for missing quotes after operators
+    const missingQuoteRegex =
+      /\b(?:contains|equals|matches|starts_with|ends_with)\s+([^"'\s][^\s]*)/gi;
+    let quoteMatch;
+
+    while ((quoteMatch = missingQuoteRegex.exec(pattern)) !== null) {
+      const valueStart =
+        quoteMatch.index + quoteMatch[0].indexOf(quoteMatch[1]);
+      result.operators.valid = false;
+      result.operators.errors.push(
+        `Missing quotes around value: ${quoteMatch[1]}`,
+      );
+      result.highlights.push({
+        start: valueStart,
+        end: valueStart + quoteMatch[1].length,
+        type: "error",
+        message: `Value should be quoted: "${quoteMatch[1]}"`,
+      });
+    }
   }
 
-  convertCurrentFilterToAdvanced() {
-    return this.convertPatternToAdvancedFilter();
+  /**
+   * Validate quoted values
+   */
+  validateValues(pattern, result) {
+    // Check for unmatched quotes
+    const quotes = pattern.match(/["']/g);
+    if (quotes && quotes.length % 2 !== 0) {
+      result.values.valid = false;
+      result.values.errors.push("Unmatched quotes in pattern");
+
+      // Find the last quote position
+      const lastQuotePos = pattern.lastIndexOf(quotes[quotes.length - 1]);
+      result.highlights.push({
+        start: lastQuotePos,
+        end: lastQuotePos + 1,
+        type: "error",
+        message: "Unmatched quote",
+      });
+    }
+
+    // Check for empty quoted values
+    const emptyValues = pattern.match(/['"]\s*['"]/g);
+    if (emptyValues) {
+      emptyValues.forEach((match) => {
+        const index = pattern.indexOf(match);
+        result.values.valid = false;
+        result.values.errors.push("Empty quoted value");
+        result.highlights.push({
+          start: index,
+          end: index + match.length,
+          type: "warning",
+          message: "Empty value",
+        });
+      });
+    }
   }
 
-  // loadAdvancedFilter method removed - no longer needed without visual builder
+  /**
+   * Validate parentheses matching
+   */
+  validateParentheses(pattern, result) {
+    const stack = [];
+    const positions = [];
 
-  // Populate the advanced tab with text representation of the filter
-  populateAdvancedTab(advancedFilter) {
-    const textPattern = this.convertAdvancedFilterToText(
-      typeof advancedFilter === "string"
-        ? JSON.parse(advancedFilter)
-        : advancedFilter,
+    for (let i = 0; i < pattern.length; i++) {
+      const char = pattern[i];
+      if (char === "(") {
+        stack.push(i);
+        positions.push({ pos: i, type: "open" });
+      } else if (char === ")") {
+        if (stack.length === 0) {
+          result.syntax.valid = false;
+          result.syntax.errors.push("Unmatched closing parenthesis");
+          result.highlights.push({
+            start: i,
+            end: i + 1,
+            type: "error",
+            message: "Unmatched closing parenthesis",
+          });
+        } else {
+          stack.pop();
+          positions.push({ pos: i, type: "close" });
+        }
+      }
+    }
+
+    // Check for unmatched opening parentheses
+    if (stack.length > 0) {
+      stack.forEach((pos) => {
+        result.syntax.valid = false;
+        result.syntax.errors.push("Unmatched opening parenthesis");
+        result.highlights.push({
+          start: pos,
+          end: pos + 1,
+          type: "error",
+          message: "Unmatched opening parenthesis",
+        });
+      });
+    }
+  }
+
+  /**
+   * Apply visual highlights to the textarea
+   */
+  updateValidationHighlights(textarea, validation) {
+    // Remove existing highlights
+    this.clearValidationHighlights(textarea);
+
+    // Show simple error messages below textarea instead of overlay
+    if (validation.highlights.length > 0) {
+      this.showValidationMessages(textarea, validation.highlights);
+    }
+  }
+
+  /**
+   * Clear validation highlights
+   */
+  clearValidationHighlights(textarea) {
+    const messagesContainer = document.getElementById(
+      "validation-messages-container",
     );
-    document.getElementById("filterPattern").value = textPattern;
-    this.validatePattern();
+    if (messagesContainer) {
+      messagesContainer.remove();
+    }
   }
 
-  // Visual builder methods removed - only text pattern mode remains
+  /**
+   * Show validation messages below textarea
+   */
+  showValidationMessages(textarea, highlights) {
+    // Create messages container if it doesn't exist
+    let container = document.getElementById("validation-messages-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "validation-messages-container";
+      container.className = "validation-messages-container mt-2";
+      textarea.parentNode.insertBefore(container, textarea.nextSibling);
+    }
+
+    // Deduplicate highlights by text and message
+    const uniqueHighlights = [];
+    const seen = new Set();
+
+    highlights.forEach((highlight) => {
+      const text = textarea.value.slice(highlight.start, highlight.end);
+      const key = `${text}:${highlight.message}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueHighlights.push({ ...highlight, text });
+      }
+    });
+
+    // Group highlights by type
+    const errors = uniqueHighlights.filter((h) => h.type === "error");
+    const warnings = uniqueHighlights.filter((h) => h.type === "warning");
+
+    let html = "";
+
+    if (errors.length > 0) {
+      html += `<div class="validation-message-group">`;
+      html += `<div class="validation-message-header text-danger">⚠ ${errors.length} Error${errors.length > 1 ? "s" : ""}:</div>`;
+      errors.forEach((error) => {
+        html += `<div class="validation-message-item">• "${this.escapeHtml(error.text)}" - ${this.escapeHtml(error.message)}</div>`;
+      });
+      html += `</div>`;
+    }
+
+    if (warnings.length > 0) {
+      html += `<div class="validation-message-group">`;
+      html += `<div class="validation-message-header text-warning">⚠ ${warnings.length} Warning${warnings.length > 1 ? "s" : ""}:</div>`;
+      warnings.forEach((warning) => {
+        html += `<div class="validation-message-item">• "${this.escapeHtml(warning.text)}" - ${this.escapeHtml(warning.message)}</div>`;
+      });
+      html += `</div>`;
+    }
+
+    container.innerHTML = html;
+  }
+
+  /**
+   * Find the closest field name using simple string similarity
+   */
+  findClosestFieldName(input, validFields) {
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const field of validFields) {
+      const score = this.calculateSimilarity(
+        input.toLowerCase(),
+        field.toLowerCase(),
+      );
+      if (score > bestScore && score > 0.5) {
+        // Require at least 50% similarity
+        bestScore = score;
+        bestMatch = field;
+      }
+    }
+
+    return bestMatch;
+  }
+
+  /**
+   * Calculate simple string similarity score
+   */
+  calculateSimilarity(str1, str2) {
+    if (str1 === str2) return 1;
+
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+
+    if (longer.length === 0) return 1;
+
+    // Count matching characters
+    let matches = 0;
+    for (let i = 0; i < shorter.length; i++) {
+      if (longer.includes(shorter[i])) {
+        matches++;
+      }
+    }
+
+    return matches / longer.length;
+  }
+
+  /**
+   * Update validation UI indicators
+   */
+  updateValidationUI(validation) {
+    // Update validation icons
+    this.updateValidationIcon("syntax", validation.syntax);
+    this.updateValidationIcon("fields", validation.fields);
+    this.updateValidationIcon("operators", validation.operators);
+    this.updateValidationIcon("values", validation.values);
+
+    // Update server validation status
+    this.updateServerValidationStatus(validation.serverValidation);
+
+    // Update overall status
+    const textarea = document.getElementById("filterPattern");
+    if (validation.valid) {
+      textarea.classList.remove("is-invalid");
+      textarea.classList.add("is-valid");
+    } else {
+      textarea.classList.remove("is-valid");
+      textarea.classList.add("is-invalid");
+    }
+
+    // Update test button state
+    this.updateTestButton();
+  }
+
+  /**
+   * Update server validation status indicator
+   */
+  updateServerValidationStatus(serverValidation) {
+    let statusElement = document.getElementById("server-validation-status");
+
+    if (!statusElement) {
+      // Create server validation status element
+      let container = document.getElementById("validation-icons");
+      if (!container) {
+        container = document.createElement("div");
+        container.id = "validation-icons";
+        container.className = "validation-icons mt-2";
+        const textarea = document.getElementById("filterPattern");
+        textarea.parentNode.appendChild(container);
+      }
+
+      statusElement = document.createElement("div");
+      statusElement.id = "server-validation-status";
+      statusElement.className = "server-validation-status mt-1";
+      statusElement.style.minHeight = "20px";
+      container.appendChild(statusElement);
+    }
+
+    if (!serverValidation) {
+      statusElement.innerHTML = "";
+      return;
+    }
+
+    if (serverValidation.loading) {
+      statusElement.innerHTML = `
+        <div class="d-flex align-items-center text-muted">
+          <div class="spinner-border spinner-border-sm" role="status" style="width: 10px; height: 10px; border-width: 1px;">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+        </div>
+      `;
+    } else if (serverValidation.error) {
+      statusElement.innerHTML = `
+        <div class="text-warning" style="font-size: 0.7rem; opacity: 0.8;">
+          ⚠ ${this.escapeHtml(serverValidation.error)}
+        </div>
+      `;
+    } else if (serverValidation.valid) {
+      const matchText =
+        serverValidation.matchedChannels !== undefined
+          ? ` ${serverValidation.matchedChannels}/${serverValidation.totalChannels} matches`
+          : "";
+      statusElement.innerHTML = `
+        <div class="text-success" style="font-size: 0.7rem; opacity: 0.8;">
+          ✓${matchText}
+        </div>
+      `;
+    }
+  }
+
+  /**
+   * Update individual validation icon
+   */
+  updateValidationIcon(type, validationResult) {
+    const iconId = `validation-${type}`;
+    let icon = document.getElementById(iconId);
+
+    if (!icon) {
+      // Create validation icons container if it doesn't exist
+      let container = document.getElementById("validation-icons");
+      if (!container) {
+        container = document.createElement("div");
+        container.id = "validation-icons";
+        container.className = "validation-icons mt-2";
+        const textarea = document.getElementById("filterPattern");
+        textarea.parentNode.appendChild(container);
+      }
+
+      icon = document.createElement("span");
+      icon.id = iconId;
+      icon.className = "validation-icon badge me-2";
+      container.appendChild(icon);
+    }
+
+    // Update icon appearance and content
+    icon.className = "validation-icon badge me-2";
+    const label = type.charAt(0).toUpperCase() + type.slice(1);
+
+    if (validationResult.valid) {
+      icon.classList.add("bg-success");
+      icon.textContent = `✓ ${label}`;
+      icon.title = `${label}: Valid`;
+    } else {
+      icon.classList.add("bg-danger");
+      icon.textContent = `✗ ${label}`;
+      icon.title = `${label}: ${validationResult.errors.join(", ")}`;
+    }
+
+    // Add detailed tooltips for some validators
+    if (type === "fields" && this.availableFields.length > 0) {
+      const validFields = this.availableFields.map(
+        (f) => `${f.name} (${f.display_name})`,
+      );
+      icon.title += `\n\nValid Fields:\n${validFields.join("\n")}`;
+    } else if (type === "operators") {
+      const validOperators = [
+        "contains",
+        "equals",
+        "matches",
+        "starts_with",
+        "ends_with",
+      ];
+      icon.title += `\n\nValid Operators:\n${validOperators.join("\n")}\nAdd "not " prefix for negation`;
+    }
+  }
+
+  // Pattern population methods
 
   // Populate pattern from conditions array or condition_tree
-  populateAdvancedTabFromConditions(filter) {
+  populatePatternFromFilter(filter) {
     let textPattern = "";
 
     // Try to parse condition_tree first (current format)
-    if (filter.condition_tree) {
+    if (filter.condition_tree && filter.condition_tree.trim() !== "") {
       try {
         const tree = JSON.parse(filter.condition_tree);
         textPattern = this.convertTreeToPattern(tree);
       } catch (e) {
         console.error("Failed to parse condition_tree:", e);
-        textPattern = "// Complex filter - edit in JSON format if needed";
+        textPattern = "// Invalid filter data - please reconfigure";
       }
     }
     // Fall back to conditions array (legacy format)
@@ -1006,42 +1701,81 @@ class FiltersManager {
             (f) => f.name === condition.field_name,
           );
           const fieldName = field ? field.name : condition.field_name;
-          return `${fieldName} ${condition.operator.replace("_", " ")} "${condition.value}"`;
+          // Convert database format to modifier syntax for input
+          let displayOperator = condition.operator;
+
+          // Handle not_ prefix
+          if (condition.operator.startsWith("not_")) {
+            displayOperator = `not ${condition.operator.substring(4)}`;
+          }
+          // Handle case_sensitive_ prefix
+          else if (condition.operator.startsWith("case_sensitive_")) {
+            displayOperator = `case_sensitive ${condition.operator.substring(15)}`;
+          }
+          // Handle not_case_sensitive_ prefix (both modifiers)
+          else if (condition.operator.startsWith("not_case_sensitive_")) {
+            displayOperator = `not case_sensitive ${condition.operator.substring(19)}`;
+          }
+
+          return `${fieldName} ${displayOperator} "${condition.value}"`;
         })
         .join(operator);
     }
+    // Handle legacy filters with missing condition data
+    else {
+      textPattern =
+        '// Legacy filter detected - please define a new pattern below\n// Examples:\n//   channel_name contains "sport"\n//   group_title not_contains "adult"\n//   tvg_id matches "^BBC.*"';
+      console.warn("Legacy filter found with no condition data:", filter.name);
+    }
 
     document.getElementById("filterPattern").value = textPattern;
-    this.validatePattern();
+    this.debouncedValidatePattern();
   }
 
   // Convert condition tree to natural language pattern
   convertTreeToPattern(tree) {
     if (!tree) return "";
 
+    // Handle empty or invalid tree structures
+    if (typeof tree !== "object") {
+      console.warn("Invalid tree structure - not an object:", tree);
+      return "";
+    }
+
+    // Handle tree structure with root property
+    if (tree.root && typeof tree.root === "object") {
+      return this.convertTreeToPattern(tree.root);
+    }
+
     if (tree.type === "condition") {
       const fieldName = tree.field || "field";
       let operator = tree.operator || "equals";
       const value = tree.value || "";
 
-      // Convert database operators to natural language
-      const operatorMap = {
-        matches: "matches",
-        not_matches: "not matches",
-        equals: "equals",
-        not_equals: "not equals",
-        contains: "contains",
-        not_contains: "not contains",
-        starts_with: "starts_with",
-        ends_with: "ends_with",
-      };
+      // Convert database format to modifier syntax for consistency
+      let displayOperator = operator;
 
-      const mappedOperator = operatorMap[operator] || operator;
+      // Handle not_ prefix
+      if (operator.startsWith("not_")) {
+        displayOperator = `not ${operator.substring(4)}`;
+      }
+      // Handle case_sensitive_ prefix
+      else if (operator.startsWith("case_sensitive_")) {
+        displayOperator = `case_sensitive ${operator.substring(15)}`;
+      }
+      // Handle not_case_sensitive_ prefix (both modifiers)
+      else if (operator.startsWith("not_case_sensitive_")) {
+        displayOperator = `not case_sensitive ${operator.substring(19)}`;
+      }
 
-      return `${fieldName} ${mappedOperator} "${value}"`;
+      return `${fieldName} ${displayOperator} "${value}"`;
     }
 
-    if (tree.type === "group" && tree.children) {
+    if (
+      tree.type === "group" &&
+      tree.children &&
+      Array.isArray(tree.children)
+    ) {
       const logicalOp = tree.operator === "any" ? " OR " : " AND ";
       const childPatterns = tree.children
         .map((child) => this.convertTreeToPattern(child))
@@ -1050,748 +1784,16 @@ class FiltersManager {
       if (childPatterns.length === 0) return "";
       if (childPatterns.length === 1) return childPatterns[0];
 
-      // Wrap in parentheses if multiple conditions
+      // Wrap in parentheses for grouping clarity
       return `(${childPatterns.join(logicalOp)})`;
     }
 
+    // Handle unknown tree structure
+    console.warn("Unknown tree structure:", tree);
     return "";
-  }
-
-  // Visual builder methods removed - only text pattern mode remains
-
-  // Comprehensive pattern validation
-  validatePattern() {
-    const textarea = document.getElementById("filterPattern");
-    const validationContainer = document.getElementById("patternValidation");
-
-    if (!textarea) {
-      console.warn("filterPattern element not found, skipping validation");
-      return;
-    }
-
-    const pattern = textarea.value.trim();
-
-    // Show validation container if there's content and the container exists
-    if (validationContainer) {
-      if (pattern) {
-        validationContainer.style.display = "block";
-      } else {
-        validationContainer.style.display = "none";
-        textarea.classList.remove("valid", "invalid", "warning");
-        return;
-      }
-    }
-
-    if (!pattern) {
-      textarea.classList.remove("valid", "invalid", "warning");
-      return;
-    }
-
-    const validation = this.performPatternValidation(pattern);
-    this.updateValidationUI(validation);
-  }
-
-  // Perform comprehensive validation checks
-  performPatternValidation(pattern) {
-    const result = {
-      syntax: { valid: true, messages: [] },
-      fields: { valid: true, messages: [] },
-      operators: { valid: true, messages: [] },
-      regex: { valid: true, messages: [] },
-      overall: "valid",
-    };
-
-    try {
-      // 1. Syntax validation
-      const syntaxCheck = this.validateSyntax(pattern);
-      result.syntax = syntaxCheck;
-
-      if (syntaxCheck.valid) {
-        // 2. Field validation
-        const fieldCheck = this.validateFields(pattern);
-        result.fields = fieldCheck;
-
-        // 3. Operator validation
-        const operatorCheck = this.validateOperators(pattern);
-        result.operators = operatorCheck;
-
-        // 4. Regex validation (for values using 'matches' operator)
-        const regexCheck = this.validateRegexPatterns(pattern);
-        result.regex = regexCheck;
-      }
-
-      // Determine overall status
-      if (
-        !result.syntax.valid ||
-        !result.fields.valid ||
-        !result.operators.valid
-      ) {
-        result.overall = "invalid";
-      } else if (!result.regex.valid) {
-        result.overall = "warning";
-      } else {
-        result.overall = "valid";
-      }
-    } catch (error) {
-      result.syntax.valid = false;
-      result.syntax.messages = [`Parse error: ${error.message}`];
-      result.overall = "invalid";
-    }
-
-    return result;
-  }
-
-  // Validate syntax structure
-  validateSyntax(pattern) {
-    const result = { valid: true, messages: [] };
-
-    // Check for balanced quotes
-    const singleQuotes = (pattern.match(/'/g) || []).length;
-    const doubleQuotes = (pattern.match(/"/g) || []).length;
-
-    if (singleQuotes % 2 !== 0) {
-      result.valid = false;
-      result.messages.push("Unmatched single quotes");
-    }
-    if (doubleQuotes % 2 !== 0) {
-      result.valid = false;
-      result.messages.push("Unmatched double quotes");
-    }
-
-    // Check for balanced parentheses
-    let parenCount = 0;
-    for (let i = 0; i < pattern.length; i++) {
-      if (pattern[i] === "(") parenCount++;
-      if (pattern[i] === ")") parenCount--;
-      if (parenCount < 0) {
-        result.valid = false;
-        result.messages.push("Unmatched closing parenthesis");
-        break;
-      }
-    }
-    if (parenCount > 0) {
-      result.valid = false;
-      result.messages.push("Unmatched opening parenthesis");
-    }
-
-    // If basic checks failed, don't proceed with further validation
-    if (!result.valid) {
-      return result;
-    }
-
-    // Improved validation for patterns with parentheses
-    if (pattern.includes("(") && pattern.includes(")")) {
-      // Remove parentheses ONLY outside of quoted strings to preserve regex patterns
-      let withoutParens = pattern;
-      let inQuotes = false;
-      let quoteChar = "";
-      let result_str = "";
-
-      for (let i = 0; i < pattern.length; i++) {
-        const char = pattern[i];
-        if (!inQuotes && (char === '"' || char === "'")) {
-          inQuotes = true;
-          quoteChar = char;
-          result_str += char;
-        } else if (inQuotes && char === quoteChar) {
-          inQuotes = false;
-          quoteChar = "";
-          result_str += char;
-        } else if (inQuotes) {
-          // Preserve all characters inside quotes, including parentheses
-          result_str += char;
-        } else if (char === "(" || char === ")") {
-          // Replace parentheses outside of quotes with spaces
-          result_str += " ";
-        } else {
-          result_str += char;
-        }
-      }
-      withoutParens = result_str.trim();
-
-      // Check that we have valid field operator "value" patterns with optional modifiers
-      const basicConditionPattern =
-        /(?:(?:not|case_sensitive)\s+)*\w+\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["'][^"']*["']/g;
-      const conditions = withoutParens.match(basicConditionPattern);
-
-      if (!conditions || conditions.length === 0) {
-        result.valid = false;
-        result.messages.push("No valid conditions found in pattern");
-      } else {
-        // Validate that logical operators are used correctly
-        const logicalOps = withoutParens.match(/\b(?:AND|OR)\b/gi);
-        // For complex patterns, be more lenient - just check that we have conditions
-        // The backend will handle the actual parsing
-        if (conditions.length === 0) {
-          result.valid = false;
-          result.messages.push("No valid conditions found in pattern");
-        }
-      }
-    } else {
-      // For simple patterns without parentheses, use strict validation
-      const conditionPattern =
-        /^\s*(?:(?:not|case_sensitive)\s+)*\w+\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["'][^"']*["']\s*(?:\s+(?:AND|OR)\s+(?:(?:not|case_sensitive)\s+)*\w+\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["'][^"']*["']\s*)*$/i;
-
-      if (!conditionPattern.test(pattern)) {
-        result.valid = false;
-        result.messages.push(
-          'Invalid syntax structure. Expected: [not] [case_sensitive] field_name operator "value" [AND|OR [not] [case_sensitive] field_name operator "value"]. Example: channel_name contains "sport" AND group_title not contains "adult"',
-        );
-      }
-    }
-
-    if (result.valid) {
-      result.messages.push("Syntax structure is correct");
-    }
-
-    return result;
-  }
-
-  // Validate field names
-  validateFields(pattern) {
-    const result = { valid: true, messages: [] };
-    const validFields = [
-      "channel_name",
-      "group_title",
-      "tvg_id",
-      "tvg_name",
-      "stream_url",
-    ];
-
-    // Improved regex to handle modifiers properly (modifiers can come before or after field name)
-    const fieldMatches = pattern.match(
-      /(?:(?:not|case_sensitive)\s+)*\b(\w+)\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["']/g,
-    );
-    const foundFields = new Set();
-    const invalidFields = [];
-
-    if (fieldMatches) {
-      fieldMatches.forEach((match) => {
-        // Extract field name, accounting for modifiers that might come before it
-        const parts = match.split(/\s+/);
-        let field = null;
-
-        // Find the field name (first word that's not a modifier)
-        for (const part of parts) {
-          if (
-            part !== "not" &&
-            part !== "case_sensitive" &&
-            !part.match(/^(?:contains|equals|matches|starts_with|ends_with)$/)
-          ) {
-            field = part;
-            break;
-          }
-        }
-
-        if (field) {
-          foundFields.add(field);
-          if (!validFields.includes(field)) {
-            invalidFields.push(field);
-          }
-        }
-      });
-    }
-
-    if (invalidFields.length > 0) {
-      result.valid = false;
-      result.messages.push(
-        `Invalid field(s): ${invalidFields.join(", ")}. Valid fields are: ${validFields.join(", ")}`,
-      );
-    } else if (foundFields.size > 0) {
-      result.messages.push(
-        `Using valid field(s): ${Array.from(foundFields).join(", ")}`,
-      );
-    }
-
-    return result;
-  }
-
-  // Validate operators
-  validateOperators(pattern) {
-    const result = { valid: true, messages: [] };
-    const baseOperators = [
-      "contains",
-      "equals",
-      "matches",
-      "starts_with",
-      "ends_with",
-    ];
-    const modifiers = ["not", "case_sensitive"];
-
-    // Extract operators from pattern using more flexible regex
-    const operatorMatches = pattern.match(
-      /\w+\s+((?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with))\s+["']/g,
-    );
-    const foundOperators = new Set();
-    const invalidOperators = [];
-
-    if (operatorMatches) {
-      operatorMatches.forEach((match) => {
-        // Extract the operator part (everything between field and value)
-        const parts = match.split(/\s+/);
-        const operatorPart = parts.slice(1, -1).join(" "); // Remove field and quoted value
-        foundOperators.add(operatorPart);
-
-        // Validate the operator part
-        const operatorWords = operatorPart.split(/\s+/);
-        const baseOp = operatorWords[operatorWords.length - 1]; // Last word should be base operator
-        const mods = operatorWords.slice(0, -1); // Everything before should be modifiers
-
-        let isValid = baseOperators.includes(baseOp);
-        if (isValid) {
-          // Check all modifiers are valid
-          for (const mod of mods) {
-            if (!modifiers.includes(mod)) {
-              isValid = false;
-              break;
-            }
-          }
-        }
-
-        if (!isValid) {
-          invalidOperators.push(operatorPart);
-        }
-      });
-    }
-
-    if (invalidOperators.length > 0) {
-      result.valid = false;
-      result.messages.push(
-        `Invalid operator(s): ${invalidOperators.join(", ")}. Valid operators: ${baseOperators.join(", ")}. You can add 'not' or 'case_sensitive' before operators (e.g., "not contains", "case_sensitive equals")`,
-      );
-    }
-
-    return result;
-  }
-
-  // Validate regex patterns in values
-  validateRegexPatterns(pattern) {
-    const result = { valid: true, messages: [] };
-
-    // Find all conditions with 'matches' operator
-    const matchesConditions = pattern.match(
-      /\w+\s+(?:(?:not|case_sensitive)\s+)*matches\s+["']([^"']+)["']/gi,
-    );
-    const warningRegex = [];
-    let regexCount = 0;
-
-    if (matchesConditions) {
-      matchesConditions.forEach((match) => {
-        const regexMatch = match.match(/["']([^"']+)["']/);
-        if (regexMatch) {
-          const regexPattern = regexMatch[1];
-          regexCount++;
-
-          // Check for unsupported regex features
-          if (regexPattern.includes("(?i)")) {
-            result.valid = false;
-            result.messages.push(
-              `"${regexPattern}": (?i) flag is not supported. The 'matches' operator is case-insensitive by default.`,
-            );
-          } else if (regexPattern.includes("(?")) {
-            result.valid = false;
-            result.messages.push(
-              `"${regexPattern}": Advanced regex flags are not supported by the server's regex engine.`,
-            );
-          } else {
-            // Test with Rust-compatible regex features only
-            try {
-              // Basic validation - don't try to emulate Rust regex exactly,
-              // just catch obvious syntax errors
-              new RegExp(regexPattern);
-              // Additional validation for common regex patterns that are valid in Rust
-              // Allow patterns with alternation (|), quantifiers (?*+), and character classes
-              // These are supported by the Rust regex engine
-            } catch (error) {
-              // Only mark as invalid for genuine syntax errors
-              // Don't fail on advanced regex features that might work in Rust
-              if (error.message.includes("Invalid regular expression")) {
-                result.valid = false;
-                result.messages.push(`"${regexPattern}": ${error.message}`);
-              } else {
-                // For other errors, show as warning but allow submission
-                result.messages.push(
-                  `"${regexPattern}": Warning - ${error.message}. Pattern will be validated by server.`,
-                );
-              }
-            }
-          }
-        }
-      });
-    }
-
-    if (regexCount > 0 && result.valid) {
-      result.messages.push(`${regexCount} valid regex pattern(s) found`);
-    }
-
-    return result;
-  }
-
-  // Update validation UI elements
-  updateValidationUI(validation) {
-    const textarea = document.getElementById("filterPattern");
-    const syntaxIcon = document.getElementById("syntaxIcon");
-    const fieldsIcon = document.getElementById("fieldsIcon");
-    const operatorsIcon = document.getElementById("operatorsIcon");
-    const regexIcon = document.getElementById("regexIcon");
-    const messagesContainer = document.getElementById("validationMessages");
-
-    // Update textarea styling
-    if (textarea) {
-      textarea.classList.remove("valid", "invalid", "warning");
-      textarea.classList.add(validation.overall);
-
-      // Add precise highlighting only for specific field/operator errors
-      // Don't highlight for general syntax issues
-      if (
-        validation.overall === "invalid" &&
-        (!validation.fields.valid ||
-          !validation.operators.valid ||
-          !validation.regex.valid)
-      ) {
-        this.addPreciseHighlighting(textarea, validation);
-      } else {
-        this.removePreciseHighlighting(textarea);
-      }
-    }
-
-    // Update validation icons (only if they exist)
-    if (syntaxIcon || fieldsIcon || operatorsIcon || regexIcon) {
-      this.updateValidationIcon(syntaxIcon, validation.syntax, "Syntax");
-      this.updateValidationIcon(fieldsIcon, validation.fields, "Fields");
-      this.updateValidationIcon(
-        operatorsIcon,
-        validation.operators,
-        "Operators",
-      );
-      this.updateValidationIcon(regexIcon, validation.regex, "Regex");
-    }
-
-    // Update messages (only if container exists)
-    if (!messagesContainer) {
-      // Silently skip if validation messages container doesn't exist
-      return;
-    }
-
-    messagesContainer.innerHTML = "";
-
-    const allMessages = [
-      ...validation.syntax.messages,
-      ...validation.fields.messages,
-      ...validation.operators.messages,
-      ...validation.regex.messages,
-    ];
-
-    allMessages.forEach((message) => {
-      const messageDiv = document.createElement("div");
-      messageDiv.className = "validation-message";
-
-      if (message.includes("Invalid") || message.includes("error")) {
-        messageDiv.classList.add("error");
-      } else if (
-        message.includes("pattern(s) validated") ||
-        message.includes("correct") ||
-        message.includes("Using")
-      ) {
-        messageDiv.classList.add("success");
-      } else {
-        messageDiv.classList.add("warning");
-      }
-
-      messageDiv.textContent = message;
-      messagesContainer.appendChild(messageDiv);
-    });
-
-    // Show overall status if no specific messages
-    if (allMessages.length === 0) {
-      const messageDiv = document.createElement("div");
-      messageDiv.className = "validation-message success";
-      messageDiv.textContent = "Pattern is valid and ready to use";
-      messagesContainer.appendChild(messageDiv);
-    }
-  }
-
-  // Update individual validation icon
-  updateValidationIcon(icon, validation, label) {
-    if (!icon) return; // Skip if element doesn't exist
-
-    icon.classList.remove("valid", "invalid", "warning");
-    icon.textContent = label;
-
-    if (validation.valid) {
-      icon.classList.add("valid");
-      icon.title = `${label}: Valid`;
-    } else {
-      icon.classList.add("invalid");
-      icon.title = `${label}: ${validation.messages[0] || "Invalid"}`;
-    }
-  }
-
-  // Add precise highlighting for validation errors
-  addPreciseHighlighting(textarea, validation) {
-    this.removePreciseHighlighting(textarea);
-
-    const pattern = textarea.value;
-    const invalidRanges = this.findInvalidRanges(pattern, validation);
-
-    if (invalidRanges.length === 0) {
-      // No specific errors found, don't highlight anything
-      return;
-    }
-
-    // Create wrapper if it doesn't exist
-    let wrapper = textarea.parentNode;
-    if (!wrapper.classList.contains("validation-wrapper")) {
-      const newWrapper = document.createElement("div");
-      newWrapper.className = "validation-wrapper";
-      newWrapper.style.position = "relative";
-      textarea.parentNode.insertBefore(newWrapper, textarea);
-      newWrapper.appendChild(textarea);
-      wrapper = newWrapper;
-    }
-
-    // Create overlay for highlighting
-    const overlay = document.createElement("div");
-    overlay.className = "validation-overlay";
-    overlay.style.cssText = `
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      font-family: ${getComputedStyle(textarea).fontFamily};
-      font-size: ${getComputedStyle(textarea).fontSize};
-      line-height: ${getComputedStyle(textarea).lineHeight};
-      padding: ${getComputedStyle(textarea).padding};
-      border: ${getComputedStyle(textarea).borderWidth} solid transparent;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-      overflow: hidden;
-      color: transparent;
-      z-index: 1;
-      background: transparent;
-    `;
-
-    // Build highlighted content
-    let highlightedContent = "";
-    let lastIndex = 0;
-
-    for (const range of invalidRanges) {
-      // Add normal text before error (with pointer-events: none)
-      highlightedContent += `<span style="pointer-events: none;">${this.escapeHtml(
-        pattern.substring(lastIndex, range.start),
-      )}</span>`;
-
-      // Add highlighted error text with tooltip
-      highlightedContent += `<span class="error-highlight" title="${this.escapeHtml(range.message)}" style="cursor: help; position: relative; pointer-events: auto;" data-tooltip="${this.escapeHtml(range.message)}">${this.escapeHtml(pattern.substring(range.start, range.end))}</span>`;
-
-      lastIndex = range.end;
-    }
-
-    // Add remaining text (with pointer-events: none)
-    highlightedContent += `<span style="pointer-events: none;">${this.escapeHtml(pattern.substring(lastIndex))}</span>`;
-
-    overlay.innerHTML = highlightedContent;
-    wrapper.appendChild(overlay);
-
-    // Add hover and click events for tooltips
-    overlay.addEventListener("mouseover", (e) => {
-      if (e.target.classList.contains("error-highlight")) {
-        const message = e.target.getAttribute("data-tooltip");
-        if (message) {
-          this.showTooltip(e.target, message);
-        }
-      }
-    });
-
-    overlay.addEventListener("mouseout", (e) => {
-      if (e.target.classList.contains("error-highlight")) {
-        this.hideTooltip();
-      }
-    });
-
-    overlay.addEventListener("click", (e) => {
-      if (e.target.classList.contains("error-highlight")) {
-        e.preventDefault();
-        e.stopPropagation();
-        const message = e.target.getAttribute("data-tooltip");
-        if (message) {
-          this.showTooltip(e.target, message, true); // persistent tooltip
-        }
-      }
-    });
-  }
-
-  // Remove precise highlighting
-  removePreciseHighlighting(textarea) {
-    textarea.classList.remove("invalid-syntax-blue");
-
-    const wrapper = textarea.parentNode;
-    if (wrapper && wrapper.classList.contains("validation-wrapper")) {
-      const overlay = wrapper.querySelector(".validation-overlay");
-      if (overlay) {
-        overlay.remove();
-      }
-    }
-  }
-
-  // Find invalid text ranges for highlighting
-  findInvalidRanges(pattern, validation) {
-    const ranges = [];
-
-    // Only find ranges if there are actual validation errors
-    // Don't highlight anything if it's just a syntax structure issue with parentheses
-    if (validation.syntax.valid) {
-      // Find invalid operators
-      if (!validation.operators.valid) {
-        const baseOperators = [
-          "contains",
-          "equals",
-          "matches",
-          "starts_with",
-          "ends_with",
-        ];
-        const modifiers = ["not", "case_sensitive"];
-
-        const operatorRegex =
-          /(?:(?:not|case_sensitive)\s+)*\b(\w+)\s+((?:(?:not|case_sensitive)\s+)*(\w+(?:_\w+)*))\s+["'][^"']*["']/g;
-        let match;
-
-        while ((match = operatorRegex.exec(pattern)) !== null) {
-          const operatorPart = match[2];
-          const operatorWords = operatorPart.split(/\s+/);
-          const baseOp = operatorWords[operatorWords.length - 1];
-          const mods = operatorWords.slice(0, -1);
-
-          let isValid = baseOperators.includes(baseOp);
-          if (isValid) {
-            for (const mod of mods) {
-              if (!modifiers.includes(mod)) {
-                isValid = false;
-                break;
-              }
-            }
-          }
-
-          if (!isValid) {
-            const operatorStart = match.index + match[1].length + 1;
-            ranges.push({
-              start: operatorStart,
-              end: operatorStart + operatorPart.length,
-              message: `Invalid operator: "${operatorPart}". Valid operators: contains, equals, matches, starts_with, ends_with. You can prefix with 'not' or 'case_sensitive' (e.g., "not contains", "case_sensitive equals")`,
-            });
-          }
-        }
-      }
-
-      // Find invalid fields
-      if (!validation.fields.valid) {
-        const validFields = [
-          "channel_name",
-          "group_title",
-          "tvg_id",
-          "tvg_name",
-          "stream_url",
-        ];
-        const fieldRegex =
-          /(?:(?:not|case_sensitive)\s+)*(\w+)\s+(?:(?:not|case_sensitive)\s+)*(?:contains|equals|matches|starts_with|ends_with)\s+["']/g;
-        let match;
-
-        while ((match = fieldRegex.exec(pattern)) !== null) {
-          const fullMatch = match[0];
-          const field = match[1];
-
-          if (!validFields.includes(field)) {
-            // Find the actual position of the field name within the match
-            const fieldStartInMatch = fullMatch.indexOf(field);
-            const fieldStart = match.index + fieldStartInMatch;
-
-            ranges.push({
-              start: fieldStart,
-              end: fieldStart + field.length,
-              message: `Invalid field: "${field}". Valid fields are: ${validFields.join(", ")}`,
-            });
-          }
-        }
-      }
-    }
-
-    // Sort ranges by start position
-    ranges.sort((a, b) => a.start - b.start);
-    return ranges;
-  }
-
-  // Show a temporary tooltip for better mobile/accessibility support
-  showTooltip(element, message, persistent = false) {
-    // Remove any existing tooltips
-    this.hideTooltip();
-
-    // Create tooltip element
-    const tooltip = document.createElement("div");
-    tooltip.className = "validation-tooltip";
-    tooltip.textContent = message;
-    tooltip.style.cssText = `
-      position: absolute;
-      background: #333;
-      color: white;
-      padding: 8px 12px;
-      border-radius: 4px;
-      font-size: 12px;
-      z-index: 1000;
-      pointer-events: none;
-      max-width: 300px;
-      word-wrap: break-word;
-      white-space: normal;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      opacity: 0;
-      transition: opacity 0.2s ease-in;
-    `;
-
-    // Position tooltip
-    document.body.appendChild(tooltip);
-    const rect = element.getBoundingClientRect();
-    const tooltipRect = tooltip.getBoundingClientRect();
-
-    tooltip.style.left =
-      Math.max(10, rect.left + rect.width / 2 - tooltipRect.width / 2) + "px";
-    tooltip.style.top = rect.top - tooltipRect.height - 8 + "px";
-
-    // Fade in
-    requestAnimationFrame(() => {
-      tooltip.style.opacity = "1";
-    });
-
-    // Store reference for cleanup
-    this.currentTooltip = tooltip;
-
-    // Auto-remove tooltip after delay (unless persistent)
-    if (!persistent) {
-      this.tooltipTimeout = setTimeout(() => {
-        this.hideTooltip();
-      }, 3000);
-    }
-  }
-
-  // Hide tooltip
-  hideTooltip() {
-    if (this.currentTooltip) {
-      this.currentTooltip.style.opacity = "0";
-      setTimeout(() => {
-        if (this.currentTooltip && this.currentTooltip.parentNode) {
-          this.currentTooltip.remove();
-        }
-        this.currentTooltip = null;
-      }, 200);
-    }
-    if (this.tooltipTimeout) {
-      clearTimeout(this.tooltipTimeout);
-      this.tooltipTimeout = null;
-    }
   }
 }
 
-// Initialize the filters manager when the page loads
 let filtersManager;
 
 async function initializeFiltersManager() {
@@ -1816,3 +1818,30 @@ if (document.readyState === "loading") {
 function showFilterExamples() {
   filtersManager.showExamplesModal();
 }
+
+// Debug function for validation highlighting (console: testValidationHighlighting())
+window.testValidationHighlighting = function () {
+  if (!filtersManager || !document.getElementById("filterPattern")) {
+    console.error("Open a filter modal first");
+    return;
+  }
+
+  const tests = [
+    'channel_name contans "test"',
+    'invalid_field contains "test"',
+    "channel_name contains test",
+    'channel_name contains "test',
+    '() AND channel_name contains "test"',
+  ];
+
+  tests.forEach((pattern, i) => {
+    const textarea = document.getElementById("filterPattern");
+    textarea.value = pattern;
+    const result = filtersManager.validatePatternSyntax(pattern);
+    console.log(
+      `${i + 1}. "${pattern}" → ${result.highlights.length} highlights`,
+    );
+    if (result.highlights.length > 0)
+      filtersManager.updateValidationHighlights(textarea, result);
+  });
+};

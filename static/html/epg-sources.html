@@ -4,7 +4,10 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>EPG Sources - M3U Proxy</title>
-        <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>" />
+        <link
+            rel="icon"
+            href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>"
+        />
         <link rel="stylesheet" href="/static/css/main.css" />
     </head>
     <body>
@@ -95,7 +98,9 @@
                                 required
                             >
                                 <option value="xmltv">XMLTV File/URL</option>
-                                <option value="xtream">Xtream Codes</option>
+                                <option value="xtream" selected>
+                                    Xtream Codes
+                                </option>
                             </select>
                         </div>
 
@@ -308,7 +313,6 @@
                 </div>
             </div>
         </div>
-
 
         <!-- EPG Viewer Modal -->
         <div id="epgViewerModal" class="modal epg-viewer-modal">

@@ -297,7 +297,7 @@ pub enum FilterOperator {
     NotContains, // Does not contain
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 pub enum LogicalOperator {
     #[serde(rename = "and")]
@@ -354,6 +354,15 @@ pub enum ExtendedExpression {
         condition: ConditionTree,
         actions: Vec<Action>,
     },
+    #[serde(rename = "conditional_action_groups")]
+    ConditionalActionGroups(Vec<ConditionalActionGroup>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConditionalActionGroup {
+    pub conditions: ConditionTree,
+    pub actions: Vec<Action>,
+    pub logical_operator: Option<LogicalOperator>, // AND/OR with next group
 }
 
 // Individual action within a SET clause

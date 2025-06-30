@@ -262,6 +262,7 @@ pub struct FilterTestResult {
     pub matching_channels: Vec<FilterTestChannel>,
     pub total_channels: usize,
     pub matched_count: usize,
+    pub expression_tree: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

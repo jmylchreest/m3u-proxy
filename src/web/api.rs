@@ -3137,8 +3137,8 @@ fn format_condition_tree_for_display(tree: &crate::models::ConditionTree) -> Str
     format_condition_node_for_display(&tree.root, 0)
 }
 
-/// Generate JSON representation of condition tree for frontend rendering
-fn generate_expression_tree_json(tree: &crate::models::ConditionTree) -> serde_json::Value {
+/// Generate JSON representation of condition tree for frontend rendering (shared by data mapping and filters)
+pub fn generate_expression_tree_json(tree: &crate::models::ConditionTree) -> serde_json::Value {
     generate_condition_node_json(&tree.root)
 }
 
@@ -3178,6 +3178,7 @@ fn generate_condition_node_json(node: &crate::models::ConditionNode) -> serde_js
         }
     }
 }
+
 
 /// Format a condition node for human-readable display
 fn format_condition_node_for_display(node: &crate::models::ConditionNode, depth: usize) -> String {

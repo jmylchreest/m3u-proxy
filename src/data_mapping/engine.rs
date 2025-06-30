@@ -351,10 +351,10 @@ impl DataMappingEngine {
                         // Handle capture group substitution ($1, $2, etc.)
                         // Check if this contains capture group references
                         if val.contains('$') && Regex::new(r"\$\d+").unwrap().is_match(val) {
-                            let (_resolved_value, capture_info) =
+                            let (resolved_value, capture_info) =
                                 self.substitute_capture_groups(val, captures);
-                            // Store template as the value and resolved info in capture_info
-                            (val.clone(), capture_info)
+                            // Store resolved value and capture info
+                            (resolved_value, capture_info)
                         } else {
                             (val.clone(), None)
                         }
@@ -1092,9 +1092,10 @@ impl DataMappingEngine {
         let capture_description = if !has_substitutions {
             None
         } else {
-            // Format: (value: 'resolved_value', $1='val1', $2='')
+            // Format: template (value: 'resolved_value', $1='val1', $2='')
             Some(format!(
-                "(value: '{}', {})",
+                "{} (value: '{}', {})",
+                input,  // Original template
                 result, // Resolved value
                 individual_captures.join(", ")
             ))

@@ -627,6 +627,11 @@ class FiltersManager {
       </div>
     `;
 
+    // Add expression tree if available
+    if (result.expression_tree) {
+      resultsHtml += this.generateFilterExpressionTreeHtml(result.expression_tree);
+    }
+
     if (result.matching_channels && result.matching_channels.length > 0) {
       resultsHtml += `
         <div class="test-results-channels">
@@ -1790,6 +1795,74 @@ class FiltersManager {
 
     // Handle unknown tree structure
     console.warn("Unknown tree structure:", tree);
+    return "";
+  }
+
+  generateFilterExpressionTreeHtml(expression_tree) {
+    if (!expression_tree) return "";
+    
+    try {
+      return `
+        <div class="expression-tree-container mt-3">
+          <div class="expression-tree-header">
+            <h6>🌳 Logical Structure</h6>
+          </div>
+          <div class="expression-tree">
+            ${this.renderFilterTreeNode(expression_tree, 0)}
+          </div>
+        </div>
+      `;
+    } catch (error) {
+      console.warn("Failed to render filter expression tree:", error);
+      return "";
+    }
+  }
+
+  renderFilterTreeNode(node, depth = 0) {
+    if (!node) return "";
+
+    const indent = "  ".repeat(depth);
+
+    if (node.type === "group") {
+      let html = `<div class="tree-node tree-operator">${indent}${node.operator}</div>`;
+
+      if (node.children && node.children.length > 0) {
+        node.children.forEach((child, index) => {
+          const isLast = index === node.children.length - 1;
+          const connector = isLast ? "└── " : "├── ";
+          
+          if (child.type === "group") {
+            html += `<div class="tree-node tree-operator">${indent}${connector}${child.operator}</div>`;
+            if (child.children && child.children.length > 0) {
+              child.children.forEach((grandchild, grandIndex) => {
+                const isLastGrand = grandIndex === child.children.length - 1;
+                const grandConnector = isLastGrand ? "└── " : "├── ";
+                const grandIndent = "  ".repeat(depth + 1);
+                
+                if (grandchild.type === "group") {
+                  html += this.renderFilterTreeNode(grandchild, depth + 2);
+                } else {
+                  const negatePrefix = grandchild.negate ? "NOT " : "";
+                  const caseDisplay = grandchild.case_sensitive ? " (case-sensitive)" : " (case-insensitive)";
+                  html += `<div class="tree-node tree-condition">${grandIndent}${grandConnector}(${this.escapeHtml(grandchild.field)} ${negatePrefix}${grandchild.operator} "${this.escapeHtml(grandchild.value)}"${caseDisplay})</div>`;
+                }
+              });
+            }
+          } else {
+            const negatePrefix = child.negate ? "NOT " : "";
+            const caseDisplay = child.case_sensitive ? " (case-sensitive)" : " (case-insensitive)";
+            html += `<div class="tree-node tree-condition">${indent}${connector}(${this.escapeHtml(child.field)} ${negatePrefix}${child.operator} "${this.escapeHtml(child.value)}"${caseDisplay})</div>`;
+          }
+        });
+      }
+
+      return html;
+    } else if (node.type === "condition") {
+      const negatePrefix = node.negate ? "NOT " : "";
+      const caseDisplay = node.case_sensitive ? " (case-sensitive)" : " (case-insensitive)";
+      return `<div class="tree-node tree-condition">${indent}(${this.escapeHtml(node.field)} ${negatePrefix}${node.operator} "${this.escapeHtml(node.value)}"${caseDisplay})</div>`;
+    }
+
     return "";
   }
 }

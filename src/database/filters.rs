@@ -246,6 +246,7 @@ impl super::Database {
                     matching_channels: vec![],
                     total_channels: 0,
                     matched_count: 0,
+                    expression_tree: None,
                 });
             }
         };
@@ -326,11 +327,15 @@ impl super::Database {
                     matching_channels: vec![],
                     total_channels,
                     matched_count: 0,
+                    expression_tree: None,
                 });
             }
         };
 
         let matched_count = matching_channels.len();
+
+        // Generate expression tree for frontend
+        let expression_tree = crate::web::api::generate_expression_tree_json(&condition_tree);
 
         Ok(FilterTestResult {
             is_valid: true,
@@ -338,6 +343,7 @@ impl super::Database {
             matching_channels,
             total_channels,
             matched_count,
+            expression_tree: Some(expression_tree),
         })
     }
 

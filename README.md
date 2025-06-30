@@ -716,6 +716,67 @@ Use the **preview functionality** to test your data mapping rules:
 
 The preview shows exactly what will appear in your final M3U and XMLTV output.
 
+### Advanced Expression Features
+
+The data mapping system includes several advanced features for sophisticated metadata transformation:
+
+#### Conditional Assignment Operator (?=)
+
+The `?=` operator sets a value only if the target field is currently empty or null:
+
+```json
+{
+  "name": "Set default group for ungrouped channels",
+  "expression": "group_title ?= \"General\""
+}
+```
+
+This is particularly useful for:
+- Setting fallback values for missing metadata
+- Providing defaults without overwriting existing data
+- Creating conditional transformations based on field presence
+
+#### Enhanced Regex Capture Groups
+
+When using regex patterns with capture groups, the system provides detailed information about substitutions:
+
+```json
+{
+  "name": "Extract and reformat channel numbers",
+  "expression": "channel_name matches \"^(\\d+)\\s*-\\s*(.+)\" SET tvg_shift = \"$1$2\""
+}
+```
+
+**Capture Group Display**: The preview shows both the template and resolved values:
+- Template: `$1$2`
+- Resolved value: `HD24`
+- Individual captures: `$1='HD', $2='24'`
+
+This enhanced display helps debug regex patterns and understand exactly how capture groups are being processed.
+
+#### Hierarchical Expression Trees
+
+The rule preview displays logical expressions as hierarchical trees with operators as parent nodes:
+
+```
+AND
+├── channel_name contains "HD"
+└── OR
+    ├── group_title equals "Movies"
+    └── group_title equals "Sports"
+```
+
+This visualization makes complex conditional logic easier to understand and debug.
+
+#### Performance Metrics
+
+The system tracks execution time for each rule, helping identify performance bottlenecks:
+- **Execution Time**: Microsecond-precision timing per rule
+- **Match Statistics**: Number of channels affected by each rule
+- **Detailed Metrics**: Available in the rule preview modal
+
+These metrics are especially valuable when optimizing large rule sets or working with high-volume channel data.
+
 ## Stream Proxy Setup
 
 1. Create a new Stream Proxy

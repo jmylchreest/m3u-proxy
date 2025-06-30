@@ -297,6 +297,21 @@ pub enum FilterOperator {
     NotContains, // Does not contain
 }
 
+impl std::fmt::Display for FilterOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FilterOperator::Matches => write!(f, "matches"),
+            FilterOperator::Equals => write!(f, "equals"),
+            FilterOperator::Contains => write!(f, "contains"),
+            FilterOperator::StartsWith => write!(f, "starts_with"),
+            FilterOperator::EndsWith => write!(f, "ends_with"),
+            FilterOperator::NotMatches => write!(f, "not_matches"),
+            FilterOperator::NotEquals => write!(f, "not_equals"),
+            FilterOperator::NotContains => write!(f, "not_contains"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 pub enum LogicalOperator {
@@ -304,14 +319,27 @@ pub enum LogicalOperator {
     And,
     #[serde(rename = "or")]
     Or,
+    /// @deprecated Use And instead. Kept for backward compatibility.
     #[serde(rename = "all")]
     All,
+    /// @deprecated Use Or instead. Kept for backward compatibility.
     #[serde(rename = "any")]
     Any,
 }
 
+impl std::fmt::Display for LogicalOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogicalOperator::And => write!(f, "and"),
+            LogicalOperator::Or => write!(f, "or"),
+            LogicalOperator::All => write!(f, "all"),
+            LogicalOperator::Any => write!(f, "any"),
+        }
+    }
+}
+
 impl LogicalOperator {
-    /// Checks if this is an AND-like operator (And or All)
+    /// Checks if this is an AND-like operator (And or deprecated All)
     pub fn is_and_like(&self) -> bool {
         matches!(self, LogicalOperator::And | LogicalOperator::All)
     }
@@ -380,9 +408,11 @@ pub enum ActionOperator {
     #[serde(rename = "set")]
     Set, // = (overwrite)
 
+    #[serde(rename = "set_if_empty")]
+    SetIfEmpty, // ?= (conditional set - only if current value is empty/null)
+
     #[serde(rename = "append")]
     Append, // += (append with space)
-
 
     #[serde(rename = "remove")]
     Remove, // -= (remove substring)

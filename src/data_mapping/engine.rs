@@ -99,7 +99,7 @@ impl DataMappingEngine {
     ) -> Result<(Vec<MappedChannel>, HashMap<Uuid, (u128, u128, usize)>), Box<dyn std::error::Error>>
     {
         let start_time = Instant::now();
-        let performance_stats = HashMap::new();
+        let mut performance_stats: HashMap<Uuid, (u128, u128, usize)> = HashMap::new();
         let mut mapped_channels = Vec::with_capacity(channels.len());
 
         if self.config.enable_performance_logging {
@@ -112,9 +112,23 @@ impl DataMappingEngine {
 
         // Process each channel
         for channel in channels {
-            let channel_result =
-                self.apply_rules_to_channel(channel, &rules, &logo_assets, base_url)?;
+            let (channel_result, rule_timings) =
+                self.apply_rules_to_channel_with_timing(channel, &rules, &logo_assets, base_url)?;
             mapped_channels.push(channel_result);
+
+            // Aggregate timing statistics per rule
+            for (rule_id, execution_time_micros) in rule_timings {
+                let entry = performance_stats.entry(rule_id).or_insert((0, 0, 0));
+                entry.0 += execution_time_micros; // total_execution_time
+                entry.2 += 1; // processed_count (number of channels this rule was applied to)
+            }
+        }
+
+        // Calculate average execution times
+        for (_, stats) in performance_stats.iter_mut() {
+            if stats.2 > 0 {
+                stats.1 = stats.0 / stats.2 as u128; // avg_execution_time = total / count
+            }
         }
 
         let total_duration = start_time.elapsed();
@@ -130,14 +144,14 @@ impl DataMappingEngine {
         Ok((mapped_channels, performance_stats))
     }
 
-    /// Apply rules to a single channel
-    fn apply_rules_to_channel(
+    /// Apply rules to a single channel with timing measurements
+    fn apply_rules_to_channel_with_timing(
         &mut self,
         channel: Channel,
         rules: &[DataMappingRule],
-        _logo_assets: &HashMap<Uuid, LogoAsset>,
-        _base_url: &str,
-    ) -> Result<MappedChannel, Box<dyn std::error::Error>> {
+        logo_assets: &HashMap<Uuid, LogoAsset>,
+        base_url: &str,
+    ) -> Result<(MappedChannel, Vec<(Uuid, u128)>), Box<dyn std::error::Error>> {
         let mut mapped = MappedChannel {
             original: channel.clone(),
             mapped_tvg_id: channel.tvg_id.clone(),
@@ -148,7 +162,10 @@ impl DataMappingEngine {
             mapped_channel_name: channel.channel_name.clone(),
             applied_rules: Vec::new(),
             is_removed: false,
+            capture_group_values: HashMap::new(),
         };
+
+        let mut rule_timings = Vec::new();
 
         // Apply each rule
         for rule in rules.iter() {
@@ -159,29 +176,572 @@ impl DataMappingEngine {
             // Only process rules for the correct source type
             if rule.source_type == DataMappingSourceType::Stream {
                 if let Some(expression) = &rule.expression {
-                    let conditions_match = self.evaluate_expression_for_channel(
-                        &mapped.original,
+                    let rule_start = Instant::now();
+
+                    let applied = self.apply_rule_expression_to_channel(
+                        &mut mapped,
                         expression,
                         &rule.source_type,
+                        rule,
+                        logo_assets,
+                        base_url,
                     )?;
 
-                    if conditions_match {
-                        // Rule matched - mark as applied
-                        mapped.applied_rules.push(rule.name.clone());
+                    let rule_duration = rule_start.elapsed();
+                    let rule_micros = rule_duration.as_micros();
 
+                    // Only record timing if the rule was actually evaluated (regardless of match)
+                    rule_timings.push((rule.id, rule_micros));
+
+                    if applied {
                         debug!(
-                            "Rule '{}' matched for channel '{}'",
-                            rule.name, mapped.original.channel_name
+                            "Rule '{}' applied to channel '{}' in {}μs",
+                            rule.name, mapped.original.channel_name, rule_micros
                         );
                     }
                 }
             }
         }
 
+        Ok((mapped, rule_timings))
+    }
+
+    /// Apply rules to a single channel (legacy method without timing)
+    fn apply_rules_to_channel(
+        &mut self,
+        channel: Channel,
+        rules: &[DataMappingRule],
+        logo_assets: &HashMap<Uuid, LogoAsset>,
+        base_url: &str,
+    ) -> Result<MappedChannel, Box<dyn std::error::Error>> {
+        let (mapped, _) =
+            self.apply_rules_to_channel_with_timing(channel, rules, logo_assets, base_url)?;
         Ok(mapped)
     }
 
-    /// Evaluate an expression for a channel
+    /// Apply rule expression to channel and return whether any changes were made
+    fn apply_rule_expression_to_channel(
+        &mut self,
+        mapped_channel: &mut MappedChannel,
+        expression: &str,
+        source_type: &DataMappingSourceType,
+        rule: &DataMappingRule,
+        logo_assets: &HashMap<Uuid, LogoAsset>,
+        base_url: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        // Get available fields for this source type
+        let available_fields = match source_type {
+            DataMappingSourceType::Stream => vec![
+                "tvg_id".to_string(),
+                "tvg_name".to_string(),
+                "tvg_logo".to_string(),
+                "tvg_shift".to_string(),
+                "group_title".to_string(),
+                "channel_name".to_string(),
+            ],
+            DataMappingSourceType::Epg => vec![
+                "channel_id".to_string(),
+                "channel_name".to_string(),
+                "channel_logo".to_string(),
+                "channel_group".to_string(),
+                "language".to_string(),
+            ],
+        };
+
+        // Parse the expression using the filter parser
+        let parser = FilterParser::new().with_fields(available_fields);
+        let parsed = parser.parse_extended(expression)?;
+
+        // Apply the expression based on its type
+        match parsed {
+            ExtendedExpression::ConditionOnly(condition_tree) => {
+                // Just evaluate conditions, no actions to apply
+                let mut captures = RegexCaptures::new();
+                let matches = self.evaluate_condition_tree_for_channel(
+                    &mapped_channel.original,
+                    &condition_tree,
+                    &mut captures,
+                )?;
+                if matches {
+                    mapped_channel.applied_rules.push(rule.name.clone());
+                }
+                Ok(matches)
+            }
+            ExtendedExpression::ConditionWithActions { condition, actions } => {
+                // Evaluate condition and apply actions if it matches
+                let mut captures = RegexCaptures::new();
+                let matches = self.evaluate_condition_tree_for_channel(
+                    &mapped_channel.original,
+                    &condition,
+                    &mut captures,
+                )?;
+                if matches {
+                    mapped_channel.applied_rules.push(rule.name.clone());
+                    self.apply_actions_to_channel_with_captures(
+                        mapped_channel,
+                        &actions,
+                        &captures,
+                        logo_assets,
+                        base_url,
+                        &rule.name,
+                    )?;
+                }
+                Ok(matches)
+            }
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                let mut any_applied = false;
+
+                // Apply each conditional action group
+                for group in groups {
+                    let mut captures = RegexCaptures::new();
+                    let matches = self.evaluate_condition_tree_for_channel(
+                        &mapped_channel.original,
+                        &group.conditions,
+                        &mut captures,
+                    )?;
+                    if matches {
+                        if !any_applied {
+                            mapped_channel.applied_rules.push(rule.name.clone());
+                        }
+                        self.apply_actions_to_channel_with_captures(
+                            mapped_channel,
+                            &group.actions,
+                            &captures,
+                            logo_assets,
+                            base_url,
+                            &rule.name,
+                        )?;
+                        any_applied = true;
+                    }
+                }
+
+                Ok(any_applied)
+            }
+        }
+    }
+
+    /// Apply a list of actions to a mapped channel with capture group substitution
+    fn apply_actions_to_channel_with_captures(
+        &mut self,
+        mapped_channel: &mut MappedChannel,
+        actions: &[crate::models::Action],
+        captures: &RegexCaptures,
+        logo_assets: &HashMap<Uuid, LogoAsset>,
+        base_url: &str,
+        rule_name: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::models::{ActionOperator, ActionValue};
+
+        for action in actions {
+            let field_name = &action.field;
+            let (value, capture_used) = match &action.value {
+                ActionValue::Literal(val) => {
+                    // Handle @logo: references
+                    if val.starts_with("@logo:") {
+                        if let Ok(logo_uuid) = uuid::Uuid::parse_str(&val[6..]) {
+                            if let Some(_logo_asset) = logo_assets.get(&logo_uuid) {
+                                (crate::utils::generate_logo_url(base_url, logo_uuid), None)
+                            } else {
+                                (val.clone(), None)
+                            }
+                        } else {
+                            (val.clone(), None)
+                        }
+                    } else {
+                        // Handle capture group substitution ($1, $2, etc.)
+                        // Check if this contains capture group references
+                        if val.contains('$') && Regex::new(r"\$\d+").unwrap().is_match(val) {
+                            let (_resolved_value, capture_info) =
+                                self.substitute_capture_groups(val, captures);
+                            // Store template as the value and resolved info in capture_info
+                            (val.clone(), capture_info)
+                        } else {
+                            (val.clone(), None)
+                        }
+                    }
+                }
+                ActionValue::Function(_) => {
+                    // Functions not implemented yet
+                    continue;
+                }
+                ActionValue::Variable(var_ref) => {
+                    // Get value from another field
+                    let value = self
+                        .get_field_value(&mapped_channel.original, &var_ref.field_name)
+                        .unwrap_or_default();
+                    (value, None)
+                }
+            };
+
+            // Store capture group information if used
+            if let Some(capture_info) = capture_used {
+                mapped_channel
+                    .capture_group_values
+                    .entry(rule_name.to_string())
+                    .or_insert_with(HashMap::new)
+                    .insert(field_name.clone(), capture_info);
+            }
+
+            // Apply the action based on operator and field
+            match action.operator {
+                ActionOperator::Set => {
+                    match field_name.as_str() {
+                        "tvg_id" => mapped_channel.mapped_tvg_id = Some(value),
+                        "tvg_name" => mapped_channel.mapped_tvg_name = Some(value),
+                        "tvg_logo" => mapped_channel.mapped_tvg_logo = Some(value),
+                        "tvg_shift" => mapped_channel.mapped_tvg_shift = Some(value),
+                        "group_title" => mapped_channel.mapped_group_title = Some(value),
+                        "channel_name" => mapped_channel.mapped_channel_name = value,
+                        _ => {} // Unknown field
+                    }
+                }
+                ActionOperator::SetIfEmpty => {
+                    // Only set the value if the current field is empty/null
+                    match field_name.as_str() {
+                        "tvg_id" => {
+                            let current = mapped_channel
+                                .mapped_tvg_id
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_id.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_tvg_id = Some(value);
+                            }
+                        }
+                        "tvg_name" => {
+                            let current = mapped_channel
+                                .mapped_tvg_name
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_name.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_tvg_name = Some(value);
+                            }
+                        }
+                        "tvg_logo" => {
+                            let current = mapped_channel
+                                .mapped_tvg_logo
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_logo.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_tvg_logo = Some(value);
+                            }
+                        }
+                        "tvg_shift" => {
+                            let current = mapped_channel
+                                .mapped_tvg_shift
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_shift.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_tvg_shift = Some(value);
+                            }
+                        }
+                        "group_title" => {
+                            let current = mapped_channel
+                                .mapped_group_title
+                                .as_ref()
+                                .or(mapped_channel.original.group_title.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_group_title = Some(value);
+                            }
+                        }
+                        "channel_name" => {
+                            if mapped_channel.mapped_channel_name.trim().is_empty() {
+                                mapped_channel.mapped_channel_name = value;
+                            }
+                        }
+                        _ => {} // Unknown field
+                    }
+                }
+                ActionOperator::Append => {
+                    match field_name.as_str() {
+                        "tvg_id" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_id
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_id.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_id = Some(format!("{} {}", current, value));
+                        }
+                        "tvg_name" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_name
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_name.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_name = Some(format!("{} {}", current, value));
+                        }
+                        "tvg_logo" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_logo
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_logo.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_logo = Some(format!("{} {}", current, value));
+                        }
+                        "tvg_shift" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_shift
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_shift.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_shift =
+                                Some(format!("{} {}", current, value));
+                        }
+                        "group_title" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_group_title
+                                .as_ref()
+                                .or(mapped_channel.original.group_title.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_group_title =
+                                Some(format!("{} {}", current, value));
+                        }
+                        "channel_name" => {
+                            mapped_channel.mapped_channel_name =
+                                format!("{} {}", mapped_channel.mapped_channel_name, value);
+                        }
+                        _ => {} // Unknown field
+                    }
+                }
+                ActionOperator::Remove => {
+                    mapped_channel.is_removed = true;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Apply a list of actions to a mapped channel (legacy method without captures)
+    fn apply_actions_to_channel(
+        &mut self,
+        mapped_channel: &mut MappedChannel,
+        actions: &[crate::models::Action],
+        logo_assets: &HashMap<Uuid, LogoAsset>,
+        base_url: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::models::{ActionOperator, ActionValue};
+
+        for action in actions {
+            let field_name = &action.field;
+            let value = match &action.value {
+                ActionValue::Literal(val) => {
+                    // Handle @logo: references
+                    if val.starts_with("@logo:") {
+                        if let Ok(logo_uuid) = uuid::Uuid::parse_str(&val[6..]) {
+                            if let Some(_logo_asset) = logo_assets.get(&logo_uuid) {
+                                crate::utils::generate_logo_url(base_url, logo_uuid)
+                            } else {
+                                val.clone()
+                            }
+                        } else {
+                            val.clone()
+                        }
+                    } else {
+                        val.clone()
+                    }
+                }
+                ActionValue::Function(_) => {
+                    // Functions not implemented yet
+                    continue;
+                }
+                ActionValue::Variable(var_ref) => {
+                    // Get value from another field
+                    self.get_field_value(&mapped_channel.original, &var_ref.field_name)
+                        .unwrap_or_default()
+                }
+            };
+
+            // Apply the action based on operator and field
+            match action.operator {
+                ActionOperator::Set => {
+                    match field_name.as_str() {
+                        "tvg_id" => mapped_channel.mapped_tvg_id = Some(value),
+                        "tvg_name" => mapped_channel.mapped_tvg_name = Some(value),
+                        "tvg_logo" => mapped_channel.mapped_tvg_logo = Some(value),
+                        "tvg_shift" => mapped_channel.mapped_tvg_shift = Some(value),
+                        "group_title" => mapped_channel.mapped_group_title = Some(value),
+                        "channel_name" => mapped_channel.mapped_channel_name = value,
+                        _ => {} // Unknown field
+                    }
+                }
+                ActionOperator::SetIfEmpty => {
+                    // Only set the value if the current field is empty/null (legacy method without capture tracking)
+                    match field_name.as_str() {
+                        "tvg_id" => {
+                            let current = mapped_channel
+                                .mapped_tvg_id
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_id.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_tvg_id = Some(value);
+                            }
+                        }
+                        "tvg_name" => {
+                            let current = mapped_channel
+                                .mapped_tvg_name
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_name.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_tvg_name = Some(value);
+                            }
+                        }
+                        "tvg_logo" => {
+                            let current = mapped_channel
+                                .mapped_tvg_logo
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_logo.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_tvg_logo = Some(value);
+                            }
+                        }
+                        "tvg_shift" => {
+                            let current = mapped_channel
+                                .mapped_tvg_shift
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_shift.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_tvg_shift = Some(value);
+                            }
+                        }
+                        "group_title" => {
+                            let current = mapped_channel
+                                .mapped_group_title
+                                .as_ref()
+                                .or(mapped_channel.original.group_title.as_ref());
+                            if current.is_none() || current.map_or(true, |s| s.trim().is_empty()) {
+                                mapped_channel.mapped_group_title = Some(value);
+                            }
+                        }
+                        "channel_name" => {
+                            if mapped_channel.mapped_channel_name.trim().is_empty() {
+                                mapped_channel.mapped_channel_name = value;
+                            }
+                        }
+                        _ => {} // Unknown field
+                    }
+                }
+                ActionOperator::Append => {
+                    match field_name.as_str() {
+                        "tvg_id" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_id
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_id.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_id = Some(format!("{} {}", current, value));
+                        }
+                        "tvg_name" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_name
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_name.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_name = Some(format!("{} {}", current, value));
+                        }
+                        "tvg_logo" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_logo
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_logo.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_logo = Some(format!("{} {}", current, value));
+                        }
+                        "tvg_shift" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_shift
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_shift.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_shift =
+                                Some(format!("{} {}", current, value));
+                        }
+                        "group_title" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_group_title
+                                .as_ref()
+                                .or(mapped_channel.original.group_title.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_group_title =
+                                Some(format!("{} {}", current, value));
+                        }
+                        "channel_name" => {
+                            mapped_channel.mapped_channel_name =
+                                format!("{} {}", mapped_channel.mapped_channel_name, value);
+                        }
+                        _ => {} // Unknown field
+                    }
+                }
+                ActionOperator::Remove => {
+                    match field_name.as_str() {
+                        "tvg_id" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_id
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_id.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_id = Some(current.replace(&value, ""));
+                        }
+                        "tvg_name" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_name
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_name.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_name = Some(current.replace(&value, ""));
+                        }
+                        "tvg_logo" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_logo
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_logo.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_logo = Some(current.replace(&value, ""));
+                        }
+                        "tvg_shift" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_tvg_shift
+                                .as_ref()
+                                .or(mapped_channel.original.tvg_shift.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_tvg_shift = Some(current.replace(&value, ""));
+                        }
+                        "group_title" => {
+                            let empty_string = String::new();
+                            let current = mapped_channel
+                                .mapped_group_title
+                                .as_ref()
+                                .or(mapped_channel.original.group_title.as_ref())
+                                .unwrap_or(&empty_string);
+                            mapped_channel.mapped_group_title = Some(current.replace(&value, ""));
+                        }
+                        "channel_name" => {
+                            mapped_channel.mapped_channel_name =
+                                mapped_channel.mapped_channel_name.replace(&value, "");
+                        }
+                        _ => {} // Unknown field
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Evaluate an expression for a channel (kept for backwards compatibility)
     fn evaluate_expression_for_channel(
         &mut self,
         channel: &Channel,
@@ -207,24 +767,30 @@ impl DataMappingEngine {
             ],
         };
 
+        // Parse the expression using the filter parser
         let parser = FilterParser::new().with_fields(available_fields);
         let parsed = parser.parse_extended(expression)?;
 
         // Evaluate the expression
+        let mut dummy_captures = RegexCaptures::new();
         match parsed {
-            ExtendedExpression::ConditionOnly(condition_tree) => {
-                self.evaluate_condition_tree_for_channel(channel, &condition_tree)
-            }
+            ExtendedExpression::ConditionOnly(condition_tree) => self
+                .evaluate_condition_tree_for_channel(channel, &condition_tree, &mut dummy_captures),
             ExtendedExpression::ConditionWithActions { condition, .. } => {
-                self.evaluate_condition_tree_for_channel(channel, &condition)
+                self.evaluate_condition_tree_for_channel(channel, &condition, &mut dummy_captures)
             }
             ExtendedExpression::ConditionalActionGroups(groups) => {
-                // For multiple groups, evaluate the first one's conditions
-                if let Some(first_group) = groups.first() {
-                    self.evaluate_condition_tree_for_channel(channel, &first_group.conditions)
-                } else {
-                    Ok(false)
+                // For multiple groups, evaluate if any group's conditions match
+                for group in groups {
+                    if self.evaluate_condition_tree_for_channel(
+                        channel,
+                        &group.conditions,
+                        &mut dummy_captures,
+                    )? {
+                        return Ok(true);
+                    }
                 }
+                Ok(false)
             }
         }
     }
@@ -234,8 +800,9 @@ impl DataMappingEngine {
         &mut self,
         channel: &Channel,
         condition_tree: &crate::models::ConditionTree,
+        captures: &mut RegexCaptures,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        self.evaluate_condition_node_for_channel(channel, &condition_tree.root)
+        self.evaluate_condition_node_for_channel(channel, &condition_tree.root, captures)
     }
 
     /// Evaluate a condition node for a channel
@@ -243,6 +810,7 @@ impl DataMappingEngine {
         &mut self,
         channel: &Channel,
         node: &crate::models::ConditionNode,
+        captures: &mut RegexCaptures,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         match node {
             crate::models::ConditionNode::Condition {
@@ -271,7 +839,26 @@ impl DataMappingEngine {
                     }
                     FilterOperator::Matches => {
                         let regex = self.get_or_create_regex(value, false)?;
-                        regex.is_match(&field_value)
+                        if let Some(matched) = regex.captures(&field_value) {
+                            // Store captures for later use in actions
+                            // Skip group 0 (full match) and start with group 1 (first capture group)
+                            let capture_count = regex.captures_len();
+                            for i in 1..capture_count {
+                                if let Some(group_match) = matched.get(i) {
+                                    // Capture group exists (may be empty)
+                                    captures.add_capture(
+                                        format!("${}", i),
+                                        group_match.as_str().to_string(),
+                                    );
+                                } else {
+                                    // Capture group doesn't exist in this match
+                                    captures.add_capture(format!("${}", i), String::new());
+                                }
+                            }
+                            true
+                        } else {
+                            false
+                        }
                     }
                     FilterOperator::NotMatches => {
                         let regex = self.get_or_create_regex(value, false)?;
@@ -287,16 +874,24 @@ impl DataMappingEngine {
                 }
 
                 let first_result =
-                    self.evaluate_condition_node_for_channel(channel, &children[0])?;
+                    self.evaluate_condition_node_for_channel(channel, &children[0], captures)?;
 
                 let mut combined_result = first_result;
                 for child in children.iter().skip(1) {
-                    let child_result = self.evaluate_condition_node_for_channel(channel, child)?;
+                    let child_result =
+                        self.evaluate_condition_node_for_channel(channel, child, captures)?;
                     match operator {
-                        LogicalOperator::And | LogicalOperator::All => {
+                        LogicalOperator::And => {
                             combined_result = combined_result && child_result;
                         }
-                        LogicalOperator::Or | LogicalOperator::Any => {
+                        LogicalOperator::Or => {
+                            combined_result = combined_result || child_result;
+                        }
+                        // Legacy operators (should not be used in extended expressions)
+                        LogicalOperator::All => {
+                            combined_result = combined_result && child_result;
+                        }
+                        LogicalOperator::Any => {
                             combined_result = combined_result || child_result;
                         }
                     }
@@ -454,6 +1049,59 @@ impl DataMappingEngine {
             _ => None,
         }
     }
+
+    /// Substitute capture groups ($1, $2, etc.) in a string with actual captured values
+    fn substitute_capture_groups(
+        &self,
+        input: &str,
+        captures: &RegexCaptures,
+    ) -> (String, Option<String>) {
+        let mut result = input.to_string();
+        let mut individual_captures = Vec::new();
+        let mut has_substitutions = false;
+
+        // Regular expression to find capture group references like $1, $2, etc.
+        let capture_pattern = Regex::new(r"\$(\d+)").unwrap();
+
+        // Collect all capture group references first to avoid replacement conflicts
+        let mut replacements = Vec::new();
+
+        for cap in capture_pattern.captures_iter(input) {
+            let full_match = cap.get(0).unwrap().as_str(); // e.g., "$1"
+            let group_num = cap.get(1).unwrap().as_str(); // e.g., "1"
+            let group_key = format!("${}", group_num);
+
+            if let Some(captured_value) = captures.get_capture(&group_key) {
+                replacements.push((full_match.to_string(), captured_value.clone()));
+                individual_captures.push(format!("{}='{}'", group_key, captured_value));
+                has_substitutions = true;
+            } else {
+                // Handle missing capture groups - replace with empty string and mark as empty
+                replacements.push((full_match.to_string(), String::new()));
+                individual_captures.push(format!("{}=''", group_key));
+                has_substitutions = true;
+            }
+        }
+
+        // Apply replacements in reverse order of length to avoid partial replacements
+        replacements.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        for (placeholder, replacement) in replacements {
+            result = result.replace(&placeholder, &replacement);
+        }
+
+        let capture_description = if !has_substitutions {
+            None
+        } else {
+            // Format: (value: 'resolved_value', $1='val1', $2='')
+            Some(format!(
+                "(value: '{}', {})",
+                result, // Resolved value
+                individual_captures.join(", ")
+            ))
+        };
+
+        (result, capture_description)
+    }
 }
 
 impl Default for DataMappingEngine {
@@ -463,7 +1111,7 @@ impl Default for DataMappingEngine {
 }
 
 impl From<crate::config::DataMappingEngineConfig> for DataMappingEngineConfig {
-    fn from(config: crate::config::DataMappingEngineConfig) -> Self {
+    fn from(_config: crate::config::DataMappingEngineConfig) -> Self {
         Self {
             enable_first_pass_filtering: true,
             enable_regex_caching: true,

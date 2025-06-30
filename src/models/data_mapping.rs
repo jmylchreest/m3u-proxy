@@ -2,6 +2,7 @@ use crate::models::{EpgChannel, EpgProgram};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -204,6 +205,8 @@ pub struct MappedChannel {
     pub mapped_channel_name: String,
     pub applied_rules: Vec<String>,
     pub is_removed: bool,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub capture_group_values: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,6 +368,7 @@ impl DataMappingRuleCreateRequest {
         }
     }
 }
+
 
 impl DataMappingRuleUpdateRequest {
     pub fn validate_expression(&self) -> Result<(), String> {

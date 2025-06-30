@@ -419,6 +419,7 @@ impl DataMappingService {
                     mapped_channel_name: channel.channel_name.clone(),
                     applied_rules: Vec::new(),
                     is_removed: false,
+                    capture_group_values: std::collections::HashMap::new(),
                     original: channel,
                 })
                 .collect();

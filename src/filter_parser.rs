@@ -31,8 +31,6 @@ impl FilterParser {
             logical_operators: vec![
                 "AND".to_string(),
                 "OR".to_string(),
-                "ALL".to_string(),
-                "ANY".to_string(),
             ],
             valid_fields: vec![], // Empty by default, will be set via with_fields
         }
@@ -386,8 +384,8 @@ impl FilterParser {
                             .map_or(true, |c| c.is_whitespace() || c == '(' || c == ')')
                     {
                         let operator = match logical_op.as_str() {
-                            "AND" | "ALL" => LogicalOperator::All,
-                            "OR" | "ANY" => LogicalOperator::Any,
+                            "AND" | "ALL" => LogicalOperator::And,
+                            "OR" | "ANY" => LogicalOperator::Or,
                             _ => return Err(anyhow!("Unknown logical operator: {}", logical_op)),
                         };
                         tokens.push(Token::LogicalOp(operator));
@@ -453,6 +451,11 @@ impl FilterParser {
             }
             if remaining.starts_with("-=") {
                 tokens.push(Token::AssignmentOp(ActionOperator::Remove));
+                current_pos += 2;
+                continue;
+            }
+            if remaining.starts_with("?=") {
+                tokens.push(Token::AssignmentOp(ActionOperator::SetIfEmpty));
                 current_pos += 2;
                 continue;
             }
@@ -1096,7 +1099,7 @@ mod tests {
 
         match result.root {
             ConditionNode::Group { operator, children } => {
-                assert!(matches!(operator, LogicalOperator::All));
+                assert!(matches!(operator, LogicalOperator::And));
                 assert_eq!(children.len(), 2);
             }
             _ => panic!("Expected AND group"),
@@ -1110,13 +1113,13 @@ mod tests {
 
         match result.root {
             ConditionNode::Group { operator, children } => {
-                assert!(matches!(operator, LogicalOperator::All));
+                assert!(matches!(operator, LogicalOperator::And));
                 assert_eq!(children.len(), 2);
 
                 // Second child should be another group
                 match &children[1] {
                     ConditionNode::Group { operator, children } => {
-                        assert!(matches!(operator, LogicalOperator::Any));
+                        assert!(matches!(operator, LogicalOperator::Or));
                         assert_eq!(children.len(), 2);
                     }
                     _ => panic!("Expected nested OR group"),
@@ -1325,13 +1328,13 @@ mod tests {
                 // Verify complex condition structure
                 match condition.root {
                     ConditionNode::Group { operator, children } => {
-                        assert!(matches!(operator, LogicalOperator::All));
+                        assert!(matches!(operator, LogicalOperator::And));
                         assert_eq!(children.len(), 2);
 
                         // First child should be OR group
                         match &children[0] {
                             ConditionNode::Group { operator, children } => {
-                                assert!(matches!(operator, LogicalOperator::Any));
+                                assert!(matches!(operator, LogicalOperator::Or));
                                 assert_eq!(children.len(), 2);
                             }
                             _ => panic!("Expected OR group as first child"),
@@ -1368,7 +1371,7 @@ mod tests {
         match result {
             ExtendedExpression::ConditionOnly(condition) => match condition.root {
                 ConditionNode::Group { operator, children } => {
-                    assert!(matches!(operator, LogicalOperator::All));
+                    assert!(matches!(operator, LogicalOperator::And));
                     assert_eq!(children.len(), 2);
                 }
                 _ => panic!("Expected group condition"),
@@ -1585,7 +1588,7 @@ mod tests {
                 // First group should have nested AND condition
                 match &groups[0].conditions.root {
                     ConditionNode::Group { operator, children } => {
-                        assert!(matches!(operator, LogicalOperator::All));
+                        assert!(matches!(operator, LogicalOperator::And));
                         assert_eq!(children.len(), 2);
                     }
                     _ => panic!("Expected group condition with AND"),
@@ -1675,7 +1678,7 @@ mod tests {
                 // Should have complex nested conditions
                 match &groups[0].conditions.root {
                     ConditionNode::Group { operator, children } => {
-                        assert!(matches!(operator, LogicalOperator::All));
+                        assert!(matches!(operator, LogicalOperator::And));
                         assert_eq!(children.len(), 3); // Three conditions joined by AND
                     }
                     _ => panic!("Expected group condition with multiple ANDs"),
@@ -1737,7 +1740,7 @@ mod tests {
             ExtendedExpression::ConditionWithActions { condition, actions } => {
                 match &condition.root {
                     ConditionNode::Group { operator, children } => {
-                        assert!(matches!(operator, LogicalOperator::All));
+                        assert!(matches!(operator, LogicalOperator::And));
                         assert_eq!(children.len(), 2);
                     }
                     _ => panic!("Expected AND group"),
@@ -1819,14 +1822,14 @@ mod tests {
                 // Should have deeply nested structure
                 match &condition.root {
                     ConditionNode::Group { operator, children } => {
-                        assert!(matches!(operator, LogicalOperator::Any)); // OR at top level
+                        assert!(matches!(operator, LogicalOperator::Or)); // OR at top level
                         assert_eq!(children.len(), 2);
 
                         // Each child should be an AND group
                         for child in children {
                             match child {
                                 ConditionNode::Group { operator, children } => {
-                                    assert!(matches!(operator, LogicalOperator::All)); // AND groups
+                                    assert!(matches!(operator, LogicalOperator::And)); // AND groups
                                     assert_eq!(children.len(), 2);
                                 }
                                 _ => panic!("Expected AND groups as children"),

@@ -109,8 +109,7 @@ fn mapped_channel_to_frontend_format(
         "mapped_tvg_name": mc.mapped_tvg_name,
         "mapped_tvg_logo": mc.mapped_tvg_logo,
         "mapped_tvg_shift": mc.mapped_tvg_shift,
-        "mapped_group_title": mc.mapped_group_title,
-        "capture_group_values": mc.capture_group_values
+        "mapped_group_title": mc.mapped_group_title
     })
 }
 
@@ -697,113 +696,9 @@ pub async fn get_epg_filter_fields(
 // Data Mapping API
 pub async fn list_data_mapping_rules(
     State(state): State<AppState>,
-) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
+) -> Result<Json<Vec<crate::models::data_mapping::DataMappingRule>>, StatusCode> {
     match state.data_mapping_service.get_all_rules().await {
-        Ok(rules) => {
-            let enhanced_rules = rules
-                .into_iter()
-                .map(|rule| {
-                    // Parse expression to get counts
-                    let (condition_count, action_count) = if let Some(expression) = &rule.expression
-                    {
-                        let available_fields = vec![
-                            "tvg_id".to_string(),
-                            "tvg_name".to_string(),
-                            "tvg_logo".to_string(),
-                            "tvg_shift".to_string(),
-                            "group_title".to_string(),
-                            "channel_name".to_string(),
-                        ];
-                        let parser =
-                            crate::filter_parser::FilterParser::new().with_fields(available_fields);
-                        if let Ok(parsed) = parser.parse_extended(expression) {
-                            match parsed {
-                                crate::models::ExtendedExpression::ConditionOnly(
-                                    condition_tree,
-                                ) => (count_conditions_in_tree(&condition_tree), 0),
-                                crate::models::ExtendedExpression::ConditionWithActions {
-                                    condition,
-                                    actions,
-                                } => (count_conditions_in_tree(&condition), actions.len()),
-                                crate::models::ExtendedExpression::ConditionalActionGroups(
-                                    groups,
-                                ) => {
-                                    let condition_count: usize = groups
-                                        .iter()
-                                        .map(|g| count_conditions_in_tree(&g.conditions))
-                                        .sum();
-                                    let action_count: usize =
-                                        groups.iter().map(|g| g.actions.len()).sum();
-                                    (condition_count, action_count)
-                                }
-                            }
-                        } else {
-                            (0, 0)
-                        }
-                    } else {
-                        (0, 0)
-                    };
-
-                    // Generate JSON expression tree for frontend display
-                    let expression_tree = if let Some(expression) = &rule.expression {
-                        let available_fields = vec![
-                            "tvg_id".to_string(),
-                            "tvg_name".to_string(),
-                            "tvg_logo".to_string(),
-                            "tvg_shift".to_string(),
-                            "group_title".to_string(),
-                            "channel_name".to_string(),
-                        ];
-                        let parser =
-                            crate::filter_parser::FilterParser::new().with_fields(available_fields);
-                        if let Ok(parsed) = parser.parse_extended(expression) {
-                            match parsed {
-                                crate::models::ExtendedExpression::ConditionOnly(
-                                    condition_tree,
-                                ) => Some(generate_expression_tree_json(&condition_tree)),
-                                crate::models::ExtendedExpression::ConditionWithActions {
-                                    condition,
-                                    ..
-                                } => Some(generate_expression_tree_json(&condition)),
-                                crate::models::ExtendedExpression::ConditionalActionGroups(
-                                    groups,
-                                ) => {
-                                    if let Some(first_group) = groups.first() {
-                                        Some(generate_expression_tree_json(
-                                            &first_group.conditions,
-                                        ))
-                                    } else {
-                                        None
-                                    }
-                                }
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    serde_json::json!({
-                        "id": rule.id,
-                        "name": rule.name,
-                        "description": rule.description,
-                        "source_type": rule.source_type,
-                        "scope": rule.scope,
-                        "expression": rule.expression,
-                        "sort_order": rule.sort_order,
-                        "is_active": rule.is_active,
-                        "created_at": rule.created_at,
-                        "updated_at": rule.updated_at,
-                        "condition_count": condition_count,
-                        "action_count": action_count,
-                        "expression_tree": expression_tree,
-                    })
-                })
-                .collect();
-
-            Ok(Json(enhanced_rules))
-        }
+        Ok(rules) => Ok(Json(rules)),
         Err(e) => {
             error!("Failed to list data mapping rules: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -1045,99 +940,177 @@ pub async fn test_data_mapping_rule(
                 is_valid: false,
                 error: Some(format!("Expression parsing error: {}", e)),
                 matching_channels: vec![],
-                total_channels: total_channels_count as i32,
+                total_channels: total_channels_count,
                 matched_count: 0,
             }));
         }
     };
 
-    // Count conditions and actions from parsed expression
-    let (condition_count, action_count) = match &parsed_expression {
-        crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
-            (count_conditions_in_tree(condition_tree), 0)
-        }
-        crate::models::ExtendedExpression::ConditionWithActions { condition, actions } => {
-            (count_conditions_in_tree(condition), actions.len())
-        }
-        crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
-            let condition_count: usize = groups
-                .iter()
-                .map(|g| count_conditions_in_tree(&g.conditions))
-                .sum();
-            let action_count: usize = groups.iter().map(|g| g.actions.len()).sum();
-            (condition_count, action_count)
-        }
-    };
-
     // For testing, create temporary conditions and actions from the parsed expression
-    let (_conditions, actions) = match parsed_expression {
+    let (conditions, actions) = match parsed_expression {
         crate::models::ExtendedExpression::ConditionOnly(_) => {
             // No actions to test
             return Ok(Json(crate::models::data_mapping::DataMappingTestResult {
                 is_valid: true,
-                error: Some(format!(
-                    "Condition-only expression: {} conditions, 0 actions",
-                    condition_count
-                )),
+                error: None,
                 matching_channels: vec![],
-                total_channels: total_channels_count as i32,
+                total_channels: total_channels_count,
                 matched_count: 0,
             }));
         }
         crate::models::ExtendedExpression::ConditionWithActions { condition, actions } => {
             // Convert condition tree to flat conditions for testing
             let flat_conditions = flatten_condition_tree_for_test(&condition);
-            let test_actions = Vec::<String>::new(); // Legacy test simplified
+            let test_actions = convert_actions_for_test(&actions);
             (flat_conditions, test_actions)
         }
         crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
             // For testing, use the first group
             if let Some(first_group) = groups.first() {
                 let flat_conditions = flatten_condition_tree_for_test(&first_group.conditions);
-                let test_actions = Vec::<String>::new(); // Legacy test simplified
+                let test_actions = convert_actions_for_test(&first_group.actions);
                 (flat_conditions, test_actions)
             } else {
                 return Ok(Json(crate::models::data_mapping::DataMappingTestResult {
                     is_valid: false,
                     error: Some("No conditional action groups found".to_string()),
                     matching_channels: vec![],
-                    total_channels: total_channels_count as i32,
+                    total_channels: total_channels_count,
                     matched_count: 0,
                 }));
             }
         }
     };
 
-    // Logo assets simplified for legacy test
-    let logo_assets = HashMap::new();
+    // Convert to internal types for testing
+    let test_conditions: Vec<crate::models::data_mapping::DataMappingCondition> = conditions
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| crate::models::data_mapping::DataMappingCondition {
+            id: Uuid::new_v4(),
+            rule_id: Uuid::new_v4(),
+            field_name: c.field_name,
+            operator: c.operator,
+            value: c.value,
+            logical_operator: c.logical_operator,
+            sort_order: i as i32,
+            created_at: chrono::Utc::now(),
+        })
+        .collect();
+
+    let test_actions: Vec<crate::models::data_mapping::DataMappingAction> = actions
+        .into_iter()
+        .enumerate()
+        .map(|(i, a)| crate::models::data_mapping::DataMappingAction {
+            id: Uuid::new_v4(),
+            rule_id: Uuid::new_v4(),
+            action_type: a.action_type,
+            target_field: a.target_field,
+            value: a.value,
+            logo_asset_id: a.logo_asset_id,
+            timeshift_minutes: a.timeshift_minutes,
+            sort_order: i as i32,
+            created_at: chrono::Utc::now(),
+        })
+        .collect();
+
+    // Get logo assets for the actions (including those from @logo: references)
+    let mut logo_assets = HashMap::new();
+    for action in &test_actions {
+        if let Some(logo_id) = action.logo_asset_id {
+            if let Ok(asset) = state.logo_asset_service.get_asset(logo_id).await {
+                logo_assets.insert(logo_id, asset);
+            }
+        }
+        // Also check for @logo: references in values
+        if let Some(value) = &action.value {
+            if value.starts_with("@logo:") {
+                if let Ok(logo_uuid) = uuid::Uuid::parse_str(&value[6..]) {
+                    if let Ok(asset) = state.logo_asset_service.get_asset(logo_uuid).await {
+                        logo_assets.insert(logo_uuid, asset);
+                    }
+                }
+            }
+        }
+    }
 
     let mut engine = DataMappingEngine::new();
-    let start_time = std::time::Instant::now();
     match engine.test_mapping_rule(
         channels,
+        test_conditions.clone(),
+        test_actions.clone(),
         logo_assets.clone(),
         &state.config.web.base_url,
-        &payload.expression,
     ) {
         Ok(mapped_channels) => {
-            let execution_time = start_time.elapsed().as_micros();
-
             let test_channels: Vec<crate::models::data_mapping::DataMappingTestChannel> =
                 mapped_channels
                     .into_iter()
-                    .filter(|mc| !mc.applied_rules.is_empty()) // Only show channels that had rules applied
                     .map(|mc| {
                         let (original_values, mapped_values) = mapped_channel_to_test_format(&mc);
 
-                        // Create action descriptions based on what actually changed in the mapped channel
-                        let applied_actions = Vec::<String>::new(); // Legacy test endpoint - simplified for extended expressions
+                        // Create meaningful action descriptions with resolved values
+                        let applied_actions = if mc.applied_rules.is_empty() {
+                            vec![]
+                        } else {
+                            test_actions.iter().map(|action| {
+                                match action.action_type {
+                                    crate::models::data_mapping::DataMappingActionType::SetValue => {
+                                        let template = action.value.as_deref().unwrap_or("");
+                                        let resolved_value = get_resolved_value(&mc, &action.target_field);
+
+                                        // Check if template contains @logo: reference
+                                        let display_template = if template.starts_with("@logo:") {
+                                            if let Ok(logo_uuid) = uuid::Uuid::parse_str(&template[6..]) {
+                                                if let Some(logo_asset) = logo_assets.get(&logo_uuid) {
+                                                    let logo_url = crate::utils::generate_logo_url(&state.config.web.base_url, logo_uuid);
+                                                    format!("@logo:{} ({})", &logo_asset.name, logo_url)
+                                                } else {
+                                                    format!("{} (logo not found)", template)
+                                                }
+                                            } else {
+                                                template.to_string()
+                                            }
+                                        } else {
+                                            template.to_string()
+                                        };
+
+                                        if template.contains('$') && resolved_value.is_some() {
+                                            format!("Set {} = {} ('{}')", action.target_field, display_template, resolved_value.unwrap())
+                                        } else {
+                                            format!("Set {} = {}", action.target_field, display_template)
+                                        }
+                                    },
+                                    crate::models::data_mapping::DataMappingActionType::SetLogo => {
+                                        if let Some(logo_id) = action.logo_asset_id {
+                                            if let Some(logo_asset) = logo_assets.get(&logo_id) {
+                                                let logo_url = crate::utils::generate_logo_url(&state.config.web.base_url, logo_id);
+                                                format!("Set logo for {} = {} ({})", action.target_field, logo_asset.name, logo_url)
+                                            } else {
+                                                format!("Set logo for {} (logo not found)", action.target_field)
+                                            }
+                                        } else {
+                                            format!("Set logo for {}", action.target_field)
+                                        }
+                                    },
+                                    crate::models::data_mapping::DataMappingActionType::TimeshiftEpg => {
+                                        format!("Timeshift EPG by {} minutes", action.timeshift_minutes.unwrap_or(0))
+                                    },
+                                    crate::models::data_mapping::DataMappingActionType::DeduplicateStreamUrls => {
+                                        "Deduplicate stream URLs".to_string()
+                                    },
+                                    crate::models::data_mapping::DataMappingActionType::RemoveChannel => {
+                                        "Remove channel".to_string()
+                                    },
+                                }
+                            }).collect()
+                        };
 
                         crate::models::data_mapping::DataMappingTestChannel {
                             channel_name: mc.original.channel_name,
                             group_title: mc.original.group_title,
-                            original_values: serde_json::to_value(original_values)
-                                .unwrap_or_default(),
-                            mapped_values: serde_json::to_value(mapped_values).unwrap_or_default(),
+                            original_values,
+                            mapped_values,
                             applied_actions,
                         }
                     })
@@ -1145,16 +1118,10 @@ pub async fn test_data_mapping_rule(
 
             let result = crate::models::data_mapping::DataMappingTestResult {
                 is_valid: true,
-                error: Some(format!(
-                    "Test completed: {} conditions, {} actions, {} matching channels ({}μs)",
-                    condition_count,
-                    action_count,
-                    test_channels.len(),
-                    execution_time
-                )),
+                error: None,
                 matching_channels: test_channels.clone(),
-                total_channels: total_channels_count as i32,
-                matched_count: test_channels.len() as i32,
+                total_channels: total_channels_count,
+                matched_count: test_channels.len(),
             };
 
             Ok(Json(result))
@@ -1164,7 +1131,7 @@ pub async fn test_data_mapping_rule(
                 is_valid: false,
                 error: Some(e.to_string()),
                 matching_channels: vec![],
-                total_channels: total_channels_count as i32,
+                total_channels: total_channels_count,
                 matched_count: 0,
             };
             Ok(Json(result))
@@ -1263,8 +1230,8 @@ pub async fn apply_stream_source_data_mapping(
         Ok(rules) => rules
             .into_iter()
             .filter(|r| {
-                r.is_active
-                    && r.source_type
+                r.rule.is_active
+                    && r.rule.source_type
                         == crate::models::data_mapping::DataMappingSourceType::Stream
             })
             .map(|rule| {
@@ -1296,84 +1263,12 @@ pub async fn apply_stream_source_data_mapping(
                     info!("Available IDs in performance data: {:?}", rule_performance.keys().collect::<Vec<_>>());
                 }
 
-                // Parse expression to get counts
-                let (condition_count, action_count) = if let Some(expression) = &rule.expression {
-                    let available_fields = vec![
-                        "tvg_id".to_string(),
-                        "tvg_name".to_string(),
-                        "tvg_logo".to_string(),
-                        "tvg_shift".to_string(),
-                        "group_title".to_string(),
-                        "channel_name".to_string(),
-                    ];
-                    let parser = crate::filter_parser::FilterParser::new().with_fields(available_fields);
-                    if let Ok(parsed) = parser.parse_extended(expression) {
-                        match parsed {
-                            crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
-                                (count_conditions_in_tree(&condition_tree), 0)
-                            }
-                            crate::models::ExtendedExpression::ConditionWithActions { condition, actions } => {
-                                (count_conditions_in_tree(&condition), actions.len())
-                            }
-                            crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
-                                let condition_count: usize = groups
-                                    .iter()
-                                    .map(|g| count_conditions_in_tree(&g.conditions))
-                                    .sum();
-                                let action_count: usize = groups.iter().map(|g| g.actions.len()).sum();
-                                (condition_count, action_count)
-                            }
-                        }
-                    } else {
-                        (0, 0)
-                    }
-                } else {
-                    (0, 0)
-                };
-
-                // Generate human-readable condition tree for frontend display
-                let expression_tree = if let Some(expression) = &rule.expression {
-                    let available_fields = vec![
-                        "tvg_id".to_string(),
-                        "tvg_name".to_string(),
-                        "tvg_logo".to_string(),
-                        "tvg_shift".to_string(),
-                        "group_title".to_string(),
-                        "channel_name".to_string(),
-                    ];
-                    let parser = crate::filter_parser::FilterParser::new().with_fields(available_fields);
-                    if let Ok(parsed) = parser.parse_extended(expression) {
-                        match parsed {
-                            crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
-                                Some(generate_expression_tree_json(&condition_tree))
-                            }
-                            crate::models::ExtendedExpression::ConditionWithActions { condition, .. } => {
-                                Some(generate_expression_tree_json(&condition))
-                            }
-                            crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
-                                if let Some(first_group) = groups.first() {
-                                    Some(generate_expression_tree_json(&first_group.conditions))
-                                } else {
-                                    None
-                                }
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
                 serde_json::json!({
                     "rule_id": rule.id,
                     "rule_name": rule.name,
                     "rule_description": rule.description,
                     "affected_channels_count": affected_count,
                     "expression": rule.expression,
-                    "condition_count": condition_count,
-                    "action_count": action_count,
-                    "expression_tree": expression_tree,
                     "avg_execution_time": avg_execution_time,
                     "total_execution_time": total_execution_time,
                     "sort_order": rule.sort_order,
@@ -1613,96 +1508,12 @@ async fn apply_data_mapping_rules_impl(
                                 .map(|(total, avg, count)| (*total, *avg, *count))
                                 .unwrap_or((0, 0, 0));
 
-                        // Parse expression to get counts
-                        let (condition_count, action_count) =
-                            if let Some(expression) = &rule.expression {
-                                let available_fields = vec![
-                                    "tvg_id".to_string(),
-                                    "tvg_name".to_string(),
-                                    "tvg_logo".to_string(),
-                                    "tvg_shift".to_string(),
-                                    "group_title".to_string(),
-                                    "channel_name".to_string(),
-                                ];
-                                let parser = crate::filter_parser::FilterParser::new()
-                                    .with_fields(available_fields);
-                                if let Ok(parsed) = parser.parse_extended(expression) {
-                                    match parsed {
-                                    crate::models::ExtendedExpression::ConditionOnly(
-                                        condition_tree,
-                                    ) => (count_conditions_in_tree(&condition_tree), 0),
-                                    crate::models::ExtendedExpression::ConditionWithActions {
-                                        condition,
-                                        actions,
-                                    } => (count_conditions_in_tree(&condition), actions.len()),
-                                    crate::models::ExtendedExpression::ConditionalActionGroups(
-                                        groups,
-                                    ) => {
-                                        let condition_count: usize = groups
-                                            .iter()
-                                            .map(|g| count_conditions_in_tree(&g.conditions))
-                                            .sum();
-                                        let action_count: usize =
-                                            groups.iter().map(|g| g.actions.len()).sum();
-                                        (condition_count, action_count)
-                                    }
-                                }
-                                } else {
-                                    (0, 0)
-                                }
-                            } else {
-                                (0, 0)
-                            };
-
-                        // Generate JSON expression tree for frontend display
-                        let expression_tree = if let Some(expression) = &rule.expression {
-                            let available_fields = vec![
-                                "tvg_id".to_string(),
-                                "tvg_name".to_string(),
-                                "tvg_logo".to_string(),
-                                "tvg_shift".to_string(),
-                                "group_title".to_string(),
-                                "channel_name".to_string(),
-                            ];
-                            let parser = crate::filter_parser::FilterParser::new()
-                                .with_fields(available_fields);
-                            if let Ok(parsed) = parser.parse_extended(expression) {
-                                match parsed {
-                                    crate::models::ExtendedExpression::ConditionOnly(
-                                        condition_tree,
-                                    ) => Some(generate_expression_tree_json(&condition_tree)),
-                                    crate::models::ExtendedExpression::ConditionWithActions {
-                                        condition,
-                                        ..
-                                    } => Some(generate_expression_tree_json(&condition)),
-                                    crate::models::ExtendedExpression::ConditionalActionGroups(
-                                        groups,
-                                    ) => {
-                                        if let Some(first_group) = groups.first() {
-                                            Some(generate_expression_tree_json(
-                                                &first_group.conditions,
-                                            ))
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
                         serde_json::json!({
                                 "rule_id": rule.id,
                                 "rule_name": rule.name,
                                 "rule_description": rule.description,
                                 "affected_channels_count": affected_count,
                                 "expression": rule.expression,
-                                "condition_count": condition_count,
-                                "action_count": action_count,
-                                "expression_tree": expression_tree,
                                 "avg_execution_time": avg_execution_time,
                         "total_execution_time": total_execution_time,
                                 "sort_order": rule.sort_order,
@@ -2657,7 +2468,7 @@ pub async fn get_logo_asset_with_formats(
             let linked_with_urls: Vec<crate::models::logo_asset::LogoAssetWithUrl> = linked_assets
                 .into_iter()
                 .map(|linked| crate::models::logo_asset::LogoAssetWithUrl {
-                    url: crate::utils::generate_logo_url(&state.config.web.base_url, linked.id),
+                    url: format!("/api/logos/{}", linked.id),
                     asset: linked,
                 })
                 .collect();
@@ -2679,7 +2490,7 @@ pub async fn get_logo_asset_with_formats(
 
             let response = crate::models::logo_asset::LogoAssetWithLinked {
                 asset,
-                url: crate::utils::generate_logo_url(&state.config.web.base_url, id),
+                url: format!("/api/logos/{}", id),
                 linked_assets: linked_with_urls,
                 available_formats,
             };
@@ -2971,16 +2782,15 @@ pub async fn auto_map_channels(
 // Helper function to flatten condition tree for testing
 fn flatten_condition_tree_for_test(
     condition_tree: &crate::models::ConditionTree,
-) -> Vec<String> { // Legacy test - simplified
+) -> Vec<crate::models::data_mapping::DataMappingConditionRequest> {
     let mut conditions = vec![];
-    // Legacy test code disabled for extended expressions migration
-    // flatten_condition_node_for_test(&condition_tree.root, &mut conditions, None);
+    flatten_condition_node_for_test(&condition_tree.root, &mut conditions, None);
     conditions
 }
 
 fn flatten_condition_node_for_test(
     node: &crate::models::ConditionNode,
-    conditions: &mut Vec<String>, // Legacy test - simplified
+    conditions: &mut Vec<crate::models::data_mapping::DataMappingConditionRequest>,
     logical_op: Option<crate::models::LogicalOperator>,
 ) {
     match node {
@@ -3017,8 +2827,12 @@ fn flatten_condition_node_for_test(
                 operator.clone()
             };
 
-            // Legacy test simplified
-            conditions.push(format!("{} {} {}", field, final_operator, value));
+            conditions.push(crate::models::data_mapping::DataMappingConditionRequest {
+                field_name: field.clone(),
+                operator: final_operator,
+                value: value.clone(),
+                logical_operator: logical_op,
+            });
         }
         crate::models::ConditionNode::Group { operator, children } => {
             for (i, child) in children.iter().enumerate() {
@@ -3033,188 +2847,43 @@ fn flatten_condition_node_for_test(
     }
 }
 
-
-/// Generate descriptions of actions that were actually applied to a mapped channel
-fn generate_applied_actions_descriptions(
-    mapped_channel: &crate::models::data_mapping::MappedChannel,
-    actions: &[String], // Legacy test - simplified
-    _logo_assets: &std::collections::HashMap<uuid::Uuid, crate::models::logo_asset::LogoAsset>,
-    _base_url: &str,
-) -> Vec<String> {
-    let mut descriptions = Vec::new();
-
-    // Check each field for changes and describe them
-    let original = &mapped_channel.original;
-
-    // Check tvg_id changes
-    if let Some(mapped_value) = &mapped_channel.mapped_tvg_id {
-        if original.tvg_id.as_deref() != Some(mapped_value) {
-            let original_display = original.tvg_id.as_deref().unwrap_or("null");
-            descriptions.push(format!("tvg_id: {} → {}", original_display, mapped_value));
-        }
-    }
-
-    // Check tvg_name changes
-    if let Some(mapped_value) = &mapped_channel.mapped_tvg_name {
-        if original.tvg_name.as_deref() != Some(mapped_value) {
-            let original_display = original.tvg_name.as_deref().unwrap_or("null");
-            descriptions.push(format!("tvg_name: {} → {}", original_display, mapped_value));
-        }
-    }
-
-    // Check tvg_logo changes
-    if let Some(mapped_value) = &mapped_channel.mapped_tvg_logo {
-        if original.tvg_logo.as_deref() != Some(mapped_value) {
-            let original_display = original.tvg_logo.as_deref().unwrap_or("null");
-            descriptions.push(format!("tvg_logo: {} → {}", original_display, mapped_value));
-        }
-    }
-
-    // Check tvg_shift changes with template resolution
-    if let Some(mapped_value) = &mapped_channel.mapped_tvg_shift {
-        if original.tvg_shift.as_deref() != Some(mapped_value) {
-            let original_display = original.tvg_shift.as_deref().unwrap_or("null");
-
-            // Find the action that set tvg_shift to show template and resolved value
-            if let Some(action) = actions
-                .iter()
-                .find(|action| action.contains("tvg_shift")) // Legacy test simplified
-            {
-                // Legacy test simplified
-                descriptions.push(format!(
-                    "tvg_shift: {} → {}",
-                    original_display, mapped_value
-                ));
-                return descriptions;
-            } else {
-                descriptions.push(format!(
-                    "tvg_shift: {} → {} (value: '{}')",
-                    original_display, "UNKNOWN", mapped_value
-                ));
-            }
-        }
-    }
-
-    // Check group_title changes
-    if let Some(mapped_value) = &mapped_channel.mapped_group_title {
-        if original.group_title.as_deref() != Some(mapped_value) {
-            let original_display = original.group_title.as_deref().unwrap_or("null");
-            descriptions.push(format!(
-                "group_title: {} → {}",
-                original_display, mapped_value
-            ));
-        }
-    }
-
-    // Check channel_name changes
-    if mapped_channel.mapped_channel_name != original.channel_name {
-        descriptions.push(format!(
-            "channel_name: {} → {}",
-            original.channel_name, mapped_channel.mapped_channel_name
-        ));
-    }
-
-    descriptions
-}
-
-/// Count conditions in a condition tree
-fn count_conditions_in_tree(tree: &crate::models::ConditionTree) -> usize {
-    count_conditions_in_node(&tree.root)
-}
-
-/// Count conditions in a condition node recursively
-fn count_conditions_in_node(node: &crate::models::ConditionNode) -> usize {
-    match node {
-        crate::models::ConditionNode::Condition { .. } => 1,
-        crate::models::ConditionNode::Group { children, .. } => {
-            children.iter().map(count_conditions_in_node).sum()
-        }
-    }
-}
-
-/// Create a human-readable display of a condition tree
-fn format_condition_tree_for_display(tree: &crate::models::ConditionTree) -> String {
-    format_condition_node_for_display(&tree.root, 0)
-}
-
-/// Generate JSON representation of condition tree for frontend rendering
-fn generate_expression_tree_json(tree: &crate::models::ConditionTree) -> serde_json::Value {
-    generate_condition_node_json(&tree.root)
-}
-
-/// Generate JSON representation of a condition node
-fn generate_condition_node_json(node: &crate::models::ConditionNode) -> serde_json::Value {
-    match node {
-        crate::models::ConditionNode::Condition {
-            field,
-            operator,
-            value,
-            negate,
-            case_sensitive,
-        } => {
-            json!({
-                "type": "condition",
-                "field": field,
-                "operator": format!("{:?}", operator),
-                "value": value,
-                "negate": negate,
-                "case_sensitive": case_sensitive
-            })
-        }
-        crate::models::ConditionNode::Group { operator, children } => {
-            let operator_str = match operator {
-                crate::models::LogicalOperator::And => "AND",
-                crate::models::LogicalOperator::Or => "OR",
-                // Legacy operators (should not be used in extended expressions)
-                crate::models::LogicalOperator::All => "AND", // Deprecated
-                crate::models::LogicalOperator::Any => "OR",  // Deprecated
-            };
-            
-            json!({
-                "type": "group",
-                "operator": operator_str,
-                "children": children.iter().map(|child| generate_condition_node_json(child)).collect::<Vec<_>>()
-            })
-        }
-    }
-}
-
-/// Format a condition node for human-readable display
-fn format_condition_node_for_display(node: &crate::models::ConditionNode, depth: usize) -> String {
-    let indent = "  ".repeat(depth);
-
-    match node {
-        crate::models::ConditionNode::Condition {
-            field,
-            operator,
-            value,
-            negate,
-            ..
-        } => {
-            let op_str = if *negate {
-                format!("NOT {}", operator)
-            } else {
-                format!("{}", operator)
-            };
-
-            format!("{}({} {} \"{}\")", indent, field, op_str, value)
-        }
-        crate::models::ConditionNode::Group { operator, children } => {
-            let mut result = format!("{}{}", indent, operator.to_string().to_uppercase());
-
-            for (i, child) in children.iter().enumerate() {
-                result.push('\n');
-                if i == children.len() - 1 {
-                    result.push_str(&format!("{}└── ", indent));
-                } else {
-                    result.push_str(&format!("{}├── ", indent));
+// Helper function to convert actions for testing
+fn convert_actions_for_test(
+    actions: &[crate::models::Action],
+) -> Vec<crate::models::data_mapping::DataMappingActionRequest> {
+    actions
+        .iter()
+        .filter_map(|action| {
+            let action_type = match action.operator {
+                crate::models::ActionOperator::Set => {
+                    crate::models::data_mapping::DataMappingActionType::SetValue
                 }
+                _ => return None, // Skip unsupported operators for now
+            };
 
-                let child_str = format_condition_node_for_display(child, 0);
-                result.push_str(&child_str);
-            }
+            let (value, logo_asset_id) = match &action.value {
+                crate::models::ActionValue::Literal(v) => {
+                    // Check if this is a @logo: reference
+                    if v.starts_with("@logo:") {
+                        if let Ok(logo_uuid) = uuid::Uuid::parse_str(&v[6..]) {
+                            (Some(v.clone()), Some(logo_uuid))
+                        } else {
+                            (Some(v.clone()), None)
+                        }
+                    } else {
+                        (Some(v.clone()), None)
+                    }
+                }
+                _ => (None, None), // Skip complex values for testing
+            };
 
-            result
-        }
-    }
+            Some(crate::models::data_mapping::DataMappingActionRequest {
+                action_type,
+                target_field: action.field.clone(),
+                value,
+                logo_asset_id,
+                timeshift_minutes: None,
+            })
+        })
+        .collect()
 }

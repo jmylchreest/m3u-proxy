@@ -1,3 +1,19 @@
+//! Utility functions for the M3U Proxy application
+//!
+//! This module provides various helper functions including:
+//! - URL normalization and sanitization
+//! - DateTime parsing utilities
+//! - **Logo URL Generation**: Centralized functions for generating logo URLs
+//!
+//! ## Logo URL Functions
+//!
+//! Use these functions consistently throughout the application for logo URLs:
+//!
+//! - `generate_logo_url(base_url, uuid)` - Full URL with domain
+//! - `logo_uuid_to_relative_url(uuid)` - Just the path (e.g., "/api/logos/uuid")
+//! - `logo_uuid_to_url_with_format(uuid, base_url, format)` - With format specifier
+//! - `logo_uuid_to_url(uuid, base_url, options)` - Full control with options
+
 use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx;
 use uuid::Uuid;
@@ -52,10 +68,71 @@ pub fn sanitize_base_url(base_url: &str) -> String {
     url
 }
 
-/// Generate a full logo URL using the base URL and logo asset ID
+/// Options for logo URL generation
+pub struct LogoUrlOptions {
+    /// Whether to include the full scheme and domain
+    pub include_domain: bool,
+    /// Optional format specifier (e.g., "original", "thumbnail")
+    pub format: Option<String>,
+}
+
+impl Default for LogoUrlOptions {
+    fn default() -> Self {
+        Self {
+            include_domain: true,
+            format: None,
+        }
+    }
+}
+
+/// Generate a logo URL with flexible options
+pub fn logo_uuid_to_url(logo_id: Uuid, base_url: &str, options: LogoUrlOptions) -> String {
+    let base = if options.include_domain {
+        sanitize_base_url(base_url)
+    } else {
+        String::new()
+    };
+
+    let path = if let Some(format) = options.format {
+        format!("/api/logos/{}/formats/{}", logo_id, format)
+    } else {
+        format!("/api/logos/{}", logo_id)
+    };
+
+    if options.include_domain {
+        format!("{}{}", base, path)
+    } else {
+        path
+    }
+}
+
+/// Generate a full logo URL using the base URL and logo asset ID (convenience function)
 pub fn generate_logo_url(base_url: &str, logo_id: Uuid) -> String {
-    let sanitized_base = sanitize_base_url(base_url);
-    format!("{}/api/logos/{}", sanitized_base, logo_id)
+    logo_uuid_to_url(logo_id, base_url, LogoUrlOptions::default())
+}
+
+/// Generate a relative logo URL (just the path, no domain)
+pub fn logo_uuid_to_relative_url(logo_id: Uuid) -> String {
+    logo_uuid_to_url(
+        logo_id,
+        "",
+        LogoUrlOptions {
+            include_domain: false,
+            format: None,
+        },
+    )
+}
+
+/// Generate a full logo URL with a specific format
+pub fn logo_uuid_to_url_with_format(logo_id: Uuid, base_url: &str, format: &str) -> String {
+    logo_uuid_to_url(
+        logo_id,
+        base_url,
+        LogoUrlOptions {
+            include_domain: true,
+            format: Some(format.to_string()),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -101,6 +178,69 @@ mod tests {
         assert_eq!(
             generate_logo_url("https://example.com", logo_id),
             "https://example.com/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+        );
+    }
+
+    #[test]
+    fn test_logo_uuid_to_url() {
+        let logo_id = Uuid::parse_str("c63d556e-7b3c-4a85-accd-214c32663482").unwrap();
+
+        // Test with full domain
+        assert_eq!(
+            logo_uuid_to_url(logo_id, "http://localhost:8080", LogoUrlOptions::default()),
+            "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+        );
+
+        // Test relative URL
+        assert_eq!(
+            logo_uuid_to_url(
+                logo_id,
+                "http://localhost:8080",
+                LogoUrlOptions {
+                    include_domain: false,
+                    format: None,
+                }
+            ),
+            "/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+        );
+
+        // Test with format
+        assert_eq!(
+            logo_uuid_to_url(logo_id, "http://localhost:8080", LogoUrlOptions {
+                include_domain: true,
+                format: Some("thumbnail".to_string()),
+            }),
+            "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482/formats/thumbnail"
+        );
+
+        // Test relative URL with format
+        assert_eq!(
+            logo_uuid_to_url(
+                logo_id,
+                "",
+                LogoUrlOptions {
+                    include_domain: false,
+                    format: Some("original".to_string()),
+                }
+            ),
+            "/api/logos/c63d556e-7b3c-4a85-accd-214c32663482/formats/original"
+        );
+    }
+
+    #[test]
+    fn test_convenience_functions() {
+        let logo_id = Uuid::parse_str("c63d556e-7b3c-4a85-accd-214c32663482").unwrap();
+
+        // Test relative URL convenience function
+        assert_eq!(
+            logo_uuid_to_relative_url(logo_id),
+            "/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+        );
+
+        // Test format convenience function
+        assert_eq!(
+            logo_uuid_to_url_with_format(logo_id, "http://localhost:8080", "thumbnail"),
+            "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482/formats/thumbnail"
         );
     }
 }

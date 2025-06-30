@@ -658,30 +658,47 @@ function escapeHtml(text) {
 }
 
 // Generate a visual tree representation of an expression
-function generateExpressionTree(expression) {
-  if (!expression || typeof expression !== "string") {
-    return "";
+function generateExpressionTree(rule) {
+  // Check if we have the new JSON expression_tree format
+  if (rule.expression_tree && typeof rule.expression_tree === "object") {
+    try {
+      return `
+        <div class="expression-tree-container">
+          <div class="expression-tree-header">
+            <strong>Logical Structure:</strong>
+          </div>
+          <div class="expression-tree">
+            ${renderJsonTreeNode(rule.expression_tree, 0)}
+          </div>
+        </div>
+      `;
+    } catch (error) {
+      console.warn("Failed to render JSON expression tree:", error);
+    }
   }
 
-  try {
-    // Parse the expression to extract logical structure
-    const tree = parseExpressionToTree(expression);
-    if (!tree) return "";
+  // Fallback to old string parsing method for backward compatibility
+  if (rule.expression && typeof rule.expression === "string") {
+    try {
+      const tree = parseExpressionToTree(rule.expression);
+      if (!tree) return "";
 
-    return `
-      <div class="expression-tree-container">
-        <div class="expression-tree-header">
-          <strong>Logical Structure:</strong>
+      return `
+        <div class="expression-tree-container">
+          <div class="expression-tree-header">
+            <strong>Logical Structure:</strong>
+          </div>
+          <div class="expression-tree">
+            ${renderTreeNode(tree, 0)}
+          </div>
         </div>
-        <div class="expression-tree">
-          ${renderTreeNode(tree, 0)}
-        </div>
-      </div>
-    `;
-  } catch (error) {
-    console.warn("Failed to parse expression tree:", error);
-    return "";
+      `;
+    } catch (error) {
+      console.warn("Failed to parse expression tree:", error);
+    }
   }
+
+  return "";
 }
 
 // Simple expression parser for tree visualization
@@ -769,6 +786,62 @@ function parseCondition(condition) {
 }
 
 // Render a tree node with proper indentation
+// Render JSON expression tree node (new format)
+function renderJsonTreeNode(node, depth = 0) {
+  if (!node) return "";
+
+  const indent = "  ".repeat(depth);
+
+  if (node.type === "group") {
+    let html = `<div class="tree-node tree-operator">${indent}${node.operator}</div>`;
+
+    if (node.children && node.children.length > 0) {
+      node.children.forEach((child, index) => {
+        const isLast = index === node.children.length - 1;
+        const connector = isLast ? "└── " : "├── ";
+
+        if (child.type === "group") {
+          html += `<div class="tree-node tree-operator">${indent}${connector}${child.operator}</div>`;
+          if (child.children && child.children.length > 0) {
+            child.children.forEach((grandchild, grandIndex) => {
+              const isLastGrand = grandIndex === child.children.length - 1;
+              const grandConnector = isLastGrand ? "└── " : "├── ";
+              const grandIndent = "  ".repeat(depth + 1);
+
+              if (grandchild.type === "group") {
+                html += renderJsonTreeNode(grandchild, depth + 2);
+              } else {
+                const negatePrefix = grandchild.negate ? "NOT " : "";
+                const caseDisplay = grandchild.case_sensitive
+                  ? " (case-sensitive)"
+                  : " (case-insensitive)";
+                html += `<div class="tree-node tree-condition">${grandIndent}${grandConnector}(${escapeHtml(grandchild.field)} ${negatePrefix}${grandchild.operator} "${escapeHtml(grandchild.value)}"${caseDisplay})</div>`;
+              }
+            });
+          }
+        } else {
+          const negatePrefix = child.negate ? "NOT " : "";
+          const caseDisplay = child.case_sensitive
+            ? " (case-sensitive)"
+            : " (case-insensitive)";
+          html += `<div class="tree-node tree-condition">${indent}${connector}(${escapeHtml(child.field)} ${negatePrefix}${child.operator} "${escapeHtml(child.value)}"${caseDisplay})</div>`;
+        }
+      });
+    }
+
+    return html;
+  } else if (node.type === "condition") {
+    const negatePrefix = node.negate ? "NOT " : "";
+    const caseDisplay = node.case_sensitive
+      ? " (case-sensitive)"
+      : " (case-insensitive)";
+    return `<div class="tree-node tree-condition">${indent}(${escapeHtml(node.field)} ${negatePrefix}${node.operator} "${escapeHtml(node.value)}"${caseDisplay})</div>`;
+  }
+
+  return "";
+}
+
+// Render legacy tree node (old format)
 function renderTreeNode(node, depth) {
   if (!node) return "";
 
@@ -862,7 +935,7 @@ function renderRules() {
         <div class="rule-expression">
           <strong>Expression:</strong>
           <pre><code>${escapeHtml(rule.expression || "No expression defined")}</code></pre>
-          ${rule.expression ? generateExpressionTree(rule.expression) : ""}
+          ${rule.expression ? generateExpressionTree(rule) : ""}
         </div>
       </div>
     </div>
@@ -1336,6 +1409,19 @@ function displayPreviewResults(title, result) {
                   .map((channel, channelIndex) => {
                     const mutations = [];
 
+                    // Helper function to get capture group info for a field
+                    const getCaptureInfo = (fieldName) => {
+                      if (!channel.capture_group_values) return null;
+                      for (const [ruleName, fields] of Object.entries(
+                        channel.capture_group_values,
+                      )) {
+                        if (fields[fieldName]) {
+                          return fields[fieldName];
+                        }
+                      }
+                      return null;
+                    };
+
                     // Check for changes between original and mapped values
                     if (
                       channel.original_channel_name !==
@@ -1346,6 +1432,7 @@ function displayPreviewResults(title, result) {
                         before: channel.original_channel_name,
                         after: channel.mapped_channel_name,
                         type: "text",
+                        captureInfo: getCaptureInfo("channel_name"),
                       });
                     }
                     if (channel.original_tvg_id !== channel.mapped_tvg_id) {
@@ -1354,6 +1441,7 @@ function displayPreviewResults(title, result) {
                         before: channel.original_tvg_id || "null",
                         after: channel.mapped_tvg_id || "null",
                         type: "text",
+                        captureInfo: getCaptureInfo("tvg_id"),
                       });
                     }
                     if (
@@ -1364,6 +1452,7 @@ function displayPreviewResults(title, result) {
                         before: channel.original_tvg_shift || "null",
                         after: channel.mapped_tvg_shift || "null",
                         type: "text",
+                        captureInfo: getCaptureInfo("tvg_shift"),
                       });
                     }
                     if (
@@ -1375,6 +1464,7 @@ function displayPreviewResults(title, result) {
                         before: channel.original_group_title || "null",
                         after: channel.mapped_group_title || "null",
                         type: "text",
+                        captureInfo: getCaptureInfo("group_title"),
                       });
                     }
                     if (channel.original_tvg_logo !== channel.mapped_tvg_logo) {
@@ -1383,6 +1473,7 @@ function displayPreviewResults(title, result) {
                         before: channel.original_tvg_logo || "null",
                         after: channel.mapped_tvg_logo || "null",
                         type: "logo",
+                        captureInfo: getCaptureInfo("tvg_logo"),
                       });
                     }
 
@@ -1412,6 +1503,7 @@ ${mutations
   .map((mut) => {
     const beforeVal = mut.before;
     const afterVal = mut.after;
+    const captureInfo = mut.captureInfo ? ` ${mut.captureInfo}` : "";
     const logoPreview =
       mut.type === "logo"
         ? `<div class="inline-logo-preview">
@@ -1420,7 +1512,7 @@ ${mutations
            ${getLogoPreviewElement(mut.after, "after")}
          </div>`
         : "";
-    return `${mut.field.padEnd(12)} ${beforeVal} → ${afterVal}${logoPreview}`;
+    return `${mut.field.padEnd(12)} ${beforeVal} → ${afterVal}${captureInfo}${logoPreview}`;
   })
   .join("\n")}
                           </code>
@@ -1490,6 +1582,15 @@ ${mutations
     allChannels: channels,
     allRules: rules,
   };
+
+  // Initialize channel visibility - all channels should be visible initially
+  // since all rules are selected by default
+  setTimeout(() => {
+    const channelRows = document.querySelectorAll(".channel-preview-row");
+    channelRows.forEach((row) => {
+      row.style.display = "block";
+    });
+  }, 0);
 }
 
 // Close preview modal function
@@ -1638,26 +1739,30 @@ function updateChannelVisibility() {
 
   const channelRows = document.querySelectorAll(".channel-preview-row");
 
-  // Create a mapping of rule IDs to selected indices
-  const selectedRuleIds = new Set();
-  filterState.selectedRules.forEach((ruleIndex) => {
-    const rule = filterState.allRules[ruleIndex];
-    if (rule && rule.rule_id) {
-      selectedRuleIds.add(rule.rule_id);
-    }
-  });
+  // If no rules are selected, hide all channels
+  if (filterState.selectedRules.size === 0) {
+    channelRows.forEach((row) => {
+      row.style.display = "none";
+    });
+  } else {
+    // Create a mapping of rule names from selected rule indices
+    const selectedRuleNames = new Set();
+    filterState.selectedRules.forEach((ruleIndex) => {
+      const rule = filterState.allRules[ruleIndex];
+      if (rule && rule.rule_name) {
+        selectedRuleNames.add(rule.rule_name);
+      }
+    });
 
-  channelRows.forEach((row) => {
-    const appliedRules = JSON.parse(row.dataset.appliedRules || "[]");
-
-    // Show channel if any of its applied rules are selected
-    // Allow showing nothing when no rules are selected (deselect all)
-    const shouldShow =
-      filterState.selectedRules.size > 0 &&
-      appliedRules.some((ruleId) => selectedRuleIds.has(ruleId));
-
-    row.style.display = shouldShow ? "block" : "none";
-  });
+    // Show channels that have at least one matching rule
+    channelRows.forEach((row) => {
+      const appliedRules = JSON.parse(row.dataset.appliedRules || "[]");
+      const hasMatchingRule = appliedRules.some((ruleName) =>
+        selectedRuleNames.has(ruleName),
+      );
+      row.style.display = hasMatchingRule ? "block" : "none";
+    });
+  }
 
   // Update channel count badge
   const visibleChannels = document.querySelectorAll(

@@ -20,7 +20,7 @@ field := identifier
 operator := "contains" | "equals" | "matches" | "starts_with" | "ends_with" | 
            "not_contains" | "not_equals" | "not_matches"
 value := quoted_string
-logical_operator := "AND" | "OR" | "ALL" | "ANY"
+logical_operator := "AND" | "OR"
 modifiers := ["not"] ["case_sensitive"]
 quoted_string := "\"" string "\"" | "'" string "'"
 ```

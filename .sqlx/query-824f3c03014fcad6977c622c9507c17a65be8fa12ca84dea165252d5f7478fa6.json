@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE epg_sources SET timezone = ?, timezone_detected = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "824f3c03014fcad6977c622c9507c17a65be8fa12ca84dea165252d5f7478fa6"
+}

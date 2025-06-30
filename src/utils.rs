@@ -1,23 +1,31 @@
 //! Utility functions for the M3U Proxy application
 //!
 //! This module provides various helper functions including:
-//! - URL normalization and sanitization
-//! - DateTime parsing utilities
-//! - **Logo URL Generation**: Centralized functions for generating logo URLs
+//! - URL normalization and sanitization  
+//! - DateTime parsing utilities (DEPRECATED - use utils::datetime)
+//! - Logo URL Generation (DEPRECATED - use utils::logo)
+//! - Validation utilities (use utils::validation)
 //!
-//! ## Logo URL Functions
+//! ## Migration Notice
 //!
-//! Use these functions consistently throughout the application for logo URLs:
+//! This module is being refactored. Use the new sub-modules:
+//! - `utils::datetime` for datetime operations
+//! - `utils::logo` for logo URL generation  
+//! - `utils::validation` for input validation
 //!
-//! - `generate_logo_url(uuid, base_url)` - Full URL if base_url provided, relative if None
-//! - `logo_uuid_to_url_with_format(uuid, base_url, format)` - With format specifier
-//! - `logo_uuid_to_url(uuid, base_url, options)` - Full control with options
+//! The functions in this module are maintained for backward compatibility
+//! but should be migrated to use the new modules.
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx;
 use uuid::Uuid;
 
 pub mod time;
+
+// New refactored modules
+pub mod datetime;
+pub mod logo;
+pub mod validation;
 
 /// Normalize a URL by ensuring it has a proper scheme (http:// or https://)
 /// If the URL already has a scheme, it returns it unchanged.

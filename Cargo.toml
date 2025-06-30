@@ -79,6 +79,7 @@ fastrand = "2.0"
 
 # URL parsing and manipulation
 url = "2.4"
+urlencoding = "2.1"
 
 
 # M3U and XMLTV parsing

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                UPDATE stream_sources\n                SET name = ?, url = ?, username = ?, password = ?,\n                    max_concurrent_streams = ?, update_cron = ?, is_active = ?, updated_at = ?\n                WHERE id = ?\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "19b08473748163c7fea821f70c0e849605e2a1c9c4c85724d5a254c337fb48b2"
+}

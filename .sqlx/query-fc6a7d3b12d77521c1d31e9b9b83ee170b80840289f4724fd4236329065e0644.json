@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE linked_xtream_sources\n            SET name = ?, url = ?, username = ?, password = ?, updated_at = ?\n            WHERE link_id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "fc6a7d3b12d77521c1d31e9b9b83ee170b80840289f4724fd4236329065e0644"
+}

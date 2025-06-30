@@ -119,7 +119,7 @@ fn test_intermediate_examples_from_docs() {
         ExtendedExpression::ConditionWithActions { condition, actions } => {
             match &condition.root {
                 ConditionNode::Group { operator, children } => {
-                    assert!(matches!(operator, LogicalOperator::All));
+                    assert!(matches!(operator, LogicalOperator::And));
                     assert_eq!(children.len(), 2);
                 }
                 _ => panic!("Expected AND group"),
@@ -136,7 +136,7 @@ fn test_intermediate_examples_from_docs() {
         ExtendedExpression::ConditionWithActions { condition, actions } => {
             match &condition.root {
                 ConditionNode::Group { operator, children } => {
-                    assert!(matches!(operator, LogicalOperator::All));
+                    assert!(matches!(operator, LogicalOperator::And));
                     assert_eq!(children.len(), 2);
 
                     // Second condition should be not_contains
@@ -232,14 +232,14 @@ fn test_nested_conditional_logic_from_docs() {
             // Verify deeply nested structure
             match &condition.root {
                 ConditionNode::Group { operator, children } => {
-                    assert!(matches!(operator, LogicalOperator::Any)); // Top-level OR
+                    assert!(matches!(operator, LogicalOperator::Or)); // Top-level OR
                     assert_eq!(children.len(), 2);
 
                     // Both children should be AND groups
                     for child in children {
                         match child {
                             ConditionNode::Group { operator, children } => {
-                                assert!(matches!(operator, LogicalOperator::All)); // AND groups
+                                assert!(matches!(operator, LogicalOperator::And)); // AND groups
                                 assert_eq!(children.len(), 2);
                             }
                             _ => panic!("Expected nested AND groups"),
@@ -407,7 +407,7 @@ fn test_quality_based_grouping_from_docs() {
             // HD group with exclusion logic
             match &groups[1].conditions.root {
                 ConditionNode::Group { operator, children } => {
-                    assert!(matches!(operator, LogicalOperator::All));
+                    assert!(matches!(operator, LogicalOperator::And));
                     assert_eq!(children.len(), 2);
                 }
                 _ => panic!("Expected AND group for HD conditions"),

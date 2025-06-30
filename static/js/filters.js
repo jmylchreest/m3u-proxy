@@ -239,12 +239,14 @@ class FiltersManager {
     }
 
     // Sort filters alphabetically by name
-    const sortedFilters = [...this.filters].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, {
+    const sortedFilters = [...this.filters].sort((a, b) => {
+      const nameA = (a.filter || a).name;
+      const nameB = (b.filter || b).name;
+      return nameA.localeCompare(nameB, undefined, {
         numeric: true,
         sensitivity: "base",
-      }),
-    );
+      });
+    });
 
     tbody.innerHTML = sortedFilters
       .map((filterData, index) => {
@@ -290,9 +292,10 @@ class FiltersManager {
                             ${this.renderActionsCell(filter, usageCount)}
                         </div>
                     </div>
-                    <div class="filter-pattern">
-                        <div class="pattern-label">Filter:</div>
-                        <pre class="pattern-code ${filterPreview.includes("⚠️") ? "pattern-warning" : ""}"><code>${this.escapeHtml(filterPreview)}</code></pre>
+                    <div class="rule-expression">
+                        <strong>Expression:</strong>
+                        <pre><code>${this.escapeHtml(filterPreview)}</code></pre>
+                        ${this.generateFilterExpressionTree(filterData)}
                     </div>
                 </div>
             `;
@@ -1864,6 +1867,156 @@ class FiltersManager {
     }
 
     return "";
+  }
+
+
+  // Generate expression tree for a filter on the main page
+  generateFilterExpressionTree(filterData) {
+    // Check if we have expression_tree from the API
+    if (filterData.expression_tree) {
+      return `
+        <div class="expression-tree-container">
+          <div class="expression-tree-header">
+            <strong>Logical Structure:</strong>
+          </div>
+          <div class="expression-tree">
+            ${this.renderFilterTreeNode(filterData.expression_tree, 0)}
+          </div>
+        </div>
+      `;
+    }
+
+    // Fallback: try to parse condition_tree directly (for legacy support)
+    const filter = filterData.filter || filterData;
+    if (!filter.condition_tree || filter.condition_tree.trim() === "") {
+      return "";
+    }
+
+    try {
+      const tree = JSON.parse(filter.condition_tree);
+      if (!tree) return "";
+
+      return `
+        <div class="expression-tree-container">
+          <div class="expression-tree-header">
+            <strong>Logical Structure:</strong>
+          </div>
+          <div class="expression-tree">
+            ${this.renderFilterTreeNode(tree, 0)}
+          </div>
+        </div>
+      `;
+    } catch (error) {
+      console.warn("Failed to render filter expression tree for filter", filter.id, ":", error);
+      return "";
+    }
+  }
+
+  // Validation methods for live expression preview
+  validateFilterExpression() {
+    const expression = document.getElementById("filterPattern")?.value?.trim();
+    const sourceType = document.getElementById("filterSourceType")?.value;
+    const textarea = document.getElementById("filterPattern");
+    const validationDiv = document.getElementById("filterExpressionValidation");
+
+    if (!validationDiv || !textarea) return;
+
+    // Clear previous validation
+    validationDiv.innerHTML = "";
+
+    if (!expression) {
+      textarea.classList.remove("is-invalid", "is-valid");
+      return;
+    }
+
+    if (!sourceType) {
+      validationDiv.innerHTML = `
+        <div class="alert alert-warning py-2">
+          <small>⚠️ Please select a source type first</small>
+        </div>
+      `;
+      textarea.classList.remove("is-valid");
+      textarea.classList.add("is-invalid");
+      return;
+    }
+
+    // Show loading indicator
+    validationDiv.innerHTML = `
+      <div class="d-flex align-items-center text-muted small">
+        <div class="spinner-border spinner-border-sm me-2" role="status" style="width: 12px; height: 12px;">
+          <span class="visually-hidden">Loading...</span>
+        </div>
+        Validating filter expression...
+      </div>
+    `;
+
+    // Validate filter expression
+    this.validateFilterExpressionAsync(expression, sourceType)
+      .then((result) => {
+        if (result.is_valid) {
+          let validationHtml = `
+            <div class="alert alert-success py-2">
+              <small>✅ Filter expression is valid</small>
+            </div>
+          `;
+
+          // Add expression tree if available
+          if (result.expression_tree) {
+            validationHtml += this.generateFilterExpressionTreeHtml(result.expression_tree);
+          }
+
+          validationDiv.innerHTML = validationHtml;
+          textarea.classList.remove("is-invalid");
+          textarea.classList.add("is-valid");
+        } else {
+          validationDiv.innerHTML = `
+            <div class="alert alert-danger py-2">
+              <small>❌ ${result.error || "Filter validation failed"}</small>
+            </div>
+          `;
+          textarea.classList.remove("is-valid");
+          textarea.classList.add("is-invalid");
+        }
+      })
+      .catch((error) => {
+        validationDiv.innerHTML = `
+          <div class="alert alert-danger py-2">
+            <small>❌ Validation error: ${error.message}</small>
+          </div>
+        `;
+        textarea.classList.remove("is-valid");
+        textarea.classList.add("is-invalid");
+      });
+  }
+
+  async validateFilterExpressionAsync(expression, sourceType) {
+    const response = await fetch("/api/filters/validate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        filter_expression: expression,
+        source_type: sourceType,
+        source_id: "00000000-0000-0000-0000-000000000000", // Dummy UUID for validation
+        is_inverse: false,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  debouncedValidateFilterExpression() {
+    if (this.validationTimeout) {
+      clearTimeout(this.validationTimeout);
+    }
+    this.validationTimeout = setTimeout(() => {
+      this.validateFilterExpression();
+    }, 500);
   }
 }
 

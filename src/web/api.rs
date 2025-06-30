@@ -335,9 +335,34 @@ pub async fn regenerate_proxy(
 // Filters API
 pub async fn list_filters(
     State(state): State<AppState>,
-) -> Result<Json<Vec<FilterWithUsage>>, StatusCode> {
+) -> Result<Json<serde_json::Value>, StatusCode> {
     match state.database.get_filters_with_usage().await {
-        Ok(filters) => Ok(Json(filters)),
+        Ok(filters) => {
+            // Generate expression trees for each filter
+            let enhanced_filters: Vec<serde_json::Value> = filters
+                .into_iter()
+                .map(|filter_with_usage| {
+                    let expression_tree = if !filter_with_usage.filter.condition_tree.trim().is_empty() {
+                        // Parse the condition_tree JSON to generate expression tree
+                        if let Ok(condition_tree) = serde_json::from_str::<crate::models::ConditionTree>(&filter_with_usage.filter.condition_tree) {
+                            Some(generate_expression_tree_json(&condition_tree))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    serde_json::json!({
+                        "filter": filter_with_usage.filter,
+                        "usage_count": filter_with_usage.usage_count,
+                        "expression_tree": expression_tree,
+                    })
+                })
+                .collect();
+
+            Ok(Json(serde_json::Value::Array(enhanced_filters)))
+        }
         Err(e) => {
             error!("Failed to list filters: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -428,6 +453,38 @@ pub async fn test_filter(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+pub async fn validate_filter(
+    Json(payload): Json<FilterTestRequest>,
+) -> Result<Json<FilterTestResult>, StatusCode> {
+    // Parse the filter expression to validate syntax and generate expression tree
+    let parser = crate::filter_parser::FilterParser::new();
+    let condition_tree = match parser.parse(&payload.filter_expression) {
+        Ok(tree) => tree,
+        Err(e) => {
+            return Ok(Json(FilterTestResult {
+                is_valid: false,
+                error: Some(format!("Syntax error: {}", e)),
+                matching_channels: vec![],
+                total_channels: 0,
+                matched_count: 0,
+                expression_tree: None,
+            }));
+        }
+    };
+
+    // Generate expression tree for frontend
+    let expression_tree = generate_expression_tree_json(&condition_tree);
+
+    Ok(Json(FilterTestResult {
+        is_valid: true,
+        error: None,
+        matching_channels: vec![], // No actual testing for validation
+        total_channels: 0,
+        matched_count: 0,
+        expression_tree: Some(expression_tree),
+    }))
 }
 
 // Source-specific filter endpoints
@@ -2653,11 +2710,11 @@ pub async fn get_logo_asset_with_formats(
                 }
             };
 
-            // Convert linked assets to LogoAssetWithUrl
+            // Convert linked assets to LogoAssetWithUrl (using relative URLs for web UI)
             let linked_with_urls: Vec<crate::models::logo_asset::LogoAssetWithUrl> = linked_assets
                 .into_iter()
                 .map(|linked| crate::models::logo_asset::LogoAssetWithUrl {
-                    url: crate::utils::generate_logo_url(&state.config.web.base_url, linked.id),
+                    url: crate::utils::generate_logo_url(linked.id, None),
                     asset: linked,
                 })
                 .collect();
@@ -2679,7 +2736,7 @@ pub async fn get_logo_asset_with_formats(
 
             let response = crate::models::logo_asset::LogoAssetWithLinked {
                 asset,
-                url: crate::utils::generate_logo_url(&state.config.web.base_url, id),
+                url: crate::utils::generate_logo_url(id, None),
                 linked_assets: linked_with_urls,
                 available_formats,
             };
@@ -3165,9 +3222,6 @@ fn generate_condition_node_json(node: &crate::models::ConditionNode) -> serde_js
             let operator_str = match operator {
                 crate::models::LogicalOperator::And => "AND",
                 crate::models::LogicalOperator::Or => "OR",
-                // Legacy operators (should not be used in extended expressions)
-                crate::models::LogicalOperator::All => "AND", // Deprecated
-                crate::models::LogicalOperator::Any => "OR",  // Deprecated
             };
             
             json!({

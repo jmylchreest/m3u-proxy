@@ -201,7 +201,7 @@ impl LogoAssetService {
                 updated_at: utils::parse_datetime(&row.get::<String, _>("updated_at"))?,
             };
 
-            let url = crate::utils::generate_logo_url(base_url, asset.id);
+            let url = crate::utils::generate_logo_url(asset.id, Some(base_url));
             assets.push(LogoAssetWithUrl { asset, url });
         }
 
@@ -319,7 +319,7 @@ impl LogoAssetService {
                 updated_at: utils::parse_datetime(&row.get::<String, _>("updated_at"))?,
             };
 
-            let url = crate::utils::generate_logo_url(base_url, asset.id);
+            let url = crate::utils::generate_logo_url(asset.id, Some(base_url));
             assets.push(LogoAssetWithUrl { asset, url });
         }
 

@@ -340,7 +340,7 @@ impl DataMappingEngine {
                     if val.starts_with("@logo:") {
                         if let Ok(logo_uuid) = uuid::Uuid::parse_str(&val[6..]) {
                             if let Some(_logo_asset) = logo_assets.get(&logo_uuid) {
-                                (crate::utils::generate_logo_url(base_url, logo_uuid), None)
+                                (crate::utils::generate_logo_url(logo_uuid, Some(base_url)), None)
                             } else {
                                 (val.clone(), None)
                             }
@@ -534,7 +534,7 @@ impl DataMappingEngine {
                     if val.starts_with("@logo:") {
                         if let Ok(logo_uuid) = uuid::Uuid::parse_str(&val[6..]) {
                             if let Some(_logo_asset) = logo_assets.get(&logo_uuid) {
-                                crate::utils::generate_logo_url(base_url, logo_uuid)
+                                crate::utils::generate_logo_url(logo_uuid, Some(base_url))
                             } else {
                                 val.clone()
                             }
@@ -887,13 +887,6 @@ impl DataMappingEngine {
                         LogicalOperator::Or => {
                             combined_result = combined_result || child_result;
                         }
-                        // Legacy operators (should not be used in extended expressions)
-                        LogicalOperator::All => {
-                            combined_result = combined_result && child_result;
-                        }
-                        LogicalOperator::Any => {
-                            combined_result = combined_result || child_result;
-                        }
                     }
                 }
 
@@ -1092,11 +1085,11 @@ impl DataMappingEngine {
         let capture_description = if !has_substitutions {
             None
         } else {
-            // Format: template (value: 'resolved_value', $1='val1', $2='')
+            // Format: 'resolved_value' (template, $1='val1', $2='')
             Some(format!(
-                "{} (value: '{}', {})",
-                input,  // Original template
+                "'{}' ({}, {})",
                 result, // Resolved value
+                input,  // Original template
                 individual_captures.join(", ")
             ))
         };

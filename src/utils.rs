@@ -9,8 +9,7 @@
 //!
 //! Use these functions consistently throughout the application for logo URLs:
 //!
-//! - `generate_logo_url(base_url, uuid)` - Full URL with domain
-//! - `logo_uuid_to_relative_url(uuid)` - Just the path (e.g., "/api/logos/uuid")
+//! - `generate_logo_url(uuid, base_url)` - Full URL if base_url provided, relative if None
 //! - `logo_uuid_to_url_with_format(uuid, base_url, format)` - With format specifier
 //! - `logo_uuid_to_url(uuid, base_url, options)` - Full control with options
 
@@ -106,22 +105,18 @@ pub fn logo_uuid_to_url(logo_id: Uuid, base_url: &str, options: LogoUrlOptions) 
     }
 }
 
-/// Generate a full logo URL using the base URL and logo asset ID (convenience function)
-pub fn generate_logo_url(base_url: &str, logo_id: Uuid) -> String {
-    logo_uuid_to_url(logo_id, base_url, LogoUrlOptions::default())
+/// Generate a logo URL with optional base URL (convenience function)
+/// If base_url is None, returns a relative URL; if Some(base_url), returns a full URL
+pub fn generate_logo_url(logo_id: Uuid, base_url: Option<&str>) -> String {
+    match base_url {
+        Some(base) => logo_uuid_to_url(logo_id, base, LogoUrlOptions::default()),
+        None => logo_uuid_to_url(logo_id, "", LogoUrlOptions { 
+            include_domain: false, 
+            format: None 
+        }),
+    }
 }
 
-/// Generate a relative logo URL (just the path, no domain)
-pub fn logo_uuid_to_relative_url(logo_id: Uuid) -> String {
-    logo_uuid_to_url(
-        logo_id,
-        "",
-        LogoUrlOptions {
-            include_domain: false,
-            format: None,
-        },
-    )
-}
 
 /// Generate a full logo URL with a specific format
 pub fn logo_uuid_to_url_with_format(logo_id: Uuid, base_url: &str, format: &str) -> String {
@@ -165,19 +160,26 @@ mod tests {
     fn test_generate_logo_url() {
         let logo_id = Uuid::parse_str("c63d556e-7b3c-4a85-accd-214c32663482").unwrap();
 
+        // Test with full URLs
         assert_eq!(
-            generate_logo_url("http://localhost:8080", logo_id),
+            generate_logo_url(logo_id, Some("http://localhost:8080")),
             "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
 
         assert_eq!(
-            generate_logo_url("http://localhost:8080/", logo_id),
+            generate_logo_url(logo_id, Some("http://localhost:8080/")),
             "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
 
         assert_eq!(
-            generate_logo_url("https://example.com", logo_id),
+            generate_logo_url(logo_id, Some("https://example.com")),
             "https://example.com/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+        );
+
+        // Test with relative URL
+        assert_eq!(
+            generate_logo_url(logo_id, None),
+            "/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
     }
 
@@ -233,7 +235,7 @@ mod tests {
 
         // Test relative URL convenience function
         assert_eq!(
-            logo_uuid_to_relative_url(logo_id),
+            generate_logo_url(logo_id, None),
             "/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
 

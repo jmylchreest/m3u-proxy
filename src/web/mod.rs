@@ -130,6 +130,7 @@ impl WebServer {
             )
             .route("/api/filters/epg/fields", get(api::get_epg_filter_fields))
             .route("/api/filters/test", post(api::test_filter))
+            .route("/api/filters/validate", post(api::validate_filter))
             // Legacy filter endpoints (for backward compatibility)
             .route(
                 "/api/filters",

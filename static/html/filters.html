@@ -82,7 +82,10 @@
                                 autocorrect="off"
                                 autocapitalize="off"
                                 placeholder='Enter filter pattern... (e.g., channel_name contains "sport" OR (tvg_id contains "BBC" AND group_title not_contains "adult"))'
+                                onchange="filtersManager.validateFilterExpression()"
+                                oninput="filtersManager.debouncedValidateFilterExpression()"
                             ></textarea>
+                            <div id="filterExpressionValidation" class="mt-2"></div>
                             <small class="text-muted">
                                 Use natural language patterns with operators
                                 like <code>contains</code>, <code>equals</code>,

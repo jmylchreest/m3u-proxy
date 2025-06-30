@@ -156,9 +156,6 @@ impl FilterEngine {
                 match operator {
                     LogicalOperator::And => Ok(results.iter().all(|&x| x)),
                     LogicalOperator::Or => Ok(results.iter().any(|&x| x)),
-                    // Legacy fallback mapping
-                    LogicalOperator::All => Ok(results.iter().all(|&x| x)),
-                    LogicalOperator::Any => Ok(results.iter().any(|&x| x)),
                 }
             }
         }

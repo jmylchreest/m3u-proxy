@@ -59,7 +59,7 @@ class SourcesManager {
   async loadSources() {
     try {
       this.showLoading();
-      const response = await fetch("/api/sources/stream");
+      const response = await fetch("/api/v1/sources/stream");
 
       if (!response.ok) {
         throw new Error(
@@ -317,7 +317,7 @@ class SourcesManager {
 
       let response;
       if (this.editingSource) {
-        response = await fetch(`/api/sources/stream/${this.editingSource.id}`, {
+        response = await fetch(`/api/v1/sources/stream/${this.editingSource.id}`, {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
@@ -325,7 +325,7 @@ class SourcesManager {
           body: JSON.stringify(formData),
         });
       } else {
-        response = await fetch("/api/sources/stream", {
+        response = await fetch("/api/v1/sources/stream", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -410,7 +410,7 @@ class SourcesManager {
     const source = sourceWithStats.source || sourceWithStats;
 
     try {
-      const response = await fetch(`/api/sources/stream/${id}/refresh`, {
+      const response = await fetch(`/api/v1/sources/stream/${id}/refresh`, {
         method: "POST",
       });
 
@@ -447,7 +447,7 @@ class SourcesManager {
     }
 
     try {
-      const response = await fetch(`/api/sources/stream/${id}`, {
+      const response = await fetch(`/api/v1/sources/stream/${id}`, {
         method: "DELETE",
       });
 
@@ -527,7 +527,7 @@ class SourcesManager {
 
   async loadProgress() {
     try {
-      const response = await fetch("/api/progress/sources");
+      const response = await fetch("/api/v1/progress/sources");
       if (!response.ok) return;
 
       const data = await response.json();
@@ -675,7 +675,7 @@ class SourcesManager {
     const source = sourceWithStats.source || sourceWithStats;
 
     try {
-      const response = await fetch(`/api/sources/stream/${id}/cancel`, {
+      const response = await fetch(`/api/v1/sources/stream/${id}/cancel`, {
         method: "POST",
       });
 
@@ -716,7 +716,7 @@ class SourcesManager {
       }
 
       const response = await fetch(
-        `/api/sources/${sourceType}/${sourceId}/data-mapping/preview`,
+        `/api/v1/sources/${sourceType}/${sourceId}/data-mapping/preview`,
       );
 
       if (!response.ok) {

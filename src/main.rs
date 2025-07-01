@@ -3,27 +3,18 @@ use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-pub mod assets;
-mod config;
-mod data_mapping;
-mod database;
-mod filter_parser;
-mod ingestor;
-mod logo_assets;
-mod models;
-mod proxy;
-mod utils;
-mod web;
-
-use config::Config;
-use data_mapping::DataMappingService;
-use database::Database;
-use ingestor::{
-    scheduler::{create_cache_invalidation_channel, SchedulerService},
-    IngestionStateManager,
+// Use the library instead of redeclaring modules
+use m3u_proxy::{
+    config::Config,
+    data_mapping::DataMappingService,
+    database::Database,
+    ingestor::{
+        scheduler::{create_cache_invalidation_channel, SchedulerService},
+        IngestionStateManager,
+    },
+    logo_assets::{LogoAssetService, LogoAssetStorage},
+    web::WebServer,
 };
-use logo_assets::{LogoAssetService, LogoAssetStorage};
-use web::WebServer;
 
 #[derive(Parser)]
 #[command(name = "m3u-proxy")]

@@ -87,7 +87,7 @@ class FiltersManager {
 
   async loadFilterFields() {
     try {
-      const response = await fetch("/api/filters/fields");
+      const response = await fetch("/api/v1/filters/fields");
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -134,7 +134,7 @@ class FiltersManager {
 
   async loadSources() {
     try {
-      const response = await fetch("/api/sources/stream");
+      const response = await fetch("/api/v1/sources/stream");
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -207,7 +207,7 @@ class FiltersManager {
   async loadFilters() {
     this.showLoading();
     try {
-      const response = await fetch("/api/filters?" + new Date().getTime());
+      const response = await fetch("/api/v1/filters?" + new Date().getTime());
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -394,8 +394,8 @@ class FiltersManager {
 
     try {
       const url = this.isEditing
-        ? `/api/filters/${this.currentFilter.id}`
-        : "/api/filters";
+        ? `/api/v1/filters/${this.currentFilter.id}`
+        : "/api/v1/filters";
       const method = this.isEditing ? "PUT" : "POST";
 
       const response = await fetch(url, {
@@ -528,7 +528,7 @@ class FiltersManager {
     }
 
     try {
-      const response = await fetch(`/api/filters/${filter.id}`, {
+      const response = await fetch(`/api/v1/filters/${filter.id}`, {
         method: "DELETE",
       });
 
@@ -574,7 +574,7 @@ class FiltersManager {
     testBtn.disabled = true;
 
     try {
-      const response = await fetch("/api/filters/test", {
+      const response = await fetch("/api/v1/filters/test", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1008,7 +1008,7 @@ class FiltersManager {
       is_inverse: false,
     };
 
-    const response = await fetch("/api/filters/test", {
+    const response = await fetch("/api/v1/filters/test", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1990,7 +1990,7 @@ class FiltersManager {
   }
 
   async validateFilterExpressionAsync(expression, sourceType) {
-    const response = await fetch("/api/filters/validate", {
+    const response = await fetch("/api/v1/filters/validate", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

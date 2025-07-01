@@ -1,11 +1,11 @@
 use crate::filter_parser::FilterParser;
 use crate::models::{
     data_mapping::{
-        DataMappingRule, DataMappingRuleScope, DataMappingSourceType, EpgDataMappingResult,
-        MappedChannel, MappedEpgChannel, MappedEpgProgram,
+        DataMappingRule, DataMappingRuleScope, DataMappingSourceType,
+        MappedChannel,
     },
     logo_asset::LogoAsset,
-    Channel, EpgChannel, EpgProgram, ExtendedExpression, FilterOperator, LogicalOperator,
+    Channel, ExtendedExpression, FilterOperator, LogicalOperator,
 };
 
 use chrono::Utc;
@@ -837,6 +837,12 @@ impl DataMappingEngine {
                     FilterOperator::EndsWith => {
                         field_value.to_lowercase().ends_with(&value.to_lowercase())
                     }
+                    FilterOperator::NotStartsWith => !field_value
+                        .to_lowercase()
+                        .starts_with(&value.to_lowercase()),
+                    FilterOperator::NotEndsWith => {
+                        !field_value.to_lowercase().ends_with(&value.to_lowercase())
+                    }
                     FilterOperator::Matches => {
                         let regex = self.get_or_create_regex(value, false)?;
                         if let Some(matched) = regex.captures(&field_value) {
@@ -938,67 +944,6 @@ impl DataMappingEngine {
         }
     }
 
-    /// Apply EPG mapping rules (simplified version)
-    pub fn apply_epg_mapping_rules(
-        &mut self,
-        channels: Vec<EpgChannel>,
-        programs: Vec<EpgProgram>,
-        _rules: Vec<DataMappingRule>,
-        _logo_assets: HashMap<Uuid, LogoAsset>,
-        _source_id: Uuid,
-        _base_url: &str,
-    ) -> Result<EpgDataMappingResult, Box<dyn std::error::Error>> {
-        let start_time = Instant::now();
-
-        // For now, return a simple result with no transformations applied
-        // This would need to be implemented for full EPG support
-        let mapped_channels: Vec<MappedEpgChannel> = channels
-            .into_iter()
-            .map(|channel| MappedEpgChannel {
-                original: channel.clone(),
-                mapped_channel_id: channel.channel_id.clone(),
-                mapped_channel_name: channel.channel_name.clone(),
-                mapped_channel_logo: channel.channel_logo.clone(),
-                mapped_channel_group: channel.channel_group.clone(),
-                mapped_language: channel.language.clone(),
-                applied_rules: Vec::new(),
-                clone_group_id: None,
-                is_primary_clone: true,
-                timeshift_offset: None,
-            })
-            .collect();
-
-        let mapped_programs: Vec<MappedEpgProgram> = programs
-            .into_iter()
-            .map(|program| MappedEpgProgram {
-                original: program.clone(),
-                mapped_channel_id: program.channel_id.clone(),
-                mapped_channel_name: program.channel_name.clone(),
-                mapped_program_title: program.program_title.clone(),
-                mapped_program_description: program.program_description.clone(),
-                mapped_program_category: program.program_category.clone(),
-                mapped_start_time: program.start_time,
-                mapped_end_time: program.end_time,
-                applied_rules: Vec::new(),
-            })
-            .collect();
-
-        let result = EpgDataMappingResult {
-            mapped_channels,
-            mapped_programs,
-            clone_groups: HashMap::new(),
-            total_mutations: 0,
-            channels_affected: 0,
-            programs_affected: 0,
-        };
-
-        let duration = start_time.elapsed();
-        if self.config.enable_performance_logging {
-            info!("EPG mapping completed in {:?}", duration);
-        }
-
-        Ok(result)
-    }
 
     /// Test a mapping rule with given channels (simplified version)
     pub fn test_mapping_rule(
@@ -1031,17 +976,6 @@ impl DataMappingEngine {
         Ok(mapped_channels)
     }
 
-    /// Get EPG channel field value
-    fn get_epg_channel_field_value(&self, channel: &EpgChannel, field: &str) -> Option<String> {
-        match field {
-            "channel_id" => Some(channel.channel_id.clone()),
-            "channel_name" => Some(channel.channel_name.clone()),
-            "channel_logo" => channel.channel_logo.clone(),
-            "channel_group" => channel.channel_group.clone(),
-            "language" => channel.language.clone(),
-            _ => None,
-        }
-    }
 
     /// Substitute capture groups ($1, $2, etc.) in a string with actual captured values
     fn substitute_capture_groups(

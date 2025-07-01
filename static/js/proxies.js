@@ -28,7 +28,7 @@ if (document.readyState === "loading") {
 // Load all stream proxies
 async function loadProxies() {
   try {
-    const response = await fetch("/api/proxies?" + new Date().getTime());
+    const response = await fetch("/api/v1/proxies?" + new Date().getTime());
     console.log("Proxies API response status:", response.status);
     if (!response.ok) throw new Error("Failed to load proxies");
 
@@ -48,7 +48,7 @@ async function loadProxies() {
 // Load sources for dropdown
 async function loadSources() {
   try {
-    const response = await fetch("/api/sources");
+    const response = await fetch("/api/v1/sources");
     if (!response.ok) throw new Error("Failed to load sources");
 
     availableSources = await response.json();
@@ -61,7 +61,7 @@ async function loadSources() {
 // Load filters for checkboxes
 async function loadFilters() {
   try {
-    const response = await fetch("/api/filters");
+    const response = await fetch("/api/v1/filters");
     if (!response.ok) throw new Error("Failed to load filters");
 
     availableFilters = await response.json();
@@ -238,8 +238,8 @@ async function saveProxy() {
 
   try {
     const url = editingProxy
-      ? `/api/proxies/${editingProxy.id}`
-      : "/api/proxies";
+      ? `/api/v1/proxies/${editingProxy.id}`
+      : "/api/v1/proxies";
     const method = editingProxy ? "PUT" : "POST";
 
     const response = await fetch(url, {
@@ -288,7 +288,7 @@ async function deleteProxy(proxyId) {
   }
 
   try {
-    const response = await fetch(`/api/proxies/${proxyId}`, {
+    const response = await fetch(`/api/v1/proxies/${proxyId}`, {
       method: "DELETE",
     });
 
@@ -309,7 +309,7 @@ async function regenerateProxy(proxyId) {
   try {
     showInfo("Regenerating proxy...");
 
-    const response = await fetch(`/api/proxies/${proxyId}/regenerate`, {
+    const response = await fetch(`/api/v1/proxies/${proxyId}/regenerate`, {
       method: "POST",
     });
 
@@ -337,7 +337,7 @@ async function regenerateAllProxies() {
   try {
     showInfo("Regenerating all proxies...");
 
-    const response = await fetch("/api/proxies/regenerate-all", {
+    const response = await fetch("/api/v1/proxies/regenerate-all", {
       method: "POST",
     });
 
@@ -385,7 +385,7 @@ async function generatePreview(proxyData) {
   try {
     showInfo("Generating preview...");
 
-    const response = await fetch("/api/proxies/preview", {
+    const response = await fetch("/api/v1/proxies/preview", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -60,7 +60,7 @@ class EpgSourcesManager {
   async loadSources() {
     try {
       this.showLoading();
-      const response = await fetch("/api/sources/epg");
+      const response = await fetch("/api/v1/sources/epg");
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -451,8 +451,8 @@ class EpgSourcesManager {
 
     try {
       const url = isEditing
-        ? `/api/sources/epg/${this.editingSource.id}`
-        : "/api/sources/epg";
+        ? `/api/v1/sources/epg/${this.editingSource.id}`
+        : "/api/v1/sources/epg";
 
       const method = isEditing ? "PUT" : "POST";
 
@@ -547,7 +547,7 @@ class EpgSourcesManager {
 
   async editSource(sourceId) {
     try {
-      const response = await fetch(`/api/sources/epg/${sourceId}`);
+      const response = await fetch(`/api/v1/sources/epg/${sourceId}`);
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -563,7 +563,7 @@ class EpgSourcesManager {
 
   async refreshSource(sourceId) {
     try {
-      const response = await fetch(`/api/sources/epg/${sourceId}/refresh`, {
+      const response = await fetch(`/api/v1/sources/epg/${sourceId}/refresh`, {
         method: "POST",
       });
 
@@ -601,7 +601,7 @@ class EpgSourcesManager {
 
     for (const source of activeSources) {
       try {
-        const response = await fetch(`/api/sources/epg/${source.id}/refresh`, {
+        const response = await fetch(`/api/v1/sources/epg/${source.id}/refresh`, {
           method: "POST",
         });
 
@@ -645,7 +645,7 @@ class EpgSourcesManager {
   // Progress tracking methods
   async loadProgress() {
     try {
-      const response = await fetch("/api/progress/sources");
+      const response = await fetch("/api/v1/progress/sources");
       if (!response.ok) return;
 
       const data = await response.json();
@@ -741,7 +741,7 @@ class EpgSourcesManager {
     }
 
     try {
-      const response = await fetch(`/api/sources/epg/${sourceId}`, {
+      const response = await fetch(`/api/v1/sources/epg/${sourceId}`, {
         method: "DELETE",
       });
 
@@ -774,7 +774,7 @@ class EpgSourcesManager {
       content.style.display = "none";
 
       // Load channels
-      const response = await fetch(`/api/sources/epg/${sourceId}/channels`);
+      const response = await fetch(`/api/v1/sources/epg/${sourceId}/channels`);
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -1217,7 +1217,7 @@ class EpgSourcesManager {
 
       // Note: We do client-side filtering instead of server-side for better flexibility
 
-      const apiUrl = `/api/epg/viewer?${params}`;
+      const apiUrl = `/api/v1/epg/viewer?${params}`;
       console.log("Making API request to:", apiUrl);
 
       const response = await fetch(apiUrl, {

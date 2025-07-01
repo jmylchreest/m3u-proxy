@@ -226,6 +226,22 @@ impl FilterEngine {
                 let regex = self.get_or_compile_regex(value, case_sensitive)?;
                 !regex.is_match(&field_value)
             }
+            FilterOperator::NotStartsWith => {
+                if case_sensitive {
+                    !field_value.starts_with(value)
+                } else {
+                    !field_value
+                        .to_lowercase()
+                        .starts_with(&value.to_lowercase())
+                }
+            }
+            FilterOperator::NotEndsWith => {
+                if case_sensitive {
+                    !field_value.ends_with(value)
+                } else {
+                    !field_value.to_lowercase().ends_with(&value.to_lowercase())
+                }
+            }
         };
 
         // Apply negation if specified

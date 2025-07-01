@@ -1058,7 +1058,6 @@ pub async fn test_data_mapping_rule(
     Json(payload): Json<crate::models::data_mapping::DataMappingTestRequest>,
 ) -> Result<Json<crate::models::data_mapping::DataMappingTestResult>, StatusCode> {
     use crate::data_mapping::DataMappingEngine;
-    use crate::filter_parser::FilterParser;
 
     // Get channels from the source
     let channels = match state
@@ -1078,106 +1077,20 @@ pub async fn test_data_mapping_rule(
 
     let total_channels_count = channels.len();
 
-    // Parse the expression to get conditions and actions
-    let available_fields = match payload.source_type {
-        crate::models::data_mapping::DataMappingSourceType::Stream => {
-            crate::models::data_mapping::StreamMappingFields::available_fields()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect()
-        }
-        crate::models::data_mapping::DataMappingSourceType::Epg => {
-            crate::models::data_mapping::EpgMappingFields::available_fields()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect()
-        }
-    };
-
-    let parser = FilterParser::new().with_fields(available_fields);
-    let parsed_expression = match parser.parse_extended(&payload.expression) {
-        Ok(expr) => expr,
-        Err(e) => {
-            return Ok(Json(crate::models::data_mapping::DataMappingTestResult {
-                is_valid: false,
-                error: Some(format!("Expression parsing error: {}", e)),
-                matching_channels: vec![],
-                total_channels: total_channels_count as i32,
-                matched_count: 0,
-            }));
-        }
-    };
-
-    // Count conditions and actions from parsed expression
-    let (condition_count, action_count) = match &parsed_expression {
-        crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
-            (count_conditions_in_tree(condition_tree), 0)
-        }
-        crate::models::ExtendedExpression::ConditionWithActions { condition, actions } => {
-            (count_conditions_in_tree(condition), actions.len())
-        }
-        crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
-            let condition_count: usize = groups
-                .iter()
-                .map(|g| count_conditions_in_tree(&g.conditions))
-                .sum();
-            let action_count: usize = groups.iter().map(|g| g.actions.len()).sum();
-            (condition_count, action_count)
-        }
-    };
-
-    // For testing, create temporary conditions and actions from the parsed expression
-    let (_conditions, actions) = match parsed_expression {
-        crate::models::ExtendedExpression::ConditionOnly(_) => {
-            // No actions to test
-            return Ok(Json(crate::models::data_mapping::DataMappingTestResult {
-                is_valid: true,
-                error: Some(format!(
-                    "Condition-only expression: {} conditions, 0 actions",
-                    condition_count
-                )),
-                matching_channels: vec![],
-                total_channels: total_channels_count as i32,
-                matched_count: 0,
-            }));
-        }
-        crate::models::ExtendedExpression::ConditionWithActions { condition, actions } => {
-            // Convert condition tree to flat conditions for testing
-            let flat_conditions = flatten_condition_tree_for_test(&condition);
-            let test_actions = Vec::<String>::new(); // Legacy test simplified
-            (flat_conditions, test_actions)
-        }
-        crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
-            // For testing, use the first group
-            if let Some(first_group) = groups.first() {
-                let flat_conditions = flatten_condition_tree_for_test(&first_group.conditions);
-                let test_actions = Vec::<String>::new(); // Legacy test simplified
-                (flat_conditions, test_actions)
-            } else {
-                return Ok(Json(crate::models::data_mapping::DataMappingTestResult {
-                    is_valid: false,
-                    error: Some("No conditional action groups found".to_string()),
-                    matching_channels: vec![],
-                    total_channels: total_channels_count as i32,
-                    matched_count: 0,
-                }));
-            }
-        }
-    };
-
-    // Logo assets simplified for legacy test
+    // Get logo assets (simplified for now - could be enhanced later)
     let logo_assets = HashMap::new();
 
+    // Use the engine to test the mapping rule directly
     let mut engine = DataMappingEngine::new();
     let start_time = std::time::Instant::now();
     match engine.test_mapping_rule(
         channels,
-        logo_assets.clone(),
+        logo_assets,
         &state.config.web.base_url,
         &payload.expression,
     ) {
         Ok(mapped_channels) => {
-            let execution_time = start_time.elapsed().as_micros();
+            let _execution_time = start_time.elapsed().as_micros();
 
             let test_channels: Vec<crate::models::data_mapping::DataMappingTestChannel> =
                 mapped_channels
@@ -1186,29 +1099,20 @@ pub async fn test_data_mapping_rule(
                     .map(|mc| {
                         let (original_values, mapped_values) = mapped_channel_to_test_format(&mc);
 
-                        // Create action descriptions based on what actually changed in the mapped channel
-                        let applied_actions = Vec::<String>::new(); // Legacy test endpoint - simplified for extended expressions
-
                         crate::models::data_mapping::DataMappingTestChannel {
                             channel_name: mc.original.channel_name,
                             group_title: mc.original.group_title,
                             original_values: serde_json::to_value(original_values)
                                 .unwrap_or_default(),
                             mapped_values: serde_json::to_value(mapped_values).unwrap_or_default(),
-                            applied_actions,
+                            applied_actions: vec![], // Actions are applied in the engine, no need for descriptions
                         }
                     })
                     .collect();
 
             let result = crate::models::data_mapping::DataMappingTestResult {
                 is_valid: true,
-                error: Some(format!(
-                    "Test completed: {} conditions, {} actions, {} matching channels ({}μs)",
-                    condition_count,
-                    action_count,
-                    test_channels.len(),
-                    execution_time
-                )),
+                error: None, // No error for successful tests
                 matching_channels: test_channels.clone(),
                 total_channels: total_channels_count as i32,
                 matched_count: test_channels.len() as i32,
@@ -1919,13 +1823,12 @@ pub async fn upload_logo_asset(
     }
 }
 
-pub async fn get_logo_asset(
+/// Get logo asset image bytes with preference for PNG format
+/// Returns image bytes for /api/v1/logos/:id endpoint
+pub async fn get_logo_asset_image(
     Path(id): Path<Uuid>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> Result<(axum::http::HeaderMap, Vec<u8>), StatusCode> {
-    let requested_format = params.get("format").map(|s| s.as_str());
-
     // Get the main asset first
     let main_asset = match state.logo_asset_service.get_asset(id).await {
         Ok(asset) => asset,
@@ -1935,27 +1838,7 @@ pub async fn get_logo_asset(
         }
     };
 
-    // If a specific format is requested, try to find that format
-    if let Some(format) = requested_format {
-        // First check if the main asset matches the requested format
-        if asset_matches_format(&main_asset, format) {
-            return serve_asset(&state, main_asset).await;
-        }
-
-        // Look for linked assets with the requested format
-        if let Ok(linked_assets) = state.logo_asset_service.get_linked_assets(id).await {
-            for linked_asset in linked_assets {
-                if asset_matches_format(&linked_asset, format) {
-                    return serve_asset(&state, linked_asset).await;
-                }
-            }
-        }
-
-        // Requested format not found
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    // No specific format requested - use preference order: png > svg > webp > original
+    // Use preference order: png > svg > webp > original
     let preference_order = ["png", "svg", "webp"];
 
     // Get all assets (main + linked)
@@ -1977,6 +1860,39 @@ pub async fn get_logo_asset(
 
     // Fall back to original asset
     serve_asset(&state, main_asset).await
+}
+
+/// Get logo asset in a specific format
+/// Returns image bytes for /api/v1/logos/:id/formats/:format endpoint
+pub async fn get_logo_asset_format(
+    Path((id, format)): Path<(Uuid, String)>,
+    State(state): State<AppState>,
+) -> Result<(axum::http::HeaderMap, Vec<u8>), StatusCode> {
+    // Get the main asset first
+    let main_asset = match state.logo_asset_service.get_asset(id).await {
+        Ok(asset) => asset,
+        Err(e) => {
+            error!("Failed to get logo asset {}: {}", id, e);
+            return Err(StatusCode::NOT_FOUND);
+        }
+    };
+
+    // First check if the main asset matches the requested format
+    if asset_matches_format(&main_asset, &format) {
+        return serve_asset(&state, main_asset).await;
+    }
+
+    // Look for linked assets with the requested format
+    if let Ok(linked_assets) = state.logo_asset_service.get_linked_assets(id).await {
+        for linked_asset in linked_assets {
+            if asset_matches_format(&linked_asset, &format) {
+                return serve_asset(&state, linked_asset).await;
+            }
+        }
+    }
+
+    // Requested format not found
+    Err(StatusCode::NOT_FOUND)
 }
 
 fn asset_matches_format(asset: &crate::models::logo_asset::LogoAsset, format: &str) -> bool {
@@ -3025,154 +2941,6 @@ pub async fn auto_map_channels(
     }
 }
 
-// Helper function to flatten condition tree for testing
-fn flatten_condition_tree_for_test(
-    condition_tree: &crate::models::ConditionTree,
-) -> Vec<String> { // Legacy test - simplified
-    let mut conditions = vec![];
-    // Legacy test code disabled for extended expressions migration
-    // flatten_condition_node_for_test(&condition_tree.root, &mut conditions, None);
-    conditions
-}
-
-fn flatten_condition_node_for_test(
-    node: &crate::models::ConditionNode,
-    conditions: &mut Vec<String>, // Legacy test - simplified
-    logical_op: Option<crate::models::LogicalOperator>,
-) {
-    match node {
-        crate::models::ConditionNode::Condition {
-            field,
-            operator,
-            value,
-            case_sensitive: _,
-            negate,
-        } => {
-            let final_operator = if *negate {
-                match operator {
-                    crate::models::FilterOperator::Equals => {
-                        crate::models::FilterOperator::NotEquals
-                    }
-                    crate::models::FilterOperator::Contains => {
-                        crate::models::FilterOperator::NotContains
-                    }
-                    crate::models::FilterOperator::Matches => {
-                        crate::models::FilterOperator::NotMatches
-                    }
-                    crate::models::FilterOperator::NotEquals => {
-                        crate::models::FilterOperator::Equals
-                    }
-                    crate::models::FilterOperator::NotContains => {
-                        crate::models::FilterOperator::Contains
-                    }
-                    crate::models::FilterOperator::NotMatches => {
-                        crate::models::FilterOperator::Matches
-                    }
-                    _ => operator.clone(),
-                }
-            } else {
-                operator.clone()
-            };
-
-            // Legacy test simplified
-            conditions.push(format!("{} {} {}", field, final_operator, value));
-        }
-        crate::models::ConditionNode::Group { operator, children } => {
-            for (i, child) in children.iter().enumerate() {
-                let child_logical_op = if i == 0 {
-                    logical_op.clone()
-                } else {
-                    Some(operator.clone())
-                };
-                flatten_condition_node_for_test(child, conditions, child_logical_op);
-            }
-        }
-    }
-}
-
-
-/// Generate descriptions of actions that were actually applied to a mapped channel
-fn generate_applied_actions_descriptions(
-    mapped_channel: &crate::models::data_mapping::MappedChannel,
-    actions: &[String], // Legacy test - simplified
-    _logo_assets: &std::collections::HashMap<uuid::Uuid, crate::models::logo_asset::LogoAsset>,
-    _base_url: &str,
-) -> Vec<String> {
-    let mut descriptions = Vec::new();
-
-    // Check each field for changes and describe them
-    let original = &mapped_channel.original;
-
-    // Check tvg_id changes
-    if let Some(mapped_value) = &mapped_channel.mapped_tvg_id {
-        if original.tvg_id.as_deref() != Some(mapped_value) {
-            let original_display = original.tvg_id.as_deref().unwrap_or("null");
-            descriptions.push(format!("tvg_id: {} → {}", original_display, mapped_value));
-        }
-    }
-
-    // Check tvg_name changes
-    if let Some(mapped_value) = &mapped_channel.mapped_tvg_name {
-        if original.tvg_name.as_deref() != Some(mapped_value) {
-            let original_display = original.tvg_name.as_deref().unwrap_or("null");
-            descriptions.push(format!("tvg_name: {} → {}", original_display, mapped_value));
-        }
-    }
-
-    // Check tvg_logo changes
-    if let Some(mapped_value) = &mapped_channel.mapped_tvg_logo {
-        if original.tvg_logo.as_deref() != Some(mapped_value) {
-            let original_display = original.tvg_logo.as_deref().unwrap_or("null");
-            descriptions.push(format!("tvg_logo: {} → {}", original_display, mapped_value));
-        }
-    }
-
-    // Check tvg_shift changes with template resolution
-    if let Some(mapped_value) = &mapped_channel.mapped_tvg_shift {
-        if original.tvg_shift.as_deref() != Some(mapped_value) {
-            let original_display = original.tvg_shift.as_deref().unwrap_or("null");
-
-            // Find the action that set tvg_shift to show template and resolved value
-            if let Some(action) = actions
-                .iter()
-                .find(|action| action.contains("tvg_shift")) // Legacy test simplified
-            {
-                // Legacy test simplified
-                descriptions.push(format!(
-                    "tvg_shift: {} → {}",
-                    original_display, mapped_value
-                ));
-                return descriptions;
-            } else {
-                descriptions.push(format!(
-                    "tvg_shift: {} → {} (value: '{}')",
-                    original_display, "UNKNOWN", mapped_value
-                ));
-            }
-        }
-    }
-
-    // Check group_title changes
-    if let Some(mapped_value) = &mapped_channel.mapped_group_title {
-        if original.group_title.as_deref() != Some(mapped_value) {
-            let original_display = original.group_title.as_deref().unwrap_or("null");
-            descriptions.push(format!(
-                "group_title: {} → {}",
-                original_display, mapped_value
-            ));
-        }
-    }
-
-    // Check channel_name changes
-    if mapped_channel.mapped_channel_name != original.channel_name {
-        descriptions.push(format!(
-            "channel_name: {} → {}",
-            original.channel_name, mapped_channel.mapped_channel_name
-        ));
-    }
-
-    descriptions
-}
 
 /// Count conditions in a condition tree
 fn count_conditions_in_tree(tree: &crate::models::ConditionTree) -> usize {
@@ -3187,11 +2955,6 @@ fn count_conditions_in_node(node: &crate::models::ConditionNode) -> usize {
             children.iter().map(count_conditions_in_node).sum()
         }
     }
-}
-
-/// Create a human-readable display of a condition tree
-fn format_condition_tree_for_display(tree: &crate::models::ConditionTree) -> String {
-    format_condition_node_for_display(&tree.root, 0)
 }
 
 /// Generate JSON representation of condition tree for frontend rendering (shared by data mapping and filters)
@@ -3233,43 +2996,124 @@ fn generate_condition_node_json(node: &crate::models::ConditionNode) -> serde_js
     }
 }
 
-
-/// Format a condition node for human-readable display
-fn format_condition_node_for_display(node: &crate::models::ConditionNode, depth: usize) -> String {
-    let indent = "  ".repeat(depth);
-
-    match node {
-        crate::models::ConditionNode::Condition {
-            field,
-            operator,
-            value,
-            negate,
-            ..
-        } => {
-            let op_str = if *negate {
-                format!("NOT {}", operator)
-            } else {
-                format!("{}", operator)
-            };
-
-            format!("{}({} {} \"{}\")", indent, field, op_str, value)
+/// Get progress for all sources (used by frontend polling)
+pub async fn get_sources_progress(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Get progress for all active stream sources
+    let stream_sources = match state.database.list_stream_sources().await {
+        Ok(sources) => sources.into_iter().filter(|s| s.is_active).collect::<Vec<_>>(),
+        Err(e) => {
+            error!("Failed to list stream sources for progress: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
-        crate::models::ConditionNode::Group { operator, children } => {
-            let mut result = format!("{}{}", indent, operator.to_string().to_uppercase());
+    };
 
-            for (i, child) in children.iter().enumerate() {
-                result.push('\n');
-                if i == children.len() - 1 {
-                    result.push_str(&format!("{}└── ", indent));
-                } else {
-                    result.push_str(&format!("{}├── ", indent));
-                }
-
-                let child_str = format_condition_node_for_display(child, 0);
-                result.push_str(&child_str);
-            }
-
-            result
-        }
+    let mut sources_progress = Vec::new();
+    for source in stream_sources {
+        let progress = state.state_manager.get_progress(source.id).await;
+        let processing_info = state.state_manager.get_processing_info(source.id).await;
+        
+        sources_progress.push(json!({
+            "source_id": source.id,
+            "source_name": source.name,
+            "source_type": "stream",
+            "progress": progress,
+            "processing_info": processing_info
+        }));
     }
+
+    Ok(Json(json!({
+        "success": true,
+        "sources": sources_progress
+    })))
+}
+
+/// Get progress for all EPG sources (used by frontend polling)  
+pub async fn get_epg_progress(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Get progress for all active EPG sources
+    let epg_sources = match state.database.list_epg_sources().await {
+        Ok(sources) => sources.into_iter().filter(|s| s.is_active).collect::<Vec<_>>(),
+        Err(e) => {
+            error!("Failed to list EPG sources for progress: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let mut sources_progress = Vec::new();
+    for source in epg_sources {
+        let progress = state.state_manager.get_progress(source.id).await;
+        let processing_info = state.state_manager.get_processing_info(source.id).await;
+        
+        sources_progress.push(json!({
+            "source_id": source.id,
+            "source_name": source.name,
+            "source_type": "epg",
+            "progress": progress,
+            "processing_info": processing_info
+        }));
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "sources": sources_progress
+    })))
+}
+
+
+/// Get stream fields for data mapping  
+pub async fn get_stream_fields(
+    _state: State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    Ok(Json(json!({
+        "fields": [
+            {"name": "channel_name", "type": "string", "description": "Channel name"},
+            {"name": "tvg_id", "type": "string", "description": "TVG ID"},
+            {"name": "tvg_name", "type": "string", "description": "TVG name"},
+            {"name": "tvg_logo", "type": "string", "description": "TVG logo URL"},
+            {"name": "tvg_shift", "type": "string", "description": "TVG time shift"},
+            {"name": "group_title", "type": "string", "description": "Group title"},
+            {"name": "url", "type": "string", "description": "Stream URL"}
+        ]
+    })))
+}
+
+/// Get EPG fields for data mapping
+pub async fn get_epg_fields(
+    _state: State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    Ok(Json(json!({
+        "fields": [
+            {"name": "channel_id", "type": "string", "description": "Channel ID"},
+            {"name": "channel_name", "type": "string", "description": "Channel display name"},
+            {"name": "programme_title", "type": "string", "description": "Programme title"},
+            {"name": "programme_description", "type": "string", "description": "Programme description"},
+            {"name": "start_time", "type": "datetime", "description": "Programme start time"},
+            {"name": "end_time", "type": "datetime", "description": "Programme end time"}
+        ]
+    })))
+}
+
+
+/// Preview proxies (placeholder implementation)
+pub async fn preview_proxies(
+    _state: State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    Ok(Json(json!({
+        "success": true,
+        "proxies": [],
+        "message": "Proxy preview not yet implemented"
+    })))
+}
+
+/// Regenerate all proxies (placeholder implementation)
+pub async fn regenerate_all_proxies(
+    _state: State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    Ok(Json(json!({
+        "success": true,
+        "message": "Proxy regeneration not yet implemented"
+    })))
 }

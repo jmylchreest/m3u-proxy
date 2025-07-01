@@ -101,7 +101,7 @@ class EpgViewer {
 
             // Note: We do client-side filtering instead of server-side for better flexibility
 
-            const response = await fetch(`/api/epg/viewer?${params}`);
+            const response = await fetch(`/api/v1/epg/viewer?${params}`);
 
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);

@@ -4,9 +4,8 @@
 //! providing a consistent interface for data access operations.
 
 use async_trait::async_trait;
-use crate::errors::{RepositoryError, RepositoryResult};
+use crate::errors::RepositoryResult;
 use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Core repository trait providing CRUD operations
 ///

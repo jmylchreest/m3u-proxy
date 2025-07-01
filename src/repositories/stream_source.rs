@@ -7,7 +7,6 @@
 use async_trait::async_trait;
 use sqlx::{Pool, Sqlite, Row};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 use crate::errors::{RepositoryError, RepositoryResult};

@@ -19,14 +19,18 @@ impl FilterParser {
     pub fn new() -> Self {
         Self {
             operators: vec![
-                "contains".to_string(),
-                "equals".to_string(),
-                "matches".to_string(),
-                "starts_with".to_string(),
-                "ends_with".to_string(),
+                // Negated operators (must come first to match before base operators)
+                "not_starts_with".to_string(),
+                "not_ends_with".to_string(),
                 "not_contains".to_string(),
                 "not_equals".to_string(),
                 "not_matches".to_string(),
+                // Base operators
+                "starts_with".to_string(),
+                "ends_with".to_string(),
+                "contains".to_string(),
+                "equals".to_string(),
+                "matches".to_string(),
             ],
             logical_operators: vec![
                 "AND".to_string(),
@@ -472,7 +476,7 @@ impl FilterParser {
                 continue;
             }
 
-            // Handle filter operators
+            // Handle filter operators (base operators only - modifiers handled separately)
             let mut found_operator = false;
             for op in &self.operators {
                 if remaining.starts_with(op) {
@@ -493,6 +497,8 @@ impl FilterParser {
                             "not_contains" => FilterOperator::NotContains,
                             "not_equals" => FilterOperator::NotEquals,
                             "not_matches" => FilterOperator::NotMatches,
+                            "not_starts_with" => FilterOperator::NotStartsWith,
+                            "not_ends_with" => FilterOperator::NotEndsWith,
                             _ => return Err(anyhow!("Unknown filter operator: {}", op)),
                         };
                         tokens.push(Token::Operator(filter_op));
@@ -616,9 +622,28 @@ impl FilterParser {
                     return Err(anyhow!("Expected operator after field '{}'", field));
                 }
 
-                let operator = match &tokens[*pos] {
+                // Apply modifiers to the base operator to get the final operator
+                let base_operator = match &tokens[*pos] {
                     Token::Operator(op) => op.clone(),
                     _ => return Err(anyhow!("Expected operator after field '{}'", field)),
+                };
+                
+                let operator = if negate {
+                    match base_operator {
+                        FilterOperator::Contains => FilterOperator::NotContains,
+                        FilterOperator::Equals => FilterOperator::NotEquals,
+                        FilterOperator::Matches => FilterOperator::NotMatches,
+                        FilterOperator::StartsWith => FilterOperator::NotStartsWith,
+                        FilterOperator::EndsWith => FilterOperator::NotEndsWith,
+                        // Already negated operators - double negation becomes positive
+                        FilterOperator::NotContains => FilterOperator::Contains,
+                        FilterOperator::NotEquals => FilterOperator::Equals,
+                        FilterOperator::NotMatches => FilterOperator::Matches,
+                        FilterOperator::NotStartsWith => FilterOperator::StartsWith,
+                        FilterOperator::NotEndsWith => FilterOperator::EndsWith,
+                    }
+                } else {
+                    base_operator
                 };
                 *pos += 1;
 
@@ -637,7 +662,7 @@ impl FilterParser {
                     operator,
                     value,
                     case_sensitive,
-                    negate,
+                    negate: false, // negate is now handled through operator transformation
                 })
             }
             Token::Modifier(_) => {
@@ -684,9 +709,28 @@ impl FilterParser {
                     return Err(anyhow!("Expected operator after field '{}'", field));
                 }
 
-                let operator = match &tokens[*pos] {
+                // Apply modifiers to the base operator to get the final operator
+                let base_operator = match &tokens[*pos] {
                     Token::Operator(op) => op.clone(),
                     _ => return Err(anyhow!("Expected operator after field '{}'", field)),
+                };
+                
+                let operator = if negate {
+                    match base_operator {
+                        FilterOperator::Contains => FilterOperator::NotContains,
+                        FilterOperator::Equals => FilterOperator::NotEquals,
+                        FilterOperator::Matches => FilterOperator::NotMatches,
+                        FilterOperator::StartsWith => FilterOperator::NotStartsWith,
+                        FilterOperator::EndsWith => FilterOperator::NotEndsWith,
+                        // Already negated operators - double negation becomes positive
+                        FilterOperator::NotContains => FilterOperator::Contains,
+                        FilterOperator::NotEquals => FilterOperator::Equals,
+                        FilterOperator::NotMatches => FilterOperator::Matches,
+                        FilterOperator::NotStartsWith => FilterOperator::StartsWith,
+                        FilterOperator::NotEndsWith => FilterOperator::EndsWith,
+                    }
+                } else {
+                    base_operator
                 };
                 *pos += 1;
 
@@ -705,7 +749,7 @@ impl FilterParser {
                     operator,
                     value,
                     case_sensitive,
-                    negate,
+                    negate: false, // negate is now handled through operator transformation
                 })
             }
             _ => Err(anyhow!(

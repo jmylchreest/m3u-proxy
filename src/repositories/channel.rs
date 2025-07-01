@@ -8,7 +8,7 @@ use sqlx::{Pool, Sqlite};
 use uuid::Uuid;
 use std::collections::HashMap;
 
-use crate::errors::{RepositoryError, RepositoryResult};
+use crate::errors::RepositoryResult;
 use crate::models::Channel;
 
 /// Placeholder for channel creation request

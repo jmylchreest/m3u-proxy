@@ -55,7 +55,7 @@ async function loadLogos(page = 1) {
       params.append("asset_type", typeFilter);
     }
 
-    const url = `/api/logos?${params}&_t=${new Date().getTime()}`;
+    const url = `/api/v1/logos?${params}&_t=${new Date().getTime()}`;
     console.log("Fetching URL:", url); // Debug log
 
     const response = await fetch(url);
@@ -127,7 +127,7 @@ async function loadLinkedAssetsForLogos() {
       console.log(
         `Loading linked assets for logo ${index}: ${logo.id} (${logo.name})`,
       );
-      const response = await fetch(`/api/logos/${logo.id}/formats`);
+      const response = await fetch(`/api/v1/logos/${logo.id}/info`);
       console.log(`Linked assets response for ${logo.id}:`, response.status);
 
       if (response.ok) {
@@ -162,7 +162,7 @@ async function loadLinkedAssetsForLogos() {
 // Load cache statistics
 async function loadStats() {
   try {
-    const response = await fetch("/api/logos/stats");
+    const response = await fetch("/api/v1/logos/stats");
     if (!response.ok) throw new Error("Failed to load stats");
 
     const stats = await response.json();
@@ -506,7 +506,7 @@ async function submitUpload() {
   uploadBtn.disabled = true;
 
   try {
-    const response = await fetch("/api/logos/upload", {
+    const response = await fetch("/api/v1/logos/upload", {
       method: "POST",
       body: formData,
     });
@@ -771,7 +771,7 @@ async function performUpload() {
   }
 
   try {
-    const response = await fetch("/api/logos/upload", {
+    const response = await fetch("/api/v1/logos/upload", {
       method: "POST",
       body: formData,
     });
@@ -795,7 +795,7 @@ async function performUpload() {
 async function editLogoAsset(logoId) {
   try {
     // Fetch full logo details with linked assets
-    const response = await fetch(`/api/logos/${logoId}/formats`);
+    const response = await fetch(`/api/v1/logos/${logoId}/info`);
     if (!response.ok) throw new Error("Failed to fetch logo details");
 
     const logoData = await response.json();
@@ -844,7 +844,7 @@ async function saveLogoEdit() {
   }
 
   try {
-    const response = await fetch(`/api/logos/${logoId}`, {
+    const response = await fetch(`/api/v1/logos/${logoId}`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -887,7 +887,7 @@ async function deleteLogo(logoId) {
   }
 
   try {
-    const response = await fetch(`/api/logos/${logoId}`, {
+    const response = await fetch(`/api/v1/logos/${logoId}`, {
       method: "DELETE",
     });
 

@@ -55,7 +55,7 @@ function setupEventListeners() {
 async function loadFieldDefinitions() {
   try {
     // Load stream fields
-    const streamResponse = await fetch("/api/data-mapping/fields/stream");
+    const streamResponse = await fetch("/api/v1/data-mapping/fields/stream");
     if (streamResponse.ok) {
       const streamData = await streamResponse.json();
       STREAM_FIELDS = streamData.fields.map((f) => f.name);
@@ -65,7 +65,7 @@ async function loadFieldDefinitions() {
     }
 
     // Load EPG fields
-    const epgResponse = await fetch("/api/data-mapping/fields/epg");
+    const epgResponse = await fetch("/api/v1/data-mapping/fields/epg");
     if (epgResponse.ok) {
       const epgData = await epgResponse.json();
       EPG_FIELDS = epgData.fields.map((f) => f.name);
@@ -146,7 +146,7 @@ async function loadTestSources() {
   console.log("Loading test sources for type:", sourceType);
 
   try {
-    const response = await fetch("/api/sources/unified");
+    const response = await fetch("/api/v1/sources/unified");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -527,7 +527,7 @@ function validateExpressionSyntax(expression, sourceType) {
 // Async expression validation
 async function validateExpressionAsync(expression, sourceType) {
   try {
-    const response = await fetch("/api/data-mapping/validate", {
+    const response = await fetch("/api/v1/data-mapping/validate", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -871,11 +871,13 @@ function renderTreeNode(node, depth) {
 // Load all data mapping rules
 async function loadRules() {
   try {
-    const response = await fetch("/api/data-mapping");
+    const response = await fetch("/api/v1/data-mapping");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    currentRules = await response.json();
+    const data = await response.json();
+    // Handle paginated API response format
+    currentRules = data.data ? data.data.items : data;
     renderRules();
   } catch (error) {
     console.error("Failed to load rules:", error);
@@ -978,7 +980,7 @@ async function deleteRule(ruleId) {
   }
 
   try {
-    const response = await fetch(`/api/data-mapping/rules/${ruleId}`, {
+    const response = await fetch(`/api/v1/data-mapping/${ruleId}`, {
       method: "DELETE",
     });
 
@@ -1061,8 +1063,8 @@ async function saveRule() {
 
   try {
     const url = editingRule
-      ? `/api/data-mapping/${editingRule.id}`
-      : "/api/data-mapping";
+      ? `/api/v1/data-mapping/${editingRule.id}`
+      : "/api/v1/data-mapping";
     const method = editingRule ? "PUT" : "POST";
 
     const response = await fetch(url, {
@@ -1107,7 +1109,7 @@ async function runRuleTest() {
   testButton.textContent = "🧪 Testing...";
 
   try {
-    const response = await fetch("/api/data-mapping/test", {
+    const response = await fetch("/api/v1/data-mapping/test", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1251,7 +1253,7 @@ async function previewStreamRules() {
     // Show loading modal
     showLoadingModal("Loading stream rules preview...");
 
-    const response = await fetch("/api/data-mapping/preview", {
+    const response = await fetch("/api/v1/data-mapping/preview", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1302,7 +1304,7 @@ async function previewEpgRules() {
     // Show loading modal
     showLoadingModal("Loading EPG rules preview...");
 
-    const response = await fetch("/api/data-mapping/preview", {
+    const response = await fetch("/api/v1/data-mapping/preview", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1688,7 +1690,7 @@ function getLogoPreviewElement(logoValue, type) {
       const logoUuid = uuidMatch[1];
       // Get base URL from window location
       const baseUrl = window.location.origin;
-      logoUrl = `${baseUrl}/api/logos/${logoUuid}`;
+      logoUrl = `${baseUrl}/api/v1/logos/${logoUuid}`;
     }
   }
 
@@ -2091,8 +2093,8 @@ class ExpressionAutocomplete {
       // Query is a UUID - fetch specific logo and show alternatives
       try {
         const [specificResponse, allResponse] = await Promise.all([
-          fetch(`/api/logos/${encodeURIComponent(query)}/formats`),
-          fetch(`/api/logos/search?limit=9`), // Get 9 other logos
+          fetch(`/api/v1/logos/${encodeURIComponent(query)}/formats`),
+          fetch(`/api/v1/logos/search?limit=9`), // Get 9 other logos
         ]);
 
         const results = [];
@@ -2135,7 +2137,7 @@ class ExpressionAutocomplete {
     }
 
     // Regular name-based search
-    let url = `/api/logos/search?limit=10`;
+    let url = `/api/v1/logos/search?limit=10`;
     if (query && query.length > 0) {
       url += `&query=${encodeURIComponent(query)}`;
     }
@@ -2487,7 +2489,7 @@ class LogoAutocomplete {
 
     try {
       const response = await fetch(
-        `/api/logos/search?query=${encodeURIComponent(query)}&limit=10`,
+        `/api/v1/logos/search?query=${encodeURIComponent(query)}&limit=10`,
       );
       if (!response.ok) throw new Error("Search failed");
 
@@ -2891,7 +2893,7 @@ async function reorderRules(draggedRuleId, targetRuleId, insertBefore = false) {
     });
 
     // Send reorder request to server
-    const response = await fetch("/api/data-mapping/reorder", {
+    const response = await fetch("/api/v1/data-mapping/reorder", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

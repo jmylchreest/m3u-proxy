@@ -52,6 +52,10 @@ pub enum AppError {
     /// Generic internal errors
     #[error("Internal error: {message}")]
     Internal { message: String },
+    
+    /// HTTP client errors  
+    #[error("HTTP error: {0}")]
+    Http(#[from] reqwest::Error),
 }
 
 /// Repository layer specific errors
@@ -187,6 +191,14 @@ impl AppError {
         Self::Internal {
             message: message.into(),
         }
+    }
+    
+    /// Create a source error
+    pub fn source_error<S: Into<String>>(message: S) -> Self {
+        Self::Source(SourceError::InvalidConfig {
+            field: "general".to_string(),
+            message: message.into(),
+        })
     }
 }
 

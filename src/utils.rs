@@ -101,9 +101,9 @@ pub fn logo_uuid_to_url(logo_id: Uuid, base_url: &str, options: LogoUrlOptions) 
     };
 
     let path = if let Some(format) = options.format {
-        format!("/api/logos/{}/formats/{}", logo_id, format)
+        format!("/api/v1/logos/{}/formats/{}", logo_id, format)
     } else {
-        format!("/api/logos/{}", logo_id)
+        format!("/api/v1/logos/{}", logo_id)
     };
 
     if options.include_domain {
@@ -171,23 +171,23 @@ mod tests {
         // Test with full URLs
         assert_eq!(
             generate_logo_url(logo_id, Some("http://localhost:8080")),
-            "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+            "http://localhost:8080/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
 
         assert_eq!(
             generate_logo_url(logo_id, Some("http://localhost:8080/")),
-            "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+            "http://localhost:8080/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
 
         assert_eq!(
             generate_logo_url(logo_id, Some("https://example.com")),
-            "https://example.com/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+            "https://example.com/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
 
         // Test with relative URL
         assert_eq!(
             generate_logo_url(logo_id, None),
-            "/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+            "/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
     }
 
@@ -198,7 +198,7 @@ mod tests {
         // Test with full domain
         assert_eq!(
             logo_uuid_to_url(logo_id, "http://localhost:8080", LogoUrlOptions::default()),
-            "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+            "http://localhost:8080/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
 
         // Test relative URL
@@ -211,7 +211,7 @@ mod tests {
                     format: None,
                 }
             ),
-            "/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+            "/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
 
         // Test with format
@@ -220,7 +220,7 @@ mod tests {
                 include_domain: true,
                 format: Some("thumbnail".to_string()),
             }),
-            "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482/formats/thumbnail"
+            "http://localhost:8080/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482/formats/thumbnail"
         );
 
         // Test relative URL with format
@@ -233,7 +233,7 @@ mod tests {
                     format: Some("original".to_string()),
                 }
             ),
-            "/api/logos/c63d556e-7b3c-4a85-accd-214c32663482/formats/original"
+            "/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482/formats/original"
         );
     }
 
@@ -244,13 +244,13 @@ mod tests {
         // Test relative URL convenience function
         assert_eq!(
             generate_logo_url(logo_id, None),
-            "/api/logos/c63d556e-7b3c-4a85-accd-214c32663482"
+            "/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482"
         );
 
         // Test format convenience function
         assert_eq!(
             logo_uuid_to_url_with_format(logo_id, "http://localhost:8080", "thumbnail"),
-            "http://localhost:8080/api/logos/c63d556e-7b3c-4a85-accd-214c32663482/formats/thumbnail"
+            "http://localhost:8080/api/v1/logos/c63d556e-7b3c-4a85-accd-214c32663482/formats/thumbnail"
         );
     }
 }

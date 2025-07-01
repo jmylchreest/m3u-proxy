@@ -9,5 +9,7 @@ pub mod logo_assets;
 pub mod models;
 pub mod proxy;
 pub mod repositories;
+pub mod services;
+pub mod sources;
 pub mod utils;
 pub mod web;

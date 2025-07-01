@@ -29,7 +29,7 @@ pub struct StreamSource {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Hash)]
 #[sqlx(type_name = "stream_source_type", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum StreamSourceType {
@@ -296,6 +296,10 @@ pub enum FilterOperator {
     NotEquals, // Does not equal
     #[serde(rename = "not_contains")]
     NotContains, // Does not contain
+    #[serde(rename = "not_starts_with")]
+    NotStartsWith, // Does not start with
+    #[serde(rename = "not_ends_with")]
+    NotEndsWith, // Does not end with
 }
 
 impl std::fmt::Display for FilterOperator {
@@ -309,6 +313,8 @@ impl std::fmt::Display for FilterOperator {
             FilterOperator::NotMatches => write!(f, "not_matches"),
             FilterOperator::NotEquals => write!(f, "not_equals"),
             FilterOperator::NotContains => write!(f, "not_contains"),
+            FilterOperator::NotStartsWith => write!(f, "not_starts_with"),
+            FilterOperator::NotEndsWith => write!(f, "not_ends_with"),
         }
     }
 }

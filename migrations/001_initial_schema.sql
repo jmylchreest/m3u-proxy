@@ -36,23 +36,39 @@ CREATE TABLE epg_sources (
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
--- Stream Proxies Table
+-- Stream Proxies Table (with all required fields from the start)
 CREATE TABLE stream_proxies (
     id TEXT PRIMARY KEY NOT NULL,
     ulid TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
+    description TEXT,
+    proxy_mode TEXT NOT NULL DEFAULT 'redirect' CHECK (proxy_mode IN ('redirect', 'proxy')),
+    upstream_timeout INTEGER DEFAULT 30, -- Timeout in seconds
+    buffer_size INTEGER DEFAULT 8192, -- Buffer size in bytes
+    max_concurrent_streams INTEGER DEFAULT 1000, -- Max concurrent streams for this proxy
+    starting_channel_number INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_generated_at TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
--- Junction table for proxy-source relationships
+-- Junction table for proxy-source relationships (with priority ordering)
 CREATE TABLE proxy_sources (
     proxy_id TEXT NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
     source_id TEXT NOT NULL REFERENCES stream_sources(id) ON DELETE CASCADE,
+    priority_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (proxy_id, source_id)
+);
+
+-- Junction table for proxy-EPG source relationships (with priority ordering)
+CREATE TABLE proxy_epg_sources (
+    proxy_id TEXT NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
+    epg_source_id TEXT NOT NULL REFERENCES epg_sources(id) ON DELETE CASCADE,
+    priority_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (proxy_id, epg_source_id)
 );
 
 -- Filters Table (supports both stream and EPG filtering)
@@ -67,13 +83,11 @@ CREATE TABLE filters (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-
-
--- Junction table for proxy-filter relationships with ordering
+-- Junction table for proxy-filter relationships with ordering (using priority_order from start)
 CREATE TABLE proxy_filters (
     proxy_id TEXT NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
     filter_id TEXT NOT NULL REFERENCES filters(id) ON DELETE CASCADE,
-    sort_order INTEGER NOT NULL,
+    priority_order INTEGER NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (proxy_id, filter_id)
@@ -164,9 +178,6 @@ CREATE TABLE data_mapping_rules (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Note: Legacy condition/action tables removed
--- Data mapping now uses expression-only format stored in data_mapping_rules.expression column
-
 -- Logo Assets Table
 CREATE TABLE logo_assets (
     id TEXT PRIMARY KEY NOT NULL,
@@ -186,7 +197,52 @@ CREATE TABLE logo_assets (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Performance Indexes
+-- Relay Configurations Table
+CREATE TABLE relay_configs (
+    id TEXT PRIMARY KEY NOT NULL,
+    proxy_id TEXT NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    ffmpeg_args TEXT NOT NULL, -- JSON array of FFmpeg arguments
+    input_timeout INTEGER NOT NULL DEFAULT 30, -- Timeout in seconds for input stream
+    output_format TEXT NOT NULL DEFAULT 'hls' CHECK (output_format IN ('hls', 'dash', 'rtmp', 'copy')),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Stream Access Logs Table (for metrics collection)
+CREATE TABLE stream_access_logs (
+    id TEXT PRIMARY KEY NOT NULL,
+    proxy_ulid TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    client_ip TEXT NOT NULL,
+    user_agent TEXT,
+    referer TEXT,
+    start_time TEXT NOT NULL DEFAULT (datetime('now')),
+    end_time TEXT,
+    bytes_served INTEGER DEFAULT 0,
+    relay_used BOOLEAN DEFAULT FALSE,
+    relay_config_id TEXT REFERENCES relay_configs(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Relay Runtime Status Table (ephemeral data for running relays)
+CREATE TABLE relay_runtime_status (
+    config_id TEXT PRIMARY KEY REFERENCES relay_configs(id) ON DELETE CASCADE,
+    is_running BOOLEAN NOT NULL DEFAULT FALSE,
+    pid INTEGER,
+    port INTEGER,
+    started_at TEXT,
+    client_count INTEGER NOT NULL DEFAULT 0,
+    bytes_served INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- =============================================================================
+-- PERFORMANCE INDEXES
+-- =============================================================================
 
 -- Stream Sources
 CREATE INDEX idx_stream_sources_active ON stream_sources(is_active);
@@ -199,6 +255,14 @@ CREATE INDEX idx_epg_sources_type ON epg_sources(source_type);
 -- Stream Proxies
 CREATE INDEX idx_stream_proxies_ulid ON stream_proxies(ulid);
 CREATE INDEX idx_stream_proxies_active ON stream_proxies(is_active);
+CREATE INDEX idx_stream_proxies_proxy_mode ON stream_proxies(proxy_mode);
+
+-- Proxy Sources
+CREATE INDEX idx_proxy_sources_priority ON proxy_sources(proxy_id, priority_order);
+
+-- Proxy EPG Sources
+CREATE INDEX idx_proxy_epg_sources_proxy ON proxy_epg_sources(proxy_id);
+CREATE INDEX idx_proxy_epg_sources_priority ON proxy_epg_sources(proxy_id, priority_order);
 
 -- Channels
 CREATE INDEX idx_channels_source_id ON channels(source_id);
@@ -226,9 +290,7 @@ CREATE INDEX idx_proxy_generations_proxy_version ON proxy_generations(proxy_id, 
 CREATE INDEX idx_filters_source_type ON filters(source_type);
 
 -- Proxy Filters
-CREATE INDEX idx_proxy_filters_sort_order ON proxy_filters(proxy_id, sort_order);
-
-
+CREATE INDEX idx_proxy_filters_priority_order ON proxy_filters(proxy_id, priority_order);
 
 -- Data Mapping Rules
 CREATE INDEX idx_data_mapping_rules_sort_order ON data_mapping_rules(sort_order);
@@ -243,7 +305,25 @@ CREATE INDEX idx_logo_assets_id ON logo_assets(id);
 CREATE INDEX idx_logo_assets_parent ON logo_assets(parent_asset_id);
 CREATE INDEX idx_logo_assets_format_type ON logo_assets(format_type);
 
--- Automatic Timestamp Updates
+-- Relay Configs
+CREATE INDEX idx_relay_configs_proxy_id ON relay_configs(proxy_id);
+CREATE INDEX idx_relay_configs_active ON relay_configs(is_active);
+CREATE INDEX idx_relay_configs_output_format ON relay_configs(output_format);
+
+-- Stream Access Logs  
+CREATE INDEX idx_stream_access_logs_proxy_ulid ON stream_access_logs(proxy_ulid);
+CREATE INDEX idx_stream_access_logs_channel_id ON stream_access_logs(channel_id);
+CREATE INDEX idx_stream_access_logs_start_time ON stream_access_logs(start_time);
+CREATE INDEX idx_stream_access_logs_client_ip ON stream_access_logs(client_ip);
+CREATE INDEX idx_stream_access_logs_relay_used ON stream_access_logs(relay_used);
+
+-- Relay Runtime Status
+CREATE INDEX idx_relay_runtime_status_running ON relay_runtime_status(is_running);
+CREATE INDEX idx_relay_runtime_status_port ON relay_runtime_status(port);
+
+-- =============================================================================
+-- AUTOMATIC TIMESTAMP UPDATES
+-- =============================================================================
 
 CREATE TRIGGER stream_sources_updated_at
     AFTER UPDATE ON stream_sources
@@ -307,3 +387,17 @@ CREATE TRIGGER logo_assets_updated_at
 BEGIN
     UPDATE logo_assets SET updated_at = datetime('now') WHERE id = NEW.id;
 END;
+
+CREATE TRIGGER relay_configs_updated_at
+    AFTER UPDATE ON relay_configs
+    FOR EACH ROW
+    BEGIN
+        UPDATE relay_configs SET updated_at = datetime('now') WHERE id = NEW.id;
+    END;
+
+CREATE TRIGGER relay_runtime_status_updated_at
+    AFTER UPDATE ON relay_runtime_status
+    FOR EACH ROW
+    BEGIN
+        UPDATE relay_runtime_status SET updated_at = datetime('now') WHERE config_id = NEW.config_id;
+    END;

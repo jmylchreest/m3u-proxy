@@ -36,6 +36,7 @@ use crate::{
     database::Database,
     ingestor::{scheduler::CacheInvalidationSender, IngestionStateManager},
     logo_assets::{LogoAssetService, LogoAssetStorage},
+    metrics::MetricsLogger,
 };
 
 pub mod api;
@@ -74,6 +75,7 @@ impl WebServer {
             data_mapping_service,
             logo_asset_service,
             logo_asset_storage,
+            metrics_logger: MetricsLogger::new(),
         }).await;
 
         let addr: SocketAddr = format!("{}:{}", config.web.host, config.web.port).parse()?;
@@ -94,9 +96,12 @@ impl WebServer {
             .nest("/api/v1", Self::api_v1_routes())
             
             
-            // Proxy serving endpoints - commented out until handlers are implemented
-            // .route("/proxy/:ulid.m3u8", get(crate::web::handlers::serve_proxy_m3u))
-            // .route("/logos/:logo_id", get(crate::web::handlers::serve_logo))
+            // Proxy/Streaming endpoints (non-API content serving)
+            .route("/proxy/:ulid/m3u8", get(handlers::proxies::serve_proxy_m3u))
+            .route("/proxy/:ulid/xmltv", get(handlers::proxies::serve_proxy_xmltv))
+            .route("/stream/:proxy_ulid/:channel_id", get(handlers::proxies::proxy_stream))
+            // TODO: Add logo serving endpoint when needed
+            // .route("/logos/:logo_id", get(handlers::static_assets::serve_logo))
             
             // Root route for basic index page
             .route("/", get(handlers::index::index))
@@ -194,15 +199,27 @@ impl WebServer {
             // EPG viewer
             .route("/epg/viewer", get(api::get_epg_viewer_data))
             
-            // Proxies (placeholder implementations for now)
+            // Proxies
             .route("/proxies", get(handlers::proxies::list_proxies)
                 .post(handlers::proxies::create_proxy))
             .route("/proxies/:id", get(handlers::proxies::get_proxy)
                 .put(handlers::proxies::update_proxy)
                 .delete(handlers::proxies::delete_proxy))
-            .route("/proxies/:id/regenerate", post(handlers::proxies::regenerate_proxy))
-            .route("/proxies/preview", get(api::preview_proxies))
-            .route("/proxies/regenerate-all", post(api::regenerate_all_proxies))
+            .route("/proxies/preview", post(handlers::proxies::preview_proxy_config))
+            .route("/proxies/:id/preview", get(handlers::proxies::preview_existing_proxy))
+            
+            // Relay configuration endpoints
+            .route("/proxies/:id/relays", 
+                get(api::list_relay_configs)
+                .post(api::create_relay_config))
+            .route("/proxies/:proxy_id/relays/:relay_id", 
+                get(api::get_relay_config)
+                .put(api::update_relay_config)
+                .delete(api::delete_relay_config))
+            .route("/relays/status", get(api::list_relay_status))
+            .route("/relays/:config_id/status", get(api::get_relay_status))
+            .route("/relays/:config_id/start", post(api::start_relay))
+            .route("/relays/:config_id/stop", post(api::stop_relay))
     }
 
 
@@ -243,6 +260,7 @@ pub struct AppState {
     pub data_mapping_service: DataMappingService,
     pub logo_asset_service: LogoAssetService,
     pub logo_asset_storage: LogoAssetStorage,
+    pub metrics_logger: MetricsLogger,
 }
 
 impl AppState {

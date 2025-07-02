@@ -366,7 +366,7 @@ impl super::Database {
             let proxy_filter = ProxyFilter {
                 proxy_id: Uuid::parse_str(&row.get::<String, _>("proxy_id"))?,
                 filter_id: Uuid::parse_str(&row.get::<String, _>("filter_id"))?,
-                sort_order: row.get("sort_order"),
+                priority_order: row.get("sort_order"),
                 is_active: row.get("is_active"),
                 created_at: row.get("created_at"),
             };

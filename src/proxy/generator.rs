@@ -144,7 +144,7 @@ impl ProxyGenerator {
         };
 
         // Step 6: Generate M3U content
-        let m3u_content = self.generate_m3u_content(&filtered_channels).await?;
+        let m3u_content = self.generate_m3u_content(&filtered_channels, &proxy.ulid, base_url).await?;
 
         // Step 7: Save to database and return generation record
         let generation = ProxyGeneration {
@@ -166,7 +166,7 @@ impl ProxyGenerator {
     }
 
     /// Generate M3U content from a list of channels
-    async fn generate_m3u_content(&self, channels: &[Channel]) -> Result<String> {
+    async fn generate_m3u_content(&self, channels: &[Channel], proxy_ulid: &str, base_url: &str) -> Result<String> {
         let mut m3u = String::from("#EXTM3U\n");
 
         for (index, channel) in channels.iter().enumerate() {
@@ -203,7 +203,15 @@ impl ProxyGenerator {
             extinf.push_str(&format!(",{}\n", channel.channel_name));
 
             m3u.push_str(&extinf);
-            m3u.push_str(&format!("{}\n", channel.stream_url));
+            
+            // Generate proxy URL for stream instead of original URL
+            // This allows us to capture metrics and implement relays
+            let proxy_stream_url = format!("{}/stream/{}/{}", 
+                base_url.trim_end_matches('/'), 
+                proxy_ulid,
+                channel.id
+            );
+            m3u.push_str(&format!("{}\n", proxy_stream_url));
         }
 
         Ok(m3u)

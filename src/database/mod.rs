@@ -172,7 +172,8 @@ impl Database {
     // Proxy-related database methods
     pub async fn get_stream_proxy(&self, proxy_id: Uuid) -> Result<Option<StreamProxy>> {
         let row = sqlx::query(
-            "SELECT id, ulid, name, created_at, updated_at, last_generated_at, is_active
+            "SELECT id, ulid, name, created_at, updated_at, last_generated_at, is_active,
+             proxy_mode, upstream_timeout, buffer_size, max_concurrent_streams
              FROM stream_proxies WHERE id = ?",
         )
         .bind(proxy_id.to_string())
@@ -184,10 +185,19 @@ impl Database {
                 id: Uuid::parse_str(&row.get::<String, _>("id"))?,
                 ulid: row.get("ulid"),
                 name: row.get("name"),
+                description: None, // Field was added later, not in current schema
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
                 last_generated_at: row.get("last_generated_at"),
                 is_active: row.get("is_active"),
+                proxy_mode: match row.get::<String, _>("proxy_mode").as_str() {
+                    "proxy" => crate::models::StreamProxyMode::Proxy,
+                    _ => crate::models::StreamProxyMode::Redirect,
+                },
+                upstream_timeout: row.get("upstream_timeout"),
+                buffer_size: row.get("buffer_size"),
+                max_concurrent_streams: row.get("max_concurrent_streams"),
+                starting_channel_number: 1, // Default value, field was added later
             })),
             None => Ok(None),
         }
@@ -195,7 +205,8 @@ impl Database {
 
     pub async fn get_proxy_by_ulid(&self, ulid: &str) -> Result<StreamProxy> {
         let row = sqlx::query(
-            "SELECT id, ulid, name, created_at, updated_at, last_generated_at, is_active
+            "SELECT id, ulid, name, created_at, updated_at, last_generated_at, is_active,
+             proxy_mode, upstream_timeout, buffer_size, max_concurrent_streams
              FROM stream_proxies WHERE ulid = ?",
         )
         .bind(ulid)
@@ -206,10 +217,19 @@ impl Database {
             id: Uuid::parse_str(&row.get::<String, _>("id"))?,
             ulid: row.get("ulid"),
             name: row.get("name"),
+            description: None, // Field was added later, not in current schema
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
             last_generated_at: row.get("last_generated_at"),
             is_active: row.get("is_active"),
+            proxy_mode: match row.get::<String, _>("proxy_mode").as_str() {
+                "proxy" => StreamProxyMode::Proxy,
+                _ => StreamProxyMode::Redirect,
+            },
+            upstream_timeout: row.get("upstream_timeout"),
+            buffer_size: row.get("buffer_size"),
+            max_concurrent_streams: row.get("max_concurrent_streams"),
+            starting_channel_number: 1, // Default value, field was added later
         })
     }
 
@@ -277,7 +297,7 @@ impl Database {
             let proxy_filter = ProxyFilter {
                 proxy_id: Uuid::parse_str(&row.get::<String, _>("proxy_id"))?,
                 filter_id: Uuid::parse_str(&row.get::<String, _>("filter_id"))?,
-                sort_order: row.get("sort_order"),
+                priority_order: row.get("sort_order"),
                 is_active: row.get("is_active"),
                 created_at: row.get("created_at"),
             };
@@ -300,5 +320,39 @@ impl Database {
         }
 
         Ok(result)
+    }
+
+    /// Get a channel by ID within the context of a specific proxy
+    /// This validates that the channel belongs to one of the proxy's sources
+    pub async fn get_channel_for_proxy(&self, proxy_ulid: &str, channel_id: Uuid) -> Result<Option<Channel>> {
+        let row = sqlx::query(
+            "SELECT c.id, c.source_id, c.tvg_id, c.tvg_name, c.tvg_logo, c.tvg_shift, 
+             c.group_title, c.channel_name, c.stream_url, c.created_at, c.updated_at
+             FROM channels c
+             JOIN proxy_sources ps ON c.source_id = ps.source_id
+             JOIN stream_proxies sp ON ps.proxy_id = sp.id
+             WHERE sp.ulid = ? AND c.id = ? AND sp.is_active = 1",
+        )
+        .bind(proxy_ulid)
+        .bind(channel_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(Channel {
+                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                tvg_id: row.get("tvg_id"),
+                tvg_name: row.get("tvg_name"),
+                tvg_logo: row.get("tvg_logo"),
+                tvg_shift: row.get("tvg_shift"),
+                group_title: row.get("group_title"),
+                channel_name: row.get("channel_name"),
+                stream_url: row.get("stream_url"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })),
+            None => Ok(None),
+        }
     }
 }

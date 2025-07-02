@@ -37,21 +37,44 @@ pub enum StreamSourceType {
     Xtream,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Hash)]
+#[sqlx(type_name = "stream_proxy_mode", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum StreamProxyMode {
+    Redirect,
+    Proxy,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct StreamProxy {
     pub id: Uuid,
     pub ulid: String, // ULID for public identification
     pub name: String,
+    pub description: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_generated_at: Option<DateTime<Utc>>,
     pub is_active: bool,
+    pub proxy_mode: StreamProxyMode,
+    pub upstream_timeout: Option<i32>,
+    pub buffer_size: Option<i32>,
+    pub max_concurrent_streams: Option<i32>,
+    pub starting_channel_number: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ProxySource {
     pub proxy_id: Uuid,
     pub source_id: Uuid,
+    pub priority_order: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ProxyEpgSource {
+    pub proxy_id: Uuid,
+    pub epg_source_id: Uuid,
+    pub priority_order: i32,
     pub created_at: DateTime<Utc>,
 }
 
@@ -79,9 +102,58 @@ pub enum FilterSourceType {
 pub struct ProxyFilter {
     pub proxy_id: Uuid,
     pub filter_id: Uuid,
-    pub sort_order: i32,
+    pub priority_order: i32,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
+}
+
+// Service layer request models for proxy operations
+#[derive(Debug, Clone)]
+pub struct StreamProxyCreateRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub proxy_mode: StreamProxyMode,
+    pub upstream_timeout: Option<i32>,
+    pub buffer_size: Option<i32>,
+    pub max_concurrent_streams: Option<i32>,
+    pub starting_channel_number: i32,
+    pub stream_sources: Vec<ProxySourceCreateRequest>,
+    pub epg_sources: Vec<ProxyEpgSourceCreateRequest>,
+    pub filters: Vec<ProxyFilterCreateRequest>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamProxyUpdateRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub proxy_mode: StreamProxyMode,
+    pub upstream_timeout: Option<i32>,
+    pub buffer_size: Option<i32>,
+    pub max_concurrent_streams: Option<i32>,
+    pub starting_channel_number: i32,
+    pub stream_sources: Vec<ProxySourceCreateRequest>,
+    pub epg_sources: Vec<ProxyEpgSourceCreateRequest>,
+    pub filters: Vec<ProxyFilterCreateRequest>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxySourceCreateRequest {
+    pub source_id: Uuid,
+    pub priority_order: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyEpgSourceCreateRequest {
+    pub epg_source_id: Uuid,
+    pub priority_order: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyFilterCreateRequest {
+    pub filter_id: Uuid,
+    pub priority_order: i32,
+    pub is_active: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -856,6 +928,64 @@ pub enum UnifiedSourceWithStats {
         program_count: i64,
         next_scheduled_update: Option<DateTime<Utc>>,
     },
+}
+
+// Relay Configuration Models
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct RelayConfig {
+    pub id: Uuid,
+    pub proxy_id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub ffmpeg_args: String, // JSON array of FFmpeg arguments
+    pub input_timeout: i32,  // Timeout in seconds for input stream
+    pub output_format: RelayOutputFormat,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "relay_output_format", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum RelayOutputFormat {
+    Hls,
+    Dash,
+    Rtmp,
+    Copy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayConfigCreateRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub ffmpeg_args: Vec<String>, // Array of FFmpeg arguments
+    pub input_timeout: i32,
+    pub output_format: RelayOutputFormat,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayConfigUpdateRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub ffmpeg_args: Vec<String>, // Array of FFmpeg arguments
+    pub input_timeout: i32,
+    pub output_format: RelayOutputFormat,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayStatus {
+    pub config_id: Uuid,
+    pub proxy_id: Uuid,
+    pub is_running: bool,
+    pub pid: Option<u32>,
+    pub port: Option<u16>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub client_count: i32,
+    pub bytes_served: u64,
+    pub error_message: Option<String>,
 }
 
 impl UnifiedSourceWithStats {

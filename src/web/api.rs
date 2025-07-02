@@ -3117,3 +3117,129 @@ pub async fn regenerate_all_proxies(
         "message": "Proxy regeneration not yet implemented"
     })))
 }
+
+// Relay Configuration API Endpoints
+
+/// List relay configurations for a specific proxy
+pub async fn list_relay_configs(
+    Path(_proxy_id): Path<Uuid>,
+    State(_state): State<AppState>,
+) -> Result<Json<Vec<RelayConfig>>, StatusCode> {
+    // TODO: Implement database lookup for relay configs
+    let configs = vec![]; // Placeholder
+    Ok(Json(configs))
+}
+
+/// Create a new relay configuration for a proxy
+pub async fn create_relay_config(
+    Path(proxy_id): Path<Uuid>,
+    State(_state): State<AppState>,
+    Json(payload): Json<RelayConfigCreateRequest>,
+) -> Result<Json<RelayConfig>, StatusCode> {
+    // TODO: Implement relay config creation
+    // Validate FFmpeg arguments
+    // Store in database with proxy_id
+    let config = RelayConfig {
+        id: Uuid::new_v4(),
+        proxy_id,
+        name: payload.name,
+        description: payload.description,
+        ffmpeg_args: serde_json::to_string(&payload.ffmpeg_args).unwrap_or_default(),
+        input_timeout: payload.input_timeout,
+        output_format: payload.output_format,
+        is_active: payload.is_active,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    
+    Ok(Json(config))
+}
+
+/// Get a specific relay configuration
+pub async fn get_relay_config(
+    Path((proxy_id, relay_id)): Path<(Uuid, Uuid)>,
+    State(_state): State<AppState>,
+) -> Result<Json<RelayConfig>, StatusCode> {
+    // TODO: Implement database lookup
+    let _ = (proxy_id, relay_id);
+    Err(StatusCode::NOT_FOUND)
+}
+
+/// Update a relay configuration
+pub async fn update_relay_config(
+    Path((proxy_id, relay_id)): Path<(Uuid, Uuid)>,
+    State(_state): State<AppState>,
+    Json(_payload): Json<RelayConfigUpdateRequest>,
+) -> Result<Json<RelayConfig>, StatusCode> {
+    // TODO: Implement relay config update
+    let _ = (proxy_id, relay_id);
+    Err(StatusCode::NOT_FOUND)
+}
+
+/// Delete a relay configuration
+pub async fn delete_relay_config(
+    Path((proxy_id, relay_id)): Path<(Uuid, Uuid)>,
+    State(_state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    // TODO: Implement relay config deletion
+    // Also stop any running relays using this config
+    let _ = (proxy_id, relay_id);
+    Err(StatusCode::NOT_FOUND)
+}
+
+/// List status of all running relays
+pub async fn list_relay_status(
+    State(_state): State<AppState>,
+) -> Result<Json<Vec<RelayStatus>>, StatusCode> {
+    // TODO: Implement relay status listing
+    let statuses = vec![]; // Placeholder
+    Ok(Json(statuses))
+}
+
+/// Get status of a specific relay
+pub async fn get_relay_status(
+    Path(config_id): Path<Uuid>,
+    State(_state): State<AppState>,
+) -> Result<Json<RelayStatus>, StatusCode> {
+    // TODO: Implement relay status lookup
+    let _ = config_id;
+    Err(StatusCode::NOT_FOUND)
+}
+
+/// Start a relay based on its configuration
+pub async fn start_relay(
+    Path(config_id): Path<Uuid>,
+    State(_state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // TODO: Implement relay startup
+    // 1. Get relay configuration from database
+    // 2. Start FFmpeg process with configured arguments
+    // 3. Store process info in relay manager
+    // 4. Return status
+    let _ = config_id;
+    
+    Ok(Json(json!({
+        "success": false,
+        "message": "Relay startup not yet implemented",
+        "config_id": config_id
+    })))
+}
+
+/// Stop a running relay
+pub async fn stop_relay(
+    Path(config_id): Path<Uuid>,
+    State(_state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // TODO: Implement relay shutdown
+    // 1. Find running relay by config_id
+    // 2. Gracefully stop FFmpeg process
+    // 3. Clean up resources
+    // 4. Update status
+    let _ = config_id;
+    
+    Ok(Json(json!({
+        "success": false,
+        "message": "Relay shutdown not yet implemented",
+        "config_id": config_id
+    })))
+}

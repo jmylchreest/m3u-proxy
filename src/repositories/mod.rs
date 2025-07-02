@@ -26,11 +26,13 @@
 
 pub mod traits;
 pub mod stream_source;
+pub mod stream_proxy;
 pub mod channel;
 pub mod filter;
 
 // Re-export main traits and types
 pub use traits::*;
 pub use stream_source::StreamSourceRepository;
+pub use stream_proxy::StreamProxyRepository;
 pub use channel::ChannelRepository;
 pub use filter::FilterRepository;

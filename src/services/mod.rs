@@ -41,6 +41,7 @@
 
 pub mod traits;
 pub mod stream_source;
+pub mod stream_proxy;
 pub mod channel;
 pub mod filter;
 pub mod data_mapping;
@@ -48,6 +49,7 @@ pub mod data_mapping;
 // Re-export main traits and services
 pub use traits::*;
 pub use stream_source::StreamSourceService;
+pub use stream_proxy::StreamProxyService;
 pub use channel::ChannelService;
 pub use filter::FilterService;
 pub use data_mapping::DataMappingService;

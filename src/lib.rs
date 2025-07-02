@@ -6,6 +6,7 @@ pub mod errors;
 pub mod filter_parser;
 pub mod ingestor;
 pub mod logo_assets;
+pub mod metrics;
 pub mod models;
 pub mod proxy;
 pub mod repositories;

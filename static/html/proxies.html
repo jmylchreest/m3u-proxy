@@ -89,23 +89,52 @@
                             ></textarea>
                         </div>
 
+                        <!-- Stream Sources Section -->
                         <div class="form-group">
-                            <label for="proxySource">Source</label>
-                            <select id="proxySource" name="source_id" required>
-                                <option value="">Select a source...</option>
-                                <!-- Sources will be loaded here -->
-                            </select>
+                            <label>Stream Sources</label>
+                            <div class="priority-section">
+                                <button type="button" class="btn btn-sm btn-outline-primary add-source-btn" onclick="openAddStreamSourceModal()">
+                                    + Add Stream Source
+                                </button>
+                                <div id="streamSourcesList" class="priority-list">
+                                    <!-- Stream sources will be loaded here -->
+                                </div>
+                                <small class="text-muted">
+                                    Drag to reorder priority. Higher sources take precedence during deduplication.
+                                </small>
+                            </div>
                         </div>
 
+                        <!-- EPG Sources Section -->
                         <div class="form-group">
-                            <label for="proxyFilters">Filters (optional)</label>
-                            <div id="proxyFilters" class="filters-container">
-                                <!-- Filters will be loaded here -->
+                            <label>EPG Sources</label>
+                            <div class="priority-section">
+                                <button type="button" class="btn btn-sm btn-outline-primary add-source-btn" onclick="openAddEpgSourceModal()">
+                                    + Add EPG Source
+                                </button>
+                                <div id="epgSourcesList" class="priority-list">
+                                    <!-- EPG sources will be loaded here -->
+                                </div>
+                                <small class="text-muted">
+                                    Drag to reorder priority for EPG data merging.
+                                </small>
                             </div>
-                            <small class="text-muted">
-                                Select filters to apply to this proxy. Filters
-                                are applied after data mapping.
-                            </small>
+                        </div>
+
+                        <!-- Filters Section -->
+                        <div class="form-group">
+                            <label>Filters</label>
+                            <div class="priority-section">
+                                <button type="button" class="btn btn-sm btn-outline-primary add-filter-btn" onclick="openAddFilterModal()">
+                                    + Add Filter
+                                </button>
+                                <div id="filtersList" class="priority-list">
+                                    <!-- Filters will be loaded here -->
+                                </div>
+                                <small class="text-muted">
+                                    Drag to reorder filter execution order. Filters are applied after data mapping.
+                                </small>
+                            </div>
                         </div>
 
                         <div class="form-group">
@@ -130,6 +159,69 @@
                                 />
                                 Auto-regenerate when source or filters change
                             </label>
+                        </div>
+
+                        <!-- Streaming Configuration -->
+                        <h6 class="mt-4 mb-3">Streaming Configuration</h6>
+                        
+                        <div class="form-group">
+                            <label for="proxyMode">Stream Mode</label>
+                            <select id="proxyMode" name="proxy_mode" class="form-control">
+                                <option value="redirect">Redirect - Send clients directly to original stream URLs</option>
+                                <option value="proxy">Proxy - Stream content through this service for better metrics</option>
+                            </select>
+                            <small class="text-muted">
+                                Redirect mode is faster but provides limited metrics. Proxy mode allows full metrics collection.
+                            </small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="upstreamTimeout">Upstream Timeout (seconds)</label>
+                            <input
+                                type="number"
+                                id="upstreamTimeout"
+                                name="upstream_timeout"
+                                class="form-control"
+                                value="30"
+                                min="5"
+                                max="300"
+                            />
+                            <small class="text-muted">
+                                Timeout for upstream requests when using proxy mode.
+                            </small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="bufferSize">Buffer Size (bytes)</label>
+                            <input
+                                type="number"
+                                id="bufferSize"
+                                name="buffer_size"
+                                class="form-control"
+                                value="8192"
+                                min="1024"
+                                max="1048576"
+                                step="1024"
+                            />
+                            <small class="text-muted">
+                                Buffer size for streaming data (1KB - 1MB).
+                            </small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="maxConcurrentStreams">Max Concurrent Streams</label>
+                            <input
+                                type="number"
+                                id="maxConcurrentStreams"
+                                name="max_concurrent_streams"
+                                class="form-control"
+                                value="1000"
+                                min="1"
+                                max="10000"
+                            />
+                            <small class="text-muted">
+                                Maximum number of concurrent streams for this proxy.
+                            </small>
                         </div>
                     </form>
                 </div>
@@ -238,6 +330,72 @@
                         onclick="closeProxyPreview()"
                     >
                         Close
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Stream Source Modal -->
+        <div id="addStreamSourceModal" class="modal" style="display: none">
+            <div class="modal-content standard-modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">Add Stream Source</h3>
+                </div>
+                <div class="modal-body">
+                    <div id="streamSourcesSelectionList" class="source-selection-list">
+                        <!-- Stream sources will be loaded here -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" onclick="saveSelectedStreamSources()">
+                        Save
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="closeAddStreamSourceModal()">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add EPG Source Modal -->
+        <div id="addEpgSourceModal" class="modal" style="display: none">
+            <div class="modal-content standard-modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">Add EPG Source</h3>
+                </div>
+                <div class="modal-body">
+                    <div id="epgSourcesSelectionList" class="source-selection-list">
+                        <!-- EPG sources will be loaded here -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" onclick="saveSelectedEpgSources()">
+                        Save
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="closeAddEpgSourceModal()">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Filter Modal -->
+        <div id="addFilterModal" class="modal" style="display: none">
+            <div class="modal-content standard-modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">Add Filter</h3>
+                </div>
+                <div class="modal-body">
+                    <div id="filtersSelectionList" class="source-selection-list">
+                        <!-- Filters will be loaded here -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" onclick="saveSelectedFilters()">
+                        Save
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="closeAddFilterModal()">
+                        Cancel
                     </button>
                 </div>
             </div>

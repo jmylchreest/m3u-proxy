@@ -57,6 +57,7 @@ pub struct DisplayConfig {
     pub local_timezone: String,
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingEngineConfig {
     /// Special characters used for regex precheck filtering
@@ -132,6 +133,7 @@ impl Default for DatabaseBatchConfig {
         }
     }
 }
+
 
 impl Default for DataMappingEngineConfig {
     fn default() -> Self {

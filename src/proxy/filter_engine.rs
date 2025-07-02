@@ -26,7 +26,7 @@ impl FilterEngine {
     ) -> Result<Vec<Channel>> {
         // Sort filters by their order
         let mut sorted_filters = filters;
-        sorted_filters.sort_by_key(|(_, proxy_filter)| proxy_filter.sort_order);
+        sorted_filters.sort_by_key(|(_, proxy_filter)| proxy_filter.priority_order);
 
         let mut result_channels = Vec::new();
         let mut _current_channel_number = 1;

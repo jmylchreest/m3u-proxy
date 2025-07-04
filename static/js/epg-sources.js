@@ -645,22 +645,23 @@ class EpgSourcesManager {
   // Progress tracking methods
   async loadProgress() {
     try {
-      const response = await fetch("/api/v1/progress/sources");
+      const response = await fetch("/api/v1/progress/epg");
       if (!response.ok) return;
 
       const data = await response.json();
-      const newProgressData = data.progress || {};
+      const sourcesData = data.sources || [];
 
-      // Extract progress and processing info from consolidated response
+      // Extract progress and processing info from API response
       const extractedProgress = {};
       const extractedProcessingInfo = {};
 
-      Object.entries(newProgressData).forEach(([sourceId, data]) => {
-        if (data.progress) {
-          extractedProgress[sourceId] = data.progress;
+      sourcesData.forEach((sourceData) => {
+        const sourceId = sourceData.source_id;
+        if (sourceData.progress) {
+          extractedProgress[sourceId] = sourceData.progress;
         }
-        if (data.processing_info) {
-          extractedProcessingInfo[sourceId] = data.processing_info;
+        if (sourceData.processing_info) {
+          extractedProcessingInfo[sourceId] = sourceData.processing_info;
         }
       });
 

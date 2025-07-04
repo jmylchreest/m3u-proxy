@@ -205,7 +205,7 @@ function updateTestSourceUI() {
   availableSources.forEach((source) => {
     const option = document.createElement("option");
     option.value = source.id;
-    option.textContent = source.name;
+    option.textContent = source.source_name || source.name || 'Unknown';
     testSourceSelect.appendChild(option);
   });
 
@@ -233,7 +233,7 @@ function updateTestSourceUI() {
       sourceLabel.className = "auto-selected-source text-muted small";
       testSourceContainer.insertBefore(sourceLabel, testSourceSelect);
     }
-    sourceLabel.textContent = `Testing against: ${availableSources[0].name}`;
+    sourceLabel.textContent = `Testing against: ${availableSources[0].source_name || availableSources[0].name || 'Unknown'}`;
   } else {
     // Show dropdown for multiple sources
     testSourceSelect.style.display = "block";

@@ -45,6 +45,50 @@ cargo build --release
 ./target/release/m3u-proxy
 ```
 
+### Memory Tracking with jemalloc (Recommended)
+
+For production deployments, enable jemalloc for accurate memory tracking and better performance:
+
+```bash
+# Build with jemalloc support
+cargo build --release --features jemalloc
+
+# Run with jemalloc
+./target/release/m3u-proxy
+```
+
+#### jemalloc Benefits
+
+- **Accurate Memory Tracking**: Real allocator statistics instead of estimates
+- **Better Performance**: Optimized memory allocation for high-throughput workloads
+- **Memory Limit Enforcement**: Precise memory usage monitoring and warnings
+- **Cross-Platform**: Works on Linux, macOS, and Windows
+
+#### Memory Configuration
+
+Configure memory limits in `config.toml`:
+
+```toml
+[proxy_generation.memory]
+max_memory_mb = 512              # Memory limit for proxy generation
+batch_size = 1000               # Channels processed per batch
+enable_parallel_processing = true
+memory_check_interval = 100     # Memory check frequency
+warning_threshold = 0.8         # Warn at 80% of limit
+```
+
+#### Without jemalloc
+
+If jemalloc is not available, the system automatically falls back to simple memory tracking:
+
+```bash
+# Standard build (uses system allocator)
+cargo build --release
+
+# Still provides memory tracking, just less accurate
+./target/release/m3u-proxy
+```
+
 ### Command Line Options
 
 The application supports several command-line arguments for configuration:

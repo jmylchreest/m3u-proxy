@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE stream_proxies \n            SET name = ?, description = ?, proxy_mode = ?, upstream_timeout = ?,\n                buffer_size = ?, max_concurrent_streams = ?, starting_channel_number = ?,\n                is_active = ?, auto_regenerate = ?, updated_at = ?\n            WHERE id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "a24d7f8b7861e34c34567a9de6d7fb46886e252bf1a6e6e03cf87fd733341c45"
+}

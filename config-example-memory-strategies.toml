@@ -1,0 +1,64 @@
+# M3U Proxy Memory Strategy Configuration Examples
+# 
+# The strategy_preset field controls which memory management strategy to use:
+# - "default": Basic memory handling (built-in fallbacks)
+# - "conservative": Safe processing with chunked fallback 
+# - "aggressive": Maximum completion rate with temp file spill
+# - "temp_file_based": Always use temporary files for large datasets
+# - "custom": Use the memory_strategy settings block below
+
+[proxy_generation]
+enable_memory_tracking = true
+enable_profiling = false
+
+# Example 1: Using predefined conservative strategy (recommended for most users)
+[proxy_generation.memory]
+max_memory_mb = 512
+batch_size = 1000  
+enable_parallel_processing = true
+memory_check_interval = 100
+warning_threshold = 0.8
+strategy_preset = "conservative"
+# memory_strategy settings below are ignored when using predefined strategies
+
+# Example 2: Using predefined aggressive strategy (for high-performance servers)  
+# [proxy_generation.memory]
+# max_memory_mb = 1024
+# batch_size = 2000
+# enable_parallel_processing = true
+# memory_check_interval = 50
+# warning_threshold = 0.9
+# strategy_preset = "aggressive"
+
+# Example 3: Using temp file based strategy (for memory-constrained environments)
+# [proxy_generation.memory]
+# max_memory_mb = 256
+# batch_size = 500
+# enable_parallel_processing = false
+# memory_check_interval = 50
+# warning_threshold = 0.6
+# strategy_preset = "temp_file_based"
+# # temp_dir can be specified in memory_strategy block below
+
+# Example 4: Using custom strategy settings (advanced users only)
+# [proxy_generation.memory]
+# max_memory_mb = 512
+# batch_size = 1000
+# enable_parallel_processing = true  
+# memory_check_interval = 100
+# warning_threshold = 0.8
+# strategy_preset = "custom"  # Must be set to "custom" to use settings below
+#
+# # Custom memory strategy settings (only used when strategy_preset = "custom")
+# [proxy_generation.memory.memory_strategy]
+# warning_strategy = "continue_with_warning"     # Options: stop_early, continue_with_warning, chunked_processing, temp_file_spill
+# exceeded_strategy = "chunked_processing"       # Options: stop_early, continue_with_warning, chunked_processing, temp_file_spill
+# chunk_size = 1000                              # Chunk size for chunked_processing
+# temp_dir = "/tmp/m3u-proxy"                    # Directory for temp_file_spill
+# attempt_gc = true                              # Try garbage collection before applying strategies
+
+# Notes:
+# 1. Auto-regeneration always uses "conservative" strategy regardless of settings
+# 2. The memory_strategy block is ONLY used when strategy_preset = "custom"
+# 3. Most users should use "conservative" or "aggressive" presets
+# 4. Use "custom" only if you need fine-grained control over memory handling

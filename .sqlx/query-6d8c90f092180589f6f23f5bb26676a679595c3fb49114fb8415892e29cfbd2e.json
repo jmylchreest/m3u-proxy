@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM proxy_epg_sources WHERE proxy_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "6d8c90f092180589f6f23f5bb26676a679595c3fb49114fb8415892e29cfbd2e"
+}

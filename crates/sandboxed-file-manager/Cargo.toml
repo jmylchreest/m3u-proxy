@@ -1,0 +1,31 @@
+[package]
+name = "sandboxed-file-manager"
+version = "0.0.1"
+edition = "2024"
+authors = ["John Mylchreest <jmylchreest@gmail.com>"]
+description = "A secure, sandboxed file management library with configurable retention policies"
+repository = "https://github.com/jmylchreest/m3u-proxy"
+license = "MIT"
+keywords = ["file", "sandbox", "cleanup", "retention", "security"]
+categories = ["filesystem", "os"]
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+infer = "0.16"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+tokio = { version = "1.0", features = [
+    "fs",
+    "time",
+    "sync",
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "io-util",
+] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4"

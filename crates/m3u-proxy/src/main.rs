@@ -14,6 +14,7 @@ use m3u_proxy::{
     },
     logo_assets::{LogoAssetService, LogoAssetStorage},
     services::ProxyRegenerationService,
+    utils::memory_config::{MemoryMonitoringConfig, MemoryVerbosity, init_global_memory_config},
     web::WebServer,
 };
 use sandboxed_file_manager::SandboxedManager;
@@ -43,6 +44,14 @@ struct Cli {
     /// Log level
     #[arg(short = 'v', long, default_value = "info")]
     log_level: String,
+
+    /// Memory monitoring verbosity (silent, minimal, normal, verbose, debug)
+    #[arg(long, default_value = "minimal")]
+    memory_verbosity: String,
+
+    /// Memory limit in MB
+    #[arg(long, value_name = "MB")]
+    memory_limit: Option<usize>,
 }
 
 #[tokio::main]
@@ -63,7 +72,38 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // Parse memory verbosity from CLI or environment
+    let memory_verbosity = std::env::var("M3U_PROXY_MEMORY_VERBOSITY")
+        .unwrap_or_else(|_| cli.memory_verbosity.clone());
+
+    let memory_verbosity = MemoryVerbosity::from_str(&memory_verbosity).unwrap_or_else(|_| {
+        eprintln!(
+            "Warning: Invalid memory verbosity '{}', using 'minimal'",
+            memory_verbosity
+        );
+        MemoryVerbosity::Minimal
+    });
+
+    let memory_limit = cli.memory_limit.or_else(|| {
+        std::env::var("M3U_PROXY_MEMORY_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+    });
+
+    // Create memory monitoring configuration
+    let mut memory_config = MemoryMonitoringConfig::default();
+    memory_config.verbosity = memory_verbosity;
+    memory_config.memory_limit_mb = memory_limit;
+
     info!("Starting M3U Proxy Service v{}", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Memory monitoring: verbosity={}, limit={:?}MB",
+        memory_config.verbosity.as_str(),
+        memory_config.memory_limit_mb
+    );
+
+    // Initialize global memory configuration
+    init_global_memory_config(memory_config.clone());
 
     // Load configuration from specified file
     let mut config = Config::load_from_file(&cli.config)?;

@@ -9,14 +9,13 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::models::*;
-use crate::utils::memory_strategy::MemoryAction;
 
 /// Memory pressure levels for fine-grained strategy selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MemoryPressureLevel {
     /// < 50% memory usage - optimal performance strategies
     Optimal,
-    /// 50-70% memory usage - slight optimizations  
+    /// 50-70% memory usage - slight optimizations
     Moderate,
     /// 70-85% memory usage - more aggressive memory saving
     High,
@@ -70,7 +69,7 @@ pub trait StageStrategy: Send + Sync {
         source_ids: Vec<Uuid>,
     ) -> Result<Vec<Channel>>;
 
-    /// Execute data mapping stage  
+    /// Execute data mapping stage
     async fn execute_data_mapping(
         &self,
         context: &StageContext,
@@ -131,11 +130,19 @@ impl StageStrategyRegistry {
         }
     }
 
-    pub fn register_source_loading_strategy(&mut self, name: String, strategy: Box<dyn StageStrategy>) {
+    pub fn register_source_loading_strategy(
+        &mut self,
+        name: String,
+        strategy: Box<dyn StageStrategy>,
+    ) {
         self.source_loading_strategies.insert(name, strategy);
     }
 
-    pub fn register_data_mapping_strategy(&mut self, name: String, strategy: Box<dyn StageStrategy>) {
+    pub fn register_data_mapping_strategy(
+        &mut self,
+        name: String,
+        strategy: Box<dyn StageStrategy>,
+    ) {
         self.data_mapping_strategies.insert(name, strategy);
     }
 
@@ -143,11 +150,19 @@ impl StageStrategyRegistry {
         self.filtering_strategies.insert(name, strategy);
     }
 
-    pub fn register_channel_numbering_strategy(&mut self, name: String, strategy: Box<dyn StageStrategy>) {
+    pub fn register_channel_numbering_strategy(
+        &mut self,
+        name: String,
+        strategy: Box<dyn StageStrategy>,
+    ) {
         self.channel_numbering_strategies.insert(name, strategy);
     }
 
-    pub fn register_m3u_generation_strategy(&mut self, name: String, strategy: Box<dyn StageStrategy>) {
+    pub fn register_m3u_generation_strategy(
+        &mut self,
+        name: String,
+        strategy: Box<dyn StageStrategy>,
+    ) {
         self.m3u_generation_strategies.insert(name, strategy);
     }
 
@@ -191,13 +206,13 @@ impl StageStrategyRegistry {
 pub struct DynamicStrategySelector {
     registry: StageStrategyRegistry,
     stage_preferences: HashMap<String, Vec<String>>,
-    memory_thresholds: MemoryThresholds,
+    pub memory_thresholds: MemoryThresholds,
 }
 
 #[derive(Debug, Clone)]
 pub struct MemoryThresholds {
     pub optimal_mb: usize,
-    pub moderate_mb: usize, 
+    pub moderate_mb: usize,
     pub high_mb: usize,
     pub critical_mb: usize,
 }
@@ -205,10 +220,10 @@ pub struct MemoryThresholds {
 impl Default for MemoryThresholds {
     fn default() -> Self {
         Self {
-            optimal_mb: 256,   // < 256MB = optimal
-            moderate_mb: 384,  // < 384MB = moderate
-            high_mb: 448,      // < 448MB = high  
-            critical_mb: 486,  // < 486MB = critical, >486MB = emergency
+            optimal_mb: 256,  // < 256MB = optimal
+            moderate_mb: 384, // < 384MB = moderate
+            high_mb: 448,     // < 448MB = high
+            critical_mb: 486, // < 486MB = critical, >486MB = emergency
         }
     }
 }
@@ -216,42 +231,57 @@ impl Default for MemoryThresholds {
 impl DynamicStrategySelector {
     pub fn new(registry: StageStrategyRegistry) -> Self {
         let mut stage_preferences = HashMap::new();
-        
+
         // Default strategy preferences (best to worst for each stage)
-        stage_preferences.insert("source_loading".to_string(), vec![
-            "inmemory_full".to_string(),
-            "batched_loader".to_string(),
-            "streaming_loader".to_string(),
-            "database_spill".to_string(),
-            "minimal_loader".to_string(),
-        ]);
+        stage_preferences.insert(
+            "source_loading".to_string(),
+            vec![
+                "inmemory_full".to_string(),
+                "batched_loader".to_string(),
+                "streaming_loader".to_string(),
+                "database_spill".to_string(),
+                "minimal_loader".to_string(),
+            ],
+        );
 
-        stage_preferences.insert("data_mapping".to_string(), vec![
-            "parallel_mapping".to_string(),
-            "batched_mapping".to_string(),
-            "streaming_mapping".to_string(),
-            "compressed_mapping".to_string(),
-            "simple_mapping".to_string(),
-        ]);
+        stage_preferences.insert(
+            "data_mapping".to_string(),
+            vec![
+                "parallel_mapping".to_string(),
+                "batched_mapping".to_string(),
+                "streaming_mapping".to_string(),
+                "compressed_mapping".to_string(),
+                "simple_mapping".to_string(),
+            ],
+        );
 
-        stage_preferences.insert("filtering".to_string(), vec![
-            "inmemory_filter".to_string(),
-            "indexed_filter".to_string(),
-            "bitmask_filter".to_string(),
-            "streaming_filter".to_string(),
-            "passthrough_filter".to_string(),
-        ]);
+        stage_preferences.insert(
+            "filtering".to_string(),
+            vec![
+                "inmemory_filter".to_string(),
+                "indexed_filter".to_string(),
+                "bitmask_filter".to_string(),
+                "streaming_filter".to_string(),
+                "passthrough_filter".to_string(),
+            ],
+        );
 
-        stage_preferences.insert("channel_numbering".to_string(), vec![
-            "inmemory_numbering".to_string(),
-            "streaming_numbering".to_string(),
-        ]);
+        stage_preferences.insert(
+            "channel_numbering".to_string(),
+            vec![
+                "inmemory_numbering".to_string(),
+                "streaming_numbering".to_string(),
+            ],
+        );
 
-        stage_preferences.insert("m3u_generation".to_string(), vec![
-            "inmemory_m3u".to_string(),
-            "streaming_m3u".to_string(),
-            "chunked_m3u".to_string(),
-        ]);
+        stage_preferences.insert(
+            "m3u_generation".to_string(),
+            vec![
+                "inmemory_m3u".to_string(),
+                "streaming_m3u".to_string(),
+                "chunked_m3u".to_string(),
+            ],
+        );
 
         Self {
             registry,
@@ -276,25 +306,18 @@ impl DynamicStrategySelector {
     }
 
     /// Select optimal strategy for a stage
-    pub fn select_strategy(&self, stage: &str, memory_pressure: MemoryPressureLevel) -> Option<&dyn StageStrategy> {
+    pub fn select_strategy(
+        &self,
+        stage: &str,
+        memory_pressure: MemoryPressureLevel,
+    ) -> Option<&dyn StageStrategy> {
         let preferences = self.stage_preferences.get(stage)?;
-        self.registry.select_strategy_for_stage(stage, memory_pressure, preferences)
+        self.registry
+            .select_strategy_for_stage(stage, memory_pressure, preferences)
     }
 
     /// Update strategy preferences for a stage
     pub fn set_stage_preferences(&mut self, stage: String, preferences: Vec<String>) {
         self.stage_preferences.insert(stage, preferences);
-    }
-}
-
-/// Convert memory action to memory pressure level for strategy selection
-impl From<MemoryAction> for MemoryPressureLevel {
-    fn from(action: MemoryAction) -> Self {
-        match action {
-            MemoryAction::Continue => MemoryPressureLevel::Optimal,
-            MemoryAction::SwitchToChunked(_) => MemoryPressureLevel::High,
-            MemoryAction::UseTemporaryStorage(_) => MemoryPressureLevel::Critical,
-            MemoryAction::StopProcessing => MemoryPressureLevel::Emergency,
-        }
     }
 }

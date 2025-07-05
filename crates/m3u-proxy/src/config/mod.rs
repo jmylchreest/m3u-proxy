@@ -1,11 +1,104 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::info;
 
 pub mod duration_serde;
 pub mod file_categories;
 pub use file_categories::FileManagerConfig;
+
+/// WASM strategy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmStrategiesConfig {
+    pub enabled: bool,
+    pub plugin_directory: PathBuf,
+    pub max_memory_per_plugin_mb: usize,
+    pub timeout_seconds: u64,
+    pub enable_hot_reload: bool,
+    pub stages: HashMap<String, StageStrategyConfig>,
+}
+
+/// Strategy configuration for a specific stage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageStrategyConfig {
+    pub memory_pressure_strategies: HashMap<String, Vec<String>>, // pressure_level -> [strategy_names]
+    pub fallback_strategy: String,
+    pub strategy_configs: HashMap<String, StrategyConfig>,
+}
+
+/// Configuration for a specific strategy
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyConfig {
+    pub enabled: bool,
+    pub priority: u8,                              // 1-10, 10 being highest priority
+    pub memory_pressure_threshold: Option<String>, // "optimal", "moderate", "high", etc.
+    pub fallback_strategy: Option<String>,
+    pub plugin_config: HashMap<String, String>,
+}
+
+impl Default for WasmStrategiesConfig {
+    fn default() -> Self {
+        let mut stages = HashMap::new();
+
+        // Default source_loading stage configuration
+        let mut source_loading_strategies = HashMap::new();
+        source_loading_strategies.insert(
+            "optimal".to_string(),
+            vec!["inmemory_source_loading".to_string()],
+        );
+        source_loading_strategies.insert(
+            "moderate".to_string(),
+            vec![
+                "chunked_source_loader".to_string(),
+                "inmemory_source_loading".to_string(),
+            ],
+        );
+        source_loading_strategies.insert(
+            "high".to_string(),
+            vec!["chunked_source_loader".to_string()],
+        );
+        source_loading_strategies.insert(
+            "critical".to_string(),
+            vec!["chunked_source_loader".to_string()],
+        );
+
+        let mut strategy_configs = HashMap::new();
+        strategy_configs.insert(
+            "chunked_source_loader".to_string(),
+            StrategyConfig {
+                enabled: true,
+                priority: 8,
+                memory_pressure_threshold: Some("moderate".to_string()),
+                fallback_strategy: Some("inmemory_source_loading".to_string()),
+                plugin_config: {
+                    let mut config = HashMap::new();
+                    config.insert("chunk_size".to_string(), "2000".to_string());
+                    config.insert("temp_file_threshold".to_string(), "10000".to_string());
+                    config
+                },
+            },
+        );
+
+        stages.insert(
+            "source_loading".to_string(),
+            StageStrategyConfig {
+                memory_pressure_strategies: source_loading_strategies,
+                fallback_strategy: "inmemory_source_loading".to_string(),
+                strategy_configs,
+            },
+        );
+
+        Self {
+            enabled: false, // Disabled by default for security
+            plugin_directory: PathBuf::from("./plugins"),
+            max_memory_per_plugin_mb: 64,
+            timeout_seconds: 30,
+            enable_hot_reload: false,
+            stages,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -17,6 +110,7 @@ pub struct Config {
     pub data_mapping_engine: Option<DataMappingEngineConfig>,
     pub proxy_generation: Option<ProxyGenerationConfig>,
     pub file_manager: Option<FileManagerConfig>,
+    pub wasm_strategies: Option<WasmStrategiesConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,25 +194,6 @@ pub struct ProxyMemoryConfig {
     pub memory_check_interval: usize,
     /// Warning threshold as percentage of max memory (0.0-1.0)
     pub warning_threshold: f64,
-    /// Strategy preset selection: "default", "conservative", "aggressive", "temp_file_based", "custom"
-    /// Use "custom" to enable the memory_strategy settings below
-    pub strategy_preset: Option<String>,
-    /// Memory pressure handling strategy (only used when strategy_preset = "custom")
-    pub memory_strategy: Option<MemoryStrategySettings>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryStrategySettings {
-    /// Strategy to use when memory warning threshold is reached
-    pub warning_strategy: String,
-    /// Strategy to use when memory limit is exceeded
-    pub exceeded_strategy: String,
-    /// Chunk size for chunked processing strategy
-    pub chunk_size: Option<usize>,
-    /// Temporary directory for temp file spill strategy
-    pub temp_dir: Option<String>,
-    /// Whether to attempt garbage collection before applying strategy
-    pub attempt_gc: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,63 +310,6 @@ impl Default for ProxyMemoryConfig {
             enable_parallel_processing: true,
             memory_check_interval: 100,
             warning_threshold: 0.8, // Warn at 80% of limit
-            strategy_preset: Some("default".to_string()), // Use default predefined strategy
-            memory_strategy: Some(MemoryStrategySettings::default()),
-        }
-    }
-}
-
-impl Default for MemoryStrategySettings {
-    fn default() -> Self {
-        Self {
-            warning_strategy: "continue_with_warning".to_string(),
-            exceeded_strategy: "continue_with_warning".to_string(),
-            chunk_size: Some(1000),
-            temp_dir: Some("/tmp".to_string()),
-            attempt_gc: true,
-        }
-    }
-}
-
-impl MemoryStrategySettings {
-    /// Convert to the actual MemoryStrategyConfig used by the executor
-    pub fn to_memory_strategy_config(
-        &self,
-    ) -> Result<crate::utils::memory_strategy::MemoryStrategyConfig> {
-        use crate::utils::memory_strategy::MemoryStrategyConfig;
-
-        let warning_strategy = self.parse_strategy(&self.warning_strategy)?;
-        let exceeded_strategy = self.parse_strategy(&self.exceeded_strategy)?;
-
-        Ok(MemoryStrategyConfig {
-            warning_strategy,
-            exceeded_strategy,
-            attempt_gc: self.attempt_gc,
-        })
-    }
-
-    fn parse_strategy(
-        &self,
-        strategy_str: &str,
-    ) -> Result<crate::utils::memory_strategy::MemoryStrategy> {
-        use crate::utils::memory_strategy::MemoryStrategy;
-
-        match strategy_str.to_lowercase().as_str() {
-            "stop_early" => Ok(MemoryStrategy::StopEarly),
-            "continue_with_warning" => Ok(MemoryStrategy::ContinueWithWarning),
-            "chunked_processing" => {
-                let chunk_size = self.chunk_size.unwrap_or(1000);
-                Ok(MemoryStrategy::ChunkedProcessing { chunk_size })
-            }
-            "temp_file_spill" => {
-                let temp_dir = self
-                    .temp_dir
-                    .as_ref()
-                    .cloned()
-                    .unwrap_or_else(|| "/tmp".to_string());
-                Ok(MemoryStrategy::TempFileSpill { temp_dir })
-            }
-            _ => Err(anyhow::anyhow!("Unknown memory strategy: {}", strategy_str)),
         }
     }
 }
@@ -339,6 +357,7 @@ impl Default for Config {
             data_mapping_engine: Some(DataMappingEngineConfig::default()),
             proxy_generation: Some(ProxyGenerationConfig::default()),
             file_manager: None,
+            wasm_strategies: None,
         }
     }
 }

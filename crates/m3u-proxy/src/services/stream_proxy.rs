@@ -11,7 +11,9 @@ use crate::{
     database::Database,
     errors::types::AppError,
     logo_assets::service::LogoAssetService,
-    models::{Channel, StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest, GenerationOutput},
+    models::{
+        Channel, GenerationOutput, StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest,
+    },
     proxy::filter_engine::FilterEngine,
     repositories::{
         ChannelRepository, FilterRepository, StreamProxyRepository, StreamSourceRepository,
@@ -225,7 +227,7 @@ impl StreamProxyService {
                 &self.data_mapping_service,
                 &self.logo_service,
                 "http://localhost:8080", // TODO: Get from config
-                None, // engine_config
+                None,                    // engine_config
             )
             .await
             .map_err(|e| {
@@ -265,7 +267,7 @@ impl StreamProxyService {
 
         // Extract enhanced stats from GenerationStats if available
         let generation_stats = proxy_generation.stats.as_ref();
-        
+
         let stats = crate::web::handlers::proxies::PreviewStats {
             total_sources: resolved_config.sources.len(),
             total_channels_before_filters: proxy_generation.total_channels,
@@ -277,33 +279,40 @@ impl StreamProxyService {
             included_channels: proxy_generation.filtered_channels,
             // Enhanced pipeline metrics from GenerationStats (fix types)
             pipeline_stages: generation_stats.map(|gs| gs.stage_timings.len()),
-            filter_execution_time: generation_stats.and_then(|gs| 
-                gs.stage_timings.get("filtering").map(|&t| format!("{}ms", t))
-            ),
-            processing_rate: generation_stats.map(|gs| format!("{:.1} ch/s", gs.channels_per_second)),
+            filter_execution_time: generation_stats.and_then(|gs| {
+                gs.stage_timings
+                    .get("filtering")
+                    .map(|&t| format!("{}ms", t))
+            }),
+            processing_rate: generation_stats
+                .map(|gs| format!("{:.1} ch/s", gs.channels_per_second)),
             pipeline_stages_detail: generation_stats.map(|gs| {
-                gs.stage_timings.iter()
-                    .map(|(stage, &duration)| crate::web::handlers::proxies::PipelineStageDetail {
-                        name: stage.clone(),
-                        duration,
-                        channels_processed: gs.total_channels_processed,
-                        memory_used: gs.stage_memory_usage.get(stage).cloned(),
-                    })
+                gs.stage_timings
+                    .iter()
+                    .map(
+                        |(stage, &duration)| crate::web::handlers::proxies::PipelineStageDetail {
+                            name: stage.clone(),
+                            duration,
+                            channels_processed: gs.total_channels_processed,
+                            memory_used: gs.stage_memory_usage.get(stage).cloned(),
+                        },
+                    )
                     .collect()
             }),
             // Memory metrics from GenerationStats (fix types)
             current_memory: None, // Not tracked in current implementation
-            peak_memory: generation_stats.and_then(|gs| 
-                gs.peak_memory_usage_mb.map(|mb| (mb * 1024.0 * 1024.0) as u64)
-            ),
-            memory_efficiency: generation_stats.and_then(|gs| 
-                gs.memory_efficiency.map(|eff| format!("{:.1} ch/MB", eff))
-            ),
+            peak_memory: generation_stats.and_then(|gs| {
+                gs.peak_memory_usage_mb
+                    .map(|mb| (mb * 1024.0 * 1024.0) as u64)
+            }),
+            memory_efficiency: generation_stats
+                .and_then(|gs| gs.memory_efficiency.map(|eff| format!("{:.1} ch/MB", eff))),
             gc_collections: generation_stats.and_then(|gs| gs.gc_collections),
             memory_by_stage: generation_stats.map(|gs| gs.stage_memory_usage.clone()),
             // Processing metrics from GenerationStats (fix types)
             total_processing_time: generation_stats.map(|gs| format!("{}ms", gs.total_duration_ms)),
-            avg_channel_time: generation_stats.map(|gs| format!("{:.2}ms", gs.average_channel_processing_ms)),
+            avg_channel_time: generation_stats
+                .map(|gs| format!("{:.2}ms", gs.average_channel_processing_ms)),
             throughput: generation_stats.map(|gs| format!("{:.1} ch/s", gs.channels_per_second)),
             errors: generation_stats.map(|gs| gs.errors.len()),
             processing_timeline: generation_stats.map(|gs| {
@@ -311,7 +320,10 @@ impl StreamProxyService {
                 vec![
                     crate::web::handlers::proxies::ProcessingEvent {
                         timestamp: now,
-                        description: format!("Source loading: {}ms", gs.stage_timings.get("source_loading").unwrap_or(&0)),
+                        description: format!(
+                            "Source loading: {}ms",
+                            gs.stage_timings.get("source_loading").unwrap_or(&0)
+                        ),
                         stage: Some("source_loading".to_string()),
                         channels_count: Some(gs.total_channels_processed),
                     },
@@ -323,13 +335,19 @@ impl StreamProxyService {
                     },
                     crate::web::handlers::proxies::ProcessingEvent {
                         timestamp: now,
-                        description: format!("Filtering: {}ms", gs.stage_timings.get("filtering").unwrap_or(&0)),
+                        description: format!(
+                            "Filtering: {}ms",
+                            gs.stage_timings.get("filtering").unwrap_or(&0)
+                        ),
                         stage: Some("filtering".to_string()),
                         channels_count: Some(gs.channels_after_filtering),
                     },
                     crate::web::handlers::proxies::ProcessingEvent {
                         timestamp: now,
-                        description: format!("Channel numbering: {}ms", gs.channel_numbering_duration_ms),
+                        description: format!(
+                            "Channel numbering: {}ms",
+                            gs.channel_numbering_duration_ms
+                        ),
                         stage: Some("channel_numbering".to_string()),
                         channels_count: Some(gs.channels_after_filtering),
                     },
@@ -352,7 +370,6 @@ impl StreamProxyService {
         })
     }
 
-
     /// Parse M3U content to extract channels for preview display
     async fn parse_m3u_for_preview(
         &self,
@@ -361,11 +378,11 @@ impl StreamProxyService {
     ) -> Result<Vec<crate::web::handlers::proxies::PreviewChannel>, AppError> {
         let mut preview_channels = Vec::new();
         let limit = 20; // Limit for performance
-        
+
         let lines: Vec<&str> = m3u_content.lines().collect();
         let mut i = 0;
         let mut channel_count = 0;
-        
+
         while i < lines.len() && channel_count < limit {
             let line = lines[i].trim();
             if line.starts_with("#EXTINF:") {
@@ -375,23 +392,25 @@ impl StreamProxyService {
                 let tvg_id = Self::extract_attribute(line, "tvg-id");
                 let tvg_logo = Self::extract_attribute(line, "tvg-logo");
                 let tvg_chno = Self::extract_attribute(line, "tvg-chno");
-                
+
                 // Get the stream URL from the next line
                 let stream_url = if i + 1 < lines.len() {
                     // Fix the hardcoded preview URL to use the actual proxy name
                     let original_url = lines[i + 1].trim();
                     if original_url.contains("/stream/preview/") {
-                        original_url.replace("/stream/preview/", &format!("/stream/{}/", request.name))
+                        original_url
+                            .replace("/stream/preview/", &format!("/stream/{}/", request.name))
                     } else {
                         original_url.to_string()
                     }
                 } else {
                     "".to_string()
                 };
-                
-                let channel_number = tvg_chno.and_then(|s| s.parse::<i32>().ok())
+
+                let channel_number = tvg_chno
+                    .and_then(|s| s.parse::<i32>().ok())
                     .unwrap_or(channel_count + 1);
-                
+
                 preview_channels.push(crate::web::handlers::proxies::PreviewChannel {
                     channel_name,
                     group_title,
@@ -401,18 +420,19 @@ impl StreamProxyService {
                     source_name: "Generated".to_string(),
                     channel_number,
                 });
-                
+
                 channel_count += 1;
                 i += 2; // Skip the URL line
             } else {
                 i += 1;
             }
         }
-        
+
         Ok(preview_channels)
     }
 
     /// Generate M3U content for preview
+    #[allow(dead_code)]
     async fn generate_preview_m3u(
         &self,
         channels: &[Channel],
@@ -476,6 +496,7 @@ impl StreamProxyService {
     }
 
     /// Generate preview channel list (limited to first 20 for performance)
+    #[allow(dead_code)]
     async fn generate_preview_channels(
         &self,
         channels: &[Channel],

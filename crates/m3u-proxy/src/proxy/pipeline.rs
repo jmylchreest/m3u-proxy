@@ -10,7 +10,6 @@ use crate::database::Database;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 use crate::proxy::filter_engine::FilterEngine;
-use crate::utils::memory_strategy::{MemoryAction, MemoryStrategyExecutor};
 use crate::utils::{MemoryLimitStatus, MemoryStats, SimpleMemoryMonitor};
 
 /// Decision enum for memory pressure handling
@@ -33,8 +32,6 @@ pub struct ProxyGenerationPipeline {
     filter_engine: FilterEngine,
     /// Memory monitor for passive observation
     memory_monitor: Option<SimpleMemoryMonitor>,
-    /// Memory strategy executor for handling memory pressure
-    memory_strategy: Option<MemoryStrategyExecutor>,
     /// Optional sandboxed file manager for temporary file operations
     temp_file_manager: Option<SandboxedManager>,
 }
@@ -172,7 +169,6 @@ impl ProxyGenerationPipeline {
             logo_service,
             filter_engine: FilterEngine::new(),
             memory_monitor: None,
-            memory_strategy: None,
             temp_file_manager: None,
         }
     }
@@ -185,9 +181,6 @@ impl ProxyGenerationPipeline {
         memory_limit_mb: Option<usize>,
     ) -> Self {
         let memory_monitor = Some(SimpleMemoryMonitor::new(memory_limit_mb));
-        let memory_strategy = Some(MemoryStrategyExecutor::new(
-            crate::utils::memory_strategy::ProxyGenerationStrategies::conservative(),
-        ));
 
         Self {
             database,
@@ -195,7 +188,6 @@ impl ProxyGenerationPipeline {
             logo_service,
             filter_engine: FilterEngine::new(),
             memory_monitor,
-            memory_strategy,
             temp_file_manager: None,
         }
     }
@@ -209,9 +201,6 @@ impl ProxyGenerationPipeline {
         temp_file_manager: SandboxedManager,
     ) -> Self {
         let memory_monitor = Some(SimpleMemoryMonitor::new(memory_limit_mb));
-        let memory_strategy = Some(MemoryStrategyExecutor::new(
-            crate::utils::memory_strategy::ProxyGenerationStrategies::aggressive(),
-        ));
 
         Self {
             database,
@@ -219,7 +208,6 @@ impl ProxyGenerationPipeline {
             logo_service,
             filter_engine: FilterEngine::new(),
             memory_monitor,
-            memory_strategy,
             temp_file_manager: Some(temp_file_manager),
         }
     }
@@ -291,7 +279,11 @@ impl ProxyGenerationPipeline {
             // New fields for enhanced tracking
             total_channels: total_channel_count,
             filtered_channels: filtered_result.channels.len(),
-            applied_filters: filtered_result.applied_filters.iter().map(|f| f.name.clone()).collect(),
+            applied_filters: filtered_result
+                .applied_filters
+                .iter()
+                .map(|f| f.name.clone())
+                .collect(),
             stats: None, // Pipeline method doesn't collect comprehensive stats yet
         };
 

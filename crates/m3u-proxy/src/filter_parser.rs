@@ -6,7 +6,7 @@ use crate::models::{
     FilterOperator, LogicalOperator,
 };
 use anyhow::{Result, anyhow};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 #[derive(Debug, Clone)]
 pub struct FilterParser {

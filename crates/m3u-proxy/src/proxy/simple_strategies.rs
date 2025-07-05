@@ -7,14 +7,15 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::time::Instant;
-use tracing::info;
+use tracing::{debug, info};
 
-use crate::database::Database;
 use crate::data_mapping::service::DataMappingService;
+use crate::database::Database;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 use crate::proxy::filter_engine::FilterEngine;
 use crate::proxy::stage_contracts::*;
+use crate::utils::MemoryContext;
 
 /// Simple in-memory source loading strategy
 pub struct SimpleSourceLoader {
@@ -29,9 +30,16 @@ impl SimpleSourceLoader {
 
 #[async_trait]
 impl SourceLoadingStage for SimpleSourceLoader {
-    async fn execute(&self, input: SourceLoadingInput) -> Result<SourceLoadingOutput> {
+    async fn execute(
+        &self,
+        input: SourceLoadingInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<SourceLoadingOutput> {
         let start_time = Instant::now();
-        info!("Loading {} sources using simple in-memory strategy", input.source_ids.len());
+        debug!(
+            "Loading {} sources using simple in-memory strategy",
+            input.source_ids.len()
+        );
 
         let mut all_channels = Vec::new();
         let mut source_stats = HashMap::new();
@@ -41,29 +49,46 @@ impl SourceLoadingStage for SimpleSourceLoader {
             let channels = self.database.get_source_channels(*source_id).await?;
             let source_duration = source_start.elapsed().as_millis() as u64;
 
-            info!("Loaded {} channels from source {} in {}ms", 
-                  channels.len(), source_id, source_duration);
+            // Track memory usage after loading each source
+            let (memory_snapshot, _pressure) =
+                memory_context.observe(&format!("source_{}", source_id))?;
 
-            source_stats.insert(*source_id, SourceStats {
-                channels_loaded: channels.len(),
-                load_duration_ms: source_duration,
-                memory_used_mb: None, // Simple strategy doesn't track detailed memory
-                errors: Vec::new(),
-            });
+            debug!(
+                "Loaded {} channels from source {} in {}ms (Memory: {:.1}MB)",
+                channels.len(),
+                source_id,
+                source_duration,
+                memory_snapshot.rss_mb
+            );
+
+            source_stats.insert(
+                *source_id,
+                SourceStats {
+                    channels_loaded: channels.len(),
+                    load_duration_ms: source_duration,
+                    memory_used_mb: Some(memory_snapshot.rss_mb),
+                    errors: Vec::new(),
+                },
+            );
 
             all_channels.extend(channels);
         }
 
         let total_duration = start_time.elapsed().as_millis() as u64;
+        let final_memory_stats = memory_context.get_memory_statistics();
         let total_stats = SourceStats {
             channels_loaded: all_channels.len(),
             load_duration_ms: total_duration,
-            memory_used_mb: None,
+            memory_used_mb: Some(final_memory_stats.peak_mb),
             errors: Vec::new(),
         };
 
-        info!("Simple source loading completed: {} total channels in {}ms", 
-              all_channels.len(), total_duration);
+        debug!(
+            "Simple source loading completed: {} total channels in {}ms (Peak Memory: {:.1}MB)",
+            all_channels.len(),
+            total_duration,
+            final_memory_stats.peak_mb
+        );
 
         Ok(SourceLoadingOutput {
             channels: all_channels,
@@ -99,13 +124,20 @@ impl SimpleDataMapper {
 
 #[async_trait]
 impl DataMappingStage for SimpleDataMapper {
-    async fn execute(&self, input: DataMappingInput) -> Result<DataMappingOutput> {
+    async fn execute(
+        &self,
+        input: DataMappingInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<DataMappingOutput> {
         let start_time = Instant::now();
-        info!("Applying simple data mapping to {} channels", input.channels.len());
+        debug!(
+            "Applying simple data mapping to {} channels",
+            input.channels.len()
+        );
 
         // Store original count before processing
         let original_channel_count = input.channels.len();
-        
+
         // Group channels by source for efficient processing
         let mut channels_by_source = HashMap::new();
         for channel in input.channels {
@@ -133,19 +165,27 @@ impl DataMappingStage for SimpleDataMapper {
 
             total_transformations += source_channels.len();
             all_mapped_channels.extend(mapped_channels);
+
+            // Track memory usage after processing each source
+            memory_context.observe(&format!("mapping_source_{}", source_id))?;
         }
 
         let total_duration = start_time.elapsed().as_millis() as u64;
+        let final_memory_stats = memory_context.get_memory_statistics();
         let mapping_stats = MappingStats {
             channels_processed: original_channel_count,
             channels_transformed: all_mapped_channels.len(),
             transformations_applied: total_transformations,
             mapping_duration_ms: total_duration,
-            memory_used_mb: None,
+            memory_used_mb: Some(final_memory_stats.peak_mb),
         };
 
-        info!("Simple data mapping completed: {} channels processed in {}ms", 
-              all_mapped_channels.len(), total_duration);
+        debug!(
+            "Simple data mapping completed: {} channels processed in {}ms (Peak Memory: {:.1}MB)",
+            all_mapped_channels.len(),
+            total_duration,
+            final_memory_stats.peak_mb
+        );
 
         Ok(DataMappingOutput {
             mapped_channels: all_mapped_channels,
@@ -168,16 +208,25 @@ pub struct SimpleFilter;
 
 #[async_trait]
 impl FilteringStage for SimpleFilter {
-    async fn execute(&self, input: FilteringInput) -> Result<FilteringOutput> {
+    async fn execute(
+        &self,
+        input: FilteringInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<FilteringOutput> {
         let start_time = Instant::now();
         let original_channel_count = input.channels.len();
-        info!("Applying simple filtering to {} channels with {} filters", 
-              original_channel_count, input.filters.len());
+        debug!(
+            "Applying simple filtering to {} channels with {} filters",
+            input.channels.len(),
+            input.filters.len()
+        );
 
         let filtered_channels = if !input.filters.is_empty() {
             let mut filter_engine = FilterEngine::new();
-            
-            let filter_tuples: Vec<_> = input.filters.iter()
+
+            let filter_tuples: Vec<_> = input
+                .filters
+                .iter()
                 .filter(|f| f.is_active)
                 .map(|f| {
                     // Create a proxy filter - we'll need to get the actual proxy ID from context
@@ -193,28 +242,41 @@ impl FilteringStage for SimpleFilter {
                 })
                 .collect();
 
-            filter_engine.apply_filters(input.channels, filter_tuples).await?
+            let result = filter_engine
+                .apply_filters(input.channels, filter_tuples)
+                .await?;
+            memory_context.observe("filter_application")?;
+            result
         } else {
             input.channels
         };
 
         let total_duration = start_time.elapsed().as_millis() as u64;
         let channels_filtered_out = original_channel_count - filtered_channels.len();
-        
+        let final_memory_stats = memory_context.get_memory_statistics();
+
         let filter_stats = FilterStats {
             channels_input: original_channel_count,
             channels_output: filtered_channels.len(),
             channels_filtered_out,
-            filters_applied: input.filters.iter()
+            filters_applied: input
+                .filters
+                .iter()
                 .filter(|f| f.is_active)
                 .map(|f| f.filter.name.clone())
                 .collect(),
             filter_duration_ms: total_duration,
-            memory_used_mb: None,
+            memory_used_mb: Some(final_memory_stats.peak_mb),
         };
 
-        info!("Simple filtering completed: {}/{} channels passed ({} filtered out) in {}ms", 
-              filtered_channels.len(), original_channel_count, channels_filtered_out, total_duration);
+        info!(
+            "Simple filtering completed: {}/{} channels passed ({} filtered out) in {}ms (Peak Memory: {:.1}MB)",
+            filtered_channels.len(),
+            original_channel_count,
+            channels_filtered_out,
+            total_duration,
+            final_memory_stats.peak_mb
+        );
 
         Ok(FilteringOutput {
             filtered_channels,
@@ -237,12 +299,20 @@ pub struct SimpleChannelNumbering;
 
 #[async_trait]
 impl ChannelNumberingStage for SimpleChannelNumbering {
-    async fn execute(&self, input: ChannelNumberingInput) -> Result<ChannelNumberingOutput> {
+    async fn execute(
+        &self,
+        input: ChannelNumberingInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<ChannelNumberingOutput> {
         let start_time = Instant::now();
-        info!("Applying simple channel numbering to {} channels starting from {}", 
-              input.channels.len(), input.starting_number);
+        debug!(
+            "Applying simple channel numbering to {} channels starting from {}",
+            input.channels.len(),
+            input.starting_number
+        );
 
-        let numbered_channels: Vec<NumberedChannel> = input.channels
+        let numbered_channels: Vec<NumberedChannel> = input
+            .channels
             .into_iter()
             .enumerate()
             .map(|(i, channel)| NumberedChannel {
@@ -252,7 +322,10 @@ impl ChannelNumberingStage for SimpleChannelNumbering {
             })
             .collect();
 
+        memory_context.observe("channel_numbering")?;
+
         let total_duration = start_time.elapsed().as_millis() as u64;
+        let final_memory_stats = memory_context.get_memory_statistics();
         let numbering_stats = NumberingStats {
             channels_numbered: numbered_channels.len(),
             starting_number: input.starting_number,
@@ -260,8 +333,12 @@ impl ChannelNumberingStage for SimpleChannelNumbering {
             numbering_duration_ms: total_duration,
         };
 
-        info!("Simple channel numbering completed: {} channels numbered in {}ms", 
-              numbered_channels.len(), total_duration);
+        debug!(
+            "Simple channel numbering completed: {} channels numbered in {}ms (Peak Memory: {:.1}MB)",
+            numbered_channels.len(),
+            total_duration,
+            final_memory_stats.peak_mb
+        );
 
         Ok(ChannelNumberingOutput {
             numbered_channels,
@@ -284,10 +361,16 @@ pub struct SimpleM3uGenerator;
 
 #[async_trait]
 impl M3uGenerationStage for SimpleM3uGenerator {
-    async fn execute(&self, input: M3uGenerationInput) -> Result<M3uGenerationOutput> {
+    async fn execute(
+        &self,
+        input: M3uGenerationInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<M3uGenerationOutput> {
         let start_time = Instant::now();
-        info!("Generating M3U content for {} channels using simple strategy", 
-              input.numbered_channels.len());
+        debug!(
+            "Generating M3U content for {} channels using simple strategy",
+            input.numbered_channels.len()
+        );
 
         let mut m3u = String::from("#EXTM3U\n");
 
@@ -312,17 +395,24 @@ impl M3uGenerationStage for SimpleM3uGenerator {
             m3u.push_str(&format!("{}\n{}\n", extinf, proxy_stream_url));
         }
 
+        memory_context.observe("m3u_generation")?;
+
         let total_duration = start_time.elapsed().as_millis() as u64;
+        let final_memory_stats = memory_context.get_memory_statistics();
         let m3u_stats = M3uStats {
             channels_processed: input.numbered_channels.len(),
             m3u_size_bytes: m3u.len(),
             m3u_lines: m3u.lines().count(),
             generation_duration_ms: total_duration,
-            memory_used_mb: None,
+            memory_used_mb: Some(final_memory_stats.peak_mb),
         };
 
-        info!("Simple M3U generation completed: {} bytes generated in {}ms", 
-              m3u.len(), total_duration);
+        debug!(
+            "Simple M3U generation completed: {} bytes generated in {}ms (Peak Memory: {:.1}MB)",
+            m3u.len(),
+            total_duration,
+            final_memory_stats.peak_mb
+        );
 
         Ok(M3uGenerationOutput {
             m3u_content: m3u,
@@ -339,4 +429,3 @@ impl M3uGenerationStage for SimpleM3uGenerator {
         Some(input.numbered_channels.len() * 2048)
     }
 }
-

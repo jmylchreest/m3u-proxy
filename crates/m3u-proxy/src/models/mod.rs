@@ -483,27 +483,27 @@ pub struct Action {
 }
 
 /// Action operators for data mapping rules
-/// 
+///
 /// These operators define how values are modified in data mapping rules:
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// // Basic assignment
 /// SET tvg-name="Sports Channel"
-/// 
+///
 /// // Delete field (removes from output)
 /// DELETE tvg-channo
-/// 
+///
 /// // Set to null (explicit null value)
 /// SET tvg-logo=null
-/// 
+///
 /// // Conditional assignment (only if field is empty)
 /// SET tvg-id?="auto-generated-id"
-/// 
+///
 /// // Append to existing value
 /// SET group-title+=" HD"
-/// 
+///
 /// // Remove substring
 /// SET channel-name-="[HD]"
 /// ```
@@ -537,19 +537,19 @@ pub enum ActionOperator {
 }
 
 /// Values that can be assigned in data mapping actions
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// // Literal string value
 /// ActionValue::Literal("Sports HD".to_string())
-/// 
+///
 /// // Explicit null value (clears field)
 /// ActionValue::Null
-/// 
+///
 /// // Future: Function call
 /// ActionValue::Function(FunctionCall { name: "upper".to_string(), arguments: vec![] })
-/// 
+///
 /// // Future: Variable reference
 /// ActionValue::Variable(VariableRef { field_name: "tvg_id".to_string() })
 /// ```
@@ -588,26 +588,34 @@ pub struct VariableRef {
 
 impl Action {
     /// Validate the action for correctness
-    /// 
+    ///
     /// # Validation Rules
-    /// 
+    ///
     /// - DELETE operator cannot be used with any value
     /// - Required fields (like channel_name) cannot be deleted
     /// - SET operator requires a value
     /// - Field names must be valid for the source type
-    pub fn validate(&self, source_type: &data_mapping::DataMappingSourceType) -> Result<(), String> {
-        use crate::models::data_mapping::{StreamMappingFields, EpgMappingFields, DataMappingSourceType};
-        
+    pub fn validate(
+        &self,
+        source_type: &data_mapping::DataMappingSourceType,
+    ) -> Result<(), String> {
+        use crate::models::data_mapping::{
+            DataMappingSourceType, EpgMappingFields, StreamMappingFields,
+        };
+
         // Validate field name
         let valid_fields = match source_type {
             DataMappingSourceType::Stream => StreamMappingFields::available_fields(),
             DataMappingSourceType::Epg => EpgMappingFields::available_fields(),
         };
-        
+
         if !valid_fields.contains(&self.field.as_str()) {
-            return Err(format!("Invalid field '{}' for source type {}", self.field, source_type));
+            return Err(format!(
+                "Invalid field '{}' for source type {}",
+                self.field, source_type
+            ));
         }
-        
+
         // Validate operator-value combinations
         match (&self.operator, &self.value) {
             (ActionOperator::Delete, _) => {
@@ -622,10 +630,13 @@ impl Action {
             (ActionOperator::SetIfEmpty, ActionValue::Literal(_)) => Ok(()),
             (ActionOperator::Append, ActionValue::Literal(_)) => Ok(()),
             (ActionOperator::Remove, ActionValue::Literal(_)) => Ok(()),
-            _ => Err(format!("Invalid combination of operator {:?} with value {:?}", self.operator, self.value)),
+            _ => Err(format!(
+                "Invalid combination of operator {:?} with value {:?}",
+                self.operator, self.value
+            )),
         }
     }
-    
+
     /// Get documentation for this action
     pub fn get_documentation(&self) -> String {
         match &self.operator {
@@ -787,7 +798,7 @@ pub struct ProxyFilterWithDetails {
 }
 
 // Channel numbering data structures
-use std::collections::{HashSet, BTreeMap};
+use std::collections::{BTreeMap, HashSet};
 
 /// State tracking for sophisticated channel numbering algorithm
 #[derive(Debug, Clone)]
@@ -820,12 +831,14 @@ impl NumberedChannel {
     /// Get a description of how this channel number was assigned
     pub fn assignment_description(&self) -> String {
         match self.assignment_type {
-            ChannelNumberAssignmentType::Explicit => 
-                format!("Explicit assignment (data mapping specified {})", self.assigned_number),
-            ChannelNumberAssignmentType::ExplicitIncremented => 
-                format!("Incremented due to conflict (original + offset)"),
-            ChannelNumberAssignmentType::Sequential => 
-                format!("Sequential assignment"),
+            ChannelNumberAssignmentType::Explicit => format!(
+                "Explicit assignment (data mapping specified {})",
+                self.assigned_number
+            ),
+            ChannelNumberAssignmentType::ExplicitIncremented => {
+                format!("Incremented due to conflict (original + offset)")
+            }
+            ChannelNumberAssignmentType::Sequential => format!("Sequential assignment"),
         }
     }
 }
@@ -1332,7 +1345,9 @@ impl GenerationOutput {
 
     pub fn should_update_database(&self) -> bool {
         match self {
-            Self::Production { update_database, .. } => *update_database,
+            Self::Production {
+                update_database, ..
+            } => *update_database,
             _ => false,
         }
     }
@@ -1355,7 +1370,7 @@ pub struct GenerationStats {
     pub channels_per_second: f64,
     pub average_channel_processing_ms: f64,
 
-    /// Source processing metrics  
+    /// Source processing metrics
     pub sources_processed: usize,
     pub channels_by_source: std::collections::HashMap<String, usize>, // source_name -> channel_count
     pub source_processing_times: std::collections::HashMap<String, u64>, // source_name -> duration_ms
@@ -1450,27 +1465,37 @@ impl GenerationStats {
 
     /// Add memory usage for a stage
     pub fn add_stage_memory(&mut self, stage: &str, memory_bytes: u64) {
-        self.stage_memory_usage.insert(stage.to_string(), memory_bytes);
+        self.stage_memory_usage
+            .insert(stage.to_string(), memory_bytes);
     }
 
     /// Finalize stats and calculate derived metrics
     pub fn finalize(&mut self) {
         self.completed_at = Utc::now();
-        self.total_duration_ms = (self.completed_at - self.started_at).num_milliseconds() as u64;
-        
+
+        // Only calculate total_duration_ms if it hasn't been set manually
+        if self.total_duration_ms == 0 {
+            self.total_duration_ms =
+                (self.completed_at - self.started_at).num_milliseconds() as u64;
+        }
+
         // Calculate channels per second
         if self.total_duration_ms > 0 {
-            self.channels_per_second = (self.total_channels_processed as f64) / (self.total_duration_ms as f64 / 1000.0);
+            self.channels_per_second =
+                (self.total_channels_processed as f64) / (self.total_duration_ms as f64 / 1000.0);
         }
-        
+
         // Calculate average channel processing time
         if self.total_channels_processed > 0 {
-            self.average_channel_processing_ms = (self.total_duration_ms as f64) / (self.total_channels_processed as f64);
+            self.average_channel_processing_ms =
+                (self.total_duration_ms as f64) / (self.total_channels_processed as f64);
         }
-        
+
         // Calculate channels filtered out
-        self.channels_filtered_out = self.channels_before_filtering.saturating_sub(self.channels_after_filtering);
-        
+        self.channels_filtered_out = self
+            .channels_before_filtering
+            .saturating_sub(self.channels_after_filtering);
+
         // Calculate memory efficiency
         if let Some(peak_memory) = self.peak_memory_usage_mb {
             if peak_memory > 0.0 {
@@ -1482,7 +1507,7 @@ impl GenerationStats {
     /// Generate a concise summary string for logging with tree-style stage breakdown
     pub fn summary(&self) -> String {
         let mut lines = Vec::new();
-        
+
         // Top-level summary line
         lines.push(format!(
             "Generation completed in {}ms: {} channels ({} sources, {} filters) | {:.1} ch/s | Peak: {:.1}MB | Pipeline: {}",
@@ -1494,18 +1519,18 @@ impl GenerationStats {
             self.peak_memory_usage_mb.unwrap_or(0.0),
             self.pipeline_type
         ));
-        
+
         // Stage-by-stage breakdown with tree-style formatting
         if !self.stage_timings.is_empty() {
             // Define stage order for consistent reporting
             let stage_order = [
                 ("source_loading", "Source Loading"),
-                ("data_mapping", "Data Mapping"), 
+                ("data_mapping", "Data Mapping"),
                 ("filtering", "Filtering"),
                 ("channel_numbering", "Channel Numbering"),
-                ("m3u_generation", "M3U Generation")
+                ("m3u_generation", "M3U Generation"),
             ];
-            
+
             // Collect stages that exist in order
             let mut existing_stages = Vec::new();
             for (stage_key, stage_name) in &stage_order {
@@ -1513,30 +1538,38 @@ impl GenerationStats {
                     existing_stages.push((stage_key.to_string(), stage_name.to_string()));
                 }
             }
-            
+
             // Add any additional stages not in the standard order
             for stage in self.stage_timings.keys() {
                 if !stage_order.iter().any(|(key, _)| *key == stage) {
-                    let stage_display = stage.replace("_", " ").split(' ')
-                        .map(|word| format!("{}{}", word.chars().next().unwrap().to_uppercase(), &word[1..]))
+                    let stage_display = stage
+                        .replace("_", " ")
+                        .split(' ')
+                        .map(|word| {
+                            format!(
+                                "{}{}",
+                                word.chars().next().unwrap().to_uppercase(),
+                                &word[1..]
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join(" ");
                     existing_stages.push((stage.clone(), stage_display));
                 }
             }
-            
+
             // Generate tree-style output for each stage with k=v pairs
             for (i, (stage_key, stage_name)) in existing_stages.iter().enumerate() {
                 let is_last = i == existing_stages.len() - 1;
                 let tree_char = if is_last { "└─" } else { "├─" };
-                
+
                 if let Some(&duration) = self.stage_timings.get(stage_key) {
                     let percentage = if self.total_duration_ms > 0 {
                         (duration as f64 / self.total_duration_ms as f64) * 100.0
                     } else {
                         0.0
                     };
-                    
+
                     // Extract strategy from stage name (e.g., "source_loading_inmemory" -> "inmemory")
                     let strategy = if stage_key.ends_with("_inmemory") {
                         "inmemory"
@@ -1547,39 +1580,48 @@ impl GenerationStats {
                     } else {
                         "standard"
                     };
-                    
+
                     let mut kv_pairs = vec![
                         format!("execution_time={}ms", duration),
                         format!("total_time_pc={:.1}", percentage),
                         format!("strategy={}", strategy),
                     ];
-                    
+
                     // Add memory info if available
                     if let Some(&memory_bytes) = self.stage_memory_usage.get(stage_key) {
                         let memory_mb = memory_bytes / (1024 * 1024);
                         kv_pairs.push(format!("peak_memory={}MB", memory_mb));
                     }
-                    
+
                     lines.push(format!(
-                        "{} {}: {}", 
-                        tree_char, stage_name, kv_pairs.join(" ")
+                        "{} {}: {}",
+                        tree_char,
+                        stage_name,
+                        kv_pairs.join(" ")
                     ));
                 }
             }
         }
-        
+
         lines.join("\n")
     }
 
     /// Generate detailed performance breakdown for debugging
     pub fn detailed_summary(&self) -> String {
         let mut summary = Vec::new();
-        
+
         summary.push(format!("=== Generation Performance Summary ==="));
         summary.push(format!("Total Duration: {}ms", self.total_duration_ms));
-        summary.push(format!("Channels Processed: {} ({:.1} ch/s)", self.total_channels_processed, self.channels_per_second));
-        summary.push(format!("Sources: {} | Filters: {}", self.sources_processed, self.filters_applied.len()));
-        
+        summary.push(format!(
+            "Channels Processed: {} ({:.1} ch/s)",
+            self.total_channels_processed, self.channels_per_second
+        ));
+        summary.push(format!(
+            "Sources: {} | Filters: {}",
+            self.sources_processed,
+            self.filters_applied.len()
+        ));
+
         if !self.stage_timings.is_empty() {
             summary.push(format!(""));
             summary.push(format!("Stage Timings:"));
@@ -1587,18 +1629,25 @@ impl GenerationStats {
                 summary.push(format!("  {}: {}ms", stage, duration));
             }
         }
-        
+
         if let Some(peak_memory) = self.peak_memory_usage_mb {
             summary.push(format!(""));
-            summary.push(format!("Memory: Peak {:.1}MB | Efficiency: {:.1} ch/MB", 
-                peak_memory, self.memory_efficiency.unwrap_or(0.0)));
+            summary.push(format!(
+                "Memory: Peak {:.1}MB | Efficiency: {:.1} ch/MB",
+                peak_memory,
+                self.memory_efficiency.unwrap_or(0.0)
+            ));
         }
-        
+
         if !self.warnings.is_empty() || !self.errors.is_empty() {
             summary.push(format!(""));
-            summary.push(format!("Issues: {} warnings, {} errors", self.warnings.len(), self.errors.len()));
+            summary.push(format!(
+                "Issues: {} warnings, {} errors",
+                self.warnings.len(),
+                self.errors.len()
+            ));
         }
-        
+
         summary.join("\n")
     }
 }

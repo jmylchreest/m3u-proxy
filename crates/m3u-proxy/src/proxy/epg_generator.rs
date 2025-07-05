@@ -419,12 +419,14 @@ impl EpgGenerator {
     }
 
     /// Normalize a DateTime<Utc> to UTC (no-op but provided for API consistency)
+    #[allow(dead_code)]
     fn normalize_to_utc(&self, dt: &DateTime<Utc>) -> DateTime<Utc> {
         *dt
     }
 
     /// Normalize a DateTime<Utc> to UTC considering a timezone offset
     /// This applies the timezone offset to convert from local time to UTC
+    #[allow(dead_code)]
     fn normalize_timezone_to_utc(
         &self,
         dt: &DateTime<Utc>,

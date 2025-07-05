@@ -11,7 +11,9 @@ use crate::{
     database::Database,
     errors::types::AppError,
     models::*,
-    repositories::{FilterRepository, StreamProxyRepository, StreamSourceRepository, traits::Repository},
+    repositories::{
+        FilterRepository, StreamProxyRepository, StreamSourceRepository, traits::Repository,
+    },
     web::handlers::proxies::PreviewProxyRequest,
 };
 
@@ -20,6 +22,7 @@ pub struct ProxyConfigResolver {
     proxy_repo: StreamProxyRepository,
     stream_source_repo: StreamSourceRepository,
     filter_repo: FilterRepository,
+    #[allow(dead_code)]
     database: Database,
 }
 
@@ -40,7 +43,7 @@ impl ProxyConfigResolver {
 
     /// Resolve complete configuration for an existing proxy
     pub async fn resolve_config(&self, proxy_id: Uuid) -> Result<ResolvedProxyConfig, AppError> {
-        info!("Resolving configuration for proxy {}", proxy_id);
+        debug!("Resolving configuration for proxy {}", proxy_id);
 
         // Get the proxy
         let proxy = self
@@ -112,7 +115,10 @@ impl ProxyConfigResolver {
                     priority_order: proxy_epg_source.priority_order,
                 });
             } else {
-                debug!("Skipping missing EPG source {}", proxy_epg_source.epg_source_id);
+                debug!(
+                    "Skipping missing EPG source {}",
+                    proxy_epg_source.epg_source_id
+                );
             }
         }
 
@@ -143,7 +149,7 @@ impl ProxyConfigResolver {
         &self,
         request: PreviewProxyRequest,
     ) -> Result<ResolvedProxyConfig, AppError> {
-        info!("Resolving preview configuration for '{}'", request.name);
+        debug!("Resolving preview configuration for '{}'", request.name);
 
         // Create temporary proxy from request
         let temp_proxy = StreamProxy {
@@ -217,7 +223,7 @@ impl ProxyConfigResolver {
             epg_sources: Vec::new(), // Preview doesn't need EPG sources for now
         };
 
-        info!(
+        debug!(
             "Resolved preview configuration: {} sources, {} filters",
             config.sources.len(),
             config.filters.len()
@@ -237,7 +243,10 @@ impl ProxyConfigResolver {
         // Validate all sources are active
         for source_config in &config.sources {
             if !source_config.source.is_active {
-                debug!("Warning: Source '{}' is not active", source_config.source.name);
+                debug!(
+                    "Warning: Source '{}' is not active",
+                    source_config.source.name
+                );
             }
         }
 

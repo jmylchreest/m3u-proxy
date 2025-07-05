@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::models::*;
+use crate::utils::{MemoryCleanable, MemoryContext};
 
 /// Statistics for source loading stage
 #[derive(Debug, Clone, Default)]
@@ -18,7 +19,7 @@ pub struct SourceStats {
     pub errors: Vec<String>,
 }
 
-/// Statistics for data mapping stage  
+/// Statistics for data mapping stage
 #[derive(Debug, Clone, Default)]
 pub struct MappingStats {
     pub channels_processed: usize,
@@ -73,6 +74,24 @@ pub struct SourceLoadingOutput {
     pub total_stats: SourceStats,
 }
 
+impl MemoryCleanable for SourceLoadingOutput {
+    fn basic_cleanup(&mut self) -> usize {
+        let mut cleaned = 0;
+        cleaned += self.channels.basic_cleanup();
+        for stats in self.source_stats.values_mut() {
+            cleaned += stats.errors.basic_cleanup();
+        }
+        cleaned += self.total_stats.errors.basic_cleanup();
+        cleaned
+    }
+
+    fn aggressive_cleanup(&mut self) -> usize {
+        let cleaned = self.basic_cleanup();
+        self.source_stats.aggressive_cleanup();
+        cleaned
+    }
+}
+
 /// Stage 2: Data Mapping Input
 #[derive(Debug, Clone)]
 pub struct DataMappingInput {
@@ -89,6 +108,16 @@ pub struct DataMappingOutput {
     pub mapping_stats: MappingStats,
 }
 
+impl MemoryCleanable for DataMappingOutput {
+    fn basic_cleanup(&mut self) -> usize {
+        self.mapped_channels.basic_cleanup()
+    }
+
+    fn aggressive_cleanup(&mut self) -> usize {
+        self.basic_cleanup()
+    }
+}
+
 /// Stage 3: Filtering Input
 #[derive(Debug, Clone)]
 pub struct FilteringInput {
@@ -101,6 +130,19 @@ pub struct FilteringInput {
 pub struct FilteringOutput {
     pub filtered_channels: Vec<Channel>,
     pub filter_stats: FilterStats,
+}
+
+impl MemoryCleanable for FilteringOutput {
+    fn basic_cleanup(&mut self) -> usize {
+        let mut cleaned = 0;
+        cleaned += self.filtered_channels.basic_cleanup();
+        cleaned += self.filter_stats.filters_applied.basic_cleanup();
+        cleaned
+    }
+
+    fn aggressive_cleanup(&mut self) -> usize {
+        self.basic_cleanup()
+    }
 }
 
 /// Stage 4: Channel Numbering Input
@@ -127,6 +169,16 @@ pub struct ChannelNumberingOutput {
     pub numbering_stats: NumberingStats,
 }
 
+impl MemoryCleanable for ChannelNumberingOutput {
+    fn basic_cleanup(&mut self) -> usize {
+        self.numbered_channels.basic_cleanup()
+    }
+
+    fn aggressive_cleanup(&mut self) -> usize {
+        self.basic_cleanup()
+    }
+}
+
 /// Stage 5: M3U Generation Input
 #[derive(Debug, Clone)]
 pub struct M3uGenerationInput {
@@ -142,44 +194,82 @@ pub struct M3uGenerationOutput {
     pub m3u_stats: M3uStats,
 }
 
+impl MemoryCleanable for M3uGenerationOutput {
+    fn basic_cleanup(&mut self) -> usize {
+        self.m3u_content.basic_cleanup()
+    }
+
+    fn aggressive_cleanup(&mut self) -> usize {
+        self.basic_cleanup()
+    }
+}
+
 /// Clear stage interfaces - each stage has ONE job with clear types
 #[async_trait]
 pub trait SourceLoadingStage: Send + Sync {
-    async fn execute(&self, input: SourceLoadingInput) -> Result<SourceLoadingOutput>;
+    async fn execute(
+        &self,
+        input: SourceLoadingInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<SourceLoadingOutput>;
     fn strategy_name(&self) -> &str;
     fn estimated_memory_usage(&self, input: &SourceLoadingInput) -> Option<usize>;
-    fn supports_streaming(&self) -> bool { false }
+    fn supports_streaming(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
 pub trait DataMappingStage: Send + Sync {
-    async fn execute(&self, input: DataMappingInput) -> Result<DataMappingOutput>;
+    async fn execute(
+        &self,
+        input: DataMappingInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<DataMappingOutput>;
     fn strategy_name(&self) -> &str;
     fn estimated_memory_usage(&self, input: &DataMappingInput) -> Option<usize>;
-    fn supports_streaming(&self) -> bool { false }
+    fn supports_streaming(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
 pub trait FilteringStage: Send + Sync {
-    async fn execute(&self, input: FilteringInput) -> Result<FilteringOutput>;
+    async fn execute(
+        &self,
+        input: FilteringInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<FilteringOutput>;
     fn strategy_name(&self) -> &str;
     fn estimated_memory_usage(&self, input: &FilteringInput) -> Option<usize>;
-    fn supports_streaming(&self) -> bool { false }
+    fn supports_streaming(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
 pub trait ChannelNumberingStage: Send + Sync {
-    async fn execute(&self, input: ChannelNumberingInput) -> Result<ChannelNumberingOutput>;
+    async fn execute(
+        &self,
+        input: ChannelNumberingInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<ChannelNumberingOutput>;
     fn strategy_name(&self) -> &str;
     fn estimated_memory_usage(&self, input: &ChannelNumberingInput) -> Option<usize>;
 }
 
 #[async_trait]
 pub trait M3uGenerationStage: Send + Sync {
-    async fn execute(&self, input: M3uGenerationInput) -> Result<M3uGenerationOutput>;
+    async fn execute(
+        &self,
+        input: M3uGenerationInput,
+        memory_context: &mut MemoryContext,
+    ) -> Result<M3uGenerationOutput>;
     fn strategy_name(&self) -> &str;
     fn estimated_memory_usage(&self, input: &M3uGenerationInput) -> Option<usize>;
-    fn supports_streaming(&self) -> bool { false }
+    fn supports_streaming(&self) -> bool {
+        false
+    }
 }
 
 /// Registry for stage strategies with clear separation
@@ -215,7 +305,11 @@ impl StageRegistry {
         self.filtering.insert(name, strategy);
     }
 
-    pub fn register_channel_numbering(&mut self, name: String, strategy: Box<dyn ChannelNumberingStage>) {
+    pub fn register_channel_numbering(
+        &mut self,
+        name: String,
+        strategy: Box<dyn ChannelNumberingStage>,
+    ) {
         self.channel_numbering.insert(name, strategy);
     }
 

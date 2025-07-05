@@ -37,7 +37,7 @@ pub struct ManagerStats {
 }
 
 /// Main sandboxed file manager.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SandboxedManager {
     base_dir: PathBuf,
     file_registry: Arc<RwLock<HashMap<String, FileInfo>>>,

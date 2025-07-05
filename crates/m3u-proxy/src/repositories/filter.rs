@@ -60,6 +60,7 @@ impl FilterQuery {
 }
 
 /// Repository implementation for filters
+#[derive(Clone)]
 pub struct FilterRepository {
     pool: Pool<Sqlite>,
 }

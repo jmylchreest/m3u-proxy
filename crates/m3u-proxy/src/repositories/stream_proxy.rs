@@ -18,6 +18,7 @@ use crate::{
     utils::sqlite::SqliteRowExt,
 };
 
+#[derive(Clone)]
 pub struct StreamProxyRepository {
     pool: SqlitePool,
 }

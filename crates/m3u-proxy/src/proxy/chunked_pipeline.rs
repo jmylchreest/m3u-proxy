@@ -216,6 +216,11 @@ impl ChunkedProxyPipeline {
             channel_count: filtered_temp_file.channel_count as i32,
             m3u_content,
             created_at: chrono::Utc::now(),
+            // New fields for enhanced tracking
+            total_channels,
+            filtered_channels: filtered_temp_file.channel_count,
+            applied_filters: Vec::new(), // TODO: Track applied filters in chunked pipeline
+            stats: None, // Chunked pipeline doesn't collect comprehensive stats yet
         };
 
         let memory_stats = if let Some(ref mut monitor) = self.memory_monitor {
@@ -457,6 +462,11 @@ impl ChunkedProxyPipeline {
             channel_count: 0,
             m3u_content: "#EXTM3U\n".to_string(),
             created_at: chrono::Utc::now(),
+            // New fields for enhanced tracking
+            total_channels: 0,
+            filtered_channels: 0,
+            applied_filters: Vec::new(),
+            stats: None, // Empty generation doesn't have stats
         };
 
         let memory_stats = self.memory_monitor.as_ref().map(|m| m.get_statistics());

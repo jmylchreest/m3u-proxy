@@ -54,9 +54,8 @@ impl FilterParser {
     /// Example: "channel_name contains \"sport\" SET group_title = \"Sports\""
     /// Advanced: "(channel_name matches \"regex\" SET tvg_shift = $1$2 AND channel_name not matches \"regex\" AND tvg_id matches \"regex\")"
     pub fn parse_extended(&self, expression: &str) -> Result<ExtendedExpression> {
-        info!(
-            "Parsing extended expression: '{}' (length: {} chars)",
-            expression,
+        debug!(
+            "Parsing filter expression (length: {} chars)",
             expression.len()
         );
 
@@ -67,7 +66,7 @@ impl FilterParser {
 
         // Try to parse as conditional action groups first
         if let Ok(groups) = self.parse_conditional_action_groups(&tokens, &mut 0) {
-            info!(
+            trace!(
                 "Successfully parsed as conditional action groups:\n\
                  │ Expression: '{}'\n\
                  │ Groups: {}\n\
@@ -93,6 +92,7 @@ impl FilterParser {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+            debug!("Filter expression parsed successfully");
             return Ok(ExtendedExpression::ConditionalActionGroups(groups));
         }
 
@@ -116,7 +116,7 @@ impl FilterParser {
                 ));
             }
 
-            info!(
+            trace!(
                 "Successfully parsed as condition with actions:\n\
                  │ Expression: '{}'\n\
                  │ Conditions: {}\n\
@@ -132,6 +132,7 @@ impl FilterParser {
                     .join(", ")
             );
 
+            debug!("Filter expression parsed successfully");
             Ok(ExtendedExpression::ConditionWithActions { condition, actions })
         } else {
             // Ensure we've consumed all tokens
@@ -142,7 +143,7 @@ impl FilterParser {
                 ));
             }
 
-            info!(
+            trace!(
                 "Successfully parsed as condition only:\n\
                  │ Expression: '{}'\n\
                  └─ Conditions: {}",
@@ -150,6 +151,7 @@ impl FilterParser {
                 self.count_conditions(&condition)
             );
 
+            debug!("Filter expression parsed successfully");
             Ok(ExtendedExpression::ConditionOnly(condition))
         }
     }
@@ -886,7 +888,7 @@ impl FilterParser {
                     self.validate_condition_tree_fields(&group.conditions)?;
                     self.validate_actions(&group.actions)?;
                 }
-                info!(
+                debug!(
                     "Successfully validated all {} conditional action groups",
                     groups.len()
                 );

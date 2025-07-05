@@ -249,6 +249,44 @@ pub struct PreviewStats {
     pub applied_filters: Vec<String>,
     pub excluded_channels: usize,
     pub included_channels: usize,
+
+    // Pipeline metrics
+    pub pipeline_stages: Option<usize>,
+    pub filter_execution_time: Option<String>,
+    pub processing_rate: Option<String>,
+    pub pipeline_stages_detail: Option<Vec<PipelineStageDetail>>,
+
+    // Memory metrics
+    pub current_memory: Option<u64>,
+    pub peak_memory: Option<u64>,
+    pub memory_efficiency: Option<String>,
+    pub gc_collections: Option<usize>,
+    pub memory_by_stage: Option<std::collections::HashMap<String, u64>>,
+
+    // Processing metrics
+    pub total_processing_time: Option<String>,
+    pub avg_channel_time: Option<String>,
+    pub throughput: Option<String>,
+    pub errors: Option<usize>,
+    pub processing_timeline: Option<Vec<ProcessingEvent>>,
+}
+
+/// Pipeline stage detail
+#[derive(Debug, Clone, Serialize)]
+pub struct PipelineStageDetail {
+    pub name: String,
+    pub duration: u64,
+    pub channels_processed: usize,
+    pub memory_used: Option<u64>,
+}
+
+/// Processing event for timeline
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessingEvent {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub description: String,
+    pub stage: Option<String>,
+    pub channels_count: Option<usize>,
 }
 
 /// List all proxies

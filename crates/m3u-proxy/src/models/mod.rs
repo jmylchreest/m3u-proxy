@@ -183,6 +183,12 @@ pub struct ProxyGeneration {
     pub channel_count: i32,
     pub m3u_content: String,
     pub created_at: DateTime<Utc>,
+    // New fields for enhanced generation tracking
+    pub total_channels: usize,
+    pub filtered_channels: usize,
+    pub applied_filters: Vec<String>,
+    // Comprehensive performance and monitoring stats
+    pub stats: Option<GenerationStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1261,5 +1267,338 @@ impl UnifiedSourceWithStats {
 
     pub fn is_epg(&self) -> bool {
         matches!(self, Self::Epg { .. })
+    }
+}
+
+// New dependency injection structures for generator refactor
+
+/// Complete proxy configuration resolved from database
+/// This eliminates the need for database queries during generation
+#[derive(Debug, Clone)]
+pub struct ResolvedProxyConfig {
+    pub proxy: StreamProxy,
+    pub sources: Vec<ProxySourceConfig>,
+    pub filters: Vec<ProxyFilterConfig>,
+    pub epg_sources: Vec<ProxyEpgSourceConfig>,
+}
+
+/// Stream source configuration with priority
+#[derive(Debug, Clone)]
+pub struct ProxySourceConfig {
+    pub source: StreamSource,
+    pub priority_order: i32,
+}
+
+/// Filter configuration with metadata
+#[derive(Debug, Clone)]
+pub struct ProxyFilterConfig {
+    pub filter: Filter,
+    pub priority_order: i32,
+    pub is_active: bool,
+}
+
+/// EPG source configuration with priority
+#[derive(Debug, Clone)]
+pub struct ProxyEpgSourceConfig {
+    pub epg_source: EpgSource,
+    pub priority_order: i32,
+}
+
+/// Output destination abstraction for generation
+#[derive(Clone, Debug)]
+pub enum GenerationOutput {
+    /// Preview mode - writes to preview file manager
+    Preview {
+        file_manager: sandboxed_file_manager::SandboxedManager,
+        proxy_name: String,
+    },
+    /// Production mode - writes to proxy output file manager
+    Production {
+        file_manager: sandboxed_file_manager::SandboxedManager,
+        update_database: bool,
+    },
+    /// In-memory mode - returns content only (for testing)
+    InMemory,
+}
+
+impl GenerationOutput {
+    pub fn is_preview(&self) -> bool {
+        matches!(self, Self::Preview { .. })
+    }
+
+    pub fn is_production(&self) -> bool {
+        matches!(self, Self::Production { .. })
+    }
+
+    pub fn should_update_database(&self) -> bool {
+        match self {
+            Self::Production { update_database, .. } => *update_database,
+            _ => false,
+        }
+    }
+}
+
+/// Comprehensive generation statistics for performance monitoring and UI display
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationStats {
+    /// Overall timing
+    pub total_duration_ms: u64,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: DateTime<Utc>,
+
+    /// Stage-wise performance breakdown
+    pub stage_timings: std::collections::HashMap<String, u64>, // stage_name -> duration_ms
+    pub stage_memory_usage: std::collections::HashMap<String, u64>, // stage_name -> peak_memory_bytes
+
+    /// Channel processing metrics
+    pub total_channels_processed: usize,
+    pub channels_per_second: f64,
+    pub average_channel_processing_ms: f64,
+
+    /// Source processing metrics  
+    pub sources_processed: usize,
+    pub channels_by_source: std::collections::HashMap<String, usize>, // source_name -> channel_count
+    pub source_processing_times: std::collections::HashMap<String, u64>, // source_name -> duration_ms
+
+    /// Filter application metrics
+    pub filters_applied: Vec<String>,
+    pub filter_processing_times: std::collections::HashMap<String, u64>, // filter_name -> duration_ms
+    pub channels_before_filtering: usize,
+    pub channels_after_filtering: usize,
+    pub channels_filtered_out: usize,
+
+    /// Memory metrics
+    pub peak_memory_usage_mb: Option<f64>,
+    pub average_memory_usage_mb: Option<f64>,
+    pub memory_efficiency: Option<f64>, // channels_per_mb
+    pub gc_collections: Option<usize>,
+
+    /// Data mapping metrics
+    pub data_mapping_duration_ms: u64,
+    pub channels_mapped: usize,
+    pub mapping_transformations_applied: usize,
+
+    /// Channel numbering metrics
+    pub channel_numbering_duration_ms: u64,
+    pub numbering_strategy: String,
+    pub number_conflicts_resolved: usize,
+
+    /// M3U generation metrics
+    pub m3u_generation_duration_ms: u64,
+    pub m3u_size_bytes: usize,
+    pub m3u_lines_generated: usize,
+
+    /// Error and warning tracking
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
+    pub recoverable_errors: usize,
+
+    /// Pipeline-specific metrics
+    pub pipeline_type: String, // "standard", "chunked", "adaptive", etc.
+    pub memory_pressure_events: usize,
+    pub spill_to_disk_events: usize,
+    pub temp_files_created: usize,
+}
+
+impl GenerationStats {
+    pub fn new(pipeline_type: String) -> Self {
+        let now = Utc::now();
+        Self {
+            total_duration_ms: 0,
+            started_at: now,
+            completed_at: now,
+            stage_timings: std::collections::HashMap::new(),
+            stage_memory_usage: std::collections::HashMap::new(),
+            total_channels_processed: 0,
+            channels_per_second: 0.0,
+            average_channel_processing_ms: 0.0,
+            sources_processed: 0,
+            channels_by_source: std::collections::HashMap::new(),
+            source_processing_times: std::collections::HashMap::new(),
+            filters_applied: Vec::new(),
+            filter_processing_times: std::collections::HashMap::new(),
+            channels_before_filtering: 0,
+            channels_after_filtering: 0,
+            channels_filtered_out: 0,
+            peak_memory_usage_mb: None,
+            average_memory_usage_mb: None,
+            memory_efficiency: None,
+            gc_collections: None,
+            data_mapping_duration_ms: 0,
+            channels_mapped: 0,
+            mapping_transformations_applied: 0,
+            channel_numbering_duration_ms: 0,
+            numbering_strategy: "sequential".to_string(),
+            number_conflicts_resolved: 0,
+            m3u_generation_duration_ms: 0,
+            m3u_size_bytes: 0,
+            m3u_lines_generated: 0,
+            warnings: Vec::new(),
+            errors: Vec::new(),
+            recoverable_errors: 0,
+            pipeline_type,
+            memory_pressure_events: 0,
+            spill_to_disk_events: 0,
+            temp_files_created: 0,
+        }
+    }
+
+    /// Add timing for a stage
+    pub fn add_stage_timing(&mut self, stage: &str, duration_ms: u64) {
+        self.stage_timings.insert(stage.to_string(), duration_ms);
+    }
+
+    /// Add memory usage for a stage
+    pub fn add_stage_memory(&mut self, stage: &str, memory_bytes: u64) {
+        self.stage_memory_usage.insert(stage.to_string(), memory_bytes);
+    }
+
+    /// Finalize stats and calculate derived metrics
+    pub fn finalize(&mut self) {
+        self.completed_at = Utc::now();
+        self.total_duration_ms = (self.completed_at - self.started_at).num_milliseconds() as u64;
+        
+        // Calculate channels per second
+        if self.total_duration_ms > 0 {
+            self.channels_per_second = (self.total_channels_processed as f64) / (self.total_duration_ms as f64 / 1000.0);
+        }
+        
+        // Calculate average channel processing time
+        if self.total_channels_processed > 0 {
+            self.average_channel_processing_ms = (self.total_duration_ms as f64) / (self.total_channels_processed as f64);
+        }
+        
+        // Calculate channels filtered out
+        self.channels_filtered_out = self.channels_before_filtering.saturating_sub(self.channels_after_filtering);
+        
+        // Calculate memory efficiency
+        if let Some(peak_memory) = self.peak_memory_usage_mb {
+            if peak_memory > 0.0 {
+                self.memory_efficiency = Some(self.total_channels_processed as f64 / peak_memory);
+            }
+        }
+    }
+
+    /// Generate a concise summary string for logging with tree-style stage breakdown
+    pub fn summary(&self) -> String {
+        let mut lines = Vec::new();
+        
+        // Top-level summary line
+        lines.push(format!(
+            "Generation completed in {}ms: {} channels ({} sources, {} filters) | {:.1} ch/s | Peak: {:.1}MB | Pipeline: {}",
+            self.total_duration_ms,
+            self.total_channels_processed,
+            self.sources_processed,
+            self.filters_applied.len(),
+            self.channels_per_second,
+            self.peak_memory_usage_mb.unwrap_or(0.0),
+            self.pipeline_type
+        ));
+        
+        // Stage-by-stage breakdown with tree-style formatting
+        if !self.stage_timings.is_empty() {
+            // Define stage order for consistent reporting
+            let stage_order = [
+                ("source_loading", "Source Loading"),
+                ("data_mapping", "Data Mapping"), 
+                ("filtering", "Filtering"),
+                ("channel_numbering", "Channel Numbering"),
+                ("m3u_generation", "M3U Generation")
+            ];
+            
+            // Collect stages that exist in order
+            let mut existing_stages = Vec::new();
+            for (stage_key, stage_name) in &stage_order {
+                if self.stage_timings.contains_key(*stage_key) {
+                    existing_stages.push((stage_key.to_string(), stage_name.to_string()));
+                }
+            }
+            
+            // Add any additional stages not in the standard order
+            for stage in self.stage_timings.keys() {
+                if !stage_order.iter().any(|(key, _)| *key == stage) {
+                    let stage_display = stage.replace("_", " ").split(' ')
+                        .map(|word| format!("{}{}", word.chars().next().unwrap().to_uppercase(), &word[1..]))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    existing_stages.push((stage.clone(), stage_display));
+                }
+            }
+            
+            // Generate tree-style output for each stage with k=v pairs
+            for (i, (stage_key, stage_name)) in existing_stages.iter().enumerate() {
+                let is_last = i == existing_stages.len() - 1;
+                let tree_char = if is_last { "└─" } else { "├─" };
+                
+                if let Some(&duration) = self.stage_timings.get(stage_key) {
+                    let percentage = if self.total_duration_ms > 0 {
+                        (duration as f64 / self.total_duration_ms as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    
+                    // Extract strategy from stage name (e.g., "source_loading_inmemory" -> "inmemory")
+                    let strategy = if stage_key.ends_with("_inmemory") {
+                        "inmemory"
+                    } else if stage_key.ends_with("_chunked") {
+                        "chunked"
+                    } else if stage_key.ends_with("_filespill") {
+                        "filespill"
+                    } else {
+                        "standard"
+                    };
+                    
+                    let mut kv_pairs = vec![
+                        format!("execution_time={}ms", duration),
+                        format!("total_time_pc={:.1}", percentage),
+                        format!("strategy={}", strategy),
+                    ];
+                    
+                    // Add memory info if available
+                    if let Some(&memory_bytes) = self.stage_memory_usage.get(stage_key) {
+                        let memory_mb = memory_bytes / (1024 * 1024);
+                        kv_pairs.push(format!("peak_memory={}MB", memory_mb));
+                    }
+                    
+                    lines.push(format!(
+                        "{} {}: {}", 
+                        tree_char, stage_name, kv_pairs.join(" ")
+                    ));
+                }
+            }
+        }
+        
+        lines.join("\n")
+    }
+
+    /// Generate detailed performance breakdown for debugging
+    pub fn detailed_summary(&self) -> String {
+        let mut summary = Vec::new();
+        
+        summary.push(format!("=== Generation Performance Summary ==="));
+        summary.push(format!("Total Duration: {}ms", self.total_duration_ms));
+        summary.push(format!("Channels Processed: {} ({:.1} ch/s)", self.total_channels_processed, self.channels_per_second));
+        summary.push(format!("Sources: {} | Filters: {}", self.sources_processed, self.filters_applied.len()));
+        
+        if !self.stage_timings.is_empty() {
+            summary.push(format!(""));
+            summary.push(format!("Stage Timings:"));
+            for (stage, duration) in &self.stage_timings {
+                summary.push(format!("  {}: {}ms", stage, duration));
+            }
+        }
+        
+        if let Some(peak_memory) = self.peak_memory_usage_mb {
+            summary.push(format!(""));
+            summary.push(format!("Memory: Peak {:.1}MB | Efficiency: {:.1} ch/MB", 
+                peak_memory, self.memory_efficiency.unwrap_or(0.0)));
+        }
+        
+        if !self.warnings.is_empty() || !self.errors.is_empty() {
+            summary.push(format!(""));
+            summary.push(format!("Issues: {} warnings, {} errors", self.warnings.len(), self.errors.len()));
+        }
+        
+        summary.join("\n")
     }
 }

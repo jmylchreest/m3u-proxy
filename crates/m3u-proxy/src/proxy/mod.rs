@@ -7,12 +7,18 @@ use crate::database::Database;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 
-pub mod adaptive_pipeline;
-pub mod chunked_pipeline;
+pub mod config_resolver;
 pub mod epg_generator;
 pub mod filter_engine;
 pub mod generator;
-pub mod pipeline;
+pub mod stage_strategy;
+pub mod stage_contracts;
+pub mod wasm_host_interface;
+pub mod simple_strategies;
+pub mod streaming_stages;
+pub mod streaming_pipeline;
+// WASM plugin examples and strategies
+pub mod wasm_examples;
 
 pub struct ProxyService {
     storage_config: StorageConfig,
@@ -23,194 +29,156 @@ impl ProxyService {
         Self { storage_config }
     }
 
-    /// Generate a proxy M3U with full data mapping and filtering pipeline
-    pub async fn generate_proxy(
+    /// Generate a proxy using the new clean stage architecture (THE pipeline)
+    pub async fn generate_proxy_with_config(
         &self,
-        proxy: &StreamProxy,
+        config: ResolvedProxyConfig,
+        output: GenerationOutput,
         database: &Database,
         data_mapping_service: &DataMappingService,
         logo_service: &LogoAssetService,
         base_url: &str,
         engine_config: Option<crate::config::DataMappingEngineConfig>,
     ) -> Result<ProxyGeneration> {
-        let generator = generator::ProxyGenerator::new(self.storage_config.clone());
-        generator
-            .generate(
-                proxy,
-                database,
-                data_mapping_service,
-                logo_service,
-                base_url,
-                engine_config,
-            )
-            .await
-    }
+        use crate::proxy::stage_contracts::*;
+        use crate::proxy::simple_strategies::*;
+        use std::time::Instant;
+        
+        info!("Starting clean stage generation for proxy '{}'", config.proxy.name);
+        let overall_start = Instant::now();
 
-    /// Generate a proxy M3U using the new memory-efficient pipeline
-    pub async fn generate_proxy_with_pipeline(
-        &self,
-        proxy: &StreamProxy,
-        database: &Database,
-        data_mapping_service: &DataMappingService,
-        logo_service: &LogoAssetService,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-        pipeline_config: Option<pipeline::PipelineConfig>,
-    ) -> Result<ProxyGeneration> {
-        let mut pipeline = if let Some(ref config) = pipeline_config {
-            if config.enable_statistics {
-                // Create pipeline with memory tracking
-                let _memory_config = crate::config::ProxyMemoryConfig {
-                    max_memory_mb: config.memory_limit_mb,
-                    batch_size: config.batch_size,
-                    enable_parallel_processing: config.enable_parallel_processing,
-                    memory_check_interval: 100,
-                    warning_threshold: 0.8,
-                    strategy_preset: Some("default".to_string()),
-                    memory_strategy: Some(crate::config::MemoryStrategySettings::default()),
-                };
+        // Create simple in-memory strategies (default behavior)
+        let source_loader = SimpleSourceLoader::new(database.clone());
+        let data_mapper = SimpleDataMapper::new(data_mapping_service.clone(), logo_service.clone());
+        let filter = SimpleFilter;
+        let numbering = SimpleChannelNumbering;
+        let m3u_generator = SimpleM3uGenerator;
 
-                pipeline::ProxyGenerationPipeline::new_with_memory_monitoring(
-                    database.clone(),
-                    data_mapping_service.clone(),
-                    logo_service.clone(),
-                    config.memory_limit_mb,
-                )
-            } else {
-                pipeline::ProxyGenerationPipeline::new(
-                    database.clone(),
-                    data_mapping_service.clone(),
-                    logo_service.clone(),
-                )
-            }
-        } else {
-            pipeline::ProxyGenerationPipeline::new(
-                database.clone(),
-                data_mapping_service.clone(),
-                logo_service.clone(),
-            )
+        // Stage 1: Source Loading
+        let source_input = SourceLoadingInput {
+            source_ids: config.sources.iter().map(|s| s.source.id).collect(),
+            proxy_config: config.clone(),
+        };
+        
+        let source_output = source_loader.execute(source_input).await?;
+        info!("✓ Source loading: {} channels loaded", source_output.channels.len());
+
+        // Stage 2: Data Mapping
+        let mapping_input = DataMappingInput {
+            channels: source_output.channels,
+            source_configs: config.sources.clone(),
+            engine_config: engine_config.clone(),
+            base_url: base_url.to_string(),
+        };
+        
+        let mapping_output = data_mapper.execute(mapping_input).await?;
+        info!("✓ Data mapping: {} channels mapped", mapping_output.mapped_channels.len());
+
+        // Stage 3: Filtering
+        let filtering_input = FilteringInput {
+            channels: mapping_output.mapped_channels,
+            filters: config.filters.clone(),
+        };
+        
+        let filtering_output = filter.execute(filtering_input).await?;
+        info!("✓ Filtering: {} channels after filtering", filtering_output.filtered_channels.len());
+
+        // Stage 4: Channel Numbering
+        let numbering_input = ChannelNumberingInput {
+            channels: filtering_output.filtered_channels,
+            starting_number: config.proxy.starting_channel_number,
+            numbering_strategy: ChannelNumberingStrategy::Sequential,
+        };
+        
+        let numbering_output = numbering.execute(numbering_input).await?;
+        info!("✓ Channel numbering: {} channels numbered", numbering_output.numbered_channels.len());
+
+        // Stage 5: M3U Generation
+        let m3u_input = M3uGenerationInput {
+            numbered_channels: numbering_output.numbered_channels.clone(),
+            proxy_ulid: config.proxy.ulid.clone(),
+            base_url: base_url.to_string(),
+        };
+        
+        let m3u_output = m3u_generator.execute(m3u_input).await?;
+        info!("✓ M3U generation: {} bytes generated", m3u_output.m3u_content.len());
+
+        // Create enhanced generation statistics
+        let _total_duration = overall_start.elapsed().as_millis() as u64;
+        let mut stats = GenerationStats::new("clean_stages".to_string());
+        
+        stats.add_stage_timing("source_loading", source_output.total_stats.load_duration_ms);
+        stats.add_stage_timing("data_mapping", mapping_output.mapping_stats.mapping_duration_ms);
+        stats.add_stage_timing("filtering", filtering_output.filter_stats.filter_duration_ms);
+        stats.add_stage_timing("channel_numbering", numbering_output.numbering_stats.numbering_duration_ms);
+        stats.add_stage_timing("m3u_generation", m3u_output.m3u_stats.generation_duration_ms);
+        
+        stats.total_channels_processed = source_output.total_stats.channels_loaded;
+        stats.channels_mapped = mapping_output.mapping_stats.channels_transformed;
+        stats.channels_after_filtering = filtering_output.filter_stats.channels_output;
+        stats.m3u_size_bytes = m3u_output.m3u_stats.m3u_size_bytes;
+        stats.finalize();
+
+        // Create generation record
+        let generation = ProxyGeneration {
+            id: uuid::Uuid::new_v4(),
+            proxy_id: config.proxy.id,
+            version: 1,
+            channel_count: numbering_output.numbered_channels.len() as i32,
+            total_channels: source_output.total_stats.channels_loaded,
+            filtered_channels: filtering_output.filter_stats.channels_output,
+            applied_filters: filtering_output.filter_stats.filters_applied,
+            m3u_content: m3u_output.m3u_content,
+            created_at: chrono::Utc::now(),
+            stats: Some(stats.clone()),
         };
 
-        let (generation, memory_stats) = pipeline
-            .generate_proxy(proxy, base_url, engine_config, pipeline_config)
-            .await?;
-
-        if let Some(stats) = memory_stats {
-            info!("Memory tracking completed: {}", stats.summary());
-        }
-
+        // Handle output
+        self.write_output(&generation, &output, &config).await?;
+        
+        info!("Clean stage generation completed for '{}': {}", config.proxy.name, stats.summary());
         Ok(generation)
     }
 
-    /// Generate a proxy using adaptive strategy switching based on memory pressure
-    pub async fn generate_proxy_with_adaptive_pipeline(
+    /// Handle output writing based on destination
+    async fn write_output(
         &self,
-        proxy: &StreamProxy,
-        database: &Database,
-        data_mapping_service: &DataMappingService,
-        logo_service: &LogoAssetService,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-        memory_config: Option<&crate::config::ProxyMemoryConfig>,
-        temp_file_manager: Option<sandboxed_file_manager::SandboxedManager>,
-    ) -> Result<ProxyGeneration> {
-        use crate::proxy::adaptive_pipeline::AdaptivePipelineBuilder;
-        use crate::utils::memory_strategy::MemoryStrategyExecutor;
-
-        // Create or use provided temp file manager
-        let temp_file_manager = if let Some(manager) = temp_file_manager {
-            manager
-        } else {
-            // Create a default temp file manager using system temp directory
-            use sandboxed_file_manager::{SandboxedManager, CleanupPolicy, TimeMatch};
-            use std::time::Duration;
-            
-            let temp_dir = std::env::temp_dir().join("m3u-proxy-adaptive");
-            let cleanup_policy = CleanupPolicy::new()
-                .remove_after(Duration::from_secs(3600))
-                .time_match(TimeMatch::LastAccess)
-                .enabled(true); // 1 hour retention
-            
-            SandboxedManager::builder()
-                .base_directory(temp_dir)
-                .cleanup_policy(cleanup_policy)
-                .cleanup_interval(Duration::from_secs(300)) // Check every 5 minutes
-                .build()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to create temp file manager: {}", e))?
-        };
-
-        let mut builder = AdaptivePipelineBuilder::new()
-            .database(database.clone())
-            .data_mapping_service(data_mapping_service.clone())
-            .logo_service(logo_service.clone())
-            .temp_file_manager(temp_file_manager);
-
-        // Configure memory settings if provided
-        if let Some(config) = memory_config {
-            if let Some(limit) = config.max_memory_mb {
-                builder = builder.memory_limit_mb(limit);
+        generation: &ProxyGeneration,
+        output: &GenerationOutput,
+        config: &ResolvedProxyConfig,
+    ) -> Result<()> {
+        match output {
+            GenerationOutput::Preview { file_manager, proxy_name } => {
+                let m3u_file_id = format!("{}-{}.m3u", proxy_name, uuid::Uuid::new_v4());
+                file_manager
+                    .write(&m3u_file_id, &generation.m3u_content)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to write preview M3U: {}", e))?;
+                
+                info!("Preview content written to file manager");
             }
+            GenerationOutput::Production { file_manager, update_database } => {
+                let m3u_file_id = format!("{}-{}.m3u", config.proxy.ulid, uuid::Uuid::new_v4());
+                file_manager
+                    .write(&m3u_file_id, &generation.m3u_content)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to write production M3U: {}", e))?;
 
-            // Set up memory strategy based on strategy_preset or custom settings
-            if let Some(preset) = &config.strategy_preset {
-                match preset.to_lowercase().as_str() {
-                    "default" => {
-                        // Use default strategy (no additional configuration needed)
-                    }
-                    "conservative" => {
-                        let strategy_config = crate::utils::memory_strategy::ProxyGenerationStrategies::conservative();
-                        let strategy_executor = MemoryStrategyExecutor::new(strategy_config);
-                        builder = builder.memory_strategy(strategy_executor);
-                    }
-                    "aggressive" => {
-                        let strategy_config = crate::utils::memory_strategy::ProxyGenerationStrategies::aggressive();
-                        let strategy_executor = MemoryStrategyExecutor::new(strategy_config);
-                        builder = builder.memory_strategy(strategy_executor);
-                    }
-                    "temp_file_based" => {
-                        let temp_dir = config.memory_strategy
-                            .as_ref()
-                            .and_then(|s| s.temp_dir.as_ref())
-                            .cloned()
-                            .unwrap_or_else(|| "/tmp".to_string());
-                        let strategy_config = crate::utils::memory_strategy::ProxyGenerationStrategies::temp_file_based(&temp_dir);
-                        let strategy_executor = MemoryStrategyExecutor::new(strategy_config);
-                        builder = builder.memory_strategy(strategy_executor);
-                    }
-                    "custom" => {
-                        // Use custom memory_strategy settings
-                        if let Some(strategy_settings) = &config.memory_strategy {
-                            let strategy_config = strategy_settings.to_memory_strategy_config()?;
-                            let strategy_executor = MemoryStrategyExecutor::new(strategy_config);
-                            builder = builder.memory_strategy(strategy_executor);
-                        }
-                    }
-                    _ => {
-                        return Err(anyhow::anyhow!("Unknown strategy preset: {}. Valid options: default, conservative, aggressive, temp_file_based, custom", preset));
-                    }
+                if *update_database {
+                    info!("Generation record would be saved to database");
                 }
-            } else {
-                // No preset specified, check for custom settings (backward compatibility)
-                if let Some(strategy_settings) = &config.memory_strategy {
-                    let strategy_config = strategy_settings.to_memory_strategy_config()?;
-                    let strategy_executor = MemoryStrategyExecutor::new(strategy_config);
-                    builder = builder.memory_strategy(strategy_executor);
-                }
+
+                info!("Production content written to file manager");
+            }
+            GenerationOutput::InMemory => {
+                // Do nothing - content is just returned
             }
         }
-
-        let mut adaptive_pipeline = builder.build()?;
-        let (generation, memory_stats) = adaptive_pipeline
-            .generate_proxy_adaptive(proxy, base_url, engine_config)
-            .await?;
-
-        if let Some(stats) = memory_stats {
-            info!("Adaptive pipeline completed: {}", stats.summary());
-        }
-
-        Ok(generation)
+        Ok(())
     }
+
+
+
 
     /// Generate XMLTV EPG for a proxy based on its generated channel list
     pub async fn generate_epg_for_proxy(
@@ -226,76 +194,6 @@ impl ProxyService {
             .await
     }
 
-    /// Generate both M3U and XMLTV for a proxy in a coordinated manner
-    pub async fn generate_proxy_with_epg(
-        &self,
-        proxy: &StreamProxy,
-        database: &Database,
-        data_mapping_service: &DataMappingService,
-        logo_service: &LogoAssetService,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-        pipeline_config: Option<pipeline::PipelineConfig>,
-        epg_config: Option<epg_generator::EpgGenerationConfig>,
-    ) -> Result<(
-        ProxyGeneration,
-        String,
-        epg_generator::EpgGenerationStatistics,
-    )> {
-        // Step 1: Generate M3U using pipeline
-        let mut pipeline = if let Some(ref config) = pipeline_config {
-            if config.enable_statistics {
-                // Create pipeline with memory tracking
-                let _memory_config = crate::config::ProxyMemoryConfig {
-                    max_memory_mb: config.memory_limit_mb,
-                    batch_size: config.batch_size,
-                    enable_parallel_processing: config.enable_parallel_processing,
-                    memory_check_interval: 100,
-                    warning_threshold: 0.8,
-                    strategy_preset: Some("default".to_string()),
-                    memory_strategy: Some(crate::config::MemoryStrategySettings::default()),
-                };
-
-                pipeline::ProxyGenerationPipeline::new_with_memory_monitoring(
-                    database.clone(),
-                    data_mapping_service.clone(),
-                    logo_service.clone(),
-                    config.memory_limit_mb,
-                )
-            } else {
-                pipeline::ProxyGenerationPipeline::new(
-                    database.clone(),
-                    data_mapping_service.clone(),
-                    logo_service.clone(),
-                )
-            }
-        } else {
-            pipeline::ProxyGenerationPipeline::new(
-                database.clone(),
-                data_mapping_service.clone(),
-                logo_service.clone(),
-            )
-        };
-
-        let (proxy_generation, memory_stats) = pipeline
-            .generate_proxy(proxy, base_url, engine_config, pipeline_config)
-            .await?;
-
-        if let Some(stats) = memory_stats {
-            info!("M3U generation: {}", stats.summary());
-        }
-
-        // Step 2: Extract channel IDs from generated M3U
-        let channel_ids = pipeline.extract_channel_ids_from_generation(&proxy_generation)?;
-
-        // Step 3: Generate XMLTV EPG filtered to those channels
-        let epg_generator = epg_generator::EpgGenerator::new(database.clone());
-        let (xmltv_content, epg_stats) = epg_generator
-            .generate_xmltv_for_proxy(proxy, &channel_ids, epg_config)
-            .await?;
-
-        Ok((proxy_generation, xmltv_content, epg_stats))
-    }
 
     /// Apply filters to a list of channels (utility method)
     #[allow(dead_code)]
@@ -316,6 +214,21 @@ impl ProxyService {
     ) -> Result<std::path::PathBuf> {
         let generator = generator::ProxyGenerator::new(self.storage_config.clone());
         generator.save_m3u_file(proxy_id, content).await
+    }
+
+    /// Save M3U content to storage using proxy ULID and optional file manager
+    pub async fn save_m3u_file_with_manager(
+        &self,
+        proxy_ulid: &str,
+        content: &str,
+        file_manager: Option<sandboxed_file_manager::SandboxedManager>,
+    ) -> Result<std::path::PathBuf> {
+        let generator = if let Some(manager) = file_manager {
+            generator::ProxyGenerator::with_file_manager(self.storage_config.clone(), manager)
+        } else {
+            generator::ProxyGenerator::new(self.storage_config.clone())
+        };
+        generator.save_m3u_file_by_ulid(proxy_ulid, content).await
     }
 
     /// Clean up old proxy versions

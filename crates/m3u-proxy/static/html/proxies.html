@@ -332,6 +332,12 @@
                         </button>
                         <button
                             class="tab-button"
+                            onclick="showPreviewTab('epg')"
+                        >
+                            📅 EPG Guide
+                        </button>
+                        <button
+                            class="tab-button"
                             onclick="showPreviewTab('m3u')"
                         >
                             📄 M3U Output
@@ -346,21 +352,106 @@
 
                     <div id="channelsTab" class="tab-content active">
                         <div class="preview-controls">
-                            <input
-                                type="text"
-                                id="channelSearch"
-                                placeholder="Search channels..."
-                                onkeyup="filterPreviewChannels()"
-                            />
-                            <select
-                                id="groupFilter"
-                                onchange="filterPreviewChannels()"
-                            >
-                                <option value="">All Groups</option>
-                            </select>
+                            <div class="control-group">
+                                <input
+                                    type="text"
+                                    id="channelSearch"
+                                    placeholder="Search channels..."
+                                    onkeyup="filterPreviewChannels()"
+                                />
+                                <select
+                                    id="groupFilter"
+                                    onchange="filterPreviewChannels()"
+                                >
+                                    <option value="">All Groups</option>
+                                </select>
+                            </div>
+                            <div class="view-controls">
+                                <button
+                                    class="btn btn-outline-secondary btn-sm"
+                                    onclick="toggleChannelView('list')"
+                                    id="listViewBtn"
+                                >
+                                    📋 List View
+                                </button>
+                                <button
+                                    class="btn btn-outline-secondary btn-sm active"
+                                    onclick="toggleChannelView('detailed')"
+                                    id="detailedViewBtn"
+                                >
+                                    📋 Detailed View
+                                </button>
+                            </div>
                         </div>
                         <div id="channelsPreview" class="channels-preview">
                             <!-- Channel list will be loaded here -->
+                        </div>
+                    </div>
+
+                    <div id="epgTab" class="tab-content">
+                        <div class="preview-controls">
+                            <div class="control-group">
+                                <input
+                                    type="text"
+                                    id="epgChannelSearch"
+                                    placeholder="Search EPG channels..."
+                                    onkeyup="filterEpgChannels()"
+                                />
+                                <input
+                                    type="date"
+                                    id="epgDateSelect"
+                                    onchange="loadEpgForChannels()"
+                                />
+                                <select
+                                    id="epgTimeRange"
+                                    onchange="loadEpgForChannels()"
+                                >
+                                    <option value="6">6 Hours</option>
+                                    <option value="12" selected>
+                                        12 Hours
+                                    </option>
+                                    <option value="24">24 Hours</option>
+                                </select>
+                            </div>
+                            <div class="epg-status">
+                                <span id="epgChannelCount">0 channels</span>
+                                <button
+                                    class="btn btn-outline-primary btn-sm"
+                                    onclick="loadEpgForChannels()"
+                                >
+                                    🔄 Refresh EPG
+                                </button>
+                            </div>
+                        </div>
+                        <div id="epgPreview" class="epg-preview">
+                            <div
+                                id="epgLoading"
+                                class="loading-state"
+                                style="display: none"
+                            >
+                                <div class="spinner"></div>
+                                <p>Loading EPG data...</p>
+                            </div>
+                            <div
+                                id="epgNoData"
+                                class="no-data-state"
+                                style="display: none"
+                            >
+                                <p>
+                                    No EPG data available for selected channels
+                                    and time range
+                                </p>
+                            </div>
+                            <div id="epgContent" class="epg-content">
+                                <div
+                                    id="epgTimeline"
+                                    class="epg-timeline"
+                                ></div>
+                                <div
+                                    id="epgChannels"
+                                    class="epg-channels"
+                                ></div>
+                            </div>
                         </div>
                     </div>
 
@@ -383,8 +474,58 @@
                     </div>
 
                     <div id="statsTab" class="tab-content">
-                        <div id="proxyStats" class="stats-grid">
-                            <!-- Statistics will be loaded here -->
+                        <div class="stats-tabs">
+                            <button
+                                class="stats-tab-button active"
+                                onclick="showStatsTab('overview')"
+                            >
+                                📊 Overview
+                            </button>
+                            <button
+                                class="stats-tab-button"
+                                onclick="showStatsTab('pipeline')"
+                            >
+                                ⚙️ Pipeline
+                            </button>
+                            <button
+                                class="stats-tab-button"
+                                onclick="showStatsTab('memory')"
+                            >
+                                💾 Memory
+                            </button>
+                            <button
+                                class="stats-tab-button"
+                                onclick="showStatsTab('processing')"
+                            >
+                                ⏱️ Processing
+                            </button>
+                        </div>
+
+                        <div
+                            id="overviewStats"
+                            class="stats-tab-content active"
+                        >
+                            <div id="proxyStats" class="stats-grid">
+                                <!-- Overview statistics will be loaded here -->
+                            </div>
+                        </div>
+
+                        <div id="pipelineStats" class="stats-tab-content">
+                            <div id="pipelineStatsContent" class="stats-grid">
+                                <!-- Pipeline statistics will be loaded here -->
+                            </div>
+                        </div>
+
+                        <div id="memoryStats" class="stats-tab-content">
+                            <div id="memoryStatsContent" class="stats-grid">
+                                <!-- Memory statistics will be loaded here -->
+                            </div>
+                        </div>
+
+                        <div id="processingStats" class="stats-tab-content">
+                            <div id="processingStatsContent" class="stats-grid">
+                                <!-- Processing statistics will be loaded here -->
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -398,6 +539,11 @@
                     </button>
                 </div>
             </div>
+        </div>
+
+        <!-- EPG Tooltip -->
+        <div id="epgTooltip" class="epg-tooltip" style="display: none">
+            <!-- Tooltip content will be dynamically populated -->
         </div>
 
         <!-- Add Stream Source Modal -->

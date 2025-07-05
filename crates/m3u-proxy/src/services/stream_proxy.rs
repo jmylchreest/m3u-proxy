@@ -11,7 +11,7 @@ use crate::{
     database::Database,
     errors::types::AppError,
     logo_assets::service::LogoAssetService,
-    models::{Channel, StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest},
+    models::{Channel, StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest, GenerationOutput},
     proxy::filter_engine::FilterEngine,
     repositories::{
         ChannelRepository, FilterRepository, StreamProxyRepository, StreamSourceRepository,
@@ -185,7 +185,7 @@ impl StreamProxyService {
     }
 
     /// Generate a preview of what a proxy configuration would produce
-    /// This uses in-memory processing without touching the database
+    /// This uses the new dependency injection architecture - no temporary database entries!
     pub async fn generate_preview(
         &self,
         request: PreviewProxyRequest,
@@ -193,188 +193,56 @@ impl StreamProxyService {
         tracing::info!("Starting preview generation for proxy: {}", request.name);
         use std::collections::HashMap;
 
-        // Collect all source channels directly from database without temporary data
-        let mut all_channels = Vec::new();
-        let mut channels_by_source = HashMap::new();
-
-        // Process each stream source
-        for source_req in &request.stream_sources {
-            tracing::debug!("Processing stream source: {}", source_req.source_id);
-            // Get the source to validate it exists
-            let source = self
-                .stream_source_repo
-                .find_by_id(source_req.source_id)
-                .await
-                .map_err(|e| {
-                    tracing::error!(
-                        "Failed to find stream source {}: {}",
-                        source_req.source_id,
-                        e
-                    );
-                    AppError::Repository(e)
-                })?
-                .ok_or_else(|| {
-                    tracing::error!("Stream source not found: {}", source_req.source_id);
-                    AppError::NotFound {
-                        resource: "stream_source".to_string(),
-                        id: source_req.source_id.to_string(),
-                    }
-                })?;
-
-            // Get channels for this source
-            let source_channels = self
-                .database
-                .get_source_channels(source_req.source_id)
-                .await
-                .map_err(|e| {
-                    tracing::error!(
-                        "Failed to get source channels for {}: {}",
-                        source_req.source_id,
-                        e
-                    );
-                    AppError::Internal {
-                        message: format!("Failed to get source channels: {}", e),
-                    }
-                })?;
-
-            tracing::debug!(
-                "Found {} channels for source {}",
-                source_channels.len(),
-                source.name
-            );
-
-            let channel_count = source_channels.len();
-            channels_by_source.insert(source.name.clone(), channel_count);
-
-            // Apply data mapping to channels in memory
-            let mapped_channels = self
-                .data_mapping_service
-                .apply_mapping_for_proxy(
-                    source_channels,
-                    source_req.source_id,
-                    &self.logo_service,
-                    "http://localhost:8080", // TODO: Get from config
-                    None,                    // TODO: Get data mapping config from settings
-                )
-                .await
-                .map_err(|e| {
-                    tracing::error!(
-                        "Data mapping failed for source {}: {}",
-                        source_req.source_id,
-                        e
-                    );
-                    AppError::Internal {
-                        message: format!("Data mapping failed: {}", e),
-                    }
-                })?;
-
-            tracing::debug!(
-                "Mapped {} channels for source {}",
-                mapped_channels.len(),
-                source.name
-            );
-
-            all_channels.extend(mapped_channels);
-        }
-
-        // Apply filters in memory
-        let mut filtered_channels = all_channels.clone();
-        let mut applied_filters = Vec::new();
-
-        tracing::debug!("Total channels before filtering: {}", all_channels.len());
-
-        if !request.filters.is_empty() {
-            tracing::debug!("Applying {} filters", request.filters.len());
-            // Get filters and apply them
-            let mut filter_tuples = Vec::new();
-            for filter_req in &request.filters {
-                if filter_req.is_active {
-                    let filter = self
-                        .filter_repo
-                        .find_by_id(filter_req.filter_id)
-                        .await
-                        .map_err(|e| {
-                            tracing::error!(
-                                "Failed to find filter {}: {}",
-                                filter_req.filter_id,
-                                e
-                            );
-                            AppError::Repository(e)
-                        })?
-                        .ok_or_else(|| {
-                            tracing::error!("Filter not found: {}", filter_req.filter_id);
-                            AppError::NotFound {
-                                resource: "filter".to_string(),
-                                id: filter_req.filter_id.to_string(),
-                            }
-                        })?;
-
-                    applied_filters.push(filter.name.clone());
-
-                    // Create a fake ProxyFilter for the filter engine
-                    let proxy_filter = crate::models::ProxyFilter {
-                        proxy_id: Uuid::new_v4(), // Temporary ID
-                        filter_id: filter.id,
-                        priority_order: filter_req.priority_order,
-                        is_active: filter_req.is_active,
-                        created_at: chrono::Utc::now(),
-                    };
-
-                    filter_tuples.push((filter, proxy_filter));
-                }
-            }
-
-            // Apply filters using the filter engine
-            if !filter_tuples.is_empty() {
-                tracing::debug!("Applying {} filter tuples", filter_tuples.len());
-                let mut filter_engine = self.filter_engine.lock().await;
-                filtered_channels = filter_engine
-                    .apply_filters(all_channels.clone(), filter_tuples)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("Filter application failed: {}", e);
-                        AppError::Internal {
-                            message: format!("Filter application failed: {}", e),
-                        }
-                    })?;
-                tracing::debug!(
-                    "Filters applied successfully, {} channels remain",
-                    filtered_channels.len()
-                );
-            }
-        }
-
-        // Generate M3U content in memory
-        tracing::debug!(
-            "Generating M3U content for {} channels",
-            filtered_channels.len()
+        // Create config resolver
+        let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
+            self.proxy_repo.clone(),
+            self.stream_source_repo.clone(),
+            self.filter_repo.clone(),
+            self.database.clone(),
         );
-        let m3u_content = self
-            .generate_preview_m3u(&filtered_channels, &request)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to generate M3U content: {}", e);
-                e
-            })?;
 
-        // Store the M3U content in preview file manager
-        let m3u_file_id = format!("preview-{}.m3u", uuid::Uuid::new_v4());
-        tracing::debug!("Storing M3U content to file: {}", m3u_file_id);
-        self.preview_file_manager
-            .write(&m3u_file_id, &m3u_content)
+        // Resolve preview configuration (no database writes!)
+        let resolved_config = config_resolver
+            .resolve_preview_config(request.clone())
+            .await?;
+
+        // Validate configuration
+        config_resolver.validate_config(&resolved_config)?;
+
+        // Create preview output destination
+        let output = GenerationOutput::Preview {
+            file_manager: self.preview_file_manager.clone(),
+            proxy_name: request.name.clone(),
+        };
+
+        // Use the new generator architecture
+        let proxy_service = crate::proxy::ProxyService::new(self.storage_config.clone());
+        let proxy_generation = proxy_service
+            .generate_proxy_with_config(
+                resolved_config.clone(),
+                output,
+                &self.database,
+                &self.data_mapping_service,
+                &self.logo_service,
+                "http://localhost:8080", // TODO: Get from config
+                None, // engine_config
+            )
             .await
             .map_err(|e| {
-                tracing::error!("Failed to write M3U file {}: {}", m3u_file_id, e);
+                tracing::error!("Generator failed for preview: {}", e);
                 AppError::Internal {
-                    message: format!("Failed to write preview file: {}", e),
+                    message: format!("Generator failed: {}", e),
                 }
             })?;
 
-        // Generate preview channels and statistics
+        // Parse the generated M3U content to extract channels for preview
         let preview_channels = self
-            .generate_preview_channels(&filtered_channels, &request)
+            .parse_m3u_for_preview(&proxy_generation.m3u_content, &request)
             .await?;
+
+        // Build statistics from the generated content
         let mut channels_by_group = HashMap::new();
+        let mut channels_by_source = HashMap::new();
 
         // Calculate group statistics
         for channel in &preview_channels {
@@ -385,24 +253,163 @@ impl StreamProxyService {
             *channels_by_group.entry(group).or_insert(0) += 1;
         }
 
+        // Calculate source statistics from resolved config
+        for source_config in &resolved_config.sources {
+            let source_channels = self
+                .database
+                .get_source_channels(source_config.source.id)
+                .await
+                .unwrap_or_default();
+            channels_by_source.insert(source_config.source.name.clone(), source_channels.len());
+        }
+
+        // Extract enhanced stats from GenerationStats if available
+        let generation_stats = proxy_generation.stats.as_ref();
+        
         let stats = crate::web::handlers::proxies::PreviewStats {
-            total_sources: request.stream_sources.len(),
-            total_channels_before_filters: all_channels.len(),
-            total_channels_after_filters: filtered_channels.len(),
+            total_sources: resolved_config.sources.len(),
+            total_channels_before_filters: proxy_generation.total_channels,
+            total_channels_after_filters: proxy_generation.filtered_channels,
             channels_by_source,
             channels_by_group,
-            applied_filters,
-            excluded_channels: all_channels.len() - filtered_channels.len(),
-            included_channels: filtered_channels.len(),
+            applied_filters: proxy_generation.applied_filters,
+            excluded_channels: proxy_generation.total_channels - proxy_generation.filtered_channels,
+            included_channels: proxy_generation.filtered_channels,
+            // Enhanced pipeline metrics from GenerationStats (fix types)
+            pipeline_stages: generation_stats.map(|gs| gs.stage_timings.len()),
+            filter_execution_time: generation_stats.and_then(|gs| 
+                gs.stage_timings.get("filtering").map(|&t| format!("{}ms", t))
+            ),
+            processing_rate: generation_stats.map(|gs| format!("{:.1} ch/s", gs.channels_per_second)),
+            pipeline_stages_detail: generation_stats.map(|gs| {
+                gs.stage_timings.iter()
+                    .map(|(stage, &duration)| crate::web::handlers::proxies::PipelineStageDetail {
+                        name: stage.clone(),
+                        duration,
+                        channels_processed: gs.total_channels_processed,
+                        memory_used: gs.stage_memory_usage.get(stage).cloned(),
+                    })
+                    .collect()
+            }),
+            // Memory metrics from GenerationStats (fix types)
+            current_memory: None, // Not tracked in current implementation
+            peak_memory: generation_stats.and_then(|gs| 
+                gs.peak_memory_usage_mb.map(|mb| (mb * 1024.0 * 1024.0) as u64)
+            ),
+            memory_efficiency: generation_stats.and_then(|gs| 
+                gs.memory_efficiency.map(|eff| format!("{:.1} ch/MB", eff))
+            ),
+            gc_collections: generation_stats.and_then(|gs| gs.gc_collections),
+            memory_by_stage: generation_stats.map(|gs| gs.stage_memory_usage.clone()),
+            // Processing metrics from GenerationStats (fix types)
+            total_processing_time: generation_stats.map(|gs| format!("{}ms", gs.total_duration_ms)),
+            avg_channel_time: generation_stats.map(|gs| format!("{:.2}ms", gs.average_channel_processing_ms)),
+            throughput: generation_stats.map(|gs| format!("{:.1} ch/s", gs.channels_per_second)),
+            errors: generation_stats.map(|gs| gs.errors.len()),
+            processing_timeline: generation_stats.map(|gs| {
+                let now = chrono::Utc::now();
+                vec![
+                    crate::web::handlers::proxies::ProcessingEvent {
+                        timestamp: now,
+                        description: format!("Source loading: {}ms", gs.stage_timings.get("source_loading").unwrap_or(&0)),
+                        stage: Some("source_loading".to_string()),
+                        channels_count: Some(gs.total_channels_processed),
+                    },
+                    crate::web::handlers::proxies::ProcessingEvent {
+                        timestamp: now,
+                        description: format!("Data mapping: {}ms", gs.data_mapping_duration_ms),
+                        stage: Some("data_mapping".to_string()),
+                        channels_count: Some(gs.channels_mapped),
+                    },
+                    crate::web::handlers::proxies::ProcessingEvent {
+                        timestamp: now,
+                        description: format!("Filtering: {}ms", gs.stage_timings.get("filtering").unwrap_or(&0)),
+                        stage: Some("filtering".to_string()),
+                        channels_count: Some(gs.channels_after_filtering),
+                    },
+                    crate::web::handlers::proxies::ProcessingEvent {
+                        timestamp: now,
+                        description: format!("Channel numbering: {}ms", gs.channel_numbering_duration_ms),
+                        stage: Some("channel_numbering".to_string()),
+                        channels_count: Some(gs.channels_after_filtering),
+                    },
+                    crate::web::handlers::proxies::ProcessingEvent {
+                        timestamp: now,
+                        description: format!("M3U generation: {}ms", gs.m3u_generation_duration_ms),
+                        stage: Some("m3u_generation".to_string()),
+                        channels_count: Some(gs.channels_after_filtering),
+                    },
+                ]
+            }),
         };
 
         Ok(crate::web::handlers::proxies::PreviewProxyResponse {
             channels: preview_channels,
             stats,
-            m3u_content: Some(m3u_content), // Return actual M3U content
-            total_channels: all_channels.len(),
-            filtered_channels: filtered_channels.len(),
+            m3u_content: Some(proxy_generation.m3u_content),
+            total_channels: proxy_generation.total_channels,
+            filtered_channels: proxy_generation.filtered_channels,
         })
+    }
+
+
+    /// Parse M3U content to extract channels for preview display
+    async fn parse_m3u_for_preview(
+        &self,
+        m3u_content: &str,
+        request: &PreviewProxyRequest,
+    ) -> Result<Vec<crate::web::handlers::proxies::PreviewChannel>, AppError> {
+        let mut preview_channels = Vec::new();
+        let limit = 20; // Limit for performance
+        
+        let lines: Vec<&str> = m3u_content.lines().collect();
+        let mut i = 0;
+        let mut channel_count = 0;
+        
+        while i < lines.len() && channel_count < limit {
+            let line = lines[i].trim();
+            if line.starts_with("#EXTINF:") {
+                // Parse the EXTINF line
+                let channel_name = line.split(',').last().unwrap_or("Unknown").to_string();
+                let group_title = Self::extract_attribute(line, "group-title");
+                let tvg_id = Self::extract_attribute(line, "tvg-id");
+                let tvg_logo = Self::extract_attribute(line, "tvg-logo");
+                let tvg_chno = Self::extract_attribute(line, "tvg-chno");
+                
+                // Get the stream URL from the next line
+                let stream_url = if i + 1 < lines.len() {
+                    // Fix the hardcoded preview URL to use the actual proxy name
+                    let original_url = lines[i + 1].trim();
+                    if original_url.contains("/stream/preview/") {
+                        original_url.replace("/stream/preview/", &format!("/stream/{}/", request.name))
+                    } else {
+                        original_url.to_string()
+                    }
+                } else {
+                    "".to_string()
+                };
+                
+                let channel_number = tvg_chno.and_then(|s| s.parse::<i32>().ok())
+                    .unwrap_or(channel_count + 1);
+                
+                preview_channels.push(crate::web::handlers::proxies::PreviewChannel {
+                    channel_name,
+                    group_title,
+                    tvg_id,
+                    tvg_logo,
+                    stream_url,
+                    source_name: "Generated".to_string(),
+                    channel_number,
+                });
+                
+                channel_count += 1;
+                i += 2; // Skip the URL line
+            } else {
+                i += 1;
+            }
+        }
+        
+        Ok(preview_channels)
     }
 
     /// Generate M3U content for preview

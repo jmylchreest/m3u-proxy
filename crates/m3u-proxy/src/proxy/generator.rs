@@ -35,7 +35,238 @@ impl ProxyGenerator {
         }
     }
 
-    /// Generate a complete proxy M3U with data mapping and filters applied
+    /// Generate a complete proxy M3U using dependency injection (new architecture)
+    pub async fn generate_with_config(
+        &self,
+        config: ResolvedProxyConfig,
+        output: GenerationOutput,
+        database: &Database,
+        data_mapping_service: &DataMappingService,
+        logo_service: &LogoAssetService,
+        base_url: &str,
+        engine_config: Option<crate::config::DataMappingEngineConfig>,
+    ) -> Result<ProxyGeneration> {
+        use std::time::Instant;
+        
+        // Initialize comprehensive stats tracking
+        let mut stats = GenerationStats::new("dependency_injection".to_string());
+        info!("Starting proxy generation for '{}' using dependency injection", config.proxy.name);
+
+        if config.sources.is_empty() {
+            warn!(
+                "No sources found for proxy '{}', generating empty M3U",
+                config.proxy.name
+            );
+            let m3u_content = "#EXTM3U\n".to_string();
+            
+            // Finalize stats for empty generation
+            stats.total_channels_processed = 0;
+            stats.sources_processed = 0;
+            stats.m3u_size_bytes = m3u_content.len();
+            stats.m3u_lines_generated = 1; // Just the header
+            stats.finalize();
+            
+            let generation = ProxyGeneration {
+                id: Uuid::new_v4(),
+                proxy_id: config.proxy.id,
+                version: 1,
+                channel_count: 0,
+                total_channels: 0,
+                filtered_channels: 0,
+                applied_filters: Vec::new(),
+                m3u_content: m3u_content.clone(),
+                created_at: Utc::now(),
+                stats: Some(stats.clone()),
+            };
+
+            // Handle output based on destination
+            self.write_output(&generation, &output, None).await?;
+            
+            info!("Empty generation completed: {}", stats.summary());
+            return Ok(generation);
+        }
+
+        // Step 1: Get all channels from sources (with timing)
+        let source_loading_start = Instant::now();
+        let mut all_channels = Vec::new();
+        
+        for source_config in &config.sources {
+            let source_start = Instant::now();
+            let channels = database.get_source_channels(source_config.source.id).await?;
+            let source_duration = source_start.elapsed().as_millis() as u64;
+            
+            info!(
+                "Retrieved {} channels from source '{}' in {}ms",
+                channels.len(),
+                source_config.source.name,
+                source_duration
+            );
+            
+            // Track per-source metrics
+            stats.channels_by_source.insert(source_config.source.name.clone(), channels.len());
+            stats.source_processing_times.insert(source_config.source.name.clone(), source_duration);
+            stats.sources_processed += 1;
+            
+            all_channels.extend(channels);
+        }
+        
+        stats.add_stage_timing("source_loading", source_loading_start.elapsed().as_millis() as u64);
+        stats.total_channels_processed = all_channels.len();
+        info!("Total channels before processing: {}", all_channels.len());
+
+        // Step 2: Apply data mapping to transform channels (with timing)
+        let data_mapping_start = Instant::now();
+        let mut mapped_channels = Vec::new();
+        let mut total_transformations = 0;
+        
+        for source_config in &config.sources {
+            let source_channels: Vec<Channel> = all_channels
+                .iter()
+                .filter(|ch| ch.source_id == source_config.source.id)
+                .cloned()
+                .collect();
+
+            if source_channels.is_empty() {
+                continue;
+            }
+
+            info!(
+                "Applying data mapping to {} channels from source '{}'",
+                source_channels.len(),
+                source_config.source.name
+            );
+
+            let mapping_start = Instant::now();
+            let transformed_channels = data_mapping_service
+                .apply_mapping_for_proxy(
+                    source_channels.clone(),
+                    source_config.source.id,
+                    logo_service,
+                    base_url,
+                    engine_config.clone(),
+                )
+                .await?;
+
+            let mapping_duration = mapping_start.elapsed().as_millis() as u64;
+            total_transformations += source_channels.len(); // Assume each channel gets processed
+
+            info!(
+                "Data mapping completed: {} channels from source '{}' in {}ms",
+                transformed_channels.len(),
+                source_config.source.name,
+                mapping_duration
+            );
+
+            mapped_channels.extend(transformed_channels);
+        }
+        
+        stats.data_mapping_duration_ms = data_mapping_start.elapsed().as_millis() as u64;
+        stats.add_stage_timing("data_mapping", stats.data_mapping_duration_ms);
+        stats.channels_mapped = mapped_channels.len();
+        stats.mapping_transformations_applied = total_transformations;
+        
+        info!("Total channels after data mapping: {}", mapped_channels.len());
+
+        // Step 3: Apply filters using resolved configuration (with timing)
+        let filtering_start = Instant::now();
+        stats.channels_before_filtering = mapped_channels.len();
+        
+        let filtered_channels = if !config.filters.is_empty() {
+            info!("Applying {} filters", config.filters.len());
+            let mut filter_engine = FilterEngine::new();
+            
+            // Convert to format expected by filter engine and track filter names
+            let filter_tuples: Vec<(Filter, ProxyFilter)> = config.filters.iter()
+                .filter(|f| f.is_active)
+                .map(|f| {
+                    let proxy_filter = ProxyFilter {
+                        proxy_id: config.proxy.id,
+                        filter_id: f.filter.id,
+                        priority_order: f.priority_order,
+                        is_active: f.is_active,
+                        created_at: chrono::Utc::now(),
+                    };
+                    stats.filters_applied.push(f.filter.name.clone());
+                    (f.filter.clone(), proxy_filter)
+                })
+                .collect();
+
+            let filter_apply_start = Instant::now();
+            let result = filter_engine.apply_filters(mapped_channels, filter_tuples).await?;
+            let filter_duration = filter_apply_start.elapsed().as_millis() as u64;
+            
+            // Track individual filter timing (simplified - all filters get same duration)
+            for filter_name in &stats.filters_applied {
+                stats.filter_processing_times.insert(filter_name.clone(), filter_duration);
+            }
+            
+            result
+        } else {
+            info!("No filters to apply");
+            mapped_channels
+        };
+        
+        stats.channels_after_filtering = filtered_channels.len();
+        stats.add_stage_timing("filtering", filtering_start.elapsed().as_millis() as u64);
+        
+        info!("Total channels after filtering: {}", filtered_channels.len());
+
+        // Step 4: Apply channel numbering algorithm (with timing)
+        let numbering_start = Instant::now();
+        let numbered_channels = self
+            .apply_channel_numbering(&filtered_channels, config.proxy.starting_channel_number)
+            .await?;
+
+        stats.channel_numbering_duration_ms = numbering_start.elapsed().as_millis() as u64;
+        stats.add_stage_timing("channel_numbering", stats.channel_numbering_duration_ms);
+        stats.numbering_strategy = "sequential".to_string(); // Simple strategy for dependency injection
+        stats.number_conflicts_resolved = 0; // No conflicts in simple sequential numbering
+
+        info!("Channel numbering completed: {} numbered channels in {}ms", 
+            numbered_channels.len(), stats.channel_numbering_duration_ms);
+
+        // Step 5: Generate M3U content from numbered channels (with timing)
+        let m3u_generation_start = Instant::now();
+        let m3u_content = self
+            .generate_m3u_content_from_numbered(&numbered_channels, &config.proxy.ulid, base_url)
+            .await?;
+
+        stats.m3u_generation_duration_ms = m3u_generation_start.elapsed().as_millis() as u64;
+        stats.add_stage_timing("m3u_generation", stats.m3u_generation_duration_ms);
+        stats.m3u_size_bytes = m3u_content.len();
+        stats.m3u_lines_generated = m3u_content.lines().count();
+
+        // Step 6: Finalize stats and create generation record
+        stats.finalize();
+        
+        let generation = ProxyGeneration {
+            id: Uuid::new_v4(),
+            proxy_id: config.proxy.id,
+            version: 1,
+            channel_count: numbered_channels.len() as i32,
+            total_channels: all_channels.len(),
+            filtered_channels: filtered_channels.len(),
+            applied_filters: config.filters.iter().filter(|f| f.is_active).map(|f| f.filter.name.clone()).collect(),
+            m3u_content,
+            created_at: Utc::now(),
+            stats: Some(stats.clone()),
+        };
+
+        // Step 7: Handle output based on destination
+        self.write_output(&generation, &output, Some(&config)).await?;
+
+        // Step 8: Log comprehensive summary
+        info!("Proxy generation completed for '{}': {}", config.proxy.name, stats.summary());
+        debug!("Detailed generation stats: {}", stats.detailed_summary());
+
+        Ok(generation)
+    }
+
+    /// Generate a complete proxy M3U with data mapping and filters applied (legacy method)
+    /// 
+    /// **DEPRECATED**: Use `generate_with_config()` instead for better architecture.
+    /// This method performs database queries during generation which can be inefficient.
+    #[deprecated(note = "Use generate_with_config() with ProxyConfigResolver for better performance")]
     pub async fn generate(
         &self,
         proxy: &StreamProxy,
@@ -64,6 +295,11 @@ impl ProxyGenerator {
                 channel_count: 0,
                 m3u_content,
                 created_at: Utc::now(),
+                // New fields for enhanced tracking
+                total_channels: 0,
+                filtered_channels: 0,
+                applied_filters: Vec::new(),
+                stats: None, // Legacy method doesn't collect stats
             });
         }
 
@@ -190,6 +426,7 @@ impl ProxyGenerator {
 
         // Step 6: Assign channel numbers using sophisticated algorithm
         info!("Assigning channel numbers with sophisticated algorithm");
+        let filtered_channels_len = filtered_channels.len();
         let numbered_channels = self
             .assign_channel_numbers(filtered_channels, &applied_filters)
             .await?;
@@ -211,6 +448,11 @@ impl ProxyGenerator {
             channel_count: numbered_channels.len() as i32,
             m3u_content,
             created_at: Utc::now(),
+            // New fields for enhanced tracking
+            total_channels: all_channels.len(),
+            filtered_channels: filtered_channels_len,
+            applied_filters: applied_filters.iter().map(|f| f.name.clone()).collect(),
+            stats: None, // Legacy method doesn't collect stats
         };
 
         info!(
@@ -328,6 +570,7 @@ impl ProxyGenerator {
         );
 
         // Generate the proxy content with existing method
+        #[allow(deprecated)]
         let generation = self
             .generate(
                 proxy,
@@ -797,5 +1040,78 @@ impl ProxyGenerator {
         }
 
         Ok(())
+    }
+
+    /// Handle output writing based on destination
+    async fn write_output(
+        &self,
+        generation: &ProxyGeneration,
+        output: &GenerationOutput,
+        config: Option<&ResolvedProxyConfig>,
+    ) -> Result<()> {
+        match output {
+            GenerationOutput::Preview { file_manager, proxy_name } => {
+                // Write M3U to preview file manager
+                let m3u_file_id = format!("{}-{}.m3u", proxy_name, Uuid::new_v4());
+                file_manager
+                    .write(&m3u_file_id, &generation.m3u_content)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to write preview M3U: {}", e))?;
+                
+                // TODO: Generate and write XMLTV if EPG sources are present
+                info!("Preview content written to file manager");
+            }
+            GenerationOutput::Production { file_manager, update_database } => {
+                if let Some(config) = config {
+                    // Write M3U to production file manager
+                    let m3u_file_id = format!("{}-{}.m3u", config.proxy.ulid, Uuid::new_v4());
+                    file_manager
+                        .write(&m3u_file_id, &generation.m3u_content)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to write production M3U: {}", e))?;
+
+                    // Also write to traditional location for serving
+                    self.save_m3u_file_traditional(&config.proxy.ulid, &generation.m3u_content).await?;
+
+                    if *update_database {
+                        // TODO: Save generation record to database
+                        info!("Generation record would be saved to database");
+                    }
+
+                    info!("Production content written to file manager and traditional location");
+                }
+            }
+            GenerationOutput::InMemory => {
+                // Do nothing - content is just returned
+                debug!("In-memory generation complete, no file output");
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply channel numbering to filtered channels (simplified version for dependency injection)
+    async fn apply_channel_numbering(
+        &self,
+        channels: &[Channel],
+        starting_number: i32,
+    ) -> Result<Vec<crate::models::NumberedChannel>> {
+        use crate::models::{NumberedChannel, ChannelNumberAssignmentType};
+        
+        debug!("Applying channel numbering starting from {}", starting_number);
+        
+        let mut numbered_channels = Vec::new();
+        
+        for (index, channel) in channels.iter().enumerate() {
+            let assigned_number = starting_number + index as i32;
+            
+            numbered_channels.push(NumberedChannel {
+                channel: channel.clone(),
+                assigned_number,
+                assignment_type: ChannelNumberAssignmentType::Sequential, // Simple sequential assignment
+            });
+        }
+        
+        debug!("Channel numbering completed: {} channels assigned", numbered_channels.len());
+        Ok(numbered_channels)
     }
 }

@@ -60,6 +60,7 @@ impl StreamSourceQuery {
 }
 
 /// Repository implementation for stream sources
+#[derive(Clone)]
 pub struct StreamSourceRepository {
     pool: Pool<Sqlite>,
 }

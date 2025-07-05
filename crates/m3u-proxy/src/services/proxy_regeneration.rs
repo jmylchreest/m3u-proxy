@@ -336,77 +336,76 @@ impl ProxyRegenerationService {
                 }
             };
 
-            // Generate the proxy using adaptive pipeline for better memory management
+            // Use the new dependency injection architecture
             let proxy_service = ProxyService::new(config.storage.clone());
             
-            // Use memory configuration from config, with conservative overrides for background processing
-            let memory_config = config.proxy_generation
-                .as_ref()
-                .map(|pg| {
-                    let mut config = pg.memory.clone();
-                    
-                    // For auto-regeneration, always use conservative settings regardless of user's strategy_preset
-                    // This ensures background tasks don't interfere with foreground operations
-                    config.strategy_preset = Some("conservative".to_string());
-                    
-                    // Override parallel processing to false for background tasks
-                    config.enable_parallel_processing = false;
-                    
-                    // Use smaller batch sizes for background processing
-                    if config.batch_size > 500 {
-                        config.batch_size = 500;
-                    }
-                    
-                    // Ignore custom memory_strategy settings for background processing
-                    config.memory_strategy = None;
-                    
-                    config
-                })
-                .or_else(|| {
-                    // If no config, use conservative defaults for background processing
-                    Some(crate::config::ProxyMemoryConfig {
-                        max_memory_mb: Some(256),
-                        batch_size: 500,
-                        enable_parallel_processing: false,
-                        memory_check_interval: 100,
-                        warning_threshold: 0.7,
-                        strategy_preset: Some("conservative".to_string()),
-                        memory_strategy: None,
-                    })
-                });
+            // Create config resolver
+            use crate::repositories::{StreamProxyRepository, StreamSourceRepository, FilterRepository};
+            let proxy_repo = StreamProxyRepository::new(database.pool());
+            let stream_source_repo = StreamSourceRepository::new(database.pool());
+            let filter_repo = FilterRepository::new(database.pool());
             
-            match proxy_service.generate_proxy_with_adaptive_pipeline(
-                &proxy,
-                &database,
-                &data_mapping_service,
-                &logo_asset_service,
-                &config.web.base_url,
-                config.data_mapping_engine.clone(),
-                memory_config.as_ref(),
-                None, // Use default temp file manager
-            ).await {
-                Ok(generation) => {
-                    // Save the M3U file
-                    match proxy_service.save_m3u_file(proxy.id, &generation.m3u_content).await {
-                        Ok(_) => {
-                            let duration = start_time.elapsed();
-                            info!(
-                                "Successfully auto-regenerated proxy '{}' with {} channels using adaptive pipeline (conservative background settings) in {:?}",
-                                proxy.name, generation.channel_count, duration
-                            );
-                            let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Completed, None).await;
+            let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
+                proxy_repo,
+                stream_source_repo,
+                filter_repo,
+                database.clone(),
+            );
+
+            // Resolve proxy configuration upfront (single database query)
+            match config_resolver.resolve_config(entry.proxy_id).await {
+                Ok(resolved_config) => {
+                    // Validate configuration
+                    if let Err(e) = config_resolver.validate_config(&resolved_config) {
+                        error!("Invalid proxy configuration for {}: {}", entry.proxy_id, e);
+                        let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
+                            Some(format!("Invalid configuration: {}", e))).await;
+                        return;
+                    }
+
+                    // Create production output destination
+                    // TODO: Get actual proxy_output_file_manager from config
+                    let output = crate::models::GenerationOutput::InMemory; // Fallback for now
+                    
+                    // Generate using dependency injection
+                    match proxy_service.generate_proxy_with_config(
+                        resolved_config,
+                        output,
+                        &database,
+                        &data_mapping_service,
+                        &logo_asset_service,
+                        &config.web.base_url,
+                        config.data_mapping_engine.clone(),
+                    ).await {
+                        Ok(generation) => {
+                            // Save the M3U file using the proxy ULID for proper file management
+                            match proxy_service.save_m3u_file_with_manager(&proxy.ulid, &generation.m3u_content, None).await {
+                                Ok(_) => {
+                                    let duration = start_time.elapsed();
+                                    info!(
+                                        "Successfully auto-regenerated proxy '{}' with {} channels using dependency injection in {:?}",
+                                        proxy.name, generation.channel_count, duration
+                                    );
+                                    let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Completed, None).await;
+                                }
+                                Err(e) => {
+                                    error!("Failed to save regenerated M3U for proxy {}: {}", entry.proxy_id, e);
+                                    let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
+                                        Some(format!("Failed to save M3U: {}", e))).await;
+                                }
+                            }
                         }
                         Err(e) => {
-                            error!("Failed to save regenerated M3U for proxy {}: {}", entry.proxy_id, e);
+                            error!("Failed to regenerate proxy {} using dependency injection: {}", entry.proxy_id, e);
                             let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
-                                Some(format!("Failed to save M3U: {}", e))).await;
+                                Some(format!("Generation failed: {}", e))).await;
                         }
                     }
                 }
                 Err(e) => {
-                    error!("Failed to regenerate proxy {} using adaptive pipeline: {}", entry.proxy_id, e);
+                    error!("Failed to resolve proxy configuration for {}: {}", entry.proxy_id, e);
                     let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
-                        Some(format!("Generation failed: {}", e))).await;
+                        Some(format!("Config resolution failed: {}", e))).await;
                 }
             }
         })

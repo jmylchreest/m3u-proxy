@@ -262,6 +262,8 @@ impl ProxyGenerationPipeline {
             virtual_source.total_count, virtual_source.sources_processed
         );
 
+        let total_channel_count = virtual_source.total_count;
+
         // Stage 3: Apply filters in order to build final channel list
         let filtered_result = self
             .apply_filters_to_virtual_source(proxy, virtual_source, &mut channel_list, &config)
@@ -286,6 +288,11 @@ impl ProxyGenerationPipeline {
             channel_count: filtered_result.channels.len() as i32,
             m3u_content,
             created_at: Utc::now(),
+            // New fields for enhanced tracking
+            total_channels: total_channel_count,
+            filtered_channels: filtered_result.channels.len(),
+            applied_filters: filtered_result.applied_filters.iter().map(|f| f.name.clone()).collect(),
+            stats: None, // Pipeline method doesn't collect comprehensive stats yet
         };
 
         // Get final memory statistics

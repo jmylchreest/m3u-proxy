@@ -3,6 +3,10 @@
 let currentProxies = [];
 let editingProxy = null;
 let previewData = null;
+let previewEpgData = null;
+let currentChannelView = "detailed";
+let currentStatsTab = "overview";
+let epgTooltip = null;
 let availableStreamSources = [];
 let availableEpgSources = [];
 let availableFilters = [];
@@ -709,6 +713,9 @@ function updatePreviewContent() {
 
   // Update statistics content
   updateStatsContent();
+
+  // Initialize EPG date to today
+  initializeEpgControls();
 }
 
 // Update channels content
@@ -717,23 +724,22 @@ function updateChannelsContent() {
   if (!channelsContainer) return;
 
   const data = previewData.data || previewData;
-  const channels = data.preview_channels || [];
+  const channels = data.channels || data.preview_channels || [];
   const stats = data.stats || {};
+
+  // Update group filter options
+  populateGroupFilter();
 
   let html = `
     <div class="preview-stats">
       <div class="stats-grid">
         <div class="stat-item">
-          <span class="stat-label">Total Sources:</span>
-          <span class="stat-value">${stats.total_sources || 0}</span>
+          <span class="stat-label">Total Channels:</span>
+          <span class="stat-value">${stats.total_channels || stats.filtered_channels || channels.length}</span>
         </div>
         <div class="stat-item">
-          <span class="stat-label">Channels Before Filters:</span>
-          <span class="stat-value">${stats.total_channels_before_filters || 0}</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Channels After Filters:</span>
-          <span class="stat-value">${stats.total_channels_after_filters || 0}</span>
+          <span class="stat-label">Unique Groups:</span>
+          <span class="stat-value">${Object.keys(stats.channels_by_group || {}).length}</span>
         </div>
         <div class="stat-item">
           <span class="stat-label">Applied Filters:</span>
@@ -742,32 +748,63 @@ function updateChannelsContent() {
       </div>
     </div>
 
-    <div class="preview-channels-list" id="previewChannelsList">
+    <div class="preview-channels-list ${currentChannelView}" id="previewChannelsList">
   `;
 
   if (channels.length === 0) {
     html += '<div class="no-results">No channels found</div>';
   } else {
     channels.forEach((channel, index) => {
-      html += `
-        <div class="channel-preview-item" data-channel-name="${escapeHtml(channel.channel_name || "")}"
-             data-group="${escapeHtml(channel.group_title || "")}">
-          <div class="channel-header">
-            <span class="channel-name">${escapeHtml(channel.channel_name || "Unknown Channel")}</span>
-            <span class="channel-number">#${channel.channel_number || index + 1}</span>
-          </div>
-          <div class="channel-details">
-            ${channel.group_title ? `<span class="channel-group">📁 ${escapeHtml(channel.group_title)}</span>` : ""}
-            ${channel.tvg_id ? `<span class="channel-tvg-id">🆔 ${escapeHtml(channel.tvg_id)}</span>` : ""}
-          </div>
-          ${channel.tvg_logo ? `<div class="channel-logo"><img src="${escapeHtml(channel.tvg_logo)}" alt="Logo" onerror="this.style.display='none'"></div>` : ""}
-        </div>
-      `;
+      html += renderChannelItem(channel, index);
     });
   }
 
   html += "</div>";
   channelsContainer.innerHTML = html;
+}
+
+function renderChannelItem(channel, index) {
+  const channelData = channel.channel || channel;
+  const isDetailed = currentChannelView === "detailed";
+
+  let html = `
+    <div class="channel-preview-item ${isDetailed ? "detailed" : "compact"}"
+         data-channel-name="${escapeHtml(channelData.channel_name || "")}"
+         data-group="${escapeHtml(channelData.group_title || channelData.channel_group || "")}">
+      <div class="channel-header">
+        <span class="channel-name">${escapeHtml(channelData.channel_name || "Unknown Channel")}</span>
+        <span class="channel-number">#${channelData.channel_number || index + 1}</span>
+        ${isDetailed ? '<button class="btn btn-sm btn-outline-secondary toggle-details" onclick="toggleChannelDetails(this)">▼</button>' : ""}
+      </div>
+  `;
+
+  if (isDetailed) {
+    html += `
+      <div class="channel-details">
+        <div class="channel-basic-info">
+          ${channelData.group_title || channelData.channel_group ? `<span class="channel-group">📁 ${escapeHtml(channelData.group_title || channelData.channel_group)}</span>` : ""}
+          ${channelData.tvg_id || channelData.channel_id ? `<span class="channel-tvg-id">🆔 ${escapeHtml(channelData.tvg_id || channelData.channel_id)}</span>` : ""}
+          ${channelData.language ? `<span class="channel-language">🌐 ${escapeHtml(channelData.language)}</span>` : ""}
+        </div>
+        <div class="channel-extended-info" style="display: none;">
+          ${channelData.tvg_logo || channelData.channel_logo ? `<div class="channel-logo"><img src="${escapeHtml(channelData.tvg_logo || channelData.channel_logo)}" alt="Logo" onerror="this.style.display='none'"></div>` : ""}
+          ${channelData.url ? `<div class="channel-url"><strong>URL:</strong> <code>${escapeHtml(channelData.url)}</code></div>` : ""}
+          ${channelData.created_at ? `<div class="channel-timestamp"><strong>Added:</strong> ${new Date(channelData.created_at).toLocaleString()}</div>` : ""}
+          ${channelData.updated_at ? `<div class="channel-timestamp"><strong>Updated:</strong> ${new Date(channelData.updated_at).toLocaleString()}</div>` : ""}
+        </div>
+      </div>
+    `;
+  } else {
+    html += `
+      <div class="channel-compact-info">
+        ${channelData.group_title || channelData.channel_group ? `<span class="channel-group">${escapeHtml(channelData.group_title || channelData.channel_group)}</span>` : ""}
+        ${channelData.tvg_logo || channelData.channel_logo ? `<img class="channel-logo-small" src="${escapeHtml(channelData.tvg_logo || channelData.channel_logo)}" alt="Logo" onerror="this.style.display='none'">` : ""}
+      </div>
+    `;
+  }
+
+  html += "</div>";
+  return html;
 }
 
 // Update M3U content
@@ -783,6 +820,14 @@ function updateM3uContent() {
 
 // Update statistics content
 function updateStatsContent() {
+  // Update all stats tabs
+  updateOverviewStats();
+  updatePipelineStats();
+  updateMemoryStats();
+  updateProcessingStats();
+}
+
+function updateOverviewStats() {
   const statsContainer = document.getElementById("proxyStats");
   if (!statsContainer) return;
 
@@ -800,7 +845,7 @@ function updateStatsContent() {
     </div>
     <div class="stat-item">
       <span class="stat-label">Channels After Filters:</span>
-      <span class="stat-value">${stats.total_channels_after_filters || 0}</span>
+      <span class="stat-value">${stats.total_channels_after_filters || stats.filtered_channels || 0}</span>
     </div>
     <div class="stat-item">
       <span class="stat-label">Applied Filters:</span>
@@ -846,7 +891,173 @@ function updateStatsContent() {
     `;
   }
 
+  if (
+    stats.channels_by_source &&
+    Object.keys(stats.channels_by_source).length > 0
+  ) {
+    html += `
+      <div class="stat-item full-width">
+        <span class="stat-label">Channels by Source:</span>
+        <div class="stat-list">
+          ${Object.entries(stats.channels_by_source)
+            .map(
+              ([source, count]) =>
+                `<span class="badge badge-info">${escapeHtml(source)}: ${count}</span>`,
+            )
+            .join(" ")}
+        </div>
+      </div>
+    `;
+  }
+
   statsContainer.innerHTML = html;
+}
+
+function updatePipelineStats() {
+  const container = document.getElementById("pipelineStatsContent");
+  if (!container) return;
+
+  const data = previewData.data || previewData;
+  const stats = data.stats || {};
+
+  let html = `
+    <div class="stat-item">
+      <span class="stat-label">Pipeline Stages:</span>
+      <span class="stat-value">${stats.pipeline_stages || "N/A"}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Filter Execution Time:</span>
+      <span class="stat-value">${stats.filter_execution_time || "N/A"}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Channel Processing Rate:</span>
+      <span class="stat-value">${stats.processing_rate || "N/A"}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Memory Peak:</span>
+      <span class="stat-value">${stats.memory_peak || "N/A"}</span>
+    </div>
+  `;
+
+  if (stats.pipeline_stages_detail) {
+    html += `
+      <div class="stat-item full-width">
+        <span class="stat-label">Pipeline Stages Detail:</span>
+        <div class="pipeline-stages">
+          ${stats.pipeline_stages_detail
+            .map(
+              (stage) => `
+            <div class="pipeline-stage">
+              <span class="stage-name">${escapeHtml(stage.name)}</span>
+              <span class="stage-duration">${stage.duration}ms</span>
+            </div>
+          `,
+            )
+            .join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
+}
+
+function updateMemoryStats() {
+  const container = document.getElementById("memoryStatsContent");
+  if (!container) return;
+
+  const data = previewData.data || previewData;
+  const stats = data.stats || {};
+
+  let html = `
+    <div class="stat-item">
+      <span class="stat-label">Current Memory Usage:</span>
+      <span class="stat-value">${formatFileSize(stats.current_memory || 0)}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Peak Memory Usage:</span>
+      <span class="stat-value">${formatFileSize(stats.peak_memory || 0)}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Memory Efficiency:</span>
+      <span class="stat-value">${stats.memory_efficiency || "N/A"}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">GC Collections:</span>
+      <span class="stat-value">${stats.gc_collections || "N/A"}</span>
+    </div>
+  `;
+
+  if (stats.memory_by_stage) {
+    html += `
+      <div class="stat-item full-width">
+        <span class="stat-label">Memory by Stage:</span>
+        <div class="memory-stages">
+          ${Object.entries(stats.memory_by_stage)
+            .map(
+              ([stage, memory]) => `
+            <div class="memory-stage">
+              <span class="stage-name">${escapeHtml(stage)}</span>
+              <span class="stage-memory">${formatFileSize(memory)}</span>
+            </div>
+          `,
+            )
+            .join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
+}
+
+function updateProcessingStats() {
+  const container = document.getElementById("processingStatsContent");
+  if (!container) return;
+
+  const data = previewData.data || previewData;
+  const stats = data.stats || {};
+
+  let html = `
+    <div class="stat-item">
+      <span class="stat-label">Total Processing Time:</span>
+      <span class="stat-value">${stats.total_processing_time || "N/A"}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Average Channel Time:</span>
+      <span class="stat-value">${stats.avg_channel_time || "N/A"}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Throughput:</span>
+      <span class="stat-value">${stats.throughput || "N/A"}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Errors:</span>
+      <span class="stat-value">${stats.errors || 0}</span>
+    </div>
+  `;
+
+  if (stats.processing_timeline) {
+    html += `
+      <div class="stat-item full-width">
+        <span class="stat-label">Processing Timeline:</span>
+        <div class="processing-timeline">
+          ${stats.processing_timeline
+            .map(
+              (event) => `
+            <div class="timeline-event">
+              <span class="event-time">${new Date(event.timestamp).toLocaleTimeString()}</span>
+              <span class="event-description">${escapeHtml(event.description)}</span>
+            </div>
+          `,
+            )
+            .join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
 }
 
 // Filter preview channels
@@ -1537,3 +1748,511 @@ function clearProxyForm() {
   renderEpgSources();
   renderFilters();
 }
+
+// Enhanced Preview Functions
+
+function toggleChannelView(view) {
+  currentChannelView = view;
+
+  // Update button states
+  document
+    .getElementById("listViewBtn")
+    .classList.toggle("active", view === "list");
+  document
+    .getElementById("detailedViewBtn")
+    .classList.toggle("active", view === "detailed");
+
+  // Re-render channels
+  updateChannelsContent();
+}
+
+function toggleChannelDetails(button) {
+  const item = button.closest(".channel-preview-item");
+  const details = item.querySelector(".channel-extended-info");
+
+  if (details.style.display === "none") {
+    details.style.display = "block";
+    button.textContent = "▲";
+  } else {
+    details.style.display = "none";
+    button.textContent = "▼";
+  }
+}
+
+function showStatsTab(tabName) {
+  currentStatsTab = tabName;
+
+  // Update tab buttons
+  document.querySelectorAll(".stats-tab-button").forEach((btn) => {
+    btn.classList.remove("active");
+  });
+  document
+    .querySelector(`[onclick="showStatsTab('${tabName}')"]`)
+    .classList.add("active");
+
+  // Update tab content
+  document.querySelectorAll(".stats-tab-content").forEach((content) => {
+    content.classList.remove("active");
+  });
+  document.getElementById(`${tabName}Stats`).classList.add("active");
+}
+
+// EPG Functions
+
+function initializeEpgControls() {
+  // Set current date
+  const today = new Date().toISOString().split("T")[0];
+  document.getElementById("epgDateSelect").value = today;
+
+  // Initialize tooltip
+  epgTooltip = document.getElementById("epgTooltip");
+}
+
+async function loadEpgForChannels() {
+  try {
+    showEpgLoading();
+
+    const data = previewData.data || previewData;
+    const channels = data.channels || data.preview_channels || [];
+
+    if (channels.length === 0) {
+      showEpgNoData();
+      return;
+    }
+
+    // Get EPG parameters
+    const date = document.getElementById("epgDateSelect").value;
+    const timeRange = parseInt(document.getElementById("epgTimeRange").value);
+
+    const startTime = new Date(date + "T00:00:00");
+    const endTime = new Date(startTime);
+    endTime.setHours(endTime.getHours() + timeRange);
+
+    // Get channel IDs for EPG lookup
+    const channelIds = channels
+      .map((ch) => (ch.channel || ch).tvg_id || (ch.channel || ch).channel_id)
+      .filter((id) => id);
+
+    if (channelIds.length === 0) {
+      showEpgNoData();
+      return;
+    }
+
+    const params = new URLSearchParams({
+      start_time: startTime.toISOString(),
+      end_time: endTime.toISOString(),
+      channel_filter: channelIds.join(","),
+    });
+
+    const response = await fetch(`/api/v1/epg/viewer?${params}`);
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    previewEpgData = await response.json();
+    renderEpgGrid();
+  } catch (error) {
+    console.error("Error loading EPG data:", error);
+    showEpgError("Failed to load EPG data: " + error.message);
+  }
+}
+
+function renderEpgGrid() {
+  if (!previewEpgData || previewEpgData.channels.length === 0) {
+    showEpgNoData();
+    return;
+  }
+
+  showEpgContent();
+  renderEpgTimeline();
+  renderEpgChannels();
+}
+
+function renderEpgTimeline() {
+  const timeline = document.getElementById("epgTimeline");
+  timeline.innerHTML = "";
+
+  // Add channel info spacer
+  const spacer = document.createElement("div");
+  spacer.className = "epg-channel-spacer";
+  spacer.style.minWidth = "200px";
+  timeline.appendChild(spacer);
+
+  // Generate time slots
+  const timeRange = parseInt(document.getElementById("epgTimeRange").value);
+  const startTime = new Date(previewEpgData.start_time);
+  const endTime = new Date(startTime);
+  endTime.setHours(endTime.getHours() + timeRange);
+
+  const currentTime = new Date(startTime);
+  while (currentTime < endTime) {
+    const timeSlot = document.createElement("div");
+    timeSlot.className = "epg-time-slot";
+    timeSlot.textContent = formatTime(currentTime);
+    timeline.appendChild(timeSlot);
+
+    currentTime.setMinutes(currentTime.getMinutes() + 30);
+  }
+}
+
+function renderEpgChannels() {
+  const channelsContainer = document.getElementById("epgChannels");
+  channelsContainer.innerHTML = "";
+
+  const filteredChannels = filterEpgChannels();
+
+  if (filteredChannels.length === 0) {
+    const noChannels = document.createElement("div");
+    noChannels.className = "text-center text-muted p-4";
+    noChannels.textContent = "No channels match your filter";
+    channelsContainer.appendChild(noChannels);
+    return;
+  }
+
+  // Update channel count
+  document.getElementById("epgChannelCount").textContent =
+    `${filteredChannels.length} channels`;
+
+  filteredChannels.forEach((channelData) => {
+    const channelRow = createEpgChannelRow(channelData);
+    channelsContainer.appendChild(channelRow);
+  });
+}
+
+function createEpgChannelRow(channelData) {
+  const row = document.createElement("div");
+  row.className = "epg-channel-row";
+
+  // Channel info
+  const channelInfo = document.createElement("div");
+  channelInfo.className = "epg-channel-info";
+  channelInfo.innerHTML = `
+    <div class="epg-channel-name">${escapeHtml(channelData.channel.channel_name)}</div>
+    <div class="epg-channel-id">${escapeHtml(channelData.channel.channel_id)}</div>
+  `;
+
+  // Programs
+  const programsContainer = document.createElement("div");
+  programsContainer.className = "epg-programs";
+
+  renderEpgPrograms(programsContainer, channelData.programs);
+
+  row.appendChild(channelInfo);
+  row.appendChild(programsContainer);
+
+  return row;
+}
+
+function renderEpgPrograms(container, programs) {
+  const timeRange = parseInt(document.getElementById("epgTimeRange").value);
+  const startTime = new Date(previewEpgData.start_time);
+  const endTime = new Date(startTime);
+  endTime.setHours(endTime.getHours() + timeRange);
+
+  // Sort programs by start time
+  const sortedPrograms = programs.sort(
+    (a, b) => new Date(a.start_time) - new Date(b.start_time),
+  );
+
+  const timeSlotDuration = 30; // 30 minutes per slot
+  const currentTime = new Date(startTime);
+
+  while (currentTime < endTime) {
+    const slotEndTime = new Date(currentTime);
+    slotEndTime.setMinutes(slotEndTime.getMinutes() + timeSlotDuration);
+
+    // Find program that overlaps with this time slot
+    const program = findProgramForTimeSlot(
+      sortedPrograms,
+      currentTime,
+      slotEndTime,
+    );
+
+    if (program) {
+      const programElement = createEpgProgramElement(
+        program,
+        currentTime,
+        slotEndTime,
+      );
+      container.appendChild(programElement);
+    } else {
+      const emptySlot = createEpgEmptySlot();
+      container.appendChild(emptySlot);
+    }
+
+    currentTime.setMinutes(currentTime.getMinutes() + timeSlotDuration);
+  }
+}
+
+function findProgramForTimeSlot(programs, slotStart, slotEnd) {
+  return programs.find((program) => {
+    const programStart = new Date(program.start_time);
+    const programEnd = new Date(program.end_time);
+
+    // Program overlaps with time slot
+    return programStart < slotEnd && programEnd > slotStart;
+  });
+}
+
+function createEpgProgramElement(program, slotStart, slotEnd) {
+  const programDiv = document.createElement("div");
+  programDiv.className = "epg-program";
+
+  // Check if program is currently airing
+  const now = new Date();
+  const programStart = new Date(program.start_time);
+  const programEnd = new Date(program.end_time);
+
+  if (now >= programStart && now <= programEnd) {
+    programDiv.className += " current";
+  }
+
+  const timeText = `${formatTime(programStart)} - ${formatTime(programEnd)}`;
+
+  programDiv.innerHTML = `
+    <div class="epg-program-time">${timeText}</div>
+    <div class="epg-program-title">${escapeHtml(program.program_title)}</div>
+    ${
+      program.program_category
+        ? `<div class="epg-program-category">${escapeHtml(program.program_category)}</div>`
+        : ""
+    }
+  `;
+
+  // Add tooltip events
+  programDiv.addEventListener("mouseenter", (e) => {
+    showEpgTooltip(e, program);
+  });
+
+  programDiv.addEventListener("mouseleave", () => {
+    hideEpgTooltip();
+  });
+
+  return programDiv;
+}
+
+function createEpgEmptySlot() {
+  const emptyDiv = document.createElement("div");
+  emptyDiv.className = "epg-empty-slot";
+  emptyDiv.textContent = "No Program";
+  return emptyDiv;
+}
+
+function filterEpgChannels() {
+  if (!previewEpgData) return [];
+
+  const searchTerm = document
+    .getElementById("epgChannelSearch")
+    .value.toLowerCase();
+
+  return previewEpgData.channels.filter((channelData) => {
+    if (!searchTerm) return true;
+
+    const channel = channelData.channel;
+    return (
+      channel.channel_name.toLowerCase().includes(searchTerm) ||
+      channel.channel_id.toLowerCase().includes(searchTerm)
+    );
+  });
+}
+
+function showEpgTooltip(event, program) {
+  if (!epgTooltip) return;
+
+  const programStart = new Date(program.start_time);
+  const programEnd = new Date(program.end_time);
+  const duration = Math.round((programEnd - programStart) / (1000 * 60)); // minutes
+
+  let content = `
+    <div><strong>${escapeHtml(program.program_title)}</strong></div>
+    <div style="margin: 0.5rem 0;">
+      ${formatTime(programStart)} - ${formatTime(programEnd)} (${duration} min)
+    </div>
+  `;
+
+  if (program.program_description) {
+    content += `<div style="margin: 0.5rem 0;">${escapeHtml(program.program_description)}</div>`;
+  }
+
+  if (program.program_category) {
+    content += `<div style="margin: 0.5rem 0;"><strong>Category:</strong> ${escapeHtml(program.program_category)}</div>`;
+  }
+
+  if (program.episode_num || program.season_num) {
+    let episodeInfo = "";
+    if (program.season_num) episodeInfo += `Season ${program.season_num}`;
+    if (program.episode_num) {
+      if (episodeInfo) episodeInfo += ", ";
+      episodeInfo += `Episode ${program.episode_num}`;
+    }
+    content += `<div style="margin: 0.5rem 0;"><strong>Episode:</strong> ${episodeInfo}</div>`;
+  }
+
+  if (program.rating) {
+    content += `<div style="margin: 0.5rem 0;"><strong>Rating:</strong> ${escapeHtml(program.rating)}</div>`;
+  }
+
+  epgTooltip.innerHTML = content;
+
+  // Position tooltip
+  const rect = event.target.getBoundingClientRect();
+  epgTooltip.style.left = `${rect.left + window.scrollX}px`;
+  epgTooltip.style.top = `${rect.top + window.scrollY - epgTooltip.offsetHeight - 10}px`;
+
+  // Show tooltip
+  epgTooltip.style.display = "block";
+  epgTooltip.classList.add("show");
+}
+
+function hideEpgTooltip() {
+  if (epgTooltip) {
+    epgTooltip.style.display = "none";
+    epgTooltip.classList.remove("show");
+  }
+}
+
+function formatTime(date) {
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function showEpgLoading() {
+  document.getElementById("epgLoading").style.display = "flex";
+  document.getElementById("epgNoData").style.display = "none";
+  document.getElementById("epgContent").style.display = "none";
+}
+
+function showEpgNoData() {
+  document.getElementById("epgLoading").style.display = "none";
+  document.getElementById("epgNoData").style.display = "flex";
+  document.getElementById("epgContent").style.display = "none";
+}
+
+function showEpgContent() {
+  document.getElementById("epgLoading").style.display = "none";
+  document.getElementById("epgNoData").style.display = "none";
+  document.getElementById("epgContent").style.display = "block";
+}
+
+function showEpgError(message) {
+  console.error("EPG Error:", message);
+
+  const epgPreview = document.getElementById("epgPreview");
+  epgPreview.innerHTML = `
+    <div class="alert alert-danger">
+      <strong>Error loading EPG data:</strong> ${escapeHtml(message)}
+    </div>
+  `;
+}
+
+// Enhanced preview tab switching
+function showPreviewTab(tabName) {
+  // Update tab buttons
+  document.querySelectorAll(".tab-button").forEach((btn) => {
+    btn.classList.remove("active");
+  });
+  document
+    .querySelector(`[onclick="showPreviewTab('${tabName}')"]`)
+    .classList.add("active");
+
+  // Update tab content
+  document.querySelectorAll(".tab-content").forEach((content) => {
+    content.classList.remove("active");
+  });
+  document.getElementById(`${tabName}Tab`).classList.add("active");
+
+  // Load EPG data when EPG tab is shown
+  if (tabName === "epg" && previewData && !previewEpgData) {
+    loadEpgForChannels();
+  }
+}
+
+// Enhanced group filter population
+function populateGroupFilter() {
+  const groupSelect = document.getElementById("groupFilter");
+  if (!groupSelect) return;
+
+  const data = previewData.data || previewData;
+  const channels = data.channels || data.preview_channels || [];
+
+  // Get unique groups
+  const groups = [
+    ...new Set(
+      channels.map((ch) => {
+        const channel = ch.channel || ch;
+        return channel.group_title || channel.channel_group || "Uncategorized";
+      }),
+    ),
+  ].sort();
+
+  // Clear existing options (except "All Groups")
+  groupSelect.innerHTML = '<option value="">All Groups</option>';
+
+  // Add group options
+  groups.forEach((group) => {
+    const option = document.createElement("option");
+    option.value = group;
+    option.textContent = group;
+    groupSelect.appendChild(option);
+  });
+}
+
+// Enhanced channel filtering
+function filterPreviewChannels() {
+  const searchTerm = document
+    .getElementById("channelSearch")
+    .value.toLowerCase();
+  const selectedGroup = document.getElementById("groupFilter").value;
+
+  const channelItems = document.querySelectorAll(".channel-preview-item");
+
+  channelItems.forEach((item) => {
+    const channelName = item.dataset.channelName.toLowerCase();
+    const channelGroup = item.dataset.group;
+
+    const matchesSearch = !searchTerm || channelName.includes(searchTerm);
+    const matchesGroup = !selectedGroup || channelGroup === selectedGroup;
+
+    if (matchesSearch && matchesGroup) {
+      item.style.display = "block";
+    } else {
+      item.style.display = "none";
+    }
+  });
+}
+
+// Enhanced file size formatting
+function formatFileSize(bytes) {
+  if (bytes === 0) return "0 B";
+
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+// Initialize enhanced features when page loads
+document.addEventListener("DOMContentLoaded", function () {
+  // Initialize EPG tooltip
+  epgTooltip = document.getElementById("epgTooltip");
+
+  // Add event listeners for EPG controls
+  const epgChannelSearch = document.getElementById("epgChannelSearch");
+  if (epgChannelSearch) {
+    epgChannelSearch.addEventListener("input", () => {
+      renderEpgChannels();
+    });
+  }
+
+  // Hide tooltip when clicking outside
+  document.addEventListener("click", function (e) {
+    if (!e.target.closest(".epg-program")) {
+      hideEpgTooltip();
+    }
+  });
+});

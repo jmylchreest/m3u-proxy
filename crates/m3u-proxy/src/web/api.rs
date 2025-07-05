@@ -288,6 +288,7 @@ pub async fn regenerate_proxy(
     let proxy_generator = ProxyGenerator::new(state.config.storage.clone());
 
     // Generate the updated proxy
+    #[allow(deprecated)]
     match proxy_generator
         .generate(
             &proxy,

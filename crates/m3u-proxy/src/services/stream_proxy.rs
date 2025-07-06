@@ -36,6 +36,7 @@ pub struct StreamProxyService {
     data_mapping_service: DataMappingService,
     logo_service: LogoAssetService,
     storage_config: StorageConfig,
+    shared_plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
 }
 
 impl StreamProxyService {
@@ -50,6 +51,7 @@ impl StreamProxyService {
         data_mapping_service: DataMappingService,
         logo_service: LogoAssetService,
         storage_config: StorageConfig,
+        shared_plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
     ) -> Self {
         Self {
             proxy_repo,
@@ -62,6 +64,7 @@ impl StreamProxyService {
             data_mapping_service,
             logo_service,
             storage_config,
+            shared_plugin_manager,
         }
     }
 
@@ -218,7 +221,11 @@ impl StreamProxyService {
         };
 
         // Use the new generator architecture
-        let proxy_service = crate::proxy::ProxyService::new(self.storage_config.clone());
+        let proxy_service = if let Some(plugin_manager) = &self.shared_plugin_manager {
+            crate::proxy::ProxyService::with_plugin_manager(self.storage_config.clone(), plugin_manager.clone())
+        } else {
+            crate::proxy::ProxyService::new(self.storage_config.clone())
+        };
         let proxy_generation = proxy_service
             .generate_proxy_with_config(
                 resolved_config.clone(),

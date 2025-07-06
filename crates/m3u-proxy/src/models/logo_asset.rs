@@ -44,6 +44,8 @@ pub enum LogoFormatType {
 pub struct LogoAssetCreateRequest {
     pub name: String,
     pub description: Option<String>,
+    pub asset_type: LogoAssetType,
+    pub source_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

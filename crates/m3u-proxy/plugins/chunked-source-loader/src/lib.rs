@@ -14,14 +14,28 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 // Host interface function imports
-extern "C" {
-    fn host_write_temp_file(id_ptr: *const u8, id_len: usize, data_ptr: *const u8, data_len: usize) -> i32;
-    fn host_read_temp_file(id_ptr: *const u8, id_len: usize, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32;
+unsafe extern "C" {
+    fn host_write_temp_file(
+        id_ptr: *const u8,
+        id_len: usize,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    fn host_read_temp_file(
+        id_ptr: *const u8,
+        id_len: usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32;
     fn host_delete_temp_file(id_ptr: *const u8, id_len: usize) -> i32;
     fn host_get_memory_usage() -> u64;
     fn host_get_memory_pressure() -> u32;
     fn host_log(level: u32, msg_ptr: *const u8, msg_len: usize);
-    fn host_database_query_source(source_id_ptr: *const u8, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32;
+    fn host_database_query_source(
+        source_id_ptr: *const u8,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32;
 }
 
 /// Channel data structure (simplified)
@@ -106,19 +120,14 @@ impl ChunkedSourceLoader {
         }
 
         let file_id = format!("chunked_source_spill_{}", self.chunks_processed);
-        
+
         // Serialize channels
         let data = serde_json::to_vec(&self.accumulated_channels)
             .map_err(|e| format!("Serialization failed: {}", e))?;
 
         // Write to temp file via host interface
         let result = unsafe {
-            host_write_temp_file(
-                file_id.as_ptr(),
-                file_id.len(),
-                data.as_ptr(),
-                data.len()
-            )
+            host_write_temp_file(file_id.as_ptr(), file_id.len(), data.as_ptr(), data.len())
         };
 
         if result != 0 {
@@ -151,7 +160,7 @@ impl ChunkedSourceLoader {
                 file_id.as_ptr(),
                 file_id.len(),
                 &mut data_ptr,
-                &mut data_len
+                &mut data_len,
             )
         };
 
@@ -165,8 +174,8 @@ impl ChunkedSourceLoader {
 
         // Deserialize channels
         let data = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
-        let channels: Vec<Channel> = serde_json::from_slice(data)
-            .map_err(|e| format!("Deserialization failed: {}", e))?;
+        let channels: Vec<Channel> =
+            serde_json::from_slice(data).map_err(|e| format!("Deserialization failed: {}", e))?;
 
         // Free the allocated memory
         unsafe { libc::free(data_ptr as *mut _) };
@@ -187,7 +196,7 @@ impl ChunkedSourceLoader {
                 host_database_query_source(
                     source_id.as_bytes().as_ptr(),
                     &mut data_ptr,
-                    &mut data_len
+                    &mut data_len,
                 )
             };
 
@@ -197,7 +206,7 @@ impl ChunkedSourceLoader {
                 if let Ok(channels) = serde_json::from_slice::<Vec<Channel>>(data) {
                     all_channels.extend(channels);
                 }
-                
+
                 // Free allocated memory
                 unsafe { libc::free(data_ptr as *mut _) };
             }
@@ -234,16 +243,25 @@ impl ChunkedSourceLoader {
     fn get_stats(&self) -> HashMap<String, serde_json::Value> {
         let mut stats = HashMap::new();
         let elapsed = chrono::Utc::now() - self.start_time;
-        
+
         stats.insert("chunks_processed".to_string(), self.chunks_processed.into());
         stats.insert("spilled_files".to_string(), self.spilled_files.len().into());
-        stats.insert("total_channels".to_string(), self.total_channels_processed.into());
+        stats.insert(
+            "total_channels".to_string(),
+            self.total_channels_processed.into(),
+        );
         stats.insert("elapsed_ms".to_string(), elapsed.num_milliseconds().into());
-        stats.insert("memory_threshold_mb".to_string(), self.config.memory_threshold_mb.into());
-        
+        stats.insert(
+            "memory_threshold_mb".to_string(),
+            self.config.memory_threshold_mb.into(),
+        );
+
         if self.chunks_processed > 0 {
             let avg_channels_per_chunk = self.total_channels_processed / self.chunks_processed;
-            stats.insert("avg_channels_per_chunk".to_string(), avg_channels_per_chunk.into());
+            stats.insert(
+                "avg_channels_per_chunk".to_string(),
+                avg_channels_per_chunk.into(),
+            );
         }
 
         stats
@@ -254,7 +272,7 @@ impl ChunkedSourceLoader {
 static mut PLUGIN_STATE: Option<ChunkedSourceLoader> = None;
 
 /// Initialize plugin with configuration
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn plugin_init(config_ptr: *const u8, config_len: usize) -> i32 {
     let config = if config_ptr.is_null() || config_len == 0 {
         PluginConfig::default()
@@ -282,7 +300,7 @@ pub extern "C" fn plugin_init(config_ptr: *const u8, config_len: usize) -> i32 {
 }
 
 /// Process a chunk of source IDs
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn plugin_process_chunk(
     chunk_data_ptr: *const u8,
     chunk_data_len: usize,
@@ -293,7 +311,13 @@ pub extern "C" fn plugin_process_chunk(
 ) -> i32 {
     unsafe {
         if let Some(ref mut state) = PLUGIN_STATE {
-            match process_chunk_impl(state, chunk_data_ptr, chunk_data_len, chunk_metadata_ptr, chunk_metadata_len) {
+            match process_chunk_impl(
+                state,
+                chunk_data_ptr,
+                chunk_data_len,
+                chunk_metadata_ptr,
+                chunk_metadata_len,
+            ) {
                 Ok(output) => {
                     // Allocate output buffer
                     let output_ptr = libc::malloc(output.len()) as *mut u8;
@@ -329,7 +353,8 @@ fn process_chunk_impl(
         .map_err(|e| format!("Failed to deserialize source IDs: {}", e))?;
 
     // Deserialize metadata
-    let metadata_data = unsafe { std::slice::from_raw_parts(chunk_metadata_ptr, chunk_metadata_len) };
+    let metadata_data =
+        unsafe { std::slice::from_raw_parts(chunk_metadata_ptr, chunk_metadata_len) };
     let metadata: StageChunk<()> = serde_json::from_slice(metadata_data)
         .map_err(|e| format!("Failed to deserialize metadata: {}", e))?;
 
@@ -353,16 +378,12 @@ fn process_chunk_impl(
 
     // For accumulating strategy, return empty result
     let empty_result: Vec<Channel> = Vec::new();
-    serde_json::to_vec(&empty_result)
-        .map_err(|e| format!("Failed to serialize output: {}", e))
+    serde_json::to_vec(&empty_result).map_err(|e| format!("Failed to serialize output: {}", e))
 }
 
 /// Finalize processing and return all accumulated channels
-#[no_mangle]
-pub extern "C" fn plugin_finalize(
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-) -> i32 {
+#[unsafe(no_mangle)]
+pub extern "C" fn plugin_finalize(out_ptr: *mut *mut u8, out_len: *mut usize) -> i32 {
     unsafe {
         if let Some(ref mut state) = PLUGIN_STATE {
             match finalize_impl(state) {
@@ -431,17 +452,10 @@ fn finalize_impl(state: &mut ChunkedSourceLoader) -> Result<Vec<u8>, String> {
 }
 
 /// Get plugin capabilities
-#[no_mangle]
-pub extern "C" fn plugin_get_capabilities(
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-) -> i32 {
+#[unsafe(no_mangle)]
+pub extern "C" fn plugin_get_capabilities(out_ptr: *mut *mut u8, out_len: *mut usize) -> i32 {
     let capabilities = serde_json::json!({
-        "supports_streaming": true,
-        "requires_all_data": false,
-        "can_produce_early_output": false,
-        "preferred_chunk_size": 1000,
-        "memory_efficient": true,
+        "memory_efficiency": "low",
         "stage_types": ["source_loading"],
         "host_interface_version": "1.0"
     });
@@ -457,12 +471,12 @@ pub extern "C" fn plugin_get_capabilities(
             *out_len = data.len();
             0
         },
-        Err(_) => -1
+        Err(_) => -1,
     }
 }
 
 /// Cleanup plugin resources
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn plugin_cleanup() -> i32 {
     unsafe {
         if let Some(ref state) = PLUGIN_STATE {
@@ -475,17 +489,16 @@ pub extern "C" fn plugin_cleanup() -> i32 {
 }
 
 /// Get plugin information
-#[no_mangle]
-pub extern "C" fn plugin_get_info(
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-) -> i32 {
+#[unsafe(no_mangle)]
+pub extern "C" fn plugin_get_info(out_ptr: *mut *mut u8, out_len: *mut usize) -> i32 {
     let info = serde_json::json!({
         "name": "chunked-source-loader",
         "version": "0.0.1",
-        "description": "Memory-efficient chunked source loading with spilling",
+        "description": "Memory-efficient chunked source loading with automatic spilling",
         "author": "m3u-proxy developers",
-        "license": "MIT"
+        "license": "MIT",
+        "supported_stages": ["source_loading"],
+        "memory_efficiency": "low"
     });
 
     match serde_json::to_vec(&info) {
@@ -499,6 +512,6 @@ pub extern "C" fn plugin_get_info(
             *out_len = data.len();
             0
         },
-        Err(_) => -1
+        Err(_) => -1,
     }
 }

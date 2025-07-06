@@ -300,6 +300,70 @@ impl XtreamIngestor {
             client: reqwest::Client::new(),
         }
     }
+    
+    /// Extract clean channel name from Xtream API name field
+    /// The name field often contains EXTINF lines like: "#EXTINF:-1 tvg-name=\"...\" ## CHANNEL NAME ##"
+    /// We need to extract just the clean channel name
+    fn extract_clean_channel_name(raw_name: &str) -> String {
+        // Check if this looks like an EXTINF line
+        if raw_name.starts_with("#EXTINF:") {
+            // Try to extract from tvg-name attribute first (most reliable)
+            if let Some(tvg_name_start) = raw_name.find("tvg-name=\"") {
+                let start = tvg_name_start + 10; // Skip 'tvg-name="'
+                if let Some(end) = raw_name[start..].find('"') {
+                    let tvg_name = &raw_name[start..start + end];
+                    if !tvg_name.is_empty() {
+                        debug!(
+                            "Xtream channel name extracted from tvg-name: '{}' -> '{}'",
+                            raw_name, tvg_name
+                        );
+                        return tvg_name.to_string();
+                    }
+                }
+            }
+            
+            // Fallback: Look for content after the last attribute (space-separated)
+            // Format: #EXTINF:-1 tvg-name="..." tvg-chno="..." CHANNEL NAME
+            let mut parts = raw_name.split_whitespace();
+            parts.next(); // Skip "#EXTINF:-1"
+            
+            // Skip all attribute=value pairs
+            let remaining_parts: Vec<&str> = parts.skip_while(|part| part.contains('=')).collect();
+            
+            if !remaining_parts.is_empty() {
+                let channel_name = remaining_parts.join(" ");
+                if !channel_name.is_empty() {
+                    debug!(
+                        "Xtream channel name extracted from end: '{}' -> '{}'",
+                        raw_name, channel_name
+                    );
+                    return channel_name;
+                }
+            }
+            
+            // Last fallback: try to find comma-separated content
+            if let Some(comma_pos) = raw_name.rfind(',') {
+                let after_comma = raw_name[comma_pos + 1..].trim();
+                
+                // If there's content after the comma, use that as the channel name
+                if !after_comma.is_empty() {
+                    debug!(
+                        "Xtream channel name extracted from comma: '{}' -> '{}'",
+                        raw_name, after_comma
+                    );
+                    return after_comma.to_string();
+                }
+            }
+            
+            warn!(
+                "Could not extract clean channel name from EXTINF line: '{}'",
+                raw_name
+            );
+        }
+        
+        // If not an EXTINF line or extraction failed, return as-is
+        raw_name.to_string()
+    }
 }
 
 #[async_trait]
@@ -490,15 +554,18 @@ impl SourceIngestor for XtreamIngestor {
             }
             seen_stream_ids.insert(xtream_channel.stream_id);
 
+            // Extract clean channel name from potentially EXTINF-formatted name
+            let clean_channel_name = Self::extract_clean_channel_name(&xtream_channel.name);
+            
             let channel = Channel {
                 id: Uuid::new_v4(),
                 source_id: source.id,
                 tvg_id: xtream_channel.epg_channel_id,
-                tvg_name: Some(xtream_channel.name.clone()),
+                tvg_name: Some(clean_channel_name.clone()),
                 tvg_logo: xtream_channel.stream_icon,
                 tvg_shift: None,
                 group_title: xtream_channel.category_name,
-                channel_name: xtream_channel.name,
+                channel_name: clean_channel_name,
                 stream_url,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),

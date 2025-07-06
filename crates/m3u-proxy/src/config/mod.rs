@@ -145,6 +145,7 @@ pub struct StorageConfig {
     pub uploaded_logo_path: PathBuf,
     pub cached_logo_path: PathBuf,
     pub proxy_versions_to_keep: u32,
+    pub temp_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,6 +347,7 @@ impl Default for Config {
                 uploaded_logo_path: PathBuf::from("./data/logos/uploaded"),
                 cached_logo_path: PathBuf::from("./data/logos/cached"),
                 proxy_versions_to_keep: 3,
+                temp_path: Some("./data/temp".to_string()),
             },
             ingestion: IngestionConfig {
                 progress_update_interval: 1000,

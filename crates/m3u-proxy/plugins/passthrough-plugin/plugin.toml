@@ -1,0 +1,115 @@
+[plugin]
+name = "passthrough-plugin"
+version = "0.0.1"
+author = "M3U-Proxy Team"
+description = "Reference implementation of a simple pass-through plugin that demonstrates the WASM plugin interface"
+license = "MIT"
+repository = "https://github.com/jmylchreest/m3u-proxy"
+documentation = "https://github.com/jmylchreest/m3u-proxy/docs/plugins/passthrough"
+
+[capabilities]
+# List of pipeline stages this plugin can handle
+stages = [
+    "source_loading",
+    "data_mapping",
+    "filtering",
+    "channel_numbering",
+    "m3u_generation",
+]
+
+# Plugin behavior characteristics
+supports_streaming = true
+requires_all_data = false
+can_produce_early_output = true
+memory_efficient = true
+preferred_chunk_size = 1000
+
+# Performance hints
+estimated_cpu_usage = "low"
+estimated_memory_usage = "low"
+parallel_safe = true
+
+[memory_requirements]
+# Memory requirements in MB
+min_heap_mb = 16
+max_heap_mb = 64
+supports_memory_pressure_adaptation = true
+
+[host_interface]
+# Required host interface version
+version = "1.0"
+
+# Host functions this plugin requires
+required_functions = [
+    "host_log",                 # Logging interface
+    "host_get_memory_usage",    # Memory monitoring
+    "host_get_memory_pressure", # Memory pressure detection
+    "host_report_progress",     # Progress reporting
+]
+
+# Optional host functions this plugin can use
+optional_functions = [
+    "host_write_temp_file",  # Temporary file operations
+    "host_read_temp_file",   # Temporary file operations
+    "host_delete_temp_file", # Temporary file cleanup
+]
+
+[exported_functions]
+# Required WASM exports this plugin provides
+required = [
+    "plugin_init",             # Initialize plugin
+    "plugin_get_info",         # Get plugin metadata
+    "plugin_get_capabilities", # Get plugin capabilities
+    "plugin_cleanup",          # Cleanup resources
+    "plugin_get_stats",        # Get runtime statistics
+]
+
+# Stage-specific exports
+stage_functions = [
+    "plugin_execute_source_loading",    # Source loading stage
+    "plugin_execute_data_mapping",      # Data mapping stage
+    "plugin_execute_filtering",         # Filtering stage
+    "plugin_execute_channel_numbering", # Channel numbering stage
+    "plugin_execute_m3u_generation",    # M3U generation stage
+]
+
+[configuration]
+# Plugin-specific configuration options
+[configuration.options]
+# Example configuration options for the passthrough plugin
+pass_through_mode = { type = "string", default = "transparent", description = "Pass-through behavior mode" }
+log_level = { type = "string", default = "info", description = "Plugin logging level" }
+enable_stats = { type = "boolean", default = true, description = "Enable runtime statistics collection" }
+
+[build]
+# Build configuration for this plugin
+target = "wasm32-wasip1"
+optimization_level = "s" # Optimize for size
+panic_strategy = "abort"
+lto = true
+
+[testing]
+# Test configuration
+test_data_path = "test_data/"
+expected_outputs_path = "expected_outputs/"
+
+[examples]
+# Usage examples
+basic_usage = """
+This plugin demonstrates the basic WASM plugin interface. It passes data through
+each stage while providing logging and monitoring capabilities.
+"""
+
+configuration_example = """
+[plugin_config.passthrough-plugin]
+pass_through_mode = "transparent"
+log_level = "debug"
+enable_stats = true
+"""
+
+[metadata]
+# Additional metadata for tooling
+tags = ["reference", "example", "passthrough", "demo"]
+category = "utility"
+maturity = "stable"
+last_updated = "2025-07-05"

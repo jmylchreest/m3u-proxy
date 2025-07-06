@@ -35,6 +35,10 @@ impl StageStrategy for InMemoryM3uStrategy {
         let mut m3u = String::from("#EXTM3U\n");
 
         for nc in numbered_channels.iter() {
+            tracing::debug!(
+                "M3U Generation (InMemory) - Channel #{}: id={}, channel_name='{}', tvg_name='{:?}', stream_url='{}'",
+                nc.assigned_number, nc.channel.id, nc.channel.channel_name, nc.channel.tvg_name, nc.channel.stream_url
+            );
             let extinf = format!(
                 "#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" tvg-chno=\"{}\" group-title=\"{}\",{}",
                 nc.channel.tvg_id.as_deref().unwrap_or(""),
@@ -44,6 +48,7 @@ impl StageStrategy for InMemoryM3uStrategy {
                 nc.channel.group_title.as_deref().unwrap_or(""),
                 nc.channel.channel_name
             );
+            tracing::debug!("M3U Generation (InMemory) - Generated EXTINF: '{}'", extinf);
 
             let proxy_stream_url = format!(
                 "{}/stream/{}/{}",
@@ -104,6 +109,10 @@ impl StageStrategy for StreamingM3uStrategy {
 
         // Process channels in smaller chunks to reduce memory pressure
         for (i, nc) in numbered_channels.iter().enumerate() {
+            tracing::debug!(
+                "M3U Generation (Streaming) - Channel #{}: id={}, channel_name='{}', tvg_name='{:?}', stream_url='{}'",
+                nc.assigned_number, nc.channel.id, nc.channel.channel_name, nc.channel.tvg_name, nc.channel.stream_url
+            );
             let extinf = format!(
                 "#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" tvg-chno=\"{}\" group-title=\"{}\",{}",
                 nc.channel.tvg_id.as_deref().unwrap_or(""),
@@ -113,6 +122,7 @@ impl StageStrategy for StreamingM3uStrategy {
                 nc.channel.group_title.as_deref().unwrap_or(""),
                 nc.channel.channel_name
             );
+            tracing::debug!("M3U Generation (Streaming) - Generated EXTINF: '{}'", extinf);
 
             let proxy_stream_url = format!(
                 "{}/stream/{}/{}",

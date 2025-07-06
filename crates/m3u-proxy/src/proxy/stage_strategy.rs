@@ -6,9 +6,11 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::models::*;
+use crate::database::Database;
 
 /// Memory pressure levels for fine-grained strategy selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -36,6 +38,8 @@ pub struct StageContext {
     pub available_memory_mb: Option<usize>,
     pub current_stage: String,
     pub stats: GenerationStats,
+    pub database: Option<Arc<Database>>,
+    pub logo_service: Option<Arc<crate::logo_assets::service::LogoAssetService>>,
 }
 
 /// Input data for a stage

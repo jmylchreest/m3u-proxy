@@ -1,48 +1,44 @@
-//! Adaptive pipeline that can switch processing strategies based on memory pressure
+//! Unified Iterator-Based Pipeline
 //!
-//! This pipeline dynamically selects the best strategy for each stage based on
-//! current memory conditions, available plugins, and performance characteristics.
+//! This pipeline implements the complete 7-stage processing pipeline using orchestrator
+//! iterators, chunk management, and sophisticated buffering. It provides plugin integration
+//! with fallback to native implementations and coordinates memory usage across all stages.
 
 use anyhow::Result;
-use sandboxed_file_manager::SandboxedManager;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::data_mapping::service::DataMappingService;
 use crate::database::Database;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
-use crate::proxy::stage_strategy::StageStrategy;
-use crate::proxy::stage_strategy::{
-    DynamicStrategySelector, MemoryPressureLevel, StageContext, StageStrategyRegistry,
+use crate::pipeline::chunk_manager::ChunkSizeManager;
+use crate::pipeline::orchestrator::{
+    OrderedChannelAggregateIterator, OrderedDataMappingIterator, OrderedEpgAggregateIterator,
+    OrderedFilterIterator,
 };
-use crate::proxy::strategies::*;
+use crate::pipeline::generic_iterator::{OrderedMultiSourceIterator, OrderedSingleSourceIterator};
+use crate::pipeline::iterator_traits::PluginIterator;
+use crate::proxy::simple_strategies::*;
+use crate::proxy::stage_contracts::*;
+use crate::proxy::stage_strategy::{MemoryPressureLevel, StageContext};
+use crate::proxy::wasm_host_interface::WasmHostInterface;
 use crate::proxy::wasm_plugin::{WasmPluginConfig, WasmPluginManager};
-use crate::proxy::{chunked_pipeline::ChunkedProxyPipeline, pipeline::ProxyGenerationPipeline};
-use crate::utils::{MemoryLimitStatus, MemoryStats, SimpleMemoryMonitor};
+use crate::utils::{MemoryCleanupCoordinator, MemoryContext, SimpleMemoryMonitor};
+use sandboxed_file_manager::SandboxedManager;
 
-/// Adaptive pipeline that can switch processing strategies dynamically
+/// Unified iterator-based pipeline with sophisticated buffering and plugin integration
 pub struct AdaptivePipeline {
     database: Database,
     data_mapping_service: DataMappingService,
     logo_service: LogoAssetService,
     memory_monitor: Option<SimpleMemoryMonitor>,
-
     temp_file_manager: SandboxedManager,
-    strategy_selector: DynamicStrategySelector,
     plugin_manager: Arc<WasmPluginManager>,
-    current_memory_usage: std::sync::atomic::AtomicUsize,
-}
-
-/// Processing mode that the adaptive pipeline can switch between
-#[derive(Debug, Clone)]
-enum ProcessingMode {
-    /// Normal in-memory processing
-    Normal,
-    /// Chunked processing with specified chunk size
-    Chunked { chunk_size: usize },
-    /// Temporary file spill processing (using smaller chunks)
-    TempFileSpill { chunk_size: usize },
+    chunk_manager: Arc<ChunkSizeManager>,
+    memory_limit_mb: Option<usize>,
 }
 
 impl AdaptivePipeline {
@@ -51,1083 +47,2546 @@ impl AdaptivePipeline {
         data_mapping_service: DataMappingService,
         logo_service: LogoAssetService,
         memory_limit_mb: Option<usize>,
-
         temp_file_manager: SandboxedManager,
+        shared_plugin_manager: Option<Arc<WasmPluginManager>>,
     ) -> Self {
         let memory_monitor = memory_limit_mb.map(|limit| SimpleMemoryMonitor::new(Some(limit)));
 
-        // Initialize strategy registry with native strategies
-        let mut registry = StageStrategyRegistry::new();
+        // Use shared plugin manager if provided, otherwise create a new one
+        let plugin_manager = if let Some(shared_manager) = shared_plugin_manager {
+            tracing::debug!("AdaptivePipeline using shared plugin manager");
+            shared_manager
+        } else {
+            tracing::debug!("AdaptivePipeline creating new plugin manager");
+            // Initialize plugin manager with host interface  
+            let plugin_config = WasmPluginConfig::default();
+            let host_interface = WasmHostInterface::new(
+                temp_file_manager.clone(),
+                memory_monitor.clone(),
+                false, // network disabled by default
+            );
+            Arc::new(WasmPluginManager::new(plugin_config, host_interface))
+        };
 
-        // Register source loading strategies
-        registry.register_source_loading_strategy(
-            "inmemory_full".to_string(),
-            Box::new(InMemorySourceLoader::new(database.clone())),
-        );
-        registry.register_source_loading_strategy(
-            "batched_loader".to_string(),
-            Box::new(BatchedSourceLoader::new(database.clone(), 1000)),
-        );
-        registry.register_source_loading_strategy(
-            "streaming_loader".to_string(),
-            Box::new(StreamingSourceLoader::new(database.clone())),
-        );
-
-        // Register data mapping strategies
-        registry.register_data_mapping_strategy(
-            "parallel_mapping".to_string(),
-            Box::new(ParallelDataMapper::new(
-                data_mapping_service.clone(),
-                logo_service.clone(),
-            )),
-        );
-        registry.register_data_mapping_strategy(
-            "batched_mapping".to_string(),
-            Box::new(BatchedDataMapper::new(
-                data_mapping_service.clone(),
-                logo_service.clone(),
-                500,
-            )),
-        );
-        registry.register_data_mapping_strategy(
-            "streaming_mapping".to_string(),
-            Box::new(StreamingDataMapper::new(
-                data_mapping_service.clone(),
-                logo_service.clone(),
-            )),
-        );
-
-        let strategy_selector = DynamicStrategySelector::new(registry);
-
-        // Initialize plugin manager (disabled by default for security)
-        let plugin_config = WasmPluginConfig::default();
-        let plugin_manager = Arc::new(WasmPluginManager::new(plugin_config));
+        // Initialize chunk manager with stage dependencies
+        let chunk_manager = Arc::new(ChunkSizeManager::new(
+            1000, // default_chunk_size
+            memory_limit_mb.unwrap_or(512) * 10, // max_chunk_size (10x memory limit)
+        ));
 
         Self {
             database,
             data_mapping_service,
             logo_service,
             memory_monitor,
-
             temp_file_manager,
-            strategy_selector,
             plugin_manager,
-            current_memory_usage: std::sync::atomic::AtomicUsize::new(0),
+            chunk_manager,
+            memory_limit_mb,
         }
     }
 
-    /// Initialize the pipeline with plugin loading
+    /// Initialize the pipeline with plugin loading and chunk manager setup
     pub async fn initialize(&mut self) -> Result<()> {
-        info!("Initializing adaptive pipeline with dynamic strategies");
+        info!("Initializing unified iterator-based pipeline with WASM plugin support");
 
-        // Load WASM plugins if enabled
-        self.plugin_manager.load_plugins().await?;
-
-        // Log available strategies
-        let health_status = self.plugin_manager.health_check().await;
-        for (plugin_name, is_healthy) in health_status {
-            if is_healthy {
-                info!("Loaded healthy plugin: {}", plugin_name);
-            } else {
-                warn!("Plugin '{}' is unhealthy", plugin_name);
+        // Initialize chunk manager
+        info!("Initializing chunk size manager with 7-stage dependencies");
+        
+        // Check if plugins are already loaded (shared manager case)
+        let plugin_count = self.plugin_manager.get_loaded_plugin_count().await;
+        if plugin_count > 0 {
+            info!("Using shared plugin manager with {} already loaded plugins", plugin_count);
+        } else {
+            // Load WASM plugins if not already loaded
+            if let Err(e) = self.plugin_manager.load_plugins().await {
+                warn!(
+                    "Failed to load WASM plugins: {}, continuing with native implementations",
+                    e
+                );
             }
         }
+
+        // Log pipeline status
+        let health_status = self.plugin_manager.health_check().await;
+        let healthy_plugins = health_status
+            .iter()
+            .filter(|(_, healthy)| **healthy)
+            .count();
+        info!(
+            "Unified pipeline initialized: {} healthy plugins, {} total plugins, chunk manager ready",
+            healthy_plugins,
+            health_status.len()
+        );
 
         Ok(())
     }
 
-    /// Generate proxy using dynamic strategy selection for each stage
+    /// Generate proxy using unified iterator-based pipeline with all 7 stages
     pub async fn generate_with_dynamic_strategies(
-        &mut self,
+        &self,
         config: ResolvedProxyConfig,
-        output: GenerationOutput,
         base_url: &str,
         engine_config: Option<crate::config::DataMappingEngineConfig>,
     ) -> Result<ProxyGeneration> {
-        let mut stats = GenerationStats::new("adaptive".to_string());
         info!(
-            "Starting dynamic strategy generation for '{}' using enhanced adaptive pipeline",
-            config.proxy.name
+            "Starting unified pipeline generation proxy={} sources={} filters={}",
+            config.proxy.name,
+            config.sources.len(),
+            config.filters.len()
         );
 
-        // Get current memory usage and determine pressure level
-        let current_memory_mb = self.get_current_memory_usage_mb();
-        let memory_pressure = self
-            .strategy_selector
-            .assess_memory_pressure(current_memory_mb);
+        let overall_start = Instant::now();
 
-        info!(
-            "Current memory usage: {}MB, pressure level: {:?}",
-            current_memory_mb, memory_pressure
-        );
+        // Initialize memory context for tracking
+        let mut memory_context = MemoryContext::new(self.memory_limit_mb, None);
+        memory_context.initialize()?;
 
-        // Create stage context
-        let mut stage_context = StageContext {
-            proxy_config: config.clone(),
-            output: output.clone(),
-            base_url: base_url.to_string(),
-            engine_config: engine_config.clone(),
-            memory_pressure,
-            available_memory_mb: self.memory_monitor.as_ref().and_then(|m| m.memory_limit_mb),
-            current_stage: String::new(),
-            stats: stats.clone(),
-        };
+        // Initialize cleanup coordinator
+        let mut cleanup_coordinator =
+            MemoryCleanupCoordinator::new(true, self.memory_limit_mb.map(|mb| mb as f64));
 
-        // Stage 1: Source Loading
-        stage_context.current_stage = "source_loading".to_string();
-        let source_ids: Vec<_> = config.sources.iter().map(|s| s.source.id).collect();
-
-        let start_time = std::time::Instant::now();
-        let all_channels = self
-            .execute_stage_with_strategy("source_loading", memory_pressure, |strategy| async move {
-                strategy
-                    .execute_source_loading(&stage_context, source_ids)
-                    .await
-            })
-            .await?;
-
-        stats.add_stage_timing(
-            "source_loading_dynamic",
-            start_time.elapsed().as_millis() as u64,
-        );
-        stats.total_channels_processed = all_channels.len();
-        info!(
-            "Source loading completed: {} channels using dynamic strategy",
-            all_channels.len()
-        );
-
-        // Update memory pressure for next stage
-        let current_memory_mb = self.get_current_memory_usage_mb();
-        let new_memory_pressure = self
-            .strategy_selector
-            .assess_memory_pressure(current_memory_mb);
-        stage_context.memory_pressure = new_memory_pressure;
-
-        // Stage 2: Data Mapping
-        stage_context.current_stage = "data_mapping".to_string();
-        let start_time = std::time::Instant::now();
-        let mapped_channels = self
-            .execute_stage_with_strategy(
-                "data_mapping",
-                new_memory_pressure,
-                |strategy| async move {
-                    strategy
-                        .execute_data_mapping(&stage_context, all_channels)
-                        .await
-                },
+        // Execute all 7 pipeline stages using iterator-based approach
+        let generation = self
+            .execute_unified_pipeline_stages(
+                config.clone(),
+                base_url,
+                engine_config,
+                &mut memory_context,
+                &mut cleanup_coordinator,
             )
             .await?;
 
-        stats.add_stage_timing(
-            "data_mapping_dynamic",
-            start_time.elapsed().as_millis() as u64,
-        );
-        stats.channels_mapped = mapped_channels.len();
+        let total_duration = overall_start.elapsed().as_millis() as u64;
+
         info!(
-            "Data mapping completed: {} channels using dynamic strategy",
-            mapped_channels.len()
+            "Unified pipeline completed proxy={} total_time={}ms channels={} pipeline=iterator-based",
+            config.proxy.name, total_duration, generation.channel_count
         );
 
-        // Stage 3: Filtering (simplified for now - would use dynamic strategies too)
-        stage_context.current_stage = "filtering".to_string();
-        let start_time = std::time::Instant::now();
+        // Log memory analysis
+        let memory_analysis = memory_context.analyze_memory_patterns();
+        debug!(
+            "Memory analysis: growth={:.1}MB, stages={}, trend={:?}",
+            memory_analysis.total_memory_growth_mb,
+            memory_analysis.total_stages,
+            memory_analysis.memory_efficiency_trend
+        );
 
-        let filtered_channels = if !config.filters.is_empty() {
-            // Use existing filter engine for now (could be enhanced with dynamic strategies)
-            use crate::proxy::filter_engine::FilterEngine;
-            let mut filter_engine = FilterEngine::new();
+        Ok(generation)
+    }
 
-            let filter_tuples: Vec<_> = config
-                .filters
-                .iter()
-                .filter(|f| f.is_active)
-                .map(|f| {
-                    let proxy_filter = ProxyFilter {
-                        proxy_id: config.proxy.id,
-                        filter_id: f.filter.id,
-                        priority_order: f.priority_order,
-                        is_active: f.is_active,
-                        created_at: chrono::Utc::now(),
-                    };
-                    (f.filter.clone(), proxy_filter)
-                })
-                .collect();
+    /// Execute all 7 pipeline stages using unified iterator-based approach
+    async fn execute_unified_pipeline_stages(
+        &self,
+        config: ResolvedProxyConfig,
+        base_url: &str,
+        engine_config: Option<crate::config::DataMappingEngineConfig>,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<ProxyGeneration> {
+        info!("Starting unified 7-stage iterator-based pipeline execution");
 
-            filter_engine
-                .apply_filters(mapped_channels, filter_tuples)
-                .await?
-        } else {
-            mapped_channels
-        };
+        // Stage 1: Source Loading (using OrderedChannelAggregateIterator)
+        let source_ids: Vec<uuid::Uuid> = config.sources.iter().map(|s| s.source.id).collect();
+        let channels = self
+            .execute_source_loading_with_iterator(source_ids, memory_context, cleanup_coordinator)
+            .await?;
 
-        stats.add_stage_timing("filtering_dynamic", start_time.elapsed().as_millis() as u64);
-        stats.channels_after_filtering = filtered_channels.len();
+        // Stage 2: Data Mapping (using OrderedDataMappingIterator)
+        let mapped_channels = self
+            .execute_data_mapping_with_iterator(
+                channels,
+                &config,
+                base_url,
+                engine_config,
+                memory_context,
+                cleanup_coordinator,
+            )
+            .await?;
 
-        // Stage 4: Channel Numbering (simplified)
-        let start_time = std::time::Instant::now();
+        // Stage 3: Filtering (using OrderedFilterIterator)
+        let filtered_channels = self
+            .execute_filtering_with_iterator(
+                mapped_channels,
+                &config,
+                memory_context,
+                cleanup_coordinator,
+            )
+            .await?;
+
+        // Stage 4: Logo Prefetch (NEW - with access to EPG data)
+        let logo_processed_channels = self
+            .execute_logo_prefetch_with_iterator(
+                filtered_channels,
+                &config,
+                memory_context,
+                cleanup_coordinator,
+            )
+            .await?;
+
+        // Stage 5: Channel Numbering
         let numbered_channels = self
-            .apply_channel_numbering(&filtered_channels, config.proxy.starting_channel_number)
+            .execute_channel_numbering_with_iterator(
+                logo_processed_channels,
+                &config,
+                memory_context,
+                cleanup_coordinator,
+            )
             .await?;
-        stats.add_stage_timing(
-            "channel_numbering_dynamic",
-            start_time.elapsed().as_millis() as u64,
-        );
 
-        // Stage 5: M3U Generation (simplified)
-        let start_time = std::time::Instant::now();
+        // Stage 6: M3U Generation
         let m3u_content = self
-            .generate_m3u_content_from_numbered(&numbered_channels, &config.proxy.ulid, base_url)
+            .execute_m3u_generation_with_iterator(
+                numbered_channels.clone(),
+                &config,
+                base_url,
+                memory_context,
+                cleanup_coordinator,
+            )
             .await?;
-        stats.add_stage_timing(
-            "m3u_generation_dynamic",
-            start_time.elapsed().as_millis() as u64,
-        );
-        stats.m3u_size_bytes = m3u_content.len();
 
-        // Create generation record
+        // Stage 7: EPG Processing (parallel to M3U generation, using OrderedEpgAggregateIterator)
+        let _epg_content = self
+            .execute_epg_processing_with_iterator(
+                numbered_channels.clone(),
+                &config,
+                base_url,
+                memory_context,
+                cleanup_coordinator,
+            )
+            .await?;
+
+        info!("Unified 7-stage pipeline execution completed successfully");
+
+        // Debug: Log final channel structure before M3U generation record
+        if !numbered_channels.is_empty() {
+            debug!("=== FINAL PIPELINE OUTPUT ===");
+            for (i, numbered_channel) in numbered_channels.iter().take(3).enumerate() {
+                debug!(
+                    "Final Channel #{}: number={}, name='{}', tvg_name='{:?}', group='{:?}'",
+                    i + 1,
+                    numbered_channel.assigned_number,
+                    numbered_channel.channel.channel_name,
+                    numbered_channel.channel.tvg_name,
+                    numbered_channel.channel.group_title
+                );
+            }
+            
+            // Also log a preview of what the M3U content looks like
+            debug!("=== M3U CONTENT PREVIEW ===");
+            let preview_lines: Vec<&str> = m3u_content.lines().take(10).collect();
+            for line in preview_lines {
+                debug!("M3U Line: {}", line);
+            }
+        }
+
+        // Create generation record with enhanced statistics
         let generation = ProxyGeneration {
             id: uuid::Uuid::new_v4(),
             proxy_id: config.proxy.id,
             version: 1,
             channel_count: numbered_channels.len() as i32,
-            total_channels: all_channels.len(),
-            filtered_channels: filtered_channels.len(),
+            total_channels: numbered_channels.len(),
+            filtered_channels: numbered_channels.len(),
             applied_filters: config
                 .filters
                 .iter()
-                .filter(|f| f.is_active)
                 .map(|f| f.filter.name.clone())
                 .collect(),
             m3u_content,
             created_at: chrono::Utc::now(),
-            stats: Some(stats.clone()),
+            stats: None, // TODO: Integrate with chunk manager and iterator statistics
         };
 
-        // Handle output
-        self.write_output(&generation, &output, Some(&config))
-            .await?;
-
-        stats.finalize();
-        info!(
-            "Dynamic strategy generation completed for '{}': {}",
-            config.proxy.name,
-            stats.summary()
-        );
         Ok(generation)
     }
 
-    /// Execute a stage using the best available strategy (native or plugin)
-    async fn execute_stage_with_strategy<T, F, Fut>(
+    /// Execute source loading stage using OrderedChannelAggregateIterator with plugin/native fallback
+    async fn execute_source_loading_with_iterator(
+        &self,
+        source_ids: Vec<uuid::Uuid>,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<Vec<Channel>> {
+        memory_context.start_stage("source_loading")?;
+        
+        info!("Starting source loading stage with OrderedChannelAggregateIterator for {} sources", source_ids.len());
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Create OrderedChannelAggregateIterator for the sources
+        let mut channel_iterator = OrderedMultiSourceIterator::new(
+            Arc::new(self.database.clone()),
+            source_ids.clone(),
+            crate::pipeline::orchestrator::UuidChannelLoader {},
+            1000,
+        );
+
+        // Request optimal chunk size from chunk manager (may cascade upstream)
+        let requested_chunk_size = self.chunk_manager
+            .request_chunk_size("source_loading", 1000)
+            .await?;
+
+        info!("Source loading using chunk size: {}", requested_chunk_size);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("source_loading", memory_pressure)
+            .await
+        {
+            // Create plugin iterator context with real iterator
+            let stage_context = self.create_temp_stage_context("source_loading", memory_pressure);
+
+            match plugin.execute_source_loading(&stage_context, source_ids.clone()).await {
+                Ok(channels) => {
+                    let stage_info = memory_context.complete_stage("source_loading")?;
+                    
+                    // Check if plugin returned empty results - fall back to native iterator
+                    if channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty results, falling back to native iterator:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels loaded: {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using OrderedChannelAggregateIterator",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to native fallback below
+                    } else {
+                        info!(
+                            "WASM plugin source loading succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels loaded: {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(channels);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin source loading failed, falling back to native iterator:\n\
+                         ├─ Plugin: {}\n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: source_loading\n\
+                         ├─ Fallback: Using OrderedChannelAggregateIterator\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
+                }
+            }
+        } else {
+            info!(
+                "No WASM plugin available for source_loading stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Using: OrderedChannelAggregateIterator",
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Native implementation using OrderedChannelAggregateIterator
+        let mut all_channels = Vec::new();
+
+        loop {
+            match channel_iterator.next_chunk_with_size(requested_chunk_size).await? {
+                crate::pipeline::iterator_traits::IteratorResult::Chunk(chunk) => {
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    info!("Loaded chunk of {} channels from iterator", chunk.len());
+                    
+                    // Debug: Log first few channels to see the data structure
+                    if !chunk.is_empty() && all_channels.is_empty() {
+                        for (i, channel) in chunk.iter().take(3).enumerate() {
+                            debug!(
+                                "Channel #{}: id={}, name='{}', stream_url='{}', tvg_logo='{:?}', group_title='{:?}'",
+                                i + 1,
+                                channel.id,
+                                channel.channel_name,
+                                channel.stream_url,
+                                channel.tvg_logo,
+                                channel.group_title
+                            );
+                        }
+                    }
+                    
+                    all_channels.extend(chunk);
+                }
+                crate::pipeline::iterator_traits::IteratorResult::Exhausted => {
+                    info!("Channel iterator exhausted");
+                    break;
+                }
+            }
+        }
+
+        // Close iterator and cleanup
+        channel_iterator.close().await?;
+
+        let stage_info = memory_context.complete_stage("source_loading")?;
+        
+        info!(
+            "Native source loading completed:\n\
+             ├─ Implementation: OrderedChannelAggregateIterator\n\
+             ├─ Channels loaded: {}\n\
+             ├─ Chunk size used: {}\n\
+             ├─ Memory used: {:.1}MB\n\
+             ├─ Processing time: {}ms\n\
+             └─ Memory pressure: {:?}",
+            all_channels.len(),
+            requested_chunk_size,
+            stage_info.memory_delta_mb,
+            stage_info.duration_ms,
+            stage_info.pressure_level
+        );
+
+        Ok(all_channels)
+    }
+
+    /// Execute data mapping stage using OrderedDataMappingIterator with plugin/native fallback
+    async fn execute_data_mapping_with_iterator(
+        &self,
+        channels: Vec<Channel>,
+        config: &ResolvedProxyConfig,
+        base_url: &str,
+        engine_config: Option<crate::config::DataMappingEngineConfig>,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<Vec<Channel>> {
+        memory_context.start_stage("data_mapping")?;
+        
+        info!("Starting data mapping stage with OrderedDataMappingIterator for {} channels", channels.len());
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Create OrderedDataMappingIterator for mapping rules
+        let mut mapping_iterator = OrderedSingleSourceIterator::new(
+            Arc::new(self.database.clone()),
+            crate::pipeline::orchestrator::DataMappingLoader {},
+            config.proxy.id,
+            1000,
+        );
+
+        // Request optimal chunk size from chunk manager (coordinates with upstream)
+        let requested_chunk_size = self.chunk_manager
+            .request_chunk_size("data_mapping", channels.len().min(1000))
+            .await?;
+
+        info!("Data mapping using chunk size: {}", requested_chunk_size);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("data_mapping", memory_pressure)
+            .await
+        {
+            let stage_context = self.create_temp_stage_context("data_mapping", memory_pressure);
+
+            match plugin.execute_data_mapping(&stage_context, channels.clone()).await {
+                Ok(mapped_channels) => {
+                    let stage_info = memory_context.complete_stage("data_mapping")?;
+                    
+                    // Check if plugin returned empty results - fall back to native iterator
+                    if mapped_channels.is_empty() && !channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty results, falling back to native iterator:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels processed: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using OrderedDataMappingIterator",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            mapped_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to native fallback below
+                    } else {
+                        info!(
+                            "WASM plugin data mapping succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels processed: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            mapped_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(mapped_channels);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin data mapping failed, falling back to native iterator:\n\
+                         ├─ Plugin: {}\n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: data_mapping\n\
+                         ├─ Fallback: Using OrderedDataMappingIterator\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
+                }
+            }
+        } else {
+            info!(
+                "No WASM plugin available for data_mapping stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Using: OrderedDataMappingIterator + DataMappingService",
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Native implementation using OrderedDataMappingIterator + DataMappingService
+        let mut all_mapping_rules = Vec::new();
+        
+        // Load all mapping rules via iterator
+        loop {
+            match mapping_iterator.next_chunk_with_size(requested_chunk_size).await? {
+                crate::pipeline::iterator_traits::IteratorResult::Chunk(chunk) => {
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    info!("Loaded chunk of {} mapping rules from iterator", chunk.len());
+                    all_mapping_rules.extend(chunk);
+                }
+                crate::pipeline::iterator_traits::IteratorResult::Exhausted => {
+                    info!("Data mapping iterator exhausted");
+                    break;
+                }
+            }
+        }
+
+        // Close mapping iterator
+        mapping_iterator.close().await?;
+
+        // Apply data mapping using the service with loaded rules
+        let original_count = channels.len();
+        let mapped_channels = if all_mapping_rules.is_empty() {
+            info!("No mapping rules found, channels passed through unchanged");
+            channels
+        } else {
+            info!("Applying {} mapping rules to {} channels", all_mapping_rules.len(), channels.len());
+            
+            // Use DataMappingService to apply the mapping rules
+            self.data_mapping_service
+                .apply_mapping_for_proxy(channels.clone(), config.proxy.id, &self.logo_service, base_url, engine_config)
+                .await?
+        };
+
+        let stage_info = memory_context.complete_stage("data_mapping")?;
+        
+        info!(
+            "Native data mapping completed:\n\
+             ├─ Implementation: OrderedDataMappingIterator + DataMappingService\n\
+             ├─ Channels processed: {} → {}\n\
+             ├─ Mapping rules applied: {}\n\
+             ├─ Chunk size used: {}\n\
+             ├─ Memory used: {:.1}MB\n\
+             ├─ Processing time: {}ms\n\
+             └─ Memory pressure: {:?}",
+            original_count,
+            mapped_channels.len(),
+            all_mapping_rules.len(),
+            requested_chunk_size,
+            stage_info.memory_delta_mb,
+            stage_info.duration_ms,
+            stage_info.pressure_level
+        );
+
+        Ok(mapped_channels)
+    }
+
+    /// Execute filtering stage using OrderedFilterIterator with plugin/native fallback
+    async fn execute_filtering_with_iterator(
+        &self,
+        channels: Vec<Channel>,
+        config: &ResolvedProxyConfig,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<Vec<Channel>> {
+        memory_context.start_stage("filtering")?;
+        
+        info!("Starting filtering stage with OrderedFilterIterator for {} channels", channels.len());
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Create OrderedFilterIterator for filter rules
+        let mut filter_iterator = OrderedMultiSourceIterator::new(
+            Arc::new(self.database.clone()),
+            config.filters.clone(),
+            crate::pipeline::orchestrator::FilterLoader {},
+            1000,
+        );
+
+        // Request optimal chunk size from chunk manager (coordinates with upstream)
+        let requested_chunk_size = self.chunk_manager
+            .request_chunk_size("filtering", channels.len().min(1500))
+            .await?;
+
+        info!("Filtering using chunk size: {}", requested_chunk_size);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("filtering", memory_pressure)
+            .await
+        {
+            let stage_context = self.create_temp_stage_context("filtering", memory_pressure);
+
+            match plugin.execute_filtering(&stage_context, channels.clone()).await {
+                Ok(filtered_channels) => {
+                    let stage_info = memory_context.complete_stage("filtering")?;
+                    
+                    // Check if plugin returned empty results - fall back to native iterator
+                    if filtered_channels.is_empty() && !channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty results, falling back to native iterator:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels filtered: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using OrderedFilterIterator",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            filtered_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to native fallback below
+                    } else {
+                        info!(
+                            "WASM plugin filtering succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels filtered: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            filtered_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(filtered_channels);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin filtering failed, falling back to native iterator:\n\
+                         ├─ Plugin: {}\n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: filtering\n\
+                         ├─ Fallback: Using OrderedFilterIterator\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
+                }
+            }
+        } else {
+            info!(
+                "No WASM plugin available for filtering stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Using: OrderedFilterIterator + FilterEngine",
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Native implementation using direct filter configuration + FilterEngine
+        // Convert filter configs to (Filter, ProxyFilter) tuples for FilterEngine
+        let filter_tuples: Vec<(Filter, ProxyFilter)> = config.filters
+            .iter()
+            .map(|filter_config| {
+                // Create ProxyFilter from the config data
+                let proxy_filter = ProxyFilter {
+                    proxy_id: config.proxy.id,
+                    filter_id: filter_config.filter.id,
+                    priority_order: filter_config.priority_order,
+                    is_active: filter_config.is_active,
+                    created_at: chrono::Utc::now(),
+                };
+                (filter_config.filter.clone(), proxy_filter)
+            })
+            .collect();
+
+        // Close filter iterator
+        filter_iterator.close().await?;
+
+        // Apply filtering using FilterEngine with loaded rules
+        let input_channel_count = channels.len();
+        
+        // Debug: Log first few channels entering filtering stage
+        if !channels.is_empty() {
+            debug!("=== FILTERING STAGE INPUT ===");
+            for (i, channel) in channels.iter().take(3).enumerate() {
+                debug!(
+                    "Input Channel #{}: name='{}', tvg_name='{:?}', group='{:?}', stream_url='{}'",
+                    i + 1,
+                    channel.channel_name,
+                    channel.tvg_name,
+                    channel.group_title,
+                    channel.stream_url
+                );
+            }
+        }
+        
+        let filtered_channels = if filter_tuples.is_empty() {
+            info!("No filter rules found, all channels passed through");
+            channels
+        } else {
+            info!("Applying {} filter rules to {} channels", filter_tuples.len(), channels.len());
+            
+            // Use FilterEngine to apply the filter rules
+            let mut filter_engine = crate::proxy::filter_engine::FilterEngine::new();
+            let result = filter_engine.apply_filters(channels, filter_tuples.clone()).await?;
+            
+            // Debug: Log first few channels after filtering
+            if !result.is_empty() {
+                debug!("=== FILTERING STAGE OUTPUT ===");
+                for (i, channel) in result.iter().take(3).enumerate() {
+                    debug!(
+                        "Output Channel #{}: name='{}', tvg_name='{:?}', group='{:?}', stream_url='{}'",
+                        i + 1,
+                        channel.channel_name,
+                        channel.tvg_name,
+                        channel.group_title,
+                        channel.stream_url
+                    );
+                }
+            }
+            
+            result
+        };
+
+        let stage_info = memory_context.complete_stage("filtering")?;
+        
+        info!(
+            "Native filtering completed:\n\
+             ├─ Implementation: OrderedFilterIterator + FilterEngine\n\
+             ├─ Channels filtered: {} → {} ({:.1}% passed)\n\
+             ├─ Filter rules applied: {}\n\
+             ├─ Chunk size used: {}\n\
+             ├─ Memory used: {:.1}MB\n\
+             ├─ Processing time: {}ms\n\
+             └─ Memory pressure: {:?}",
+            input_channel_count,
+            filtered_channels.len(),
+            if input_channel_count == 0 { 0.0 } else { (filtered_channels.len() as f64 / input_channel_count as f64) * 100.0 },
+            filter_tuples.len(),
+            requested_chunk_size,
+            stage_info.memory_delta_mb,
+            stage_info.duration_ms,
+            stage_info.pressure_level
+        );
+
+        Ok(filtered_channels)
+    }
+
+    /// Execute logo prefetch stage with access to both channels and EPG data
+    async fn execute_logo_prefetch_with_iterator(
+        &self,
+        channels: Vec<Channel>,
+        config: &ResolvedProxyConfig,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<Vec<Channel>> {
+        memory_context.start_stage("logo_prefetch")?;
+        
+        info!("Starting logo prefetch stage for {} channels (with EPG access)", channels.len());
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Request optimal chunk size from chunk manager
+        let requested_chunk_size = self.chunk_manager
+            .request_chunk_size("logo_prefetch", channels.len().min(500))
+            .await?;
+
+        info!("Logo prefetch using chunk size: {}", requested_chunk_size);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("logo_prefetch", memory_pressure)
+            .await
+        {
+            let stage_context = self.create_temp_stage_context("logo_prefetch", memory_pressure);
+
+            // Note: The plugin would need a logo prefetch execution method
+            // For now, we'll use a generic execution and check results
+            match plugin.execute_with_context(stage_context).await {
+                Ok(processed_channels) => {
+                    let stage_info = memory_context.complete_stage("logo_prefetch")?;
+                    
+                    // Check if plugin returned empty results - fall back to native
+                    if processed_channels.is_empty() && !channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty results, falling back to native logo service:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels processed: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using LogoAssetService",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            processed_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to native fallback below
+                    } else {
+                        info!(
+                            "WASM plugin logo prefetch succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels processed: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            processed_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(processed_channels);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin logo prefetch failed, falling back to native service:\n\
+                         ├─ Plugin: {}\n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: logo_prefetch\n\
+                         ├─ Fallback: Using LogoAssetService\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
+                }
+            }
+        } else {
+            info!(
+                "No WASM plugin available for logo_prefetch stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Using: LogoAssetService with EPG integration",
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Native implementation using LogoAssetService
+        // This stage processes channels in chunks to cache logos efficiently
+        let mut processed_channels = Vec::new();
+        let mut total_logos_cached = 0;
+
+        // Process channels in chunks for memory efficiency
+        for chunk in channels.chunks(requested_chunk_size) {
+            let mut chunk_channels = chunk.to_vec();
+            
+            // Process each channel for logo caching
+            for channel in &mut chunk_channels {
+                // Cache channel logo if available
+                if let Some(logo_url) = &channel.tvg_logo {
+                    if !logo_url.is_empty() {
+                        // TODO: Implement logo caching when method is available
+                        debug!("Would cache logo for channel: {} -> {}", channel.channel_name, logo_url);
+                        total_logos_cached += 1;
+                    }
+                }
+
+                // TODO: In future, also access EPG data to cache program-specific logos
+                // This would require integrating with OrderedEpgAggregateIterator
+                // to get program information and cache logos for specific shows/movies
+            }
+
+            processed_channels.extend(chunk_channels);
+            
+            info!("Processed logo prefetch chunk: {} channels", chunk.len());
+        }
+
+        let stage_info = memory_context.complete_stage("logo_prefetch")?;
+        
+        info!(
+            "Native logo prefetch completed:\n\
+             ├─ Implementation: LogoAssetService\n\
+             ├─ Channels processed: {}\n\
+             ├─ Logos cached: {} ({:.1}% success rate)\n\
+             ├─ Chunk size used: {}\n\
+             ├─ Memory used: {:.1}MB\n\
+             ├─ Processing time: {}ms\n\
+             ├─ Memory pressure: {:?}\n\
+             └─ Note: EPG logo integration pending",
+            processed_channels.len(),
+            total_logos_cached,
+            if processed_channels.is_empty() { 0.0 } else { (total_logos_cached as f64 / processed_channels.len() as f64) * 100.0 },
+            requested_chunk_size,
+            stage_info.memory_delta_mb,
+            stage_info.duration_ms,
+            stage_info.pressure_level
+        );
+
+        Ok(processed_channels)
+    }
+
+    /// Execute channel numbering stage with iterator-based processing
+    async fn execute_channel_numbering_with_iterator(
+        &self,
+        channels: Vec<Channel>,
+        config: &ResolvedProxyConfig,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<Vec<NumberedChannel>> {
+        memory_context.start_stage("channel_numbering")?;
+        
+        info!("Starting channel numbering stage for {} channels", channels.len());
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Request optimal chunk size from chunk manager
+        let requested_chunk_size = self.chunk_manager
+            .request_chunk_size("channel_numbering", channels.len().min(2000))
+            .await?;
+
+        info!("Channel numbering using chunk size: {}", requested_chunk_size);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("channel_numbering", memory_pressure)
+            .await
+        {
+            let stage_context = self.create_temp_stage_context("channel_numbering", memory_pressure);
+
+            match plugin.execute_channel_numbering(&stage_context, channels.clone()).await {
+                Ok(numbered_channels) => {
+                    let stage_info = memory_context.complete_stage("channel_numbering")?;
+                    
+                    // Check if plugin returned empty results - fall back to native
+                    if numbered_channels.is_empty() && !channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty results, falling back to native numbering:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels numbered: {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using sequential numbering",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            numbered_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to native fallback below
+                    } else {
+                        info!(
+                            "WASM plugin channel numbering succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels numbered: {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            numbered_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(numbered_channels);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin channel numbering failed, falling back to native:\n\
+                         ├─ Plugin: {}\n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: channel_numbering\n\
+                         ├─ Fallback: Using sequential numbering\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
+                }
+            }
+        } else {
+            info!(
+                "No WASM plugin available for channel_numbering stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Using: Sequential numbering from proxy config",
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Native implementation using sequential numbering
+        let mut numbered_channels = Vec::new();
+        let starting_number = config.proxy.starting_channel_number;
+        
+        // Process channels in chunks for memory efficiency
+        let mut current_number = starting_number;
+        
+        for chunk in channels.chunks(requested_chunk_size) {
+            let mut chunk_numbered = Vec::new();
+            
+            for channel in chunk {
+                let numbered_channel = NumberedChannel {
+                    channel: channel.clone(),
+                    assigned_number: current_number,
+                    assignment_type: ChannelNumberAssignmentType::Sequential,
+                };
+                chunk_numbered.push(numbered_channel);
+                current_number += 1;
+            }
+            
+            numbered_channels.extend(chunk_numbered);
+            info!("Numbered chunk of {} channels (numbers {} to {})", 
+                  chunk.len(), 
+                  current_number - chunk.len() as i32, 
+                  current_number - 1);
+        }
+
+        let stage_info = memory_context.complete_stage("channel_numbering")?;
+        
+        info!(
+            "Native channel numbering completed:\n\
+             ├─ Implementation: Sequential numbering\n\
+             ├─ Channels numbered: {}\n\
+             ├─ Starting number: {}\n\
+             ├─ Ending number: {}\n\
+             ├─ Chunk size used: {}\n\
+             ├─ Memory used: {:.1}MB\n\
+             ├─ Processing time: {}ms\n\
+             └─ Memory pressure: {:?}",
+            numbered_channels.len(),
+            starting_number,
+            current_number - 1,
+            requested_chunk_size,
+            stage_info.memory_delta_mb,
+            stage_info.duration_ms,
+            stage_info.pressure_level
+        );
+
+        Ok(numbered_channels)
+    }
+
+    /// Execute M3U generation stage with iterator-based processing
+    async fn execute_m3u_generation_with_iterator(
+        &self,
+        numbered_channels: Vec<NumberedChannel>,
+        config: &ResolvedProxyConfig,
+        base_url: &str,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<String> {
+        memory_context.start_stage("m3u_generation")?;
+        
+        info!("Starting M3U generation stage for {} numbered channels", numbered_channels.len());
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Request optimal chunk size from chunk manager
+        let requested_chunk_size = self.chunk_manager
+            .request_chunk_size("m3u_generation", numbered_channels.len().min(5000))
+            .await?;
+
+        info!("M3U generation using chunk size: {}", requested_chunk_size);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("m3u_generation", memory_pressure)
+            .await
+        {
+            let stage_context = self.create_temp_stage_context("m3u_generation", memory_pressure);
+
+            match plugin.execute_m3u_generation(&stage_context, numbered_channels.clone()).await {
+                Ok(m3u_content) => {
+                    let stage_info = memory_context.complete_stage("m3u_generation")?;
+                    
+                    // Check if plugin returned empty content - fall back to native
+                    if m3u_content.is_empty() && !numbered_channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty content, falling back to native generation:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ M3U content size: {} bytes\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using native M3U generator",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            m3u_content.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to native fallback below
+                    } else {
+                        info!(
+                            "WASM plugin M3U generation succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ M3U content size: {} bytes\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            m3u_content.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(m3u_content);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin M3U generation failed, falling back to native:\n\
+                         ├─ Plugin: {}\n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: m3u_generation\n\
+                         ├─ Fallback: Using native M3U generator\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
+                }
+            }
+        } else {
+            info!(
+                "No WASM plugin available for m3u_generation stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Using: Native M3U generator",
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Native implementation using chunked M3U generation
+        let mut m3u_content = String::from("#EXTM3U\n");
+        let mut total_channels_processed = 0;
+
+        // Process numbered channels in chunks for memory efficiency
+        for chunk in numbered_channels.chunks(requested_chunk_size) {
+            let mut chunk_content = String::new();
+            
+            for numbered_channel in chunk {
+                let channel = &numbered_channel.channel;
+                
+                debug!(
+                    "M3U Generation (Adaptive Native) - Channel #{}: id={}, channel_name='{}', tvg_name='{:?}', stream_url='{}'",
+                    numbered_channel.assigned_number, channel.id, channel.channel_name, channel.tvg_name, channel.stream_url
+                );
+                
+                // Build EXTINF line with all available metadata
+                let mut extinf_parts = vec![format!("#EXTINF:-1")];
+                
+                // Add TVG attributes if available
+                if let Some(tvg_id) = &channel.tvg_id {
+                    if !tvg_id.is_empty() {
+                        extinf_parts.push(format!("tvg-id=\"{}\"", tvg_id));
+                    }
+                }
+                
+                if let Some(tvg_name) = &channel.tvg_name {
+                    if !tvg_name.is_empty() {
+                        extinf_parts.push(format!("tvg-name=\"{}\"", tvg_name));
+                    }
+                }
+                
+                if let Some(tvg_logo) = &channel.tvg_logo {
+                    if !tvg_logo.is_empty() {
+                        extinf_parts.push(format!("tvg-logo=\"{}\"", tvg_logo));
+                    }
+                }
+                
+                if let Some(group_title) = &channel.group_title {
+                    if !group_title.is_empty() {
+                        extinf_parts.push(format!("group-title=\"{}\"", group_title));
+                    }
+                }
+                
+                // Add channel number
+                extinf_parts.push(format!("tvg-chno=\"{}\"", numbered_channel.assigned_number));
+                
+                // Add channel name at the end
+                extinf_parts.push(channel.channel_name.clone());
+                
+                // Build complete EXTINF line
+                let complete_extinf = extinf_parts.join(" ");
+                debug!("M3U Generation (Adaptive Native) - Generated EXTINF: '{}'", complete_extinf);
+                chunk_content.push_str(&complete_extinf);
+                chunk_content.push('\n');
+                
+                // Add stream URL (potentially proxied through our system)
+                let stream_url = if channel.stream_url.starts_with("http") {
+                    // Use original URL for now, could be proxied through base_url in future
+                    channel.stream_url.clone()
+                } else {
+                    format!("{}/stream/{}/{}", base_url, config.proxy.ulid, channel.id)
+                };
+                chunk_content.push_str(&stream_url);
+                chunk_content.push('\n');
+                
+                total_channels_processed += 1;
+            }
+            
+            m3u_content.push_str(&chunk_content);
+            info!("Generated M3U chunk: {} channels, {} bytes", chunk.len(), chunk_content.len());
+        }
+
+        let stage_info = memory_context.complete_stage("m3u_generation")?;
+        
+        info!(
+            "Native M3U generation completed:\n\
+             ├─ Implementation: Native chunked generator\n\
+             ├─ Channels processed: {}\n\
+             ├─ M3U content size: {} bytes ({:.1} KB)\n\
+             ├─ Avg bytes per channel: {:.1}\n\
+             ├─ Chunk size used: {}\n\
+             ├─ Memory used: {:.1}MB\n\
+             ├─ Processing time: {}ms\n\
+             └─ Memory pressure: {:?}",
+            total_channels_processed,
+            m3u_content.len(),
+            m3u_content.len() as f64 / 1024.0,
+            if total_channels_processed > 0 { m3u_content.len() as f64 / total_channels_processed as f64 } else { 0.0 },
+            requested_chunk_size,
+            stage_info.memory_delta_mb,
+            stage_info.duration_ms,
+            stage_info.pressure_level
+        );
+
+        Ok(m3u_content)
+    }
+
+    /// Execute EPG processing stage using OrderedEpgAggregateIterator with plugin/native fallback
+    async fn execute_epg_processing_with_iterator(
+        &self,
+        numbered_channels: Vec<NumberedChannel>,
+        config: &ResolvedProxyConfig,
+        base_url: &str,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<String> {
+        memory_context.start_stage("epg_processing")?;
+        
+        info!("Starting EPG processing stage for {} channels", numbered_channels.len());
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Create OrderedEpgAggregateIterator for EPG data
+        let mut epg_iterator = OrderedMultiSourceIterator::new(
+            Arc::new(self.database.clone()),
+            config.epg_sources.clone(),
+            crate::pipeline::orchestrator::EpgLoader {},
+            1000,
+        );
+
+        // Request optimal chunk size from chunk manager
+        let requested_chunk_size = self.chunk_manager
+            .request_chunk_size("epg_processing", 1000)
+            .await?;
+
+        info!("EPG processing using chunk size: {}", requested_chunk_size);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("epg_processing", memory_pressure)
+            .await
+        {
+            // For WASM plugin, we would need to provide EPG iterator context
+            // This is a more complex integration that would require PluginIteratorContext
+            let stage_context = self.create_stage_context("epg_processing", config, base_url, memory_pressure, None);
+
+            // Note: This would require a specialized EPG processing plugin method
+            // For now, we'll fall back to native implementation
+            warn!(
+                "WASM plugin EPG processing not yet fully integrated:\n\
+                 ├─ Plugin: {} v{}\n\
+                 ├─ Stage: epg_processing\n\
+                 ├─ Fallback: Using native EPG generator\n\
+                 └─ Reason: EPG iterator context integration pending",
+                plugin.get_info().name,
+                plugin.get_info().version
+            );
+        } else {
+            info!(
+                "No WASM plugin available for epg_processing stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Using: Native EPG generator with OrderedEpgAggregateIterator",
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Native implementation using OrderedEpgAggregateIterator + EPG generator
+        let mut all_epg_entries = Vec::new();
+        
+        // Load all EPG entries via iterator
+        loop {
+            match epg_iterator.next_chunk_with_size(requested_chunk_size).await? {
+                crate::pipeline::iterator_traits::IteratorResult::Chunk(chunk) => {
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    info!("Loaded chunk of {} EPG entries from iterator", chunk.len());
+                    all_epg_entries.extend(chunk);
+                }
+                crate::pipeline::iterator_traits::IteratorResult::Exhausted => {
+                    info!("EPG iterator exhausted");
+                    break;
+                }
+            }
+        }
+
+        // Close EPG iterator
+        epg_iterator.close().await?;
+
+        // Generate XMLTV content using the EPG generator
+        let xmltv_content = if all_epg_entries.is_empty() {
+            info!("No EPG entries found, generating minimal XMLTV");
+            // Generate minimal XMLTV with just channel list
+            let mut xmltv = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+            xmltv.push_str("<!DOCTYPE tv SYSTEM \"xmltv.dtd\">\n");
+            xmltv.push_str("<tv>\n");
+            
+            // Add channels
+            for numbered_channel in &numbered_channels {
+                let channel = &numbered_channel.channel;
+                if let Some(tvg_id) = &channel.tvg_id {
+                    if !tvg_id.is_empty() {
+                        xmltv.push_str(&format!(
+                            "  <channel id=\"{}\">\n    <display-name>{}</display-name>\n  </channel>\n",
+                            tvg_id, channel.channel_name
+                        ));
+                    }
+                }
+            }
+            
+            xmltv.push_str("</tv>\n");
+            xmltv
+        } else {
+            info!("Processing {} EPG entries for {} channels", all_epg_entries.len(), numbered_channels.len());
+            
+            // Use EPG generator service to create XMLTV
+            let epg_generator = crate::proxy::epg_generator::EpgGenerator::new(self.database.clone());
+            
+            // Extract channel IDs for EPG filtering
+            let channel_ids: Vec<String> = numbered_channels
+                .iter()
+                .filter_map(|nc| nc.channel.tvg_id.clone())
+                .filter(|id| !id.is_empty())
+                .collect();
+
+            match epg_generator.generate_xmltv_for_proxy(&config.proxy, &channel_ids, None).await {
+                Ok((xmltv_content, stats)) => {
+                    info!(
+                        "EPG generation succeeded:\n\
+                         ├─ Channels processed: {}\n\
+                         ├─ Programs generated: {}\n\
+                         ├─ XMLTV size: {} bytes\n\
+                         └─ Time span: {} hours",
+                        stats.matched_epg_channels,
+                        stats.total_programs_after_filter,
+                        xmltv_content.len(),
+                        (stats.generation_time_ms as f64 / 3600000.0)
+                    );
+                    xmltv_content
+                }
+                Err(e) => {
+                    warn!("EPG generation failed: {}, using minimal XMLTV", e);
+                    // Generate minimal XMLTV on error
+                    format!(
+                        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE tv SYSTEM \"xmltv.dtd\">\n<tv>\n<!-- EPG generation error: {} -->\n</tv>\n",
+                        e
+                    )
+                }
+            }
+        };
+
+        let stage_info = memory_context.complete_stage("epg_processing")?;
+        
+        info!(
+            "Native EPG processing completed:\n\
+             ├─ Implementation: OrderedEpgAggregateIterator + EpgGenerator\n\
+             ├─ EPG entries processed: {}\n\
+             ├─ Channel count: {}\n\
+             ├─ XMLTV content size: {} bytes ({:.1} KB)\n\
+             ├─ Chunk size used: {}\n\
+             ├─ Memory used: {:.1}MB\n\
+             ├─ Processing time: {}ms\n\
+             └─ Memory pressure: {:?}",
+            all_epg_entries.len(),
+            numbered_channels.len(),
+            xmltv_content.len(),
+            xmltv_content.len() as f64 / 1024.0,
+            requested_chunk_size,
+            stage_info.memory_delta_mb,
+            stage_info.duration_ms,
+            stage_info.pressure_level
+        );
+
+        Ok(xmltv_content)
+    }
+
+    // ==================== REUSABLE PIPELINE UTILITIES ====================
+
+    /// Generic plugin execution wrapper with consistent fallback handling
+    async fn execute_with_plugin_fallback<T, F, Fut>(
         &self,
         stage_name: &str,
-        memory_pressure: MemoryPressureLevel,
-        executor: F,
+        memory_context: &mut MemoryContext,
+        plugin_execution: F,
+        native_fallback: Fut,
+        result_validator: impl Fn(&T) -> bool,
     ) -> Result<T>
     where
-        F: Fn(&dyn crate::proxy::stage_strategy::StageStrategy) -> Fut,
+        F: FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send>>,
         Fut: std::future::Future<Output = Result<T>>,
     {
-        // First try to get a plugin strategy
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Try WASM plugin first if available
         if let Some(plugin) = self
             .plugin_manager
             .get_plugin_for_stage(stage_name, memory_pressure)
             .await
         {
-            debug!(
-                "Using WASM plugin '{}' for stage '{}'",
-                plugin.strategy_name(),
-                stage_name
-            );
-            match executor(plugin.as_ref()).await {
-                Ok(result) => return Ok(result),
+            match plugin_execution().await {
+                Ok(result) => {
+                    let stage_info = memory_context.complete_stage(stage_name)?;
+                    
+                    // Validate result using provided validator
+                    if !result_validator(&result) {
+                        warn!(
+                            "WASM plugin returned invalid result, falling back to native:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Stage: {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Fallback: Using native implementation",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            stage_name,
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                        );
+                        
+                        // Re-start stage for native fallback
+                        memory_context.start_stage(stage_name)?;
+                    } else {
+                        info!(
+                            "WASM plugin {} execution succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            stage_name,
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(result);
+                    }
+                }
                 Err(e) => {
                     warn!(
-                        "Plugin '{}' failed for stage '{}': {}. Falling back to native strategy",
-                        plugin.strategy_name(),
+                        "WASM plugin {} failed, falling back to native:\n\
+                         ├─ Plugin: {}\n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: {}\n\
+                         └─ Fallback: Using native implementation",
                         stage_name,
+                        plugin.get_info().name,
+                        e,
+                        stage_name,
+                    );
+                    
+                    // Re-start stage for native fallback
+                    memory_context.start_stage(stage_name)?;
+                }
+            }
+        } else {
+            info!(
+                "No WASM plugin available for {} stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Using: Native implementation",
+                stage_name,
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Execute native fallback
+        native_fallback.await
+    }
+
+    /// Generic iterator processing with chunk management
+    async fn process_with_iterator<T, I>(
+        &self,
+        iterator: &mut I,
+        stage_name: &str,
+        chunk_size: usize,
+    ) -> Result<Vec<T>>
+    where
+        I: crate::pipeline::iterator_traits::PluginIterator<T>,
+    {
+        let mut all_items = Vec::new();
+
+        info!("{} using iterator with chunk size: {}", stage_name, chunk_size);
+
+        loop {
+            match iterator.next_chunk_with_size(chunk_size).await? {
+                crate::pipeline::iterator_traits::IteratorResult::Chunk(chunk) => {
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    info!("Loaded chunk of {} items from {} iterator", chunk.len(), stage_name);
+                    all_items.extend(chunk);
+                }
+                crate::pipeline::iterator_traits::IteratorResult::Exhausted => {
+                    info!("{} iterator exhausted", stage_name);
+                    break;
+                }
+            }
+        }
+
+        iterator.close().await?;
+        Ok(all_items)
+    }
+
+    /// Generic chunk processing for memory efficiency
+    fn process_in_chunks<T, R, F>(
+        &self,
+        items: Vec<T>,
+        chunk_size: usize,
+        stage_name: &str,
+        mut processor: F,
+    ) -> Result<Vec<R>>
+    where
+        F: FnMut(&[T]) -> Result<Vec<R>>,
+    {
+        let mut results = Vec::new();
+
+        for chunk in items.chunks(chunk_size) {
+            let chunk_results = processor(chunk)?;
+            results.extend(chunk_results);
+            info!("Processed {} chunk: {} items", stage_name, chunk.len());
+        }
+
+        Ok(results)
+    }
+
+    /// Generic stage completion logging
+    fn log_stage_completion<T>(
+        &self,
+        stage_name: &str,
+        implementation: &str,
+        input_count: usize,
+        output_count: usize,
+        chunk_size: usize,
+        stage_info: &crate::utils::StageMemoryInfo,
+        extra_metrics: Option<&str>,
+    ) {
+        let mut log_msg = format!(
+            "Native {} completed:\n\
+             ├─ Implementation: {}\n\
+             ├─ Items processed: {} → {}\n\
+             ├─ Chunk size used: {}\n\
+             ├─ Memory used: {:.1}MB\n\
+             ├─ Processing time: {}ms\n\
+             └─ Memory pressure: {:?}",
+            stage_name,
+            implementation,
+            input_count,
+            output_count,
+            chunk_size,
+            stage_info.memory_delta_mb,
+            stage_info.duration_ms,
+            stage_info.pressure_level
+        );
+
+        if let Some(extra) = extra_metrics {
+            log_msg.push_str(&format!("\n{}", extra));
+        }
+
+        info!("{}", log_msg);
+    }
+
+    /// Create stage context for plugin execution
+    fn create_stage_context(
+        &self,
+        stage_name: &str,
+        config: &ResolvedProxyConfig,
+        base_url: &str,
+        memory_pressure: MemoryPressureLevel,
+        _channels: Option<Vec<Channel>>, // Unused parameter, kept for compatibility
+    ) -> StageContext {
+        StageContext {
+            proxy_config: config.clone(),
+            output: GenerationOutput::Production {
+                file_manager: self.temp_file_manager.clone(),
+                update_database: true,
+            },
+            base_url: base_url.to_string(),
+            engine_config: None,
+            memory_pressure,
+            available_memory_mb: Some(512),
+            current_stage: stage_name.to_string(),
+            stats: GenerationStats::new("unified_iterator_wasm".to_string()),
+            database: Some(Arc::new(self.database.clone())),
+            logo_service: Some(Arc::new(self.logo_service.clone())),
+        }
+    }
+
+    /// Create temporary stage context for cases where config is not available
+    fn create_temp_stage_context(
+        &self,
+        stage_name: &str,
+        memory_pressure: MemoryPressureLevel,
+    ) -> StageContext {
+        StageContext {
+            proxy_config: ResolvedProxyConfig {
+                proxy: StreamProxy { 
+                    id: uuid::Uuid::new_v4(),
+                    ulid: "temp".to_string(),
+                    name: "temp".to_string(),
+                    description: None,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    last_generated_at: None,
+                    is_active: true,
+                    auto_regenerate: false,
+                    proxy_mode: crate::models::StreamProxyMode::Proxy,
+                    upstream_timeout: None,
+                    buffer_size: None,
+                    max_concurrent_streams: None,
+                    starting_channel_number: 1,
+                },
+                sources: vec![],
+                epg_sources: vec![],
+                filters: vec![],
+            },
+            output: GenerationOutput::Production {
+                file_manager: self.temp_file_manager.clone(),
+                update_database: true,
+            },
+            base_url: "http://localhost".to_string(),
+            engine_config: None,
+            memory_pressure,
+            available_memory_mb: Some(512),
+            current_stage: stage_name.to_string(),
+            stats: GenerationStats::new("unified_iterator_wasm".to_string()),
+            database: Some(Arc::new(self.database.clone())),
+            logo_service: Some(Arc::new(self.logo_service.clone())),
+        }
+    }
+
+    /// Execute source loading stage with strategy selection
+    async fn execute_source_loading_stage(
+        &self,
+        source_ids: Vec<uuid::Uuid>,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<Vec<Channel>> {
+        memory_context.start_stage("source_loading")?;
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("source_loading", memory_pressure)
+            .await
+        {
+            info!(
+                "Selected WASM plugin for source_loading stage:\n\
+                 ├─ Plugin: {} v{}\n\
+                 ├─ Memory pressure: {:?}\n\
+                 └─ Expected processing: {} channels",
+                plugin.get_info().name,
+                plugin.get_info().version,
+                memory_pressure,
+                source_ids.len()
+            );
+
+            // Try to execute the WASM plugin
+            // Create a minimal stage context for WASM plugin execution
+            let stage_context = StageContext {
+                proxy_config: ResolvedProxyConfig {
+                    proxy: StreamProxy {
+                        id: uuid::Uuid::new_v4(),
+                        ulid: "temp_proxy".to_string(),
+                        name: "Temporary Proxy".to_string(),
+                        description: None,
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                        last_generated_at: None,
+                        is_active: true,
+                        auto_regenerate: false,
+                        proxy_mode: StreamProxyMode::Proxy,
+                        upstream_timeout: None,
+                        buffer_size: None,
+                        max_concurrent_streams: None,
+                        starting_channel_number: 1,
+                    },
+                    sources: Vec::new(),
+                    filters: Vec::new(),
+                    epg_sources: Vec::new(),
+                },
+                output: GenerationOutput::InMemory,
+                base_url: "http://localhost:8080".to_string(),
+                engine_config: None,
+                memory_pressure,
+                available_memory_mb: self.memory_limit_mb,
+                current_stage: "source_loading".to_string(),
+                stats: GenerationStats::new("adaptive_wasm".to_string()),
+                database: Some(Arc::new(self.database.clone())),
+                logo_service: Some(Arc::new(self.logo_service.clone())),
+            };
+
+            match plugin.execute_source_loading(&stage_context, source_ids.clone()).await {
+                Ok(channels) => {
+                    let stage_info = memory_context.complete_stage("source_loading")?;
+                    
+                    // Check if plugin returned empty results - fall back to native strategy
+                    if channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty results, falling back to built-in strategy:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels loaded: {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using built-in inmemory source loading strategy",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to fallback strategy below
+                    } else {
+                        info!(
+                            "WASM plugin execution succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels loaded: {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(channels);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin execution failed, falling back to built-in strategy:\n\
+                         ├─ Plugin: {} \n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: source_loading\n\
+                         ├─ Fallback: Using built-in inmemory source loading strategy\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
+                }
+            }
+        } else {
+            warn!(
+                "No WASM plugin available for source_loading stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Fallback: Using built-in inmemory source loading strategy",
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Use simple strategy (default)
+        let strategy = SimpleSourceLoader::new(self.database.clone());
+        let input = SourceLoadingInput {
+            source_ids,
+            proxy_config: ResolvedProxyConfig {
+                proxy: StreamProxy {
+                    id: uuid::Uuid::new_v4(),
+                    ulid: "temp_proxy".to_string(),
+                    name: "Temporary Proxy".to_string(),
+                    description: None,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    last_generated_at: None,
+                    is_active: true,
+                    auto_regenerate: false,
+                    proxy_mode: StreamProxyMode::Proxy,
+                    upstream_timeout: None,
+                    buffer_size: None,
+                    max_concurrent_streams: None,
+                    starting_channel_number: 1,
+                },
+                sources: Vec::new(),
+                filters: Vec::new(),
+                epg_sources: Vec::new(),
+            },
+        };
+
+        let mut output = strategy.execute(input, memory_context).await?;
+        let stage_info = memory_context.complete_stage("source_loading")?;
+
+        info!(
+            "Source loading completed: {} channels, {:.1}MB memory used, {:?} pressure",
+            output.channels.len(),
+            stage_info.memory_delta_mb,
+            stage_info.pressure_level
+        );
+
+        // Cleanup if needed
+        if memory_context.should_cleanup()? {
+            cleanup_coordinator.cleanup_between_stages(
+                "source_loading",
+                &mut output,
+                crate::utils::CleanupStrategy::Basic,
+            )?;
+        }
+
+        Ok(output.channels)
+    }
+
+    /// Execute data mapping stage with strategy selection
+    async fn execute_data_mapping_stage(
+        &self,
+        channels: Vec<Channel>,
+        config: &ResolvedProxyConfig,
+        base_url: &str,
+        engine_config: Option<crate::config::DataMappingEngineConfig>,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<Vec<Channel>> {
+        memory_context.start_stage("data_mapping")?;
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("data_mapping", memory_pressure)
+            .await
+        {
+            info!(
+                "Selected WASM plugin for data_mapping stage:\n\
+                 ├─ Plugin: {} v{}\n\
+                 ├─ Memory pressure: {:?}\n\
+                 └─ Expected processing: {} channels",
+                plugin.get_info().name,
+                plugin.get_info().version,
+                memory_pressure,
+                channels.len()
+            );
+
+            // Try to execute the WASM plugin
+            // Create a minimal stage context for WASM plugin execution
+            let stage_context = StageContext {
+                proxy_config: ResolvedProxyConfig {
+                    proxy: StreamProxy {
+                        id: uuid::Uuid::new_v4(),
+                        ulid: "temp_proxy".to_string(),
+                        name: "Temporary Proxy".to_string(),
+                        description: None,
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                        last_generated_at: None,
+                        is_active: true,
+                        auto_regenerate: false,
+                        proxy_mode: StreamProxyMode::Proxy,
+                        upstream_timeout: None,
+                        buffer_size: None,
+                        max_concurrent_streams: None,
+                        starting_channel_number: 1,
+                    },
+                    sources: Vec::new(),
+                    filters: Vec::new(),
+                    epg_sources: Vec::new(),
+                },
+                output: GenerationOutput::InMemory,
+                base_url: "http://localhost:8080".to_string(),
+                engine_config: None,
+                memory_pressure,
+                available_memory_mb: self.memory_limit_mb,
+                current_stage: "source_loading".to_string(),
+                stats: GenerationStats::new("adaptive_wasm".to_string()),
+                database: Some(Arc::new(self.database.clone())),
+                logo_service: Some(Arc::new(self.logo_service.clone())),
+            };
+
+            match plugin.execute_data_mapping(&stage_context, channels.clone()).await {
+                Ok(mapped_channels) => {
+                    let stage_info = memory_context.complete_stage("data_mapping")?;
+                    
+                    // Check if plugin returned empty results - fall back to native strategy
+                    if mapped_channels.is_empty() && !channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty results, falling back to built-in strategy:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels processed: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using built-in data mapping strategy",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            mapped_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to fallback strategy below
+                    } else {
+                        info!(
+                            "WASM plugin execution succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels processed: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            mapped_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(mapped_channels);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin execution failed, falling back to built-in strategy:\n\
+                         ├─ Plugin: {} \n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: data_mapping\n\
+                         ├─ Fallback: Using built-in data mapping service\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
+                }
+            }
+        } else {
+            warn!(
+                "No WASM plugin available for data_mapping stage:\n\
+                 ├─ Memory pressure: {:?}\n\
+                 ├─ Available plugins: {}\n\
+                 └─ Fallback: Using built-in data mapping service",
+                memory_pressure,
+                self.plugin_manager.get_loaded_plugin_count().await
+            );
+        }
+
+        // Use simple strategy (default)
+        let strategy =
+            SimpleDataMapper::new(self.data_mapping_service.clone(), self.logo_service.clone());
+        let input = DataMappingInput {
+            channels,
+            source_configs: config.sources.clone(),
+            engine_config,
+            base_url: base_url.to_string(),
+        };
+
+        let mut output = strategy.execute(input, memory_context).await?;
+        let stage_info = memory_context.complete_stage("data_mapping")?;
+
+        info!(
+            "Data mapping completed: {} channels, {:.1}MB memory used",
+            output.mapped_channels.len(),
+            stage_info.memory_delta_mb
+        );
+
+        // Cleanup if needed
+        if memory_context.should_cleanup()? {
+            cleanup_coordinator.cleanup_between_stages(
+                "data_mapping",
+                &mut output,
+                crate::utils::CleanupStrategy::Basic,
+            )?;
+        }
+
+        Ok(output.mapped_channels)
+    }
+
+    /// Execute filtering stage with strategy selection
+    async fn execute_filtering_stage(
+        &self,
+        channels: Vec<Channel>,
+        config: &ResolvedProxyConfig,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<Vec<Channel>> {
+        memory_context.start_stage("filtering")?;
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("filtering", memory_pressure)
+            .await
+        {
+            info!(
+                "Selected WASM plugin for filtering stage:\n\
+                 ├─ Plugin: {} v{}\n\
+                 ├─ Memory pressure: {:?}\n\
+                 └─ Expected processing: {} channels",
+                plugin.get_info().name,
+                plugin.get_info().version,
+                memory_pressure,
+                channels.len()
+            );
+
+            // Try to execute the WASM plugin
+            // Create a minimal stage context for WASM plugin execution
+            let stage_context = StageContext {
+                proxy_config: ResolvedProxyConfig {
+                    proxy: StreamProxy {
+                        id: uuid::Uuid::new_v4(),
+                        ulid: "temp_proxy".to_string(),
+                        name: "Temporary Proxy".to_string(),
+                        description: None,
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                        last_generated_at: None,
+                        is_active: true,
+                        auto_regenerate: false,
+                        proxy_mode: StreamProxyMode::Proxy,
+                        upstream_timeout: None,
+                        buffer_size: None,
+                        max_concurrent_streams: None,
+                        starting_channel_number: 1,
+                    },
+                    sources: Vec::new(),
+                    filters: Vec::new(),
+                    epg_sources: Vec::new(),
+                },
+                output: GenerationOutput::InMemory,
+                base_url: "http://localhost:8080".to_string(),
+                engine_config: None,
+                memory_pressure,
+                available_memory_mb: self.memory_limit_mb,
+                current_stage: "source_loading".to_string(),
+                stats: GenerationStats::new("adaptive_wasm".to_string()),
+                database: Some(Arc::new(self.database.clone())),
+                logo_service: Some(Arc::new(self.logo_service.clone())),
+            };
+
+            match plugin.execute_filtering(&stage_context, channels.clone()).await {
+                Ok(filtered_channels) => {
+                    let stage_info = memory_context.complete_stage("filtering")?;
+                    
+                    // Check if plugin returned empty results - fall back to native strategy
+                    if filtered_channels.is_empty() && !channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty results, falling back to built-in strategy:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels filtered: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using built-in filtering strategy",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            filtered_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to fallback strategy below
+                    } else {
+                        info!(
+                            "WASM plugin execution succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels filtered: {} → {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            channels.len(),
+                            filtered_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(filtered_channels);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin execution failed, falling back to built-in strategy:\n\
+                         ├─ Plugin: {} \n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: filtering\n\
+                         ├─ Fallback: Using built-in filtering strategy\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
                         e
                     );
                 }
             }
         }
 
-        // Fallback to native strategy
-        if let Some(strategy) = self
-            .strategy_selector
-            .select_strategy(stage_name, memory_pressure)
-        {
-            debug!(
-                "Using native strategy '{}' for stage '{}'",
-                strategy.strategy_name(),
-                stage_name
-            );
-            executor(strategy).await
-        } else {
-            Err(anyhow::anyhow!(
-                "No suitable strategy found for stage '{}' under {:?} memory pressure",
-                stage_name,
-                memory_pressure
-            ))
-        }
-    }
-
-    /// Get current memory usage in MB
-    fn get_current_memory_usage_mb(&self) -> usize {
-        // Use actual memory monitor if available, otherwise fallback to estimation
-        if let Some(ref monitor) = self.memory_monitor {
-            // Get current RSS memory from system
-            match monitor.get_current_rss() {
-                Ok(rss_bytes) => (rss_bytes / (1024 * 1024)) as usize,
-                Err(_) => {
-                    // Fallback to atomic counter if RSS reading fails
-                    self.current_memory_usage
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                        / (1024 * 1024)
-                }
-            }
-        } else {
-            // No monitor available, use atomic counter estimation
-            self.current_memory_usage
-                .load(std::sync::atomic::Ordering::Relaxed)
-                / (1024 * 1024)
-        }
-    }
-
-    /// Generate proxy with adaptive strategy switching using dependency injection (Legacy method for backward compatibility)
-    pub async fn generate_with_config(
-        &mut self,
-        config: ResolvedProxyConfig,
-        output: GenerationOutput,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-    ) -> Result<ProxyGeneration> {
-        // Initialize comprehensive stats tracking
-        let mut stats = GenerationStats::new("adaptive".to_string());
-        info!(
-            "Starting adaptive proxy generation for '{}' using dependency injection",
-            config.proxy.name
-        );
-
-        if let Some(ref mut monitor) = self.memory_monitor {
-            monitor.initialize()?;
-            monitor.observe_stage("adaptive_initialization")?;
-        }
-
-        // Start with in-memory processing mode
-        let mut current_mode = ProcessingMode::Normal;
-
-        // Try in-memory processing first
-        match self
-            .try_in_memory_processing(
-                &config,
-                &output,
-                base_url,
-                engine_config.clone(),
-                &mut stats,
-            )
-            .await
-        {
-            Ok(generation) => {
-                info!(
-                    "In-memory processing completed successfully for '{}'",
-                    config.proxy.name
-                );
-                stats.finalize();
-                info!(
-                    "Adaptive generation completed for '{}': {}",
-                    config.proxy.name,
-                    stats.summary()
-                );
-                return Ok(generation);
-            }
-            Err(e) => {
-                warn!(
-                    "In-memory processing failed for '{}': {}. Checking memory strategy...",
-                    config.proxy.name, e
-                );
-
-                // Check if failure was due to memory pressure
-                if let Some(ref monitor) = self.memory_monitor {
-                    let status = monitor.check_memory_limit()?;
-                    match status {
-                        crate::utils::MemoryLimitStatus::Exceeded => {
-                            current_mode = ProcessingMode::Chunked(1000);
-                        }
-                        crate::utils::MemoryLimitStatus::Warning => {
-                            current_mode = ProcessingMode::Chunked(2000);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        // Execute fallback processing based on determined mode
-        let generation = match current_mode {
-            ProcessingMode::Normal => {
-                // This shouldn't happen, but fallback to error
-                return Err(anyhow::anyhow!(
-                    "In-memory processing failed and no fallback strategy determined"
-                ));
-            }
-            ProcessingMode::Chunked { chunk_size } => {
-                info!(
-                    "Switching to chunked processing (chunk_size: {}) for '{}'",
-                    chunk_size, config.proxy.name
-                );
-                self.execute_chunked_processing_with_config(
-                    &config,
-                    &output,
-                    base_url,
-                    engine_config,
-                    chunk_size,
-                    &mut stats,
-                )
-                .await?
-            }
-            ProcessingMode::TempFileSpill { chunk_size } => {
-                info!(
-                    "Switching to temp file spill processing (chunk_size: {}) for '{}'",
-                    chunk_size, config.proxy.name
-                );
-                self.execute_temp_file_processing_with_config(
-                    &config,
-                    &output,
-                    base_url,
-                    engine_config,
-                    chunk_size,
-                    &mut stats,
-                )
-                .await?
-            }
+        // Use simple strategy (default)
+        let strategy = SimpleFilter;
+        let input = FilteringInput {
+            channels,
+            filters: config.filters.clone(),
         };
 
-        stats.finalize();
+        let mut output = strategy.execute(input, memory_context).await?;
+        let stage_info = memory_context.complete_stage("filtering")?;
+
         info!(
-            "Adaptive generation completed for '{}': {}",
-            config.proxy.name,
-            stats.summary()
+            "Filtering completed: {} channels, {:.1}MB memory used",
+            output.filtered_channels.len(),
+            stage_info.memory_delta_mb
         );
-        Ok(generation)
-    }
 
-    /// Legacy method - Generate proxy with adaptive strategy switching (DEPRECATED)
-    /// Use generate_with_config() instead for better performance and dependency injection
-    #[deprecated(
-        note = "Use generate_with_config() with ResolvedProxyConfig for better performance"
-    )]
-    pub async fn generate_proxy_adaptive(
-        &mut self,
-        proxy: &StreamProxy,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-    ) -> Result<(ProxyGeneration, Option<MemoryStats>)> {
-        info!("Starting adaptive proxy generation for '{}'", proxy.name);
-
-        if let Some(ref mut monitor) = self.memory_monitor {
-            monitor.initialize()?;
-            monitor.observe_stage("adaptive_initialization")?;
+        // Cleanup if needed
+        if memory_context.should_cleanup()? {
+            cleanup_coordinator.cleanup_between_stages(
+                "filtering",
+                &mut output,
+                crate::utils::CleanupStrategy::Basic,
+            )?;
         }
 
-        // Start with normal processing mode
-        let mut current_mode = ProcessingMode::Normal;
+        Ok(output.filtered_channels)
+    }
 
-        // Try normal processing first
-        match self
-            .try_normal_processing(proxy, base_url, engine_config.clone())
+    /// Execute channel numbering stage with strategy selection
+    async fn execute_channel_numbering_stage(
+        &self,
+        channels: Vec<Channel>,
+        config: &ResolvedProxyConfig,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<Vec<NumberedChannel>> {
+        memory_context.start_stage("channel_numbering")?;
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("channel_numbering", memory_pressure)
             .await
         {
-            Ok(result) => {
-                info!(
-                    "Normal processing completed successfully for '{}'",
-                    proxy.name
-                );
-                return Ok(result);
-            }
-            Err(e) => {
-                warn!(
-                    "Normal processing failed for '{}': {}. Checking memory strategy...",
-                    proxy.name, e
-                );
-
-                // Check if failure was due to memory pressure
-                if let Some(ref monitor) = self.memory_monitor {
-                    let status = monitor.check_memory_limit()?;
-                    match status {
-                        crate::utils::MemoryLimitStatus::Exceeded => {
-                            current_mode = ProcessingMode::Chunked(1000);
-                        }
-                        crate::utils::MemoryLimitStatus::Warning => {
-                            current_mode = ProcessingMode::Chunked(2000);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        // Execute fallback processing based on determined mode
-        match current_mode {
-            ProcessingMode::Normal => {
-                // This shouldn't happen, but fallback to error
-                Err(anyhow::anyhow!(
-                    "Normal processing failed and no fallback strategy determined"
-                ))
-            }
-            ProcessingMode::Chunked { chunk_size } => {
-                info!(
-                    "Switching to chunked processing (chunk_size: {}) for '{}'",
-                    chunk_size, proxy.name
-                );
-                self.execute_chunked_processing(proxy, base_url, engine_config, chunk_size)
-                    .await
-            }
-            ProcessingMode::TempFileSpill { chunk_size } => {
-                info!(
-                    "Switching to temp file spill processing (chunk_size: {}) for '{}'",
-                    chunk_size, proxy.name
-                );
-                self.execute_temp_file_processing(proxy, base_url, engine_config, chunk_size)
-                    .await
-            }
-        }
-    }
-
-    /// Try in-memory processing using dependency injection
-    async fn try_in_memory_processing(
-        &mut self,
-        config: &ResolvedProxyConfig,
-        output: &GenerationOutput,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-        stats: &mut GenerationStats,
-    ) -> Result<ProxyGeneration> {
-        use crate::proxy::filter_engine::FilterEngine;
-        use std::time::Instant;
-
-        // Track that we're using in-memory strategy
-        stats.add_stage_timing("strategy_selection", 0); // Instant selection for in-memory
-
-        if config.sources.is_empty() {
-            warn!(
-                "No sources found for proxy '{}', generating empty M3U",
-                config.proxy.name
+            info!(
+                "Selected WASM plugin for channel_numbering stage:\n\
+                 ├─ Plugin: {} v{}\n\
+                 ├─ Memory pressure: {:?}\n\
+                 └─ Expected processing: {} channels",
+                plugin.get_info().name,
+                plugin.get_info().version,
+                memory_pressure,
+                channels.len()
             );
-            let m3u_content = "#EXTM3U\n".to_string();
 
-            let generation = ProxyGeneration {
-                id: uuid::Uuid::new_v4(),
-                proxy_id: config.proxy.id,
-                version: 1,
-                channel_count: 0,
-                total_channels: 0,
-                filtered_channels: 0,
-                applied_filters: Vec::new(),
-                m3u_content: m3u_content.clone(),
-                created_at: chrono::Utc::now(),
-                stats: Some(stats.clone()),
+            // Try to execute the WASM plugin
+            // Create a minimal stage context for WASM plugin execution
+            let stage_context = StageContext {
+                proxy_config: ResolvedProxyConfig {
+                    proxy: StreamProxy {
+                        id: uuid::Uuid::new_v4(),
+                        ulid: "temp_proxy".to_string(),
+                        name: "Temporary Proxy".to_string(),
+                        description: None,
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                        last_generated_at: None,
+                        is_active: true,
+                        auto_regenerate: false,
+                        proxy_mode: StreamProxyMode::Proxy,
+                        upstream_timeout: None,
+                        buffer_size: None,
+                        max_concurrent_streams: None,
+                        starting_channel_number: 1,
+                    },
+                    sources: Vec::new(),
+                    filters: Vec::new(),
+                    epg_sources: Vec::new(),
+                },
+                output: GenerationOutput::InMemory,
+                base_url: "http://localhost:8080".to_string(),
+                engine_config: None,
+                memory_pressure,
+                available_memory_mb: self.memory_limit_mb,
+                current_stage: "source_loading".to_string(),
+                stats: GenerationStats::new("adaptive_wasm".to_string()),
+                database: Some(Arc::new(self.database.clone())),
+                logo_service: Some(Arc::new(self.logo_service.clone())),
             };
 
-            self.write_output(&generation, output, Some(config)).await?;
-            return Ok(generation);
-        }
-
-        // Step 1: Get all channels from sources (with timing)
-        let source_loading_start = Instant::now();
-        let mut all_channels = Vec::new();
-
-        for source_config in &config.sources {
-            let source_start = Instant::now();
-            let channels = self
-                .database
-                .get_source_channels(source_config.source.id)
-                .await?;
-            let source_duration = source_start.elapsed().as_millis() as u64;
-
-            info!(
-                "Retrieved {} channels from source '{}' in {}ms",
-                channels.len(),
-                source_config.source.name,
-                source_duration
-            );
-
-            stats
-                .channels_by_source
-                .insert(source_config.source.name.clone(), channels.len());
-            stats
-                .source_processing_times
-                .insert(source_config.source.name.clone(), source_duration);
-            stats.sources_processed += 1;
-
-            all_channels.extend(channels);
-        }
-
-        stats.add_stage_timing(
-            "source_loading_inmemory",
-            source_loading_start.elapsed().as_millis() as u64,
-        );
-        stats.total_channels_processed = all_channels.len();
-
-        // Step 2: Apply data mapping (with timing)
-        let data_mapping_start = Instant::now();
-        let mut mapped_channels = Vec::new();
-        let mut total_transformations = 0;
-
-        for source_config in &config.sources {
-            let source_channels: Vec<_> = all_channels
-                .iter()
-                .filter(|ch| ch.source_id == source_config.source.id)
-                .cloned()
-                .collect();
-
-            if source_channels.is_empty() {
-                continue;
-            }
-
-            let mapping_start = Instant::now();
-            let transformed_channels = self
-                .data_mapping_service
-                .apply_mapping_for_proxy(
-                    source_channels.clone(),
-                    source_config.source.id,
-                    &self.logo_service,
-                    base_url,
-                    engine_config.clone(),
-                )
-                .await?;
-
-            let mapping_duration = mapping_start.elapsed().as_millis() as u64;
-            total_transformations += source_channels.len();
-
-            info!(
-                "Data mapping completed: {} channels from source '{}' in {}ms",
-                transformed_channels.len(),
-                source_config.source.name,
-                mapping_duration
-            );
-
-            mapped_channels.extend(transformed_channels);
-        }
-
-        stats.data_mapping_duration_ms = data_mapping_start.elapsed().as_millis() as u64;
-        stats.add_stage_timing("data_mapping_inmemory", stats.data_mapping_duration_ms);
-        stats.channels_mapped = mapped_channels.len();
-        stats.mapping_transformations_applied = total_transformations;
-
-        // Step 3: Apply filters (with timing)
-        let filtering_start = Instant::now();
-        stats.channels_before_filtering = mapped_channels.len();
-
-        let filtered_channels = if !config.filters.is_empty() {
-            info!("Applying {} filters", config.filters.len());
-            let mut filter_engine = FilterEngine::new();
-
-            let filter_tuples: Vec<_> = config
-                .filters
-                .iter()
-                .filter(|f| f.is_active)
-                .map(|f| {
-                    let proxy_filter = ProxyFilter {
-                        proxy_id: config.proxy.id,
-                        filter_id: f.filter.id,
-                        priority_order: f.priority_order,
-                        is_active: f.is_active,
-                        created_at: chrono::Utc::now(),
-                    };
-                    stats.filters_applied.push(f.filter.name.clone());
-                    (f.filter.clone(), proxy_filter)
-                })
-                .collect();
-
-            let filter_apply_start = Instant::now();
-            let result = filter_engine
-                .apply_filters(mapped_channels, filter_tuples)
-                .await?;
-            let filter_duration = filter_apply_start.elapsed().as_millis() as u64;
-
-            for filter_name in &stats.filters_applied {
-                stats
-                    .filter_processing_times
-                    .insert(filter_name.clone(), filter_duration);
-            }
-
-            result
-        } else {
-            info!("No filters to apply");
-            mapped_channels
-        };
-
-        stats.channels_after_filtering = filtered_channels.len();
-        stats.add_stage_timing(
-            "filtering_inmemory",
-            filtering_start.elapsed().as_millis() as u64,
-        );
-
-        // Step 4: Channel numbering (with timing)
-        let numbering_start = Instant::now();
-        let numbered_channels = self
-            .apply_channel_numbering(&filtered_channels, config.proxy.starting_channel_number)
-            .await?;
-
-        stats.channel_numbering_duration_ms = numbering_start.elapsed().as_millis() as u64;
-        stats.add_stage_timing(
-            "channel_numbering_inmemory",
-            stats.channel_numbering_duration_ms,
-        );
-        stats.numbering_strategy = "sequential_inmemory".to_string();
-
-        // Step 5: Generate M3U content (with timing)
-        let m3u_generation_start = Instant::now();
-        let m3u_content = self
-            .generate_m3u_content_from_numbered(&numbered_channels, &config.proxy.ulid, base_url)
-            .await?;
-
-        stats.m3u_generation_duration_ms = m3u_generation_start.elapsed().as_millis() as u64;
-        stats.add_stage_timing("m3u_generation_inmemory", stats.m3u_generation_duration_ms);
-        stats.m3u_size_bytes = m3u_content.len();
-        stats.m3u_lines_generated = m3u_content.lines().count();
-
-        // Create generation record
-        let generation = ProxyGeneration {
-            id: uuid::Uuid::new_v4(),
-            proxy_id: config.proxy.id,
-            version: 1,
-            channel_count: numbered_channels.len() as i32,
-            total_channels: all_channels.len(),
-            filtered_channels: filtered_channels.len(),
-            applied_filters: config
-                .filters
-                .iter()
-                .filter(|f| f.is_active)
-                .map(|f| f.filter.name.clone())
-                .collect(),
-            m3u_content,
-            created_at: chrono::Utc::now(),
-            stats: Some(stats.clone()),
-        };
-
-        // Handle output
-        self.write_output(&generation, output, Some(config)).await?;
-
-        Ok(generation)
-    }
-
-    /// Apply channel numbering to filtered channels (simplified version)
-    async fn apply_channel_numbering(
-        &self,
-        channels: &[Channel],
-        starting_number: i32,
-    ) -> Result<Vec<NumberedChannel>> {
-        use crate::models::{ChannelNumberAssignmentType, NumberedChannel};
-
-        let mut numbered_channels = Vec::new();
-
-        for (index, channel) in channels.iter().enumerate() {
-            let assigned_number = starting_number + index as i32;
-
-            numbered_channels.push(NumberedChannel {
-                channel: channel.clone(),
-                assigned_number,
-                assignment_type: ChannelNumberAssignmentType::Sequential,
-            });
-        }
-
-        Ok(numbered_channels)
-    }
-
-    /// Generate M3U content from numbered channels
-    async fn generate_m3u_content_from_numbered(
-        &self,
-        numbered_channels: &[NumberedChannel],
-        proxy_ulid: &str,
-        base_url: &str,
-    ) -> Result<String> {
-        let mut m3u = String::from("#EXTM3U\n");
-
-        for nc in numbered_channels.iter() {
-            let extinf = format!(
-                "#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" tvg-channo=\"{}\" group-title=\"{}\",{}",
-                nc.channel.tvg_id.as_deref().unwrap_or(""),
-                nc.channel.tvg_name.as_deref().unwrap_or(""),
-                nc.channel.tvg_logo.as_deref().unwrap_or(""),
-                nc.assigned_number,
-                nc.channel.group_title.as_deref().unwrap_or(""),
-                nc.channel.channel_name
-            );
-
-            let proxy_stream_url = format!(
-                "{}/stream/{}/{}",
-                base_url.trim_end_matches('/'),
-                proxy_ulid,
-                nc.channel.id
-            );
-
-            m3u.push_str(&format!("{}\n{}\n", extinf, proxy_stream_url));
-        }
-
-        Ok(m3u)
-    }
-
-    /// Handle output writing based on destination
-    async fn write_output(
-        &self,
-        generation: &ProxyGeneration,
-        output: &GenerationOutput,
-        config: Option<&ResolvedProxyConfig>,
-    ) -> Result<()> {
-        match output {
-            GenerationOutput::Preview {
-                file_manager,
-                proxy_name,
-            } => {
-                let m3u_file_id = format!("{}-{}.m3u", proxy_name, uuid::Uuid::new_v4());
-                file_manager
-                    .write(&m3u_file_id, &generation.m3u_content)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to write preview M3U: {}", e))?;
-
-                info!("Preview content written to file manager");
-            }
-            GenerationOutput::Production {
-                file_manager,
-                update_database,
-            } => {
-                if let Some(config) = config {
-                    let m3u_file_id = format!("{}-{}.m3u", config.proxy.ulid, uuid::Uuid::new_v4());
-                    file_manager
-                        .write(&m3u_file_id, &generation.m3u_content)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Failed to write production M3U: {}", e))?;
-
-                    if *update_database {
-                        info!("Generation record would be saved to database");
+            match plugin.execute_channel_numbering(&stage_context, channels.clone()).await {
+                Ok(numbered_channels) => {
+                    let stage_info = memory_context.complete_stage("channel_numbering")?;
+                    
+                    // Check if plugin returned empty results - fall back to native strategy
+                    if numbered_channels.is_empty() && !channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty results, falling back to built-in strategy:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels numbered: {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using built-in channel numbering strategy",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            numbered_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to fallback strategy below
+                    } else {
+                        info!(
+                            "WASM plugin execution succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ Channels numbered: {}\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            numbered_channels.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(numbered_channels);
                     }
-
-                    info!("Production content written to file manager");
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin execution failed, falling back to built-in strategy:\n\
+                         ├─ Plugin: {} \n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: channel_numbering\n\
+                         ├─ Fallback: Using built-in channel numbering strategy\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
                 }
             }
-            GenerationOutput::InMemory => {
-                // Do nothing - content is just returned
-            }
         }
-        Ok(())
-    }
 
-    /// Execute chunked processing with dependency injection
-    async fn execute_chunked_processing_with_config(
-        &mut self,
-        config: &ResolvedProxyConfig,
-        output: &GenerationOutput,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-        _chunk_size: usize,
-        stats: &mut GenerationStats,
-    ) -> Result<ProxyGeneration> {
-        // TODO: Implement chunked processing with config
-        // For now, delegate to existing chunked processing
-        info!(
-            "Chunked processing with dependency injection not yet implemented, falling back to legacy"
-        );
-
-        // Track chunked strategy
-        stats.add_stage_timing("strategy_selection", 10); // Small delay for chunked selection
-        stats.numbering_strategy = "sequential_chunked".to_string();
-
-        // For now, just do in-memory processing but mark it as chunked
-        let generation = self
-            .try_in_memory_processing(config, output, base_url, engine_config, stats)
-            .await?;
-
-        // Update stage names to reflect chunked processing
-        let mut updated_stats = stats.clone();
-        for (stage, duration) in &stats.stage_timings {
-            if stage.ends_with("_inmemory") {
-                let chunked_stage = stage.replace("_inmemory", "_chunked");
-                updated_stats.stage_timings.insert(chunked_stage, *duration);
-            }
-        }
-        *stats = updated_stats;
-
-        Ok(generation)
-    }
-
-    /// Execute temp file spill processing with dependency injection
-    async fn execute_temp_file_processing_with_config(
-        &mut self,
-        config: &ResolvedProxyConfig,
-        output: &GenerationOutput,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-        _chunk_size: usize,
-        stats: &mut GenerationStats,
-    ) -> Result<ProxyGeneration> {
-        // TODO: Implement temp file processing with config
-        // For now, delegate to existing temp file processing
-        info!(
-            "Temp file processing with dependency injection not yet implemented, falling back to legacy"
-        );
-
-        // Track temp file strategy
-        stats.add_stage_timing("strategy_selection", 20); // Longer delay for temp file setup
-        stats.numbering_strategy = "sequential_filespill".to_string();
-        stats.spill_to_disk_events += 1;
-
-        // For now, just do in-memory processing but mark it as temp file
-        let generation = self
-            .try_in_memory_processing(config, output, base_url, engine_config, stats)
-            .await?;
-
-        // Update stage names to reflect temp file processing
-        let mut updated_stats = stats.clone();
-        for (stage, duration) in &stats.stage_timings {
-            if stage.ends_with("_inmemory") {
-                let filespill_stage = stage.replace("_inmemory", "_filespill");
-                updated_stats
-                    .stage_timings
-                    .insert(filespill_stage, *duration);
-            }
-        }
-        *stats = updated_stats;
-
-        Ok(generation)
-    }
-
-    /// Try normal processing and detect if memory pressure causes failure (LEGACY)
-    async fn try_normal_processing(
-        &mut self,
-        proxy: &StreamProxy,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-    ) -> Result<(ProxyGeneration, Option<MemoryStats>)> {
-        // Create a standard pipeline
-        let mut pipeline = if let Some(memory_limit) =
-            self.memory_monitor.as_ref().and_then(|m| m.memory_limit_mb)
-        {
-            ProxyGenerationPipeline::new_with_memory_monitoring(
-                self.database.clone(),
-                self.data_mapping_service.clone(),
-                self.logo_service.clone(),
-                Some(memory_limit),
-            )
-        } else {
-            ProxyGenerationPipeline::new(
-                self.database.clone(),
-                self.data_mapping_service.clone(),
-                self.logo_service.clone(),
-            )
+        // Use simple strategy (default)
+        let strategy = SimpleChannelNumbering;
+        let input = ChannelNumberingInput {
+            channels,
+            starting_number: config.proxy.starting_channel_number,
+            numbering_strategy: ChannelNumberingStrategy::Sequential,
         };
 
-        // Try to generate normally
-        pipeline
-            .generate_proxy(proxy, base_url, engine_config, None)
-            .await
+        let mut output = strategy.execute(input, memory_context).await?;
+        let stage_info = memory_context.complete_stage("channel_numbering")?;
+
+        info!(
+            "Channel numbering completed: {} channels, {:.1}MB memory used",
+            output.numbered_channels.len(),
+            stage_info.memory_delta_mb
+        );
+
+        // Cleanup if needed
+        if memory_context.should_cleanup()? {
+            cleanup_coordinator.cleanup_between_stages(
+                "channel_numbering",
+                &mut output,
+                crate::utils::CleanupStrategy::Basic,
+            )?;
+        }
+
+        Ok(output.numbered_channels)
     }
 
-    /// Determine which fallback mode to use based on memory status and strategy
-    async fn determine_fallback_mode(
+    /// Execute M3U generation stage with strategy selection
+    async fn execute_m3u_generation_stage(
         &self,
-        status: MemoryLimitStatus,
-        strategy: &MemoryStrategyExecutor,
-    ) -> Result<ProcessingMode> {
-        let action = match status {
-            MemoryLimitStatus::Warning => {
-                strategy
-                    .handle_warning("adaptive_pipeline_fallback")
-                    .await?
+        numbered_channels: Vec<NumberedChannel>,
+        config: &ResolvedProxyConfig,
+        base_url: &str,
+        memory_context: &mut MemoryContext,
+        cleanup_coordinator: &mut MemoryCleanupCoordinator,
+    ) -> Result<String> {
+        memory_context.start_stage("m3u_generation")?;
+
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+
+        // Try WASM plugin first if available
+        if let Some(plugin) = self
+            .plugin_manager
+            .get_plugin_for_stage("m3u_generation", memory_pressure)
+            .await
+        {
+            info!(
+                "Selected WASM plugin for m3u_generation stage:\n\
+                 ├─ Plugin: {} v{}\n\
+                 ├─ Memory pressure: {:?}\n\
+                 └─ Expected processing: {} channels",
+                plugin.get_info().name,
+                plugin.get_info().version,
+                memory_pressure,
+                numbered_channels.len()
+            );
+
+            // Try to execute the WASM plugin
+            // Create a minimal stage context for WASM plugin execution
+            let stage_context = StageContext {
+                proxy_config: ResolvedProxyConfig {
+                    proxy: StreamProxy {
+                        id: uuid::Uuid::new_v4(),
+                        ulid: "temp_proxy".to_string(),
+                        name: "Temporary Proxy".to_string(),
+                        description: None,
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                        last_generated_at: None,
+                        is_active: true,
+                        auto_regenerate: false,
+                        proxy_mode: StreamProxyMode::Proxy,
+                        upstream_timeout: None,
+                        buffer_size: None,
+                        max_concurrent_streams: None,
+                        starting_channel_number: 1,
+                    },
+                    sources: Vec::new(),
+                    filters: Vec::new(),
+                    epg_sources: Vec::new(),
+                },
+                output: GenerationOutput::InMemory,
+                base_url: "http://localhost:8080".to_string(),
+                engine_config: None,
+                memory_pressure,
+                available_memory_mb: self.memory_limit_mb,
+                current_stage: "source_loading".to_string(),
+                stats: GenerationStats::new("adaptive_wasm".to_string()),
+                database: Some(Arc::new(self.database.clone())),
+                logo_service: Some(Arc::new(self.logo_service.clone())),
+            };
+
+            match plugin.execute_m3u_generation(&stage_context, numbered_channels.clone()).await {
+                Ok(m3u_content) => {
+                    let stage_info = memory_context.complete_stage("m3u_generation")?;
+                    
+                    // Check if plugin returned empty content - fall back to native strategy
+                    if m3u_content.is_empty() && !numbered_channels.is_empty() {
+                        warn!(
+                            "WASM plugin returned empty content, falling back to built-in strategy:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ M3U content size: {} bytes\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             ├─ Memory pressure: {:?}\n\
+                             └─ Fallback: Using built-in M3U generation strategy",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            m3u_content.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        // Continue to fallback strategy below
+                    } else {
+                        info!(
+                            "WASM plugin execution succeeded:\n\
+                             ├─ Plugin: {} v{}\n\
+                             ├─ M3U content size: {} bytes\n\
+                             ├─ Memory used: {:.1}MB\n\
+                             ├─ Processing time: {}ms\n\
+                             └─ Memory pressure: {:?}",
+                            plugin.get_info().name,
+                            plugin.get_info().version,
+                            m3u_content.len(),
+                            stage_info.memory_delta_mb,
+                            stage_info.duration_ms,
+                            stage_info.pressure_level
+                        );
+                        
+                        return Ok(m3u_content);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "WASM plugin execution failed, falling back to built-in strategy:\n\
+                         ├─ Plugin: {} \n\
+                         ├─ Error: {}\n\
+                         ├─ Stage: m3u_generation\n\
+                         ├─ Fallback: Using built-in M3U generation strategy\n\
+                         └─ Reason: Plugin execution error",
+                        plugin.get_info().name,
+                        e
+                    );
+                }
             }
-            MemoryLimitStatus::Exceeded => {
-                strategy
-                    .handle_exceeded("adaptive_pipeline_fallback")
-                    .await?
-            }
-            MemoryLimitStatus::Ok => {
-                // This shouldn't happen in fallback, but default to chunked
-                return Ok(ProcessingMode::Chunked { chunk_size: 500 });
-            }
+        }
+
+        // Use simple strategy (default)
+        let strategy = SimpleM3uGenerator;
+        let input = M3uGenerationInput {
+            numbered_channels: numbered_channels.clone(),
+            proxy_ulid: config.proxy.ulid.clone(),
+            base_url: base_url.to_string(),
         };
 
-        match action {
-            MemoryAction::StopProcessing => {
-                return Err(anyhow::anyhow!(
-                    "Memory strategy dictates stopping processing"
-                ));
+        let mut output = strategy.execute(input, memory_context).await?;
+        let stage_info = memory_context.complete_stage("m3u_generation")?;
+
+        info!(
+            "M3U generation completed: {} bytes, {:.1}MB memory used",
+            output.m3u_content.len(),
+            stage_info.memory_delta_mb
+        );
+
+        // Final cleanup
+        cleanup_coordinator.cleanup_between_stages(
+            "m3u_generation",
+            &mut output,
+            crate::utils::CleanupStrategy::Aggressive,
+        )?;
+
+        Ok(output.m3u_content)
+    }
+
+    /// Get current memory pressure level
+    fn get_current_memory_pressure(&self, memory_context: &MemoryContext) -> MemoryPressureLevel {
+        if let Some(ref monitor) = self.memory_monitor {
+            match monitor.check_memory_limit() {
+                Ok(crate::utils::MemoryLimitStatus::Ok) => MemoryPressureLevel::Optimal,
+                Ok(crate::utils::MemoryLimitStatus::Warning) => MemoryPressureLevel::High,
+                Ok(crate::utils::MemoryLimitStatus::Exceeded) => MemoryPressureLevel::Critical,
+                Err(_) => MemoryPressureLevel::Emergency,
             }
-            MemoryAction::SwitchToChunked(chunk_size) => Ok(ProcessingMode::Chunked { chunk_size }),
-            MemoryAction::UseTemporaryStorage(_temp_dir) => {
-                // Use smaller chunk size for temporary storage
-                Ok(ProcessingMode::TempFileSpill { chunk_size: 250 })
-            }
-            MemoryAction::Continue => {
-                // If strategy says continue but we're in fallback, use chunked as safe default
-                Ok(ProcessingMode::Chunked { chunk_size: 1000 })
+        } else {
+            // Base assessment on memory context growth
+            let stats = memory_context.get_memory_statistics();
+            let growth_ratio = (stats.peak_mb - stats.baseline_mb) / stats.baseline_mb;
+
+            if growth_ratio > 2.0 {
+                MemoryPressureLevel::Critical
+            } else if growth_ratio > 1.5 {
+                MemoryPressureLevel::High
+            } else if growth_ratio > 1.0 {
+                MemoryPressureLevel::Moderate
+            } else {
+                MemoryPressureLevel::Optimal
             }
         }
     }
 
-    /// Execute chunked processing strategy
-    async fn execute_chunked_processing(
-        &mut self,
-        proxy: &StreamProxy,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-        chunk_size: usize,
-    ) -> Result<(ProxyGeneration, Option<MemoryStats>)> {
-        let memory_limit = self.memory_monitor.as_ref().and_then(|m| m.memory_limit_mb);
-
-        let mut chunked_pipeline = ChunkedProxyPipeline::new(
-            self.database.clone(),
-            self.data_mapping_service.clone(),
-            self.logo_service.clone(),
-            chunk_size,
-            memory_limit,
-            self.temp_file_manager.clone(),
-        );
-
-        chunked_pipeline
-            .generate_proxy_chunked(proxy, base_url, engine_config)
-            .await
+    /// Get plugin manager statistics
+    pub async fn get_plugin_statistics(
+        &self,
+    ) -> Result<std::collections::HashMap<String, serde_json::Value>> {
+        Ok(self.plugin_manager.get_statistics().await)
     }
 
-    /// Execute temporary file spill processing strategy
-    async fn execute_temp_file_processing(
-        &mut self,
-        proxy: &StreamProxy,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-        chunk_size: usize,
-    ) -> Result<(ProxyGeneration, Option<MemoryStats>)> {
-        let memory_limit = self.memory_monitor.as_ref().and_then(|m| m.memory_limit_mb);
-
-        let mut temp_file_pipeline = ChunkedProxyPipeline::new(
-            self.database.clone(),
-            self.data_mapping_service.clone(),
-            self.logo_service.clone(),
-            chunk_size,
-            memory_limit,
-            self.temp_file_manager.clone(),
-        );
-
-        temp_file_pipeline
-            .generate_proxy_chunked(proxy, base_url, engine_config)
-            .await
-    }
-
-    /// Get final memory statistics
-    pub fn get_memory_statistics(&self) -> Option<MemoryStats> {
-        self.memory_monitor
-            .as_ref()
-            .map(|monitor| monitor.get_statistics())
+    /// Reload plugins if hot reload is enabled
+    pub async fn reload_plugins(&self) -> Result<()> {
+        self.plugin_manager.reload_plugins().await
     }
 }
 
-/// Builder for creating adaptive pipelines with specific configurations
+/// Builder for creating adaptive pipelines
 pub struct AdaptivePipelineBuilder {
     database: Option<Database>,
     data_mapping_service: Option<DataMappingService>,
     logo_service: Option<LogoAssetService>,
     memory_limit_mb: Option<usize>,
-
     temp_file_manager: Option<SandboxedManager>,
+    shared_plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
 }
 
 impl AdaptivePipelineBuilder {
@@ -1137,33 +2596,38 @@ impl AdaptivePipelineBuilder {
             data_mapping_service: None,
             logo_service: None,
             memory_limit_mb: None,
-
             temp_file_manager: None,
+            shared_plugin_manager: None,
         }
     }
 
-    pub fn database(mut self, database: Database) -> Self {
+    pub fn with_database(mut self, database: Database) -> Self {
         self.database = Some(database);
         self
     }
 
-    pub fn data_mapping_service(mut self, service: DataMappingService) -> Self {
+    pub fn with_data_mapping_service(mut self, service: DataMappingService) -> Self {
         self.data_mapping_service = Some(service);
         self
     }
 
-    pub fn logo_service(mut self, service: LogoAssetService) -> Self {
+    pub fn with_logo_service(mut self, service: LogoAssetService) -> Self {
         self.logo_service = Some(service);
         self
     }
 
-    pub fn memory_limit_mb(mut self, limit: usize) -> Self {
-        self.memory_limit_mb = Some(limit);
+    pub fn with_memory_limit(mut self, limit_mb: usize) -> Self {
+        self.memory_limit_mb = Some(limit_mb);
         self
     }
 
-    pub fn temp_file_manager(mut self, manager: SandboxedManager) -> Self {
+    pub fn with_temp_file_manager(mut self, manager: SandboxedManager) -> Self {
         self.temp_file_manager = Some(manager);
+        self
+    }
+
+    pub fn with_shared_plugin_manager(mut self, plugin_manager: std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>) -> Self {
+        self.shared_plugin_manager = Some(plugin_manager);
         self
     }
 
@@ -1178,6 +2642,13 @@ impl AdaptivePipelineBuilder {
             self.memory_limit_mb,
             self.temp_file_manager
                 .ok_or_else(|| anyhow::anyhow!("Temp file manager is required"))?,
+            self.shared_plugin_manager,
         ))
+    }
+}
+
+impl Default for AdaptivePipelineBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }

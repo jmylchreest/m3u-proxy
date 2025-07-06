@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::SourceIngestor;
@@ -15,6 +15,90 @@ impl M3uIngestor {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
+        }
+    }
+
+    /// Extract clean channel name from potentially malformed M3U channel name
+    /// Some M3U sources contain malformed entries with embedded EXTINF lines or extra metadata
+    /// This method cleans up such names to extract the actual channel name
+    fn extract_clean_channel_name(raw_name: &str) -> String {
+        // Check if this looks like an embedded EXTINF line
+        if raw_name.starts_with("#EXTINF:") {
+            // Try to extract from tvg-name attribute first (most reliable)
+            if let Some(tvg_name_start) = raw_name.find("tvg-name=\"") {
+                let start = tvg_name_start + 10; // Skip 'tvg-name="'
+                if let Some(end) = raw_name[start..].find('"') {
+                    let tvg_name = &raw_name[start..start + end];
+                    if !tvg_name.is_empty() {
+                        debug!(
+                            "M3U channel name extracted from embedded tvg-name: '{}' -> '{}'",
+                            raw_name, tvg_name
+                        );
+                        return tvg_name.to_string();
+                    }
+                }
+            }
+            
+            // Fallback: Look for content after the last attribute (space-separated)
+            // Format: #EXTINF:-1 tvg-name="..." tvg-chno="..." CHANNEL NAME
+            let mut parts = raw_name.split_whitespace();
+            parts.next(); // Skip "#EXTINF:-1"
+            
+            // Skip all attribute=value pairs
+            let remaining_parts: Vec<&str> = parts.skip_while(|part| part.contains('=')).collect();
+            
+            if !remaining_parts.is_empty() {
+                let channel_name = remaining_parts.join(" ");
+                if !channel_name.is_empty() {
+                    debug!(
+                        "M3U channel name extracted from embedded EXTINF end: '{}' -> '{}'",
+                        raw_name, channel_name
+                    );
+                    return channel_name;
+                }
+            }
+            
+            // Last fallback: try to find comma-separated content in the embedded line
+            if let Some(comma_pos) = raw_name.rfind(',') {
+                let after_comma = raw_name[comma_pos + 1..].trim();
+                
+                // If there's content after the comma, use that as the channel name
+                if !after_comma.is_empty() {
+                    debug!(
+                        "M3U channel name extracted from embedded EXTINF comma: '{}' -> '{}'",
+                        raw_name, after_comma
+                    );
+                    return after_comma.to_string();
+                }
+            }
+            
+            warn!(
+                "Could not extract clean channel name from embedded EXTINF line: '{}'",
+                raw_name
+            );
+        }
+        
+        // Check for other common malformed patterns
+        // Remove extra quotes that sometimes appear
+        let trimmed = raw_name.trim().trim_matches('"').trim_matches('\'');
+        
+        // Remove common prefixes that indicate metadata
+        let prefixes_to_remove = ["[HD]", "[SD]", "[4K]", "[UHD]", "HD:", "SD:", "4K:"];
+        let mut cleaned = trimmed.to_string();
+        
+        for prefix in &prefixes_to_remove {
+            if cleaned.starts_with(prefix) {
+                cleaned = cleaned[prefix.len()..].trim().to_string();
+                debug!("M3U channel name removed prefix '{}': '{}' -> '{}'", prefix, raw_name, cleaned);
+                break;
+            }
+        }
+        
+        // If cleaning resulted in empty string, return original
+        if cleaned.is_empty() {
+            raw_name.to_string()
+        } else {
+            cleaned
         }
     }
 }
@@ -270,9 +354,18 @@ impl M3uIngestor {
 
         // Parse EXTINF line: #EXTINF:-1 tvg-id="..." tvg-name="..." tvg-logo="..." group-title="...",Channel Name
         let (attributes_part, channel_name) = if let Some(comma_pos) = extinf_line.rfind(',') {
+            let raw_channel_name = extinf_line[comma_pos + 1..].trim().to_string();
+            
+            // Apply channel name cleaning to handle malformed entries
+            let clean_channel_name = Self::extract_clean_channel_name(&raw_channel_name);
+            
+            debug!(
+                "M3U Parsing - EXTINF line: '{}' -> raw_name: '{}' -> clean_name: '{}'",
+                extinf_line, raw_channel_name, clean_channel_name
+            );
             (
                 &extinf_line[8..comma_pos], // Skip "#EXTINF:"
-                extinf_line[comma_pos + 1..].trim().to_string(),
+                clean_channel_name,
             )
         } else {
             return Ok(None);

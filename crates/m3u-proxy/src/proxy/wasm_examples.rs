@@ -248,13 +248,13 @@ impl WasmStreamingStage for PureWasmChunkedLoader {
         // 4. Return serialized empty result (accumulating for finalize)
 
         if let Some(ref host) = context.host_interface {
-            let memory_usage = host.get_memory_usage().await;
-            let memory_pressure = host.get_memory_pressure().await;
+            let memory_usage = host.get_memory_usage();
+            let memory_pressure = host.get_memory_pressure();
             
             debug!("WASM: Memory usage: {} bytes, pressure: {:?}", memory_usage, memory_pressure);
 
             // Simulate processing and potential spilling
-            if memory_usage > (self.memory_threshold_mb * 1024 * 1024) as u64 {
+            if memory_usage > self.memory_threshold_mb * 1024 * 1024 {
                 let spill_file = format!("wasm_spill_{}", self.chunks_processed);
                 host.write_temp_file(&spill_file, b"simulated_channel_data").await?;
                 self.spilled_files.push(spill_file);

@@ -12,7 +12,7 @@ use std::time::Instant;
 use tracing::{debug, warn};
 
 /// Simple memory monitor for tracking generation stages
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SimpleMemoryMonitor {
     baseline_rss: u64,
     peak_rss: u64,

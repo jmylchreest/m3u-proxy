@@ -13,10 +13,18 @@ use m3u_proxy::{
         scheduler::{SchedulerService, create_cache_invalidation_channel},
     },
     logo_assets::{LogoAssetService, LogoAssetStorage},
+    proxy::{
+        wasm_plugin::{WasmPluginManager, WasmPluginConfig},
+        wasm_host_interface::{WasmHostInterface, WasmHostInterfaceFactory, PluginCapabilities},
+    },
     services::ProxyRegenerationService,
-    utils::memory_config::{MemoryMonitoringConfig, MemoryVerbosity, init_global_memory_config},
+    utils::{
+        memory_config::{MemoryMonitoringConfig, MemoryVerbosity, init_global_memory_config},
+        memory_monitor::SimpleMemoryMonitor,
+    },
     web::WebServer,
 };
+use std::{collections::HashMap, sync::Arc};
 use sandboxed_file_manager::SandboxedManager;
 
 #[derive(Parser)]
@@ -240,6 +248,91 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Initialize shared WASM plugin system if enabled
+    let shared_plugin_manager = if let Some(wasm_config) = &config.wasm_strategies {
+        if wasm_config.enabled {
+            info!("Initializing shared WASM plugin system");
+            info!("Plugin directory: {:?}", wasm_config.plugin_directory);
+            info!("Max memory per plugin: {} MB", wasm_config.max_memory_per_plugin_mb);
+            info!("Plugin timeout: {} seconds", wasm_config.timeout_seconds);
+            info!("Hot reload: {}", if wasm_config.enable_hot_reload { "ENABLED" } else { "DISABLED" });
+
+            // Create memory monitor for plugins
+            let memory_monitor = SimpleMemoryMonitor::new(Some(wasm_config.max_memory_per_plugin_mb));
+
+            // Create plugin capabilities
+            let capabilities = PluginCapabilities {
+                allow_file_access: true,
+                allow_network_access: false,
+                max_memory_query_mb: Some(wasm_config.max_memory_per_plugin_mb),
+                allowed_config_keys: vec![
+                    "chunk_size".to_string(),
+                    "compression_level".to_string(),
+                    "temp_dir".to_string(),
+                    "memory_threshold_mb".to_string(),
+                    "temp_file_threshold".to_string(),
+                ],
+            };
+
+            // Create host interface factory
+            let host_interface_factory = WasmHostInterfaceFactory::new(preview_file_manager.clone(), capabilities);
+
+            // Create plugin configuration
+            let plugin_config = HashMap::from([
+                ("chunk_size".to_string(), "1000".to_string()),
+                ("memory_threshold_mb".to_string(), wasm_config.max_memory_per_plugin_mb.to_string()),
+                ("temp_file_threshold".to_string(), "10000".to_string()),
+            ]);
+
+            // Create host interface
+            let host_interface = host_interface_factory.create_interface(Some(memory_monitor), plugin_config);
+
+            // Create plugin manager configuration
+            let plugin_manager_config = WasmPluginConfig {
+                enabled: wasm_config.enabled,
+                plugin_directory: wasm_config.plugin_directory.to_string_lossy().to_string(),
+                max_memory_per_plugin: wasm_config.max_memory_per_plugin_mb,
+                timeout_seconds: wasm_config.timeout_seconds,
+                enable_hot_reload: wasm_config.enable_hot_reload,
+                max_plugin_failures: 3,
+                fallback_timeout_ms: 5000,
+            };
+
+            // Create shared plugin manager
+            let manager = Arc::new(WasmPluginManager::new(plugin_manager_config, host_interface));
+
+            // Load plugins once at startup
+            match manager.load_plugins().await {
+                Ok(()) => {
+                    match manager.get_detailed_statistics().await {
+                        Ok(stats) => {
+                            info!("Shared plugin system initialized successfully!");
+                            info!("Plugin Statistics:");
+                            info!("   Total plugins loaded: {}", stats.len());
+                            for (plugin_name, plugin_stats) in stats {
+                                info!("   Plugin '{}': {:?}", plugin_name, plugin_stats);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to get plugin statistics: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load plugins in shared plugin manager: {}", e);
+                }
+            }
+
+            Some(manager)
+        } else {
+            info!("WASM plugin system is DISABLED");
+            None
+        }
+    } else {
+        info!("WASM plugin system not configured");
+        None
+    };
+
     let web_server = WebServer::new(
         config,
         database,
@@ -252,6 +345,7 @@ async fn main() -> Result<()> {
         preview_file_manager,
         logo_file_manager,
         proxy_output_file_manager,
+        shared_plugin_manager,
     )
     .await?;
 

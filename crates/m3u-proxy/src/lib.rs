@@ -8,6 +8,8 @@ pub mod ingestor;
 pub mod logo_assets;
 pub mod metrics;
 pub mod models;
+pub mod pipeline;
+pub mod plugins;
 pub mod proxy;
 pub mod repositories;
 pub mod services;

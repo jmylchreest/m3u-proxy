@@ -320,6 +320,7 @@ pub async fn list_proxies(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
+        state.plugin_manager.clone(),
     );
 
     // Get proxies with pagination
@@ -377,6 +378,7 @@ pub async fn get_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
+        state.plugin_manager.clone(),
     );
 
     match service.get_by_id(uuid).await {
@@ -422,6 +424,7 @@ pub async fn create_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
+        state.plugin_manager.clone(),
     );
 
     match service.create(service_request).await {
@@ -514,6 +517,7 @@ pub async fn update_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
+        state.plugin_manager.clone(),
     );
 
     match service.update(uuid, service_request).await {
@@ -558,6 +562,7 @@ pub async fn delete_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
+        state.plugin_manager.clone(),
     );
 
     match service.delete(uuid).await {
@@ -604,6 +609,7 @@ pub async fn preview_proxy_config(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
+        state.plugin_manager.clone(),
     );
 
     match service.generate_preview(request).await {
@@ -655,6 +661,7 @@ pub async fn preview_existing_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
+        state.plugin_manager.clone(),
     );
 
     // Get the existing proxy first

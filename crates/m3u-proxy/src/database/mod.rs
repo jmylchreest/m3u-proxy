@@ -13,7 +13,7 @@ pub mod filters;
 pub mod linked_xtream;
 pub mod stream_sources;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Database {
     pool: Pool<Sqlite>,
     channel_update_lock: Arc<Mutex<()>>,

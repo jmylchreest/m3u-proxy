@@ -232,3 +232,44 @@ max_spill_file_size_mb = 100
 max_concurrent_operations = 10
 # Buffer size for file I/O operations (in KB)
 io_buffer_size_kb = 64
+
+# WASM Plugin System Configuration
+[wasm_strategies]
+# Enable WASM plugin system
+enabled = true
+
+# Directory containing WASM plugin files
+plugin_directory = "./plugins"
+
+# Maximum memory per plugin in MB
+max_memory_per_plugin_mb = 64
+
+# Plugin execution timeout in seconds
+timeout_seconds = 30
+
+# Enable hot reload of plugins (development feature)
+enable_hot_reload = false
+
+# Stage-specific plugin configurations
+[wasm_strategies.stages.source_loading]
+# Strategy selection based on memory pressure
+[wasm_strategies.stages.source_loading.memory_pressure_strategies]
+optimal = ["inmemory_source_loading"]
+moderate = ["chunked_source_loader", "inmemory_source_loading"]
+high = ["chunked_source_loader"]
+critical = ["chunked_source_loader"]
+
+# Fallback strategy when all others fail
+fallback_strategy = "inmemory_source_loading"
+
+# Configuration for individual strategies
+[wasm_strategies.stages.source_loading.strategy_configs.chunked_source_loader]
+enabled = true
+priority = 8
+memory_pressure_threshold = "moderate"
+fallback_strategy = "inmemory_source_loading"
+
+[wasm_strategies.stages.source_loading.strategy_configs.chunked_source_loader.plugin_config]
+chunk_size = "2000"
+temp_file_threshold = "10000"
+memory_threshold_mb = "256"

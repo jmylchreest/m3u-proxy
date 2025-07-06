@@ -10,17 +10,17 @@ mkdir -p dist
 
 # Build for WASM target
 echo "📦 Building WASM binary..."
-cargo build --target wasm32-wasi --release
+cargo build --target wasm32-wasip1 --release
 
 # Check if wasm-opt is available for optimization
 if command -v wasm-opt &> /dev/null; then
     echo "⚡ Optimizing WASM binary..."
-    wasm-opt target/wasm32-wasi/release/chunked_source_loader.wasm \
+    wasm-opt target/wasm32-wasip1/release/chunked_source_loader.wasm \
         -O3 --enable-bulk-memory --enable-sign-ext \
         -o dist/chunked_source_loader.wasm
 else
     echo "⚠️  wasm-opt not found, copying unoptimized binary..."
-    cp target/wasm32-wasi/release/chunked_source_loader.wasm dist/
+    cp target/wasm32-wasip1/release/chunked_source_loader.wasm dist/
 fi
 
 # Generate plugin manifest
@@ -45,7 +45,7 @@ preferred_chunk_size = 1000
 version = "1.0"
 required_functions = [
     "host_get_memory_usage",
-    "host_get_memory_pressure", 
+    "host_get_memory_pressure",
     "host_write_temp_file",
     "host_read_temp_file",
     "host_delete_temp_file",

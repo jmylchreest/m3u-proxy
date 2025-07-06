@@ -5,7 +5,7 @@ use sqlx::{Pool, Row, Sqlite};
 use std::io::Cursor;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LogoAssetService {
     pool: Pool<Sqlite>,
 }

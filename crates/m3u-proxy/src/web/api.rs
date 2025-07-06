@@ -1804,6 +1804,8 @@ pub async fn upload_logo_asset(
     let create_request = LogoAssetCreateRequest {
         name: logo_name.unwrap_or(file_name.clone()),
         description: logo_description,
+        asset_type: crate::models::logo_asset::LogoAssetType::Uploaded,
+        source_url: None,
     };
 
     match state

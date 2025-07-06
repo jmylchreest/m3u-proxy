@@ -376,6 +376,7 @@ impl ProxyRegenerationService {
                         &logo_asset_service,
                         &config.web.base_url,
                         config.data_mapping_engine.clone(),
+                        &config,
                     ).await {
                         Ok(generation) => {
                             // Save the M3U file using the proxy ULID for proper file management

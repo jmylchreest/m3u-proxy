@@ -52,6 +52,7 @@ impl ProxyService {
         logo_service: &LogoAssetService,
         base_url: &str,
         engine_config: Option<crate::config::DataMappingEngineConfig>,
+        app_config: &crate::config::Config,
     ) -> Result<ProxyGeneration> {
         use crate::proxy::adaptive_pipeline::AdaptivePipelineBuilder;
         use sandboxed_file_manager::SandboxedManager;
@@ -96,7 +97,7 @@ impl ProxyService {
 
         // Generate proxy using adaptive pipeline
         let generation = pipeline
-            .generate_with_dynamic_strategies(config.clone(), base_url, engine_config)
+            .generate_with_dynamic_strategies(config.clone(), base_url, engine_config, app_config)
             .await?;
 
         // Handle output

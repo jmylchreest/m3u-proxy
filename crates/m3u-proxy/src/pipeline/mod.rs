@@ -9,6 +9,7 @@ pub mod chunk_manager;
 pub mod generic_iterator;
 pub mod iterator_traits;
 pub mod orchestrator;
+pub mod rolling_buffer_iterator;
 pub mod stages;
 
 // Re-export key types for easier access
@@ -17,8 +18,11 @@ pub use chunk_manager::{ChunkSizeManager, ChunkSizeStats, StageChunkStats};
 pub use iterator_traits::{IteratorResult, PluginIterator};
 pub use orchestrator::{
     OrderedChannelAggregateIterator, OrderedDataMappingIterator, 
-    OrderedEpgAggregateIterator, OrderedFilterIterator
+    OrderedEpgAggregateIterator, OrderedFilterIterator,
+    RollingBufferChannelIterator, OrchestratorIteratorFactory,
+    ActiveChannelLoader
 };
+pub use rolling_buffer_iterator::{ActiveDataLoader, BufferConfig, RollingBufferIterator};
 
 /// Pipeline stage names for consistent naming across the system
 pub mod stage_names {

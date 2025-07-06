@@ -12,12 +12,16 @@ use crate::database::Database;
 use crate::models::*;
 use crate::pipeline::iterator_traits::PluginIterator;
 use crate::pipeline::generic_iterator::{DataLoader, OrderedMultiSourceIterator, SingleSourceLoader, OrderedSingleSourceIterator};
+use crate::pipeline::rolling_buffer_iterator::{ActiveDataLoader, BufferConfig, RollingBufferIterator};
 
 /// Data loader for channels
 pub struct ChannelLoader;
 
 /// Data loader for channels using UUID source IDs
 pub struct UuidChannelLoader;
+
+/// Active data loader for channels (rolling buffer support)
+pub struct ActiveChannelLoader;
 
 #[async_trait]
 impl DataLoader<Channel, ProxySource> for ChannelLoader {
@@ -57,9 +61,31 @@ impl DataLoader<Channel, uuid::Uuid> for UuidChannelLoader {
     }
 }
 
+#[async_trait]
+impl ActiveDataLoader<Channel, ProxySource> for ActiveChannelLoader {
+    async fn load_chunk_from_active_source(&self, database: &Arc<Database>, source: &ProxySource, offset: usize, limit: usize) -> Result<Vec<Channel>> {
+        database.get_channels_for_active_source_paginated(source.source_id, offset, limit).await
+    }
+    
+    fn get_source_id(&self, source: &ProxySource) -> String {
+        source.source_id.to_string()
+    }
+    
+    fn get_source_priority(&self, source: &ProxySource) -> i32 {
+        source.priority_order
+    }
+    
+    fn get_type_name(&self) -> &'static str {
+        "channel"
+    }
+}
+
 /// Ordered channel aggregate iterator that streams channels from multiple sources
 /// in the order specified by the proxy configuration
 pub type OrderedChannelAggregateIterator = OrderedMultiSourceIterator<Channel, ProxySource, ChannelLoader>;
+
+/// Rolling buffer channel iterator for sophisticated buffer management
+pub type RollingBufferChannelIterator = RollingBufferIterator<Channel, ProxySource, ActiveChannelLoader>;
 
 // The PluginIterator trait is automatically implemented by OrderedMultiSourceIterator
 
@@ -180,12 +206,104 @@ pub type OrderedFilterIterator = OrderedMultiSourceIterator<FilterRule, ProxyFil
 pub struct OrchestratorIteratorFactory;
 
 impl OrchestratorIteratorFactory {
+    /// Filter proxy source configs to only include active ones
+    /// Note: This filtering should normally be done at the config resolver level,
+    /// but this provides an additional safety check.
+    pub fn filter_active_source_configs(source_configs: Vec<ProxySourceConfig>) -> Vec<ProxySourceConfig> {
+        let total_sources = source_configs.len();
+        let active_sources: Vec<ProxySourceConfig> = source_configs
+            .into_iter()
+            .filter(|source_config| source_config.source.is_active)
+            .collect();
+        
+        if active_sources.len() != total_sources {
+            tracing::info!(
+                "Filtered {} source configs to {} active sources for orchestrator",
+                total_sources,
+                active_sources.len()
+            );
+        }
+        
+        active_sources
+    }
+
+    /// Convert ProxySourceConfig to ProxySource for the factory methods
+    pub fn convert_to_proxy_sources(
+        proxy_id: uuid::Uuid,
+        source_configs: Vec<ProxySourceConfig>,
+    ) -> Vec<ProxySource> {
+        source_configs
+            .into_iter()
+            .map(|config| ProxySource {
+                proxy_id,
+                source_id: config.source.id,
+                priority_order: config.priority_order,
+                created_at: chrono::Utc::now(),
+            })
+            .collect()
+    }
+
     /// Create ordered channel aggregate iterator from proxy configuration
     pub fn create_channel_iterator(
         database: Arc<Database>,
         proxy_sources: Vec<ProxySource>, // Should be pre-sorted by priority_order
         chunk_size: usize,
     ) -> Box<dyn PluginIterator<Channel>> {
+        Box::new(OrderedMultiSourceIterator::new(database, proxy_sources, ChannelLoader {}, chunk_size))
+    }
+
+    /// Create rolling buffer channel iterator for sophisticated buffer management
+    pub fn create_rolling_buffer_channel_iterator(
+        database: Arc<Database>,
+        proxy_sources: Vec<ProxySource>, // Should be pre-sorted by priority_order and filtered to active
+        buffer_config: BufferConfig,
+    ) -> Box<dyn PluginIterator<Channel>> {
+        // Note: Active filtering should have been done before creating ProxySource objects
+        Box::new(RollingBufferIterator::new(database, proxy_sources, ActiveChannelLoader {}, buffer_config))
+    }
+
+    /// Create rolling buffer channel iterator from source configs with active filtering
+    pub fn create_rolling_buffer_channel_iterator_from_configs(
+        database: Arc<Database>,
+        proxy_id: uuid::Uuid,
+        source_configs: Vec<ProxySourceConfig>,
+        buffer_config: BufferConfig,
+    ) -> Box<dyn PluginIterator<Channel>> {
+        // Filter to only active sources and convert to ProxySource
+        let active_configs = Self::filter_active_source_configs(source_configs);
+        let proxy_sources = Self::convert_to_proxy_sources(proxy_id, active_configs);
+        Box::new(RollingBufferIterator::new(database, proxy_sources, ActiveChannelLoader {}, buffer_config))
+    }
+
+    /// Create rolling buffer channel iterator from source configs with cascading buffer integration
+    pub fn create_rolling_buffer_channel_iterator_from_configs_with_cascade(
+        database: Arc<Database>,
+        proxy_id: uuid::Uuid,
+        source_configs: Vec<ProxySourceConfig>,
+        buffer_config: BufferConfig,
+        chunk_manager: Option<Arc<crate::pipeline::chunk_manager::ChunkSizeManager>>,
+        stage_name: String,
+    ) -> Box<dyn PluginIterator<Channel>> {
+        // Filter to only active sources and convert to ProxySource
+        let active_configs = Self::filter_active_source_configs(source_configs);
+        let proxy_sources = Self::convert_to_proxy_sources(proxy_id, active_configs);
+        Box::new(RollingBufferIterator::new_with_chunk_manager(
+            database, 
+            proxy_sources, 
+            ActiveChannelLoader {}, 
+            buffer_config,
+            chunk_manager,
+            stage_name,
+        ))
+    }
+
+    /// Create channel iterator with active source filtering (legacy compatibility)
+    pub fn create_active_channel_iterator(
+        database: Arc<Database>,
+        proxy_sources: Vec<ProxySource>, // Should be pre-sorted by priority_order
+        chunk_size: usize,
+    ) -> Box<dyn PluginIterator<Channel>> {
+        // Note: Active filtering should have been done before creating ProxySource objects
         Box::new(OrderedMultiSourceIterator::new(database, proxy_sources, ChannelLoader {}, chunk_size))
     }
     

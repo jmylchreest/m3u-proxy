@@ -81,7 +81,7 @@ impl WebServer {
         let plugin_manager = if let Some(shared_manager) = shared_plugin_manager {
             tracing::info!("Using shared WASM plugin manager");
             Some(shared_manager)
-        } else if let Some(wasm_config) = &config.wasm_strategies {
+        } else if let Some(wasm_config) = &config.wasm_plugins {
             if wasm_config.enabled {
                 tracing::info!("WASM plugin system is ENABLED (creating new manager)");
                 tracing::info!("Plugin directory: {:?}", wasm_config.plugin_directory);

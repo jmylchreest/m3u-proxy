@@ -37,6 +37,7 @@ pub struct StreamProxyService {
     logo_service: LogoAssetService,
     storage_config: StorageConfig,
     shared_plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
+    app_config: crate::config::Config,
 }
 
 impl StreamProxyService {
@@ -52,6 +53,7 @@ impl StreamProxyService {
         logo_service: LogoAssetService,
         storage_config: StorageConfig,
         shared_plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
+        app_config: crate::config::Config,
     ) -> Self {
         Self {
             proxy_repo,
@@ -65,6 +67,7 @@ impl StreamProxyService {
             logo_service,
             storage_config,
             shared_plugin_manager,
+            app_config,
         }
     }
 
@@ -235,6 +238,7 @@ impl StreamProxyService {
                 &self.logo_service,
                 "http://localhost:8080", // TODO: Get from config
                 None,                    // engine_config
+                &self.app_config,
             )
             .await
             .map_err(|e| {

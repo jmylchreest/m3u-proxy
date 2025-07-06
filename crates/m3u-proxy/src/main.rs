@@ -249,7 +249,7 @@ async fn main() -> Result<()> {
     }
 
     // Initialize shared WASM plugin system if enabled
-    let shared_plugin_manager = if let Some(wasm_config) = &config.wasm_strategies {
+    let shared_plugin_manager = if let Some(wasm_config) = &config.wasm_plugins {
         if wasm_config.enabled {
             info!("Initializing shared WASM plugin system");
             info!("Plugin directory: {:?}", wasm_config.plugin_directory);

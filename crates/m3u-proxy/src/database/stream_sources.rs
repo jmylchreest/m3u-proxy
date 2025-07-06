@@ -1040,4 +1040,44 @@ impl Database {
 
         Ok(channels)
     }
+
+    /// Get channels for an active source with pagination support for orchestrator streaming
+    /// This method filters to only return channels from active sources
+    pub async fn get_channels_for_active_source_paginated(&self, source_id: Uuid, offset: usize, limit: usize) -> Result<Vec<Channel>> {
+        let rows = sqlx::query(
+            "SELECT c.id, c.source_id, c.tvg_id, c.tvg_name, c.tvg_logo, c.tvg_shift, c.group_title, c.channel_name, c.stream_url, c.created_at, c.updated_at
+             FROM channels c 
+             INNER JOIN stream_sources s ON c.source_id = s.id 
+             WHERE c.source_id = ? AND s.is_active = true 
+             ORDER BY c.channel_name 
+             LIMIT ? OFFSET ?"
+        )
+        .bind(source_id.to_string())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut channels = Vec::new();
+        for row in rows {
+            let created_at = row.get::<String, _>("created_at");
+            let updated_at = row.get::<String, _>("updated_at");
+
+            channels.push(Channel {
+                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                tvg_id: row.get("tvg_id"),
+                tvg_name: row.get("tvg_name"),
+                tvg_logo: row.get("tvg_logo"),
+                tvg_shift: row.get("tvg_shift"),
+                group_title: row.get("group_title"),
+                channel_name: row.get("channel_name"),
+                stream_url: row.get("stream_url"),
+                created_at: parse_datetime(&created_at)?,
+                updated_at: parse_datetime(&updated_at)?,
+            });
+        }
+
+        Ok(channels)
+    }
 }

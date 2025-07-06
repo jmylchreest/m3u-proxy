@@ -6,96 +6,93 @@ use tracing::info;
 
 pub mod duration_serde;
 pub mod file_categories;
-pub use file_categories::FileManagerConfig;
+pub mod plugin_resolver;
 
-/// WASM strategy configuration
+pub use file_categories::FileManagerConfig;
+pub use plugin_resolver::{PluginResolver, create_plugin_resolver};
+
+/// WASM plugin system configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WasmStrategiesConfig {
+pub struct WasmPluginsConfig {
     pub enabled: bool,
     pub plugin_directory: PathBuf,
     pub max_memory_per_plugin_mb: usize,
     pub timeout_seconds: u64,
     pub enable_hot_reload: bool,
-    pub stages: HashMap<String, StageStrategyConfig>,
 }
 
-/// Strategy configuration for a specific stage
+/// Pipeline strategies configuration - maps strategy names to stage->plugin mappings
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StageStrategyConfig {
-    pub memory_pressure_strategies: HashMap<String, Vec<String>>, // pressure_level -> [strategy_names]
-    pub fallback_strategy: String,
-    pub strategy_configs: HashMap<String, StrategyConfig>,
+pub struct PipelineStrategiesConfig {
+    #[serde(flatten)]
+    pub strategies: HashMap<String, HashMap<String, String>>,
 }
 
-/// Configuration for a specific strategy
+/// Main pipeline configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StrategyConfig {
-    pub enabled: bool,
-    pub priority: u8,                              // 1-10, 10 being highest priority
-    pub memory_pressure_threshold: Option<String>, // "optimal", "moderate", "high", etc.
-    pub fallback_strategy: Option<String>,
-    pub plugin_config: HashMap<String, String>,
+pub struct PipelineConfig {
+    /// Which pipeline strategy to use
+    pub strategy: String,
+    /// Per-plugin configuration (optional, plugin-specific settings)
+    pub plugin_configs: Option<HashMap<String, HashMap<String, toml::Value>>>,
 }
 
-impl Default for WasmStrategiesConfig {
+impl Default for WasmPluginsConfig {
     fn default() -> Self {
-        let mut stages = HashMap::new();
-
-        // Default source_loading stage configuration
-        let mut source_loading_strategies = HashMap::new();
-        source_loading_strategies.insert(
-            "optimal".to_string(),
-            vec!["inmemory_source_loading".to_string()],
-        );
-        source_loading_strategies.insert(
-            "moderate".to_string(),
-            vec![
-                "chunked_source_loader".to_string(),
-                "inmemory_source_loading".to_string(),
-            ],
-        );
-        source_loading_strategies.insert(
-            "high".to_string(),
-            vec!["chunked_source_loader".to_string()],
-        );
-        source_loading_strategies.insert(
-            "critical".to_string(),
-            vec!["chunked_source_loader".to_string()],
-        );
-
-        let mut strategy_configs = HashMap::new();
-        strategy_configs.insert(
-            "chunked_source_loader".to_string(),
-            StrategyConfig {
-                enabled: true,
-                priority: 8,
-                memory_pressure_threshold: Some("moderate".to_string()),
-                fallback_strategy: Some("inmemory_source_loading".to_string()),
-                plugin_config: {
-                    let mut config = HashMap::new();
-                    config.insert("chunk_size".to_string(), "2000".to_string());
-                    config.insert("temp_file_threshold".to_string(), "10000".to_string());
-                    config
-                },
-            },
-        );
-
-        stages.insert(
-            "source_loading".to_string(),
-            StageStrategyConfig {
-                memory_pressure_strategies: source_loading_strategies,
-                fallback_strategy: "inmemory_source_loading".to_string(),
-                strategy_configs,
-            },
-        );
-
         Self {
             enabled: false, // Disabled by default for security
             plugin_directory: PathBuf::from("./plugins"),
             max_memory_per_plugin_mb: 64,
             timeout_seconds: 30,
             enable_hot_reload: false,
-            stages,
+        }
+    }
+}
+
+impl Default for PipelineStrategiesConfig {
+    fn default() -> Self {
+        let mut strategies = HashMap::new();
+        
+        // Default strategy - chunked loading for source, passthrough for others
+        let mut default_strategy = HashMap::new();
+        default_strategy.insert("source_loading".to_string(), "chunked_source_loader".to_string());
+        default_strategy.insert("data_mapping".to_string(), "passthrough_plugin".to_string());
+        default_strategy.insert("filtering".to_string(), "passthrough_plugin".to_string());
+        default_strategy.insert("logo_prefetch".to_string(), "passthrough_plugin".to_string());
+        default_strategy.insert("channel_numbering".to_string(), "passthrough_plugin".to_string());
+        default_strategy.insert("m3u_generation".to_string(), "passthrough_plugin".to_string());
+        default_strategy.insert("epg_processing".to_string(), "passthrough_plugin".to_string());
+        strategies.insert("default".to_string(), default_strategy);
+        
+        // Performance strategy - all passthrough for maximum speed
+        let mut performance_strategy = HashMap::new();
+        performance_strategy.insert("source_loading".to_string(), "passthrough_plugin".to_string());
+        performance_strategy.insert("data_mapping".to_string(), "passthrough_plugin".to_string());
+        performance_strategy.insert("filtering".to_string(), "passthrough_plugin".to_string());
+        performance_strategy.insert("logo_prefetch".to_string(), "passthrough_plugin".to_string());
+        performance_strategy.insert("channel_numbering".to_string(), "passthrough_plugin".to_string());
+        performance_strategy.insert("m3u_generation".to_string(), "passthrough_plugin".to_string());
+        performance_strategy.insert("epg_processing".to_string(), "passthrough_plugin".to_string());
+        strategies.insert("performance".to_string(), performance_strategy);
+        
+        Self { strategies }
+    }
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        let mut plugin_configs = HashMap::new();
+        
+        // Default chunked source loader config
+        let mut chunked_config = HashMap::new();
+        chunked_config.insert("chunk_size".to_string(), toml::Value::Integer(2000));
+        chunked_config.insert("temp_file_threshold".to_string(), toml::Value::Integer(10000));
+        chunked_config.insert("memory_threshold_mb".to_string(), toml::Value::Integer(256));
+        plugin_configs.insert("chunked_source_loader".to_string(), chunked_config);
+        
+        Self {
+            strategy: "default".to_string(),
+            plugin_configs: Some(plugin_configs),
         }
     }
 }
@@ -110,7 +107,9 @@ pub struct Config {
     pub data_mapping_engine: Option<DataMappingEngineConfig>,
     pub proxy_generation: Option<ProxyGenerationConfig>,
     pub file_manager: Option<FileManagerConfig>,
-    pub wasm_strategies: Option<WasmStrategiesConfig>,
+    pub wasm_plugins: Option<WasmPluginsConfig>,
+    pub pipeline_strategies: Option<PipelineStrategiesConfig>,
+    pub pipeline: Option<PipelineConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -359,7 +358,9 @@ impl Default for Config {
             data_mapping_engine: Some(DataMappingEngineConfig::default()),
             proxy_generation: Some(ProxyGenerationConfig::default()),
             file_manager: None,
-            wasm_strategies: None,
+            wasm_plugins: Some(WasmPluginsConfig::default()),
+            pipeline_strategies: Some(PipelineStrategiesConfig::default()),
+            pipeline: Some(PipelineConfig::default()),
         }
     }
 }

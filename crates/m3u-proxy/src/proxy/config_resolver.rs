@@ -73,6 +73,11 @@ impl ProxyConfigResolver {
                 .await
                 .map_err(|e| AppError::Repository(e))?
             {
+                // Filter out inactive sources entirely
+                if !source.is_active {
+                    debug!("Filtering out inactive source '{}'", source.name);
+                    continue;
+                }
                 sources.push(ProxySourceConfig {
                     source,
                     priority_order: proxy_source.priority_order,
@@ -178,6 +183,11 @@ impl ProxyConfigResolver {
                 .await
                 .map_err(|e| AppError::Repository(e))?
             {
+                // Filter out inactive sources entirely
+                if !source.is_active {
+                    debug!("Filtering out inactive source '{}' from preview", source.name);
+                    continue;
+                }
                 sources.push(ProxySourceConfig {
                     source,
                     priority_order: source_req.priority_order,
@@ -236,19 +246,13 @@ impl ProxyConfigResolver {
     pub fn validate_config(&self, config: &ResolvedProxyConfig) -> Result<(), AppError> {
         if config.sources.is_empty() {
             return Err(AppError::Internal {
-                message: "Proxy must have at least one source".to_string(),
+                message: "Proxy must have at least one active source".to_string(),
             });
         }
 
-        // Validate all sources are active
-        for source_config in &config.sources {
-            if !source_config.source.is_active {
-                debug!(
-                    "Warning: Source '{}' is not active",
-                    source_config.source.name
-                );
-            }
-        }
+        // All sources in the resolved config are guaranteed to be active
+        // since inactive sources are filtered out during resolution
+        debug!("Configuration validated: {} active sources", config.sources.len());
 
         Ok(())
     }

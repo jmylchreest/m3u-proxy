@@ -36,7 +36,7 @@ pub struct StreamProxyService {
     data_mapping_service: DataMappingService,
     logo_service: LogoAssetService,
     storage_config: StorageConfig,
-    shared_plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
+    shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
     app_config: crate::config::Config,
 }
 
@@ -52,7 +52,7 @@ impl StreamProxyService {
         data_mapping_service: DataMappingService,
         logo_service: LogoAssetService,
         storage_config: StorageConfig,
-        shared_plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
+        shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
         app_config: crate::config::Config,
     ) -> Self {
         Self {

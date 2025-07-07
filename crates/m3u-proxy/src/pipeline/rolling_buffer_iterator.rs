@@ -216,7 +216,8 @@ where
 
         // Get the current optimal chunk size for our stage
         let optimal_chunk_size = chunk_manager.get_chunk_size(&self.stage_name).await;
-        let optimal_buffer_size = (optimal_chunk_size * 2)
+        // Buffer size should match chunk size for maximum efficiency
+        let optimal_buffer_size = optimal_chunk_size
             .min(self.config.max_buffer_size)
             .max(self.config.initial_buffer_size);
 

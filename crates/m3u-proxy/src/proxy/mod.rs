@@ -19,12 +19,11 @@ pub mod streaming_pipeline;
 pub mod streaming_stages;
 pub mod wasm_examples;
 pub mod wasm_host_interface; // Temporary compatibility stub
-pub mod wasm_plugin; // Temporary compatibility stub  
 pub mod wasm_plugin_test;
 
 pub struct ProxyService {
     storage_config: StorageConfig,
-    shared_plugin_manager: Option<std::sync::Arc<wasm_plugin::WasmPluginManager>>,
+    shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
 }
 
 impl ProxyService {
@@ -35,7 +34,7 @@ impl ProxyService {
         }
     }
 
-    pub fn with_plugin_manager(storage_config: StorageConfig, plugin_manager: std::sync::Arc<wasm_plugin::WasmPluginManager>) -> Self {
+    pub fn with_plugin_manager(storage_config: StorageConfig, plugin_manager: std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>) -> Self {
         Self {
             storage_config,
             shared_plugin_manager: Some(plugin_manager),

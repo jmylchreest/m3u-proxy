@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::models::*;
 use crate::pipeline::{ChunkSizeManager, PluginIterator, IteratorResult};
-use super::shared::{Plugin, PluginCapabilities, PluginDiscoveryConfig, PluginInfo, PluginRegistry};
+use super::shared::{Plugin, PluginDiscoveryConfig, PluginInfo, PluginRegistry};
 
 /// Pipeline-specific plugin trait
 #[async_trait]
@@ -37,10 +37,6 @@ pub trait PipelinePlugin: Plugin {
         1000 // Default
     }
     
-    /// Get memory efficiency for this plugin
-    fn memory_efficiency(&self) -> super::shared::MemoryEfficiency {
-        super::shared::MemoryEfficiency::Medium
-    }
 }
 
 /// Context provided to pipeline plugins during execution
@@ -112,7 +108,7 @@ impl PipelinePluginManager {
             };
             
             let host_interface = crate::proxy::wasm_host_interface::WasmHostInterface;
-            let mut wasm_manager = wasm::WasmPluginManager::new(wasm_config, host_interface);
+            let wasm_manager = wasm::WasmPluginManager::new(wasm_config, host_interface);
             wasm_manager.load_plugins().await?;
             
             self.wasm_manager = Some(wasm_manager);
@@ -124,14 +120,10 @@ impl PipelinePluginManager {
     
     /// Get plugin for specific stage
     pub fn get_plugin_for_stage(&self, stage: &str) -> Option<&dyn PipelinePlugin> {
-        // First check WASM plugins
-        if let Some(ref wasm_manager) = self.wasm_manager {
-            if let Some(plugin) = wasm_manager.get_plugin_for_stage(stage) {
-                return Some(plugin);
-            }
-        }
+        // WASM plugins are handled separately in adaptive_pipeline.rs
+        // This method only returns registry plugins
         
-        // Then check registry
+        // Check registry
         for plugin_name in self.registry.list_plugins() {
             if let Some(plugin) = self.registry.get(plugin_name) {
                 // Try to downcast to PipelinePlugin
@@ -165,7 +157,7 @@ impl PipelinePluginManager {
         
         // Check WASM plugins
         if let Some(ref wasm_manager) = self.wasm_manager {
-            health.extend(wasm_manager.health_check().await);
+            health.extend(wasm_manager.health_check());
         }
         
         // Check registry plugins

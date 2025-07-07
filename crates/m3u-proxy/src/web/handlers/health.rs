@@ -60,7 +60,7 @@ pub async fn detailed_health_check(
 
     // Plugin system health
     if let Some(ref plugin_manager) = state.plugin_manager {
-        match plugin_manager.get_detailed_statistics().await {
+        match plugin_manager.get_detailed_statistics() {
             Ok(plugin_stats) => {
                 health_details.insert(
                     "plugins".to_string(),

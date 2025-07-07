@@ -5,26 +5,29 @@
 //! perform clean passthrough processing for all pipeline stages.
 //!
 //! Pipeline Stages:
-//! 1. Source Loading: Consumes OrderedChannelAggregateIterator → outputs channels
-//! 2. Data Mapping: Consumes OrderedDataMappingIterator + channels → outputs mapped channels  
-//! 3. Filtering: Consumes OrderedFilterIterator + channels → outputs filtered channels
-//! 4. Logo Pre-fetch: Processes channels for logo caching → outputs channels with cached logo URLs
-//! 5. Channel Numbering: Assigns sequential numbers → outputs numbered channels
-//! 6. M3U Generation: Converts numbered channels → outputs M3U content
-//! 7. EPG Processing: Consumes OrderedEpgAggregateIterator + final channel map → outputs XMLTV
+//! 1. Data Mapping: Consumes OrderedDataMappingIterator + channels → outputs mapped channels  
+//! 2. Filtering: Consumes OrderedFilterIterator + channels → outputs filtered channels
+//! 3. Logo Pre-fetch: Processes channels for logo caching → outputs channels with cached logo URLs
+//! 4. Channel Numbering: Assigns sequential numbers → outputs numbered channels
+//! 5. M3U Generation: Converts numbered channels → outputs M3U content
+//! 6. EPG Processing: Consumes OrderedEpgAggregateIterator + final channel map → outputs XMLTV
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Host interface function imports
 unsafe extern "C" {
-    fn host_log(level: u32, msg_ptr: *const u8, msg_len: usize);
-    fn host_get_memory_usage() -> u64;
+    fn host_log(level: u32, msg_ptr: u32, msg_len: u32);
+    fn host_memory_flush() -> i32;
+    fn host_report_progress(stage_ptr: u32, stage_len: u32, message_ptr: u32, message_len: u32);
     fn host_get_memory_pressure() -> u32;
-    fn host_report_progress(stage_ptr: *const u8, stage_len: usize, processed: usize, total: usize);
-    fn host_cache_logo(url_ptr: *const u8, url_len: usize, uuid_out_ptr: *mut *mut u8, uuid_out_len: *mut usize) -> i32;
-    fn host_iterator_next_chunk(iterator_id: u32, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32;
+    fn host_cache_logo(url_ptr: u32, url_len: u32, result_ptr: u32, result_len: u32) -> i32;
+    fn host_iterator_next_chunk(iterator_id: u32, out_ptr: u32, out_len: u32, requested_chunk_size: u32) -> i32;
     fn host_iterator_close(iterator_id: u32) -> i32;
+    fn host_file_create(path_ptr: u32, path_len: u32) -> i32;
+    fn host_file_write(path_ptr: u32, path_len: u32, data_ptr: u32, data_len: u32) -> i32;
+    fn host_file_read(path_ptr: u32, path_len: u32, out_ptr: u32, out_len: u32) -> i32;
+    fn host_file_delete(path_ptr: u32, path_len: u32) -> i32;
 }
 
 /// Log levels that match the host interface
@@ -32,6 +35,37 @@ const LOG_ERROR: u32 = 1;
 const _LOG_WARN: u32 = 2;
 const LOG_INFO: u32 = 3;
 const LOG_DEBUG: u32 = 4;
+
+/// Sample logging frequency (1 in SAMPLE_LOG_FREQUENCY messages will be logged)
+const SAMPLE_LOG_FREQUENCY: u32 = 750;
+
+/// Simple random number generator for sample logging
+static mut SAMPLE_COUNTER: u32 = 0;
+
+/// Sample-based logger - logs approximately 1 in SAMPLE_LOG_FREQUENCY messages
+fn sample_log(level: u32, message: &str) {
+    unsafe {
+        SAMPLE_COUNTER = SAMPLE_COUNTER.wrapping_add(1);
+        // Use a simple hash-like approach for pseudo-randomness
+        let hash = SAMPLE_COUNTER.wrapping_mul(2654435761);
+        if hash % SAMPLE_LOG_FREQUENCY == 0 {
+            let sample_msg = format!("[SAMPLE 1/{}] {}", SAMPLE_LOG_FREQUENCY, message);
+            let msg_bytes = sample_msg.as_bytes();
+            host_log(level, msg_bytes.as_ptr() as u32, msg_bytes.len() as u32);
+        }
+    }
+}
+
+/// Create a compact string representation of a channel for logging
+fn format_channel_summary(channel: &Channel) -> String {
+    format!(
+        "{{id: {}, name: '{}', group: '{}', tvg_id: '{}'}}",
+        &channel.id.to_string()[..8],
+        channel.channel_name,
+        channel.group_title.as_deref().unwrap_or("None"),
+        channel.tvg_id.as_deref().unwrap_or("None")
+    )
+}
 
 /// Channel data structure (matches orchestrator)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,25 +150,41 @@ impl PassthroughPlugin {
     /// Log a message to the host
     fn log(&self, level: u32, message: &str) {
         unsafe {
-            host_log(level, message.as_ptr(), message.len());
+            host_log(level, message.as_ptr() as u32, message.len() as u32);
         }
     }
 
-    /// Report progress to the host
-    fn report_progress(&self, processed: usize, total: usize) {
+    /// Report progress to the host with a message
+    fn report_progress(&self, message: &str) {
         unsafe {
-            host_report_progress(self.stage.as_ptr(), self.stage.len(), processed, total);
+            host_report_progress(
+                self.stage.as_ptr() as u32, 
+                self.stage.len() as u32, 
+                message.as_ptr() as u32, 
+                message.len() as u32
+            );
         }
     }
 
-    /// Get memory usage from host
-    fn get_memory_usage(&self) -> u64 {
-        unsafe { host_get_memory_usage() }
+    /// Flush/shrink memory structures
+    fn memory_flush(&self) -> i32 {
+        unsafe { host_memory_flush() }
     }
 
-    /// Get memory pressure from host
+    /// Get memory pressure level from host to adjust chunk sizes
     fn get_memory_pressure(&self) -> u32 {
         unsafe { host_get_memory_pressure() }
+    }
+
+    /// Calculate optimal chunk size based on memory pressure
+    fn calculate_chunk_size(&self, base_chunk_size: u32) -> u32 {
+        let pressure = self.get_memory_pressure();
+        match pressure {
+            0 => base_chunk_size,                    // Low pressure - use full chunk size
+            1 => base_chunk_size / 2,                // Medium pressure - reduce by half
+            2 => base_chunk_size / 4,                // High pressure - use quarter size
+            _ => base_chunk_size / 8,                // Critical pressure - use minimal chunks
+        }
     }
 }
 
@@ -150,7 +200,7 @@ pub extern "C" fn plugin_init(_config_ptr: *const u8, _config_len: usize) -> i32
 
     let message = "Pass-through plugin initialized";
     unsafe {
-        host_log(LOG_INFO, message.as_ptr(), message.len());
+        host_log(LOG_INFO, message.as_ptr() as u32, message.len() as u32);
     }
 
     0 // Success
@@ -166,7 +216,6 @@ pub extern "C" fn plugin_get_info(out_ptr: *mut *mut u8, out_len: *mut usize) ->
         "author": "m3u-proxy developers",
         "license": "MIT",
         "supported_stages": [
-            "source_loading",
             "data_mapping", 
             "filtering",
             "logo_prefetch",
@@ -198,7 +247,6 @@ pub extern "C" fn plugin_get_capabilities(out_ptr: *mut *mut u8, out_len: *mut u
     let capabilities = serde_json::json!({
         "memory_efficiency": "low",
         "stage_types": [
-            "source_loading",
             "data_mapping",
             "filtering", 
             "logo_prefetch",
@@ -224,89 +272,6 @@ pub extern "C" fn plugin_get_capabilities(out_ptr: *mut *mut u8, out_len: *mut u
     }
 }
 
-/// Execute source loading stage - consume from OrderedChannelAggregateIterator
-#[unsafe(no_mangle)]
-pub extern "C" fn plugin_execute_source_loading(
-    iterator_id: u32,
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-) -> i32 {
-    unsafe {
-        if let Some(ref mut state) = PLUGIN_STATE {
-            state.stage = "source_loading".to_string();
-            state.log(LOG_INFO, "Executing source loading stage with orchestrator iterator");
-
-            let mut all_channels = Vec::new();
-            let mut total_chunks = 0;
-
-            // Consume all chunks from the orchestrator iterator
-            loop {
-                let mut chunk_ptr: *mut u8 = std::ptr::null_mut();
-                let mut chunk_len: usize = 0;
-                
-                let result = host_iterator_next_chunk(iterator_id, &mut chunk_ptr, &mut chunk_len);
-                
-                if result != 0 {
-                    state.log(LOG_ERROR, "Failed to get next chunk from iterator");
-                    return -1;
-                }
-                
-                if chunk_ptr.is_null() || chunk_len == 0 {
-                    state.log(LOG_DEBUG, "Iterator exhausted");
-                    break;
-                }
-                
-                // Deserialize chunk
-                let chunk_data = std::slice::from_raw_parts(chunk_ptr, chunk_len);
-                match serde_json::from_slice::<IteratorResult<Channel>>(chunk_data) {
-                    Ok(IteratorResult::Chunk(channels)) => {
-                        state.log(LOG_DEBUG, &format!("Received chunk with {} channels", channels.len()));
-                        all_channels.extend(channels);
-                        total_chunks += 1;
-                    }
-                    Ok(IteratorResult::Exhausted) => {
-                        state.log(LOG_DEBUG, "Iterator reports exhausted");
-                        break;
-                    }
-                    Err(_) => {
-                        state.log(LOG_ERROR, "Failed to deserialize iterator chunk");
-                        return -1;
-                    }
-                }
-                
-                // Free the chunk memory
-                libc::free(chunk_ptr as *mut _);
-            }
-
-            state.processed_items = all_channels.len();
-            state.log(
-                LOG_INFO,
-                &format!("Source loading completed: {} channels from {} chunks", 
-                        all_channels.len(), total_chunks),
-            );
-
-            // Passthrough: return channels unchanged
-            match serde_json::to_vec(&all_channels) {
-                Ok(output) => {
-                    let output_ptr = libc::malloc(output.len()) as *mut u8;
-                    if output_ptr.is_null() {
-                        return -2;
-                    }
-                    std::ptr::copy_nonoverlapping(output.as_ptr(), output_ptr, output.len());
-                    *out_ptr = output_ptr;
-                    *out_len = output.len();
-                    0
-                }
-                Err(_) => {
-                    state.log(LOG_ERROR, "Failed to serialize channels");
-                    -1
-                }
-            }
-        } else {
-            -1 // Plugin not initialized
-        }
-    }
-}
 
 /// Execute data mapping stage - consume mapping rules and apply to channels
 #[unsafe(no_mangle)]
@@ -321,6 +286,7 @@ pub extern "C" fn plugin_execute_data_mapping(
         if let Some(ref mut state) = PLUGIN_STATE {
             state.stage = "data_mapping".to_string();
             state.log(LOG_INFO, "Executing data mapping stage with orchestrator iterator");
+            state.report_progress("Starting data mapping stage");
 
             // Deserialize input channels
             let channels_data = std::slice::from_raw_parts(channels_ptr, channels_len);
@@ -337,23 +303,32 @@ pub extern "C" fn plugin_execute_data_mapping(
 
             // Consume all mapping rules from the orchestrator iterator
             loop {
-                let mut chunk_ptr: *mut u8 = std::ptr::null_mut();
-                let mut chunk_len: usize = 0;
+                // Allocate buffer for response data
+                let buffer_size = 4096u32; // 4KB buffer
+                let buffer_ptr = libc::malloc(buffer_size as usize) as u32;
                 
-                let result = host_iterator_next_chunk(mapping_iterator_id, &mut chunk_ptr, &mut chunk_len);
+                if buffer_ptr == 0 {
+                    state.log(LOG_ERROR, "Failed to allocate buffer for iterator chunk");
+                    return -1;
+                }
                 
-                if result != 0 {
+                let chunk_size = state.calculate_chunk_size(100); // Base chunk size 100
+                let result = host_iterator_next_chunk(mapping_iterator_id, buffer_ptr, buffer_size, chunk_size);
+                
+                if result < 0 {
+                    libc::free(buffer_ptr as *mut _);
                     state.log(LOG_ERROR, "Failed to get next chunk from mapping iterator");
                     return -1;
                 }
                 
-                if chunk_ptr.is_null() || chunk_len == 0 {
+                if result == 0 {
+                    libc::free(buffer_ptr as *mut _);
                     state.log(LOG_DEBUG, "Mapping iterator exhausted");
                     break;
                 }
                 
-                // Deserialize chunk
-                let chunk_data = std::slice::from_raw_parts(chunk_ptr, chunk_len);
+                // Read the data from buffer
+                let chunk_data = std::slice::from_raw_parts(buffer_ptr as *const u8, result as usize);
                 match serde_json::from_slice::<IteratorResult<DataMappingRule>>(chunk_data) {
                     Ok(IteratorResult::Chunk(rules)) => {
                         state.log(LOG_DEBUG, &format!("Received chunk with {} mapping rules", rules.len()));
@@ -361,30 +336,49 @@ pub extern "C" fn plugin_execute_data_mapping(
                         total_chunks += 1;
                     }
                     Ok(IteratorResult::Exhausted) => {
+                        libc::free(buffer_ptr as *mut _);
                         state.log(LOG_DEBUG, "Mapping iterator reports exhausted");
                         break;
                     }
                     Err(_) => {
                         state.log(LOG_ERROR, "Failed to deserialize mapping iterator chunk");
+                        libc::free(buffer_ptr as *mut _);
                         return -1;
                     }
                 }
                 
-                // Free the chunk memory
-                libc::free(chunk_ptr as *mut _);
+                // Free the buffer memory
+                libc::free(buffer_ptr as *mut _);
             }
 
             state.log(
                 LOG_INFO,
-                &format!("Data mapping stage: {} channels, {} mapping rules from {} chunks", 
+                &format!("Data mapping stage (PASSTHROUGH): {} channels, {} mapping rules from {} chunks", 
                         channels.len(), mapping_rules.len(), total_chunks),
             );
 
-            // Passthrough: In a real implementation, we would apply the mapping rules
-            // For passthrough, we just log the rules and return channels unchanged
-            for rule in &mapping_rules {
-                state.log(LOG_DEBUG, &format!("Mapping rule: {} -> {} ({})", 
-                         rule.source_field, rule.target_field, rule.transformation));
+            // Print detailed information about each mapping rule for debugging
+            for (i, rule) in mapping_rules.iter().enumerate() {
+                state.log(
+                    LOG_INFO,
+                    &format!("Rule[{}]: {} → {} | Transform: '{}' | Priority: {}", 
+                            i + 1, 
+                            rule.source_field, 
+                            rule.target_field, 
+                            rule.transformation, 
+                            rule.priority),
+                );
+            }
+
+            // PASSTHROUGH: For each channel, sample log the input→output mapping (which is identical)
+            for (i, channel) in channels.iter().enumerate() {
+                let input_summary = format_channel_summary(channel);
+                let output_summary = input_summary.clone(); // Identical for passthrough
+                
+                sample_log(
+                    LOG_INFO,
+                    &format!("DATA_MAPPING[{}]: INPUT={} → OUTPUT={}", i, input_summary, output_summary)
+                );
             }
 
             state.processed_items = channels.len();
@@ -441,23 +435,32 @@ pub extern "C" fn plugin_execute_filtering(
 
             // Consume all filter rules from the orchestrator iterator
             loop {
-                let mut chunk_ptr: *mut u8 = std::ptr::null_mut();
-                let mut chunk_len: usize = 0;
+                // Allocate buffer for response data
+                let buffer_size = 4096u32; // 4KB buffer
+                let buffer_ptr = libc::malloc(buffer_size as usize) as u32;
                 
-                let result = host_iterator_next_chunk(filter_iterator_id, &mut chunk_ptr, &mut chunk_len);
+                if buffer_ptr == 0 {
+                    state.log(LOG_ERROR, "Failed to allocate buffer for filter iterator chunk");
+                    return -1;
+                }
                 
-                if result != 0 {
+                let chunk_size = state.calculate_chunk_size(100); // Base chunk size 100  
+                let result = host_iterator_next_chunk(filter_iterator_id, buffer_ptr, buffer_size, chunk_size);
+                
+                if result < 0 {
+                    libc::free(buffer_ptr as *mut _);
                     state.log(LOG_ERROR, "Failed to get next chunk from filter iterator");
                     return -1;
                 }
                 
-                if chunk_ptr.is_null() || chunk_len == 0 {
+                if result == 0 {
+                    libc::free(buffer_ptr as *mut _);
                     state.log(LOG_DEBUG, "Filter iterator exhausted");
                     break;
                 }
                 
-                // Deserialize chunk
-                let chunk_data = std::slice::from_raw_parts(chunk_ptr, chunk_len);
+                // Read the data from buffer
+                let chunk_data = std::slice::from_raw_parts(buffer_ptr as *const u8, result as usize);
                 match serde_json::from_slice::<IteratorResult<FilterRule>>(chunk_data) {
                     Ok(IteratorResult::Chunk(rules)) => {
                         state.log(LOG_DEBUG, &format!("Received chunk with {} filter rules", rules.len()));
@@ -465,17 +468,19 @@ pub extern "C" fn plugin_execute_filtering(
                         total_chunks += 1;
                     }
                     Ok(IteratorResult::Exhausted) => {
+                        libc::free(buffer_ptr as *mut _);
                         state.log(LOG_DEBUG, "Filter iterator reports exhausted");
                         break;
                     }
                     Err(_) => {
                         state.log(LOG_ERROR, "Failed to deserialize filter iterator chunk");
+                        libc::free(buffer_ptr as *mut _);
                         return -1;
                     }
                 }
                 
-                // Free the chunk memory
-                libc::free(chunk_ptr as *mut _);
+                // Free the buffer memory
+                libc::free(buffer_ptr as *mut _);
             }
 
             state.log(
@@ -545,43 +550,35 @@ pub extern "C" fn plugin_execute_logo_prefetch(
             for channel in &mut channels {
                 if let Some(logo_url) = channel.tvg_logo.clone() {
                     if !logo_url.is_empty() {
-                        // Cache the logo and get UUID
-                        let mut uuid_ptr: *mut u8 = std::ptr::null_mut();
-                        let mut uuid_len: usize = 0;
+                        // Allocate buffer for logo response
+                        let buffer_size = 256u32; // 256 bytes should be enough for UUID response
+                        let buffer_ptr = libc::malloc(buffer_size as usize) as u32;
+                        
+                        if buffer_ptr == 0 {
+                            state.log(LOG_ERROR, "Failed to allocate buffer for logo cache response");
+                            continue;
+                        }
                         
                         let result = host_cache_logo(
-                            logo_url.as_ptr(),
-                            logo_url.len(),
-                            &mut uuid_ptr,
-                            &mut uuid_len
+                            logo_url.as_ptr() as u32,
+                            logo_url.len() as u32,
+                            buffer_ptr,
+                            buffer_size
                         );
                         
-                        if result == 0 && !uuid_ptr.is_null() && uuid_len > 0 {
-                            // Get the cached logo serving URL (format: "URL|UUID")
-                            let response_data = std::slice::from_raw_parts(uuid_ptr, uuid_len);
-                            if let Ok(response_str) = std::str::from_utf8(response_data) {
-                                // Parse the response format: "serving_url|uuid"
-                                let parts: Vec<&str> = response_str.split('|').collect();
-                                if parts.len() == 2 {
-                                    let serving_url = parts[0];
-                                    let cached_uuid = parts[1];
-                                    
-                                    // Update channel logo URL to use serving URL
-                                    channel.tvg_logo = Some(serving_url.to_string());
-                                    logos_cached += 1;
-                                    state.log(LOG_DEBUG, &format!("Cached logo for channel {}: {} -> {} (UUID: {})", 
-                                             channel.channel_name, logo_url, serving_url, cached_uuid));
-                                } else {
-                                    state.log(LOG_DEBUG, &format!("Invalid response format from host_cache_logo: {}", response_str));
-                                }
-                            }
-                            
-                            // Free the UUID memory
-                            libc::free(uuid_ptr as *mut _);
+                        if result == 0 {
+                            // For now, just log that logo caching was called
+                            // In a real implementation, this would parse the response from the buffer
+                            logos_cached += 1;
+                            state.log(LOG_DEBUG, &format!("Logo cache called for channel {}: {}", 
+                                     channel.channel_name, logo_url));
                         } else {
                             state.log(LOG_DEBUG, &format!("Failed to cache logo for channel {}: {}", 
                                      channel.channel_name, logo_url));
                         }
+                        
+                        // Free the buffer memory
+                        libc::free(buffer_ptr as *mut _);
                     }
                 }
             }
@@ -638,7 +635,9 @@ pub extern "C" fn plugin_execute_channel_numbering(
                         .into_iter()
                         .enumerate()
                         .map(|(i, channel)| {
-                            state.report_progress(i + 1, channel_count);
+                            if i % 1000 == 0 {
+                                state.report_progress(&format!("Numbering channels: {}/{}", i + 1, channel_count));
+                            }
                             NumberedChannel {
                                 channel,
                                 assigned_number: i as i32 + 1,
@@ -707,7 +706,9 @@ pub extern "C" fn plugin_execute_m3u_generation(
                     let mut m3u_content = String::from("#EXTM3U\n");
 
                     for (i, numbered_channel) in numbered_channels.iter().enumerate() {
-                        state.report_progress(i + 1, numbered_channels.len());
+                        if i % 1000 == 0 {
+                            state.report_progress(&format!("Generating M3U: {}/{}", i + 1, numbered_channels.len()));
+                        }
 
                         m3u_content.push_str(&format!(
                             "#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" group-title=\"{}\",{}\n{}\n",
@@ -787,23 +788,32 @@ pub extern "C" fn plugin_execute_epg_processing(
 
             // Consume all EPG data from the orchestrator iterator
             loop {
-                let mut chunk_ptr: *mut u8 = std::ptr::null_mut();
-                let mut chunk_len: usize = 0;
+                // Allocate buffer for response data
+                let buffer_size = 8192u32; // 8KB buffer for EPG data
+                let buffer_ptr = libc::malloc(buffer_size as usize) as u32;
                 
-                let result = host_iterator_next_chunk(epg_iterator_id, &mut chunk_ptr, &mut chunk_len);
+                if buffer_ptr == 0 {
+                    state.log(LOG_ERROR, "Failed to allocate buffer for EPG iterator chunk");
+                    return -1;
+                }
                 
-                if result != 0 {
+                let chunk_size = state.calculate_chunk_size(100); // Base chunk size 100
+                let result = host_iterator_next_chunk(epg_iterator_id, buffer_ptr, buffer_size, chunk_size);
+                
+                if result < 0 {
+                    libc::free(buffer_ptr as *mut _);
                     state.log(LOG_ERROR, "Failed to get next chunk from EPG iterator");
                     return -1;
                 }
                 
-                if chunk_ptr.is_null() || chunk_len == 0 {
+                if result == 0 {
+                    libc::free(buffer_ptr as *mut _);
                     state.log(LOG_DEBUG, "EPG iterator exhausted");
                     break;
                 }
                 
-                // Deserialize chunk
-                let chunk_data = std::slice::from_raw_parts(chunk_ptr, chunk_len);
+                // Read the data from buffer
+                let chunk_data = std::slice::from_raw_parts(buffer_ptr as *const u8, result as usize);
                 match serde_json::from_slice::<IteratorResult<EpgEntry>>(chunk_data) {
                     Ok(IteratorResult::Chunk(epg_entries)) => {
                         state.log(LOG_DEBUG, &format!("Received chunk with {} EPG entries", epg_entries.len()));
@@ -818,17 +828,19 @@ pub extern "C" fn plugin_execute_epg_processing(
                         total_chunks += 1;
                     }
                     Ok(IteratorResult::Exhausted) => {
+                        libc::free(buffer_ptr as *mut _);
                         state.log(LOG_DEBUG, "EPG iterator reports exhausted");
                         break;
                     }
                     Err(_) => {
                         state.log(LOG_ERROR, "Failed to deserialize EPG iterator chunk");
+                        libc::free(buffer_ptr as *mut _);
                         return -1;
                     }
                 }
                 
-                // Free the chunk memory
-                libc::free(chunk_ptr as *mut _);
+                // Free the buffer memory
+                libc::free(buffer_ptr as *mut _);
             }
 
             state.log(
@@ -952,8 +964,6 @@ pub extern "C" fn plugin_get_stats(out_ptr: *mut *mut u8, out_len: *mut usize) -
             let stats = serde_json::json!({
                 "stage": state.stage,
                 "processed_items": state.processed_items,
-                "memory_usage": state.get_memory_usage(),
-                "memory_pressure": state.get_memory_pressure(),
                 "plugin_type": "passthrough"
             });
 

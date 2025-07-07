@@ -23,7 +23,7 @@ use crate::proxy::simple_strategies::*;
 use crate::proxy::stage_contracts::*;
 use crate::proxy::stage_strategy::{MemoryPressureLevel, StageContext};
 use crate::proxy::wasm_host_interface::WasmHostInterface;
-use crate::proxy::wasm_plugin::{WasmPluginConfig, WasmPluginManager};
+use crate::plugins::pipeline::wasm::{WasmPluginConfig, WasmPluginManager};
 use crate::utils::{MemoryCleanupCoordinator, MemoryContext, SimpleMemoryMonitor};
 use sandboxed_file_manager::SandboxedManager;
 
@@ -111,15 +111,42 @@ impl AdaptivePipeline {
         }
     }
 
+    /// Check if the configured plugin has support for this stage and is available
+    /// Returns the plugin instance if available and supports the stage, None otherwise
+    fn get_configured_plugin_for_stage(&self, stage: &str, memory_pressure: MemoryPressureLevel) -> Option<Box<dyn crate::proxy::stage_strategy::StageStrategy + Send + Sync>> {
+        // Check if we have a plugin resolver (configuration-driven)
+        let Some(resolver) = self.plugin_resolver.as_ref() else {
+            debug!("No plugin resolver configured for stage '{}'", stage);
+            return None;
+        };
+        
+        // Get the configured plugin name for this stage
+        let Some(plugin_name) = resolver.get_plugin_for_stage(stage) else {
+            debug!("No plugin configured for stage '{}'", stage);
+            return None;
+        };
+        
+        // Try to get the specific plugin by name
+        let plugin = self.plugin_manager.get_plugin_by_name_for_stage(plugin_name, stage, memory_pressure);
+        
+        if plugin.is_some() {
+            info!("Using configured plugin '{}' for stage '{}'", plugin_name, stage);
+        } else {
+            warn!("Configured plugin '{}' for stage '{}' is not available or doesn't support the stage", plugin_name, stage);
+        }
+        
+        plugin
+    }
+
     /// Initialize the pipeline with plugin loading and chunk manager setup
     pub async fn initialize(&mut self) -> Result<()> {
         info!("Initializing unified iterator-based pipeline with WASM plugin support");
 
         // Initialize chunk manager
-        info!("Initializing chunk size manager with 7-stage dependencies");
+        info!("Initializing chunk size manager with 6-stage dependencies");
         
         // Check if plugins are already loaded (shared manager case)
-        let plugin_count = self.plugin_manager.get_loaded_plugin_count().await;
+        let plugin_count = self.plugin_manager.get_loaded_plugin_count();
         if plugin_count > 0 {
             info!("Using shared plugin manager with {} already loaded plugins", plugin_count);
         } else {
@@ -133,7 +160,7 @@ impl AdaptivePipeline {
         }
 
         // Log pipeline status
-        let health_status = self.plugin_manager.health_check().await;
+        let health_status = self.plugin_manager.health_check();
         let healthy_plugins = health_status
             .iter()
             .filter(|(_, healthy)| **healthy)
@@ -213,14 +240,83 @@ impl AdaptivePipeline {
         memory_context: &mut MemoryContext,
         cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<ProxyGeneration> {
-        info!("Starting unified 7-stage iterator-based pipeline execution");
+        info!("Starting unified 6-stage iterator-based pipeline execution");
 
-        // Stage 1: Source Loading (using RollingBufferChannelIterator with active source filtering)
-        let channels = self
-            .execute_source_loading_with_iterator(&config, memory_context, cleanup_coordinator)
+        // Load channels using RollingBufferChannelIterator with active source filtering
+        info!("Loading channels using RollingBufferChannelIterator for {} sources", config.sources.len());
+        
+        let memory_pressure = self.get_current_memory_pressure(memory_context);
+        
+        // Request optimal chunk size from chunk manager first
+        let requested_chunk_size = self.chunk_manager
+            .request_chunk_size("data_loading", 3000)
             .await?;
 
-        // Stage 2: Data Mapping (using OrderedDataMappingIterator)
+        info!("Data loading using chunk size: {}", requested_chunk_size);
+        
+        // Create RollingBufferChannelIterator with buffer size matching chunk size for efficiency
+        let buffer_config = BufferConfig {
+            initial_buffer_size: requested_chunk_size, // Match buffer to chunk size
+            max_buffer_size: requested_chunk_size * 5, // Allow up to 5x chunk size maximum
+            trigger_threshold: 0.8, // Load next when 80% consumed (more efficient)
+            initial_chunk_size: requested_chunk_size,
+            max_concurrent_sources: 2,
+            enable_cascade_integration: true,
+        };
+
+        let mut channel_iterator = OrchestratorIteratorFactory::create_rolling_buffer_channel_iterator_from_configs_with_cascade(
+            Arc::new(self.database.clone()),
+            config.proxy.id,
+            config.sources.clone(),
+            buffer_config,
+            Some(self.chunk_manager.clone()),
+            "data_loading".to_string(),
+        );
+
+        // Load all channels using native rolling buffer iterator
+        let mut channels = Vec::new();
+        
+        loop {
+            match channel_iterator.next_chunk_with_size(requested_chunk_size).await? {
+                crate::pipeline::iterator_traits::IteratorResult::Chunk(chunk) => {
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    info!("Loaded chunk of {} channels from iterator", chunk.len());
+                    
+                    // Debug: Log first few channels to see the data structure
+                    if !chunk.is_empty() && channels.is_empty() {
+                        for (i, channel) in chunk.iter().take(3).enumerate() {
+                            debug!(
+                                "Channel #{}: id={}, name='{}', stream_url='{}', tvg_logo='{:?}', group_title='{:?}'",
+                                i + 1,
+                                channel.id,
+                                channel.channel_name,
+                                channel.stream_url,
+                                channel.tvg_logo,
+                                channel.group_title
+                            );
+                        }
+                    }
+                    
+                    channels.extend(chunk);
+                }
+                crate::pipeline::iterator_traits::IteratorResult::Exhausted => {
+                    info!("Channel iterator exhausted");
+                    break;
+                }
+            }
+        }
+
+        // Close iterator and cleanup
+        channel_iterator.close().await?;
+        
+        info!(
+            "Data loading completed: {} channels loaded",
+            channels.len()
+        );
+
+        // Stage 1: Data Mapping (using OrderedDataMappingIterator)  
         let mapped_channels = self
             .execute_data_mapping_with_iterator(
                 channels,
@@ -232,7 +328,7 @@ impl AdaptivePipeline {
             )
             .await?;
 
-        // Stage 3: Filtering (using OrderedFilterIterator)
+        // Stage 2: Filtering (using OrderedFilterIterator)
         let filtered_channels = self
             .execute_filtering_with_iterator(
                 mapped_channels,
@@ -242,7 +338,7 @@ impl AdaptivePipeline {
             )
             .await?;
 
-        // Stage 4: Logo Prefetch (NEW - with access to EPG data)
+        // Stage 3: Logo Prefetch (NEW - with access to EPG data)
         let logo_processed_channels = self
             .execute_logo_prefetch_with_iterator(
                 filtered_channels,
@@ -252,7 +348,7 @@ impl AdaptivePipeline {
             )
             .await?;
 
-        // Stage 5: Channel Numbering
+        // Stage 4: Channel Numbering
         let numbered_channels = self
             .execute_channel_numbering_with_iterator(
                 logo_processed_channels,
@@ -262,7 +358,7 @@ impl AdaptivePipeline {
             )
             .await?;
 
-        // Stage 6: M3U Generation
+        // Stage 5: M3U Generation
         let m3u_content = self
             .execute_m3u_generation_with_iterator(
                 numbered_channels.clone(),
@@ -273,7 +369,7 @@ impl AdaptivePipeline {
             )
             .await?;
 
-        // Stage 7: EPG Processing (parallel to M3U generation, using OrderedEpgAggregateIterator)
+        // Stage 6: EPG Processing (parallel to M3U generation, using OrderedEpgAggregateIterator)
         let _epg_content = self
             .execute_epg_processing_with_iterator(
                 numbered_channels.clone(),
@@ -284,7 +380,7 @@ impl AdaptivePipeline {
             )
             .await?;
 
-        info!("Unified 7-stage pipeline execution completed successfully");
+        info!("Unified 6-stage pipeline execution completed successfully");
 
         // Debug: Log final channel structure before M3U generation record
         if !numbered_channels.is_empty() {
@@ -329,181 +425,6 @@ impl AdaptivePipeline {
         Ok(generation)
     }
 
-    /// Execute source loading stage using RollingBufferChannelIterator with active source filtering and plugin/native fallback
-    async fn execute_source_loading_with_iterator(
-        &self,
-        config: &ResolvedProxyConfig,
-        memory_context: &mut MemoryContext,
-        cleanup_coordinator: &mut MemoryCleanupCoordinator,
-    ) -> Result<Vec<Channel>> {
-        memory_context.start_stage("source_loading")?;
-        
-        info!("Starting source loading stage with RollingBufferChannelIterator for {} sources", config.sources.len());
-
-        let memory_pressure = self.get_current_memory_pressure(memory_context);
-
-        // Create RollingBufferChannelIterator with sophisticated buffer management and cascading buffer integration
-        let buffer_config = BufferConfig {
-            initial_buffer_size: self.memory_limit_mb.unwrap_or(512) * 2, // 2 channels per MB estimate
-            max_buffer_size: self.memory_limit_mb.unwrap_or(512) * 10, // 10 channels per MB maximum
-            trigger_threshold: 0.5, // Start loading next source when 50% buffer remains
-            initial_chunk_size: 1000,
-            max_concurrent_sources: 2,
-            enable_cascade_integration: true,
-        };
-
-        let mut channel_iterator = OrchestratorIteratorFactory::create_rolling_buffer_channel_iterator_from_configs_with_cascade(
-            Arc::new(self.database.clone()),
-            config.proxy.id,
-            config.sources.clone(),
-            buffer_config,
-            Some(self.chunk_manager.clone()),
-            "source_loading".to_string(),
-        );
-
-        // Request optimal chunk size from chunk manager (may cascade upstream)
-        let requested_chunk_size = self.chunk_manager
-            .request_chunk_size("source_loading", 1000)
-            .await?;
-
-        info!("Source loading using chunk size: {}", requested_chunk_size);
-
-        // Try WASM plugin first if available
-        if self.should_use_plugin_for_stage("source_loading") {
-            if let Some(plugin) = self
-                .plugin_manager
-                .get_plugin_for_stage("source_loading", memory_pressure)
-                .await
-            {
-            // Create plugin iterator context with real iterator
-            let stage_context = self.create_temp_stage_context("source_loading", memory_pressure);
-
-            // Extract source IDs for plugin compatibility
-            let source_ids: Vec<uuid::Uuid> = config.sources.iter().map(|sc| sc.source.id).collect();
-            match plugin.execute_source_loading(&stage_context, source_ids).await {
-                Ok(channels) => {
-                    let stage_info = memory_context.complete_stage("source_loading")?;
-                    
-                    // Check if plugin returned empty results - fall back to native iterator
-                    if channels.is_empty() {
-                        warn!(
-                            "WASM plugin returned empty results, falling back to native iterator:\n\
-                             ├─ Plugin: {} v{}\n\
-                             ├─ Channels loaded: {}\n\
-                             ├─ Memory used: {:.1}MB\n\
-                             ├─ Processing time: {}ms\n\
-                             ├─ Memory pressure: {:?}\n\
-                             └─ Fallback: Using RollingBufferChannelIterator",
-                            plugin.get_info().name,
-                            plugin.get_info().version,
-                            channels.len(),
-                            stage_info.memory_delta_mb,
-                            stage_info.duration_ms,
-                            stage_info.pressure_level
-                        );
-                        
-                        // Continue to native fallback below
-                    } else {
-                        info!(
-                            "WASM plugin source loading succeeded:\n\
-                             ├─ Plugin: {} v{}\n\
-                             ├─ Channels loaded: {}\n\
-                             ├─ Memory used: {:.1}MB\n\
-                             ├─ Processing time: {}ms\n\
-                             └─ Memory pressure: {:?}",
-                            plugin.get_info().name,
-                            plugin.get_info().version,
-                            channels.len(),
-                            stage_info.memory_delta_mb,
-                            stage_info.duration_ms,
-                            stage_info.pressure_level
-                        );
-                        
-                        return Ok(channels);
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "WASM plugin source loading failed, falling back to native iterator:\n\
-                         ├─ Plugin: {}\n\
-                         ├─ Error: {}\n\
-                         ├─ Stage: source_loading\n\
-                         ├─ Fallback: Using RollingBufferChannelIterator\n\
-                         └─ Reason: Plugin execution error",
-                        plugin.get_info().name,
-                        e
-                    );
-                }
-            }
-        } else {
-            info!(
-                "No WASM plugin available for source_loading stage:\n\
-                 ├─ Memory pressure: {:?}\n\
-                 ├─ Available plugins: {}\n\
-                 └─ Using: RollingBufferChannelIterator",
-                memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
-            );
-        }
-        } // Close the should_use_plugin_for_stage("source_loading") block
-
-        // Native implementation using RollingBufferChannelIterator
-        let mut all_channels = Vec::new();
-
-        loop {
-            match channel_iterator.next_chunk_with_size(requested_chunk_size).await? {
-                crate::pipeline::iterator_traits::IteratorResult::Chunk(chunk) => {
-                    if chunk.is_empty() {
-                        break;
-                    }
-                    info!("Loaded chunk of {} channels from iterator", chunk.len());
-                    
-                    // Debug: Log first few channels to see the data structure
-                    if !chunk.is_empty() && all_channels.is_empty() {
-                        for (i, channel) in chunk.iter().take(3).enumerate() {
-                            debug!(
-                                "Channel #{}: id={}, name='{}', stream_url='{}', tvg_logo='{:?}', group_title='{:?}'",
-                                i + 1,
-                                channel.id,
-                                channel.channel_name,
-                                channel.stream_url,
-                                channel.tvg_logo,
-                                channel.group_title
-                            );
-                        }
-                    }
-                    
-                    all_channels.extend(chunk);
-                }
-                crate::pipeline::iterator_traits::IteratorResult::Exhausted => {
-                    info!("Channel iterator exhausted");
-                    break;
-                }
-            }
-        }
-
-        // Close iterator and cleanup
-        channel_iterator.close().await?;
-
-        let stage_info = memory_context.complete_stage("source_loading")?;
-        
-        info!(
-            "Native source loading completed:\n\
-             ├─ Implementation: OrderedChannelAggregateIterator\n\
-             ├─ Channels loaded: {}\n\
-             ├─ Chunk size used: {}\n\
-             ├─ Memory used: {:.1}MB\n\
-             ├─ Processing time: {}ms\n\
-             └─ Memory pressure: {:?}",
-            all_channels.len(),
-            requested_chunk_size,
-            stage_info.memory_delta_mb,
-            stage_info.duration_ms,
-            stage_info.pressure_level
-        );
-
-        Ok(all_channels)
-    }
 
     /// Execute data mapping stage using OrderedDataMappingIterator with plugin/native fallback
     async fn execute_data_mapping_with_iterator(
@@ -538,11 +459,7 @@ impl AdaptivePipeline {
 
         // Try WASM plugin first if available
         if self.should_use_plugin_for_stage("data_mapping") {
-            if let Some(plugin) = self
-                .plugin_manager
-                .get_plugin_for_stage("data_mapping", memory_pressure)
-                .await
-            {
+            if let Some(plugin) = self.get_configured_plugin_for_stage("data_mapping", memory_pressure) {
             let stage_context = self.create_temp_stage_context("data_mapping", memory_pressure);
 
             match plugin.execute_data_mapping(&stage_context, channels.clone()).await {
@@ -609,7 +526,7 @@ impl AdaptivePipeline {
                  ├─ Available plugins: {}\n\
                  └─ Using: OrderedDataMappingIterator + DataMappingService",
                 memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
+                self.plugin_manager.get_loaded_plugin_count()
             );
         }
         } // Close the should_use_plugin_for_stage("data_mapping") block
@@ -708,7 +625,6 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage("filtering", memory_pressure)
-                .await
             {
             let stage_context = self.create_temp_stage_context("filtering", memory_pressure);
 
@@ -776,7 +692,7 @@ impl AdaptivePipeline {
                  ├─ Available plugins: {}\n\
                  └─ Using: OrderedFilterIterator + FilterEngine",
                 memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
+                self.plugin_manager.get_loaded_plugin_count()
             );
         }
         } // Close the should_use_plugin_for_stage("filtering") block
@@ -897,13 +813,11 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage("logo_prefetch", memory_pressure)
-                .await
             {
             let stage_context = self.create_temp_stage_context("logo_prefetch", memory_pressure);
 
-            // Note: The plugin would need a logo prefetch execution method
-            // For now, we'll use a generic execution and check results
-            match plugin.execute_with_context(stage_context).await {
+            // Execute logo prefetch with the plugin
+            match plugin.execute_logo_prefetch(&stage_context, channels.clone()).await {
                 Ok(processed_channels) => {
                     let stage_info = memory_context.complete_stage("logo_prefetch")?;
                     
@@ -967,7 +881,7 @@ impl AdaptivePipeline {
                  ├─ Available plugins: {}\n\
                  └─ Using: LogoAssetService with EPG integration",
                 memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
+                self.plugin_manager.get_loaded_plugin_count()
             );
         }
         } // Close the should_use_plugin_for_stage("logo_prefetch") block
@@ -1052,7 +966,6 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage("channel_numbering", memory_pressure)
-                .await
             {
             let stage_context = self.create_temp_stage_context("channel_numbering", memory_pressure);
 
@@ -1118,7 +1031,7 @@ impl AdaptivePipeline {
                  ├─ Available plugins: {}\n\
                  └─ Using: Sequential numbering from proxy config",
                 memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
+                self.plugin_manager.get_loaded_plugin_count()
             );
         }
         } // Close the should_use_plugin_for_stage("channel_numbering") block
@@ -1201,7 +1114,6 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage("m3u_generation", memory_pressure)
-                .await
             {
             let stage_context = self.create_temp_stage_context("m3u_generation", memory_pressure);
 
@@ -1267,7 +1179,7 @@ impl AdaptivePipeline {
                  ├─ Available plugins: {}\n\
                  └─ Using: Native M3U generator",
                 memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
+                self.plugin_manager.get_loaded_plugin_count()
             );
         }
         } // Close the should_use_plugin_for_stage("m3u_generation") block
@@ -1405,7 +1317,6 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage("epg_processing", memory_pressure)
-                .await
             {
             // For WASM plugin, we would need to provide EPG iterator context
             // This is a more complex integration that would require PluginIteratorContext
@@ -1429,7 +1340,7 @@ impl AdaptivePipeline {
                  ├─ Available plugins: {}\n\
                  └─ Using: Native EPG generator with OrderedEpgAggregateIterator",
                 memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
+                self.plugin_manager.get_loaded_plugin_count()
             );
         }
         } // Close the should_use_plugin_for_stage("epg_processing") block
@@ -1566,7 +1477,6 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage(stage_name, memory_pressure)
-                .await
             {
             match plugin_execution().await {
                 Ok(result) => {
@@ -1633,7 +1543,7 @@ impl AdaptivePipeline {
                  └─ Using: Native implementation",
                 stage_name,
                 memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
+                self.plugin_manager.get_loaded_plugin_count()
             );
         }
         } // Close the should_use_plugin_for_stage(stage_name) block
@@ -1819,7 +1729,6 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage("source_loading", memory_pressure)
-                .await
             {
             info!(
                 "Selected WASM plugin for source_loading stage:\n\
@@ -1929,7 +1838,7 @@ impl AdaptivePipeline {
                  ├─ Available plugins: {}\n\
                  └─ Fallback: Using built-in inmemory source loading strategy",
                 memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
+                self.plugin_manager.get_loaded_plugin_count()
             );
         }
         } // Close the should_use_plugin_for_stage("source_loading") block
@@ -1999,11 +1908,7 @@ impl AdaptivePipeline {
 
         // Try WASM plugin first if available
         if self.should_use_plugin_for_stage("data_mapping") {
-            if let Some(plugin) = self
-                .plugin_manager
-                .get_plugin_for_stage("data_mapping", memory_pressure)
-                .await
-            {
+            if let Some(plugin) = self.get_configured_plugin_for_stage("data_mapping", memory_pressure) {
             info!(
                 "Selected WASM plugin for data_mapping stage:\n\
                  ├─ Plugin: {} v{}\n\
@@ -2114,7 +2019,7 @@ impl AdaptivePipeline {
                  ├─ Available plugins: {}\n\
                  └─ Fallback: Using built-in data mapping service",
                 memory_pressure,
-                self.plugin_manager.get_loaded_plugin_count().await
+                self.plugin_manager.get_loaded_plugin_count()
             );
         }
         } // Close the should_use_plugin_for_stage("data_mapping") block
@@ -2167,7 +2072,6 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage("filtering", memory_pressure)
-                .await
             {
             info!(
                 "Selected WASM plugin for filtering stage:\n\
@@ -2320,7 +2224,6 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage("channel_numbering", memory_pressure)
-                .await
             {
             info!(
                 "Selected WASM plugin for channel_numbering stage:\n\
@@ -2473,7 +2376,6 @@ impl AdaptivePipeline {
             if let Some(plugin) = self
                 .plugin_manager
                 .get_plugin_for_stage("m3u_generation", memory_pressure)
-                .await
             {
             info!(
                 "Selected WASM plugin for m3u_generation stage:\n\
@@ -2636,7 +2538,7 @@ impl AdaptivePipeline {
     pub async fn get_plugin_statistics(
         &self,
     ) -> Result<std::collections::HashMap<String, serde_json::Value>> {
-        Ok(self.plugin_manager.get_statistics().await)
+        Ok(self.plugin_manager.get_statistics())
     }
 
     /// Reload plugins if hot reload is enabled
@@ -2652,7 +2554,7 @@ pub struct AdaptivePipelineBuilder {
     logo_service: Option<LogoAssetService>,
     memory_limit_mb: Option<usize>,
     temp_file_manager: Option<SandboxedManager>,
-    shared_plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
+    shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
 }
 
 impl AdaptivePipelineBuilder {
@@ -2692,7 +2594,7 @@ impl AdaptivePipelineBuilder {
         self
     }
 
-    pub fn with_shared_plugin_manager(mut self, plugin_manager: std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>) -> Self {
+    pub fn with_shared_plugin_manager(mut self, plugin_manager: std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>) -> Self {
         self.shared_plugin_manager = Some(plugin_manager);
         self
     }

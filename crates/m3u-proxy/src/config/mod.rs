@@ -15,10 +15,24 @@ pub use plugin_resolver::{PluginResolver, create_plugin_resolver};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmPluginsConfig {
     pub enabled: bool,
-    pub plugin_directory: PathBuf,
-    pub max_memory_per_plugin_mb: usize,
-    pub timeout_seconds: u64,
-    pub enable_hot_reload: bool,
+    #[serde(default = "default_plugin_directory")]
+    pub plugin_directory: Option<PathBuf>,
+    #[serde(default = "default_timeout_seconds")]
+    pub timeout_seconds: Option<u64>,
+    #[serde(default = "default_enable_hot_reload")]
+    pub enable_hot_reload: Option<bool>,
+}
+
+fn default_plugin_directory() -> Option<PathBuf> {
+    Some(PathBuf::from("./target/wasm-plugins"))
+}
+
+fn default_timeout_seconds() -> Option<u64> {
+    Some(30)
+}
+
+fn default_enable_hot_reload() -> Option<bool> {
+    Some(false)
 }
 
 /// Pipeline strategies configuration - maps strategy names to stage->plugin mappings
@@ -41,10 +55,9 @@ impl Default for WasmPluginsConfig {
     fn default() -> Self {
         Self {
             enabled: false, // Disabled by default for security
-            plugin_directory: PathBuf::from("./plugins"),
-            max_memory_per_plugin_mb: 64,
-            timeout_seconds: 30,
-            enable_hot_reload: false,
+            plugin_directory: Some(PathBuf::from("./target/wasm-plugins")),
+            timeout_seconds: Some(30),
+            enable_hot_reload: Some(false),
         }
     }
 }
@@ -53,9 +66,8 @@ impl Default for PipelineStrategiesConfig {
     fn default() -> Self {
         let mut strategies = HashMap::new();
         
-        // Default strategy - chunked loading for source, passthrough for others
+        // Default strategy - 6 stages using passthrough plugins
         let mut default_strategy = HashMap::new();
-        default_strategy.insert("source_loading".to_string(), "chunked_source_loader".to_string());
         default_strategy.insert("data_mapping".to_string(), "passthrough_plugin".to_string());
         default_strategy.insert("filtering".to_string(), "passthrough_plugin".to_string());
         default_strategy.insert("logo_prefetch".to_string(), "passthrough_plugin".to_string());
@@ -66,7 +78,6 @@ impl Default for PipelineStrategiesConfig {
         
         // Performance strategy - all passthrough for maximum speed
         let mut performance_strategy = HashMap::new();
-        performance_strategy.insert("source_loading".to_string(), "passthrough_plugin".to_string());
         performance_strategy.insert("data_mapping".to_string(), "passthrough_plugin".to_string());
         performance_strategy.insert("filtering".to_string(), "passthrough_plugin".to_string());
         performance_strategy.insert("logo_prefetch".to_string(), "passthrough_plugin".to_string());
@@ -81,18 +92,9 @@ impl Default for PipelineStrategiesConfig {
 
 impl Default for PipelineConfig {
     fn default() -> Self {
-        let mut plugin_configs = HashMap::new();
-        
-        // Default chunked source loader config
-        let mut chunked_config = HashMap::new();
-        chunked_config.insert("chunk_size".to_string(), toml::Value::Integer(2000));
-        chunked_config.insert("temp_file_threshold".to_string(), toml::Value::Integer(10000));
-        chunked_config.insert("memory_threshold_mb".to_string(), toml::Value::Integer(256));
-        plugin_configs.insert("chunked_source_loader".to_string(), chunked_config);
-        
         Self {
             strategy: "default".to_string(),
-            plugin_configs: Some(plugin_configs),
+            plugin_configs: None, // No plugin configs needed for passthrough
         }
     }
 }

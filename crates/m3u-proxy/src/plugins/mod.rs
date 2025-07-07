@@ -15,7 +15,7 @@ pub mod shared;
 pub mod wasm_host_factory;
 
 // Re-export core plugin traits and types from shared
-pub use shared::{Plugin, PluginCapabilities, PluginInfo, PluginRegistry, PluginType};
+pub use shared::{Plugin, PluginInfo, PluginRegistry, PluginType};
 pub use wasm_host_factory::{WasmHostFunctionFactory, HostFunctionContext, HostFunctionContextBuilder};
 
 /// Plugin system configuration

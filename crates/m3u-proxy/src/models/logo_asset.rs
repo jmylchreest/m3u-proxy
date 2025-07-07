@@ -69,6 +69,7 @@ pub struct LogoAssetListRequest {
     pub limit: Option<u32>,
     pub search: Option<String>,
     pub asset_type: Option<LogoAssetType>,
+    pub include_cached: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +101,7 @@ pub struct LogoAssetWithLinked {
 pub struct LogoAssetSearchRequest {
     pub query: Option<String>,
     pub limit: Option<u32>,
+    pub include_cached: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,4 +117,8 @@ pub struct LogoCacheStats {
     pub total_storage_used: i64,
     pub total_linked_assets: i64,
     pub cache_hit_rate: Option<f64>,
+    /// Filesystem-based cached logos (not in database)
+    pub filesystem_cached_logos: i64,
+    /// Storage used by filesystem-based cached logos
+    pub filesystem_cached_storage: i64,
 }

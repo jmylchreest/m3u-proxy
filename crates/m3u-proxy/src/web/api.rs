@@ -2005,6 +2005,74 @@ pub async fn delete_logo_asset(
     }
 }
 
+/// Get cached logo asset by cache ID
+/// This endpoint serves logos cached by the WASM plugin system using the sandboxed file manager
+/// Normalized format: cache_id.png, with fallback to legacy formats
+pub async fn get_cached_logo_asset(
+    Path(cache_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<(axum::http::HeaderMap, Vec<u8>), StatusCode> {
+    use crate::services::file_categories::FileCategory;
+    
+    // Build the subdirectory path
+    let subdirectory = FileCategory::LogoCached.subdirectory();
+    
+    // Try PNG first (normalized format: cache_id.png)
+    let mut file_extension = "png".to_string();
+    let file_data = match state.logo_file_manager.read(
+        &format!("{}/{}.png", subdirectory, cache_id)
+    ).await {
+        Ok(data) => {
+            info!("Serving normalized cached logo: {}.png", cache_id);
+            data
+        },
+        Err(_) => {
+            // Fall back to legacy format with other extensions
+            let mut found_data = None;
+            for ext in &["jpg", "jpeg", "gif", "webp", "svg"] {
+                match state.logo_file_manager.read(
+                    &format!("{}/{}.{}", subdirectory, cache_id, ext)
+                ).await {
+                    Ok(data) => {
+                        file_extension = ext.to_string();
+                        found_data = Some(data);
+                        info!("Serving legacy cached logo: {}.{}", cache_id, ext);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            found_data.ok_or_else(|| {
+                info!("Cached logo not found: {}", cache_id);
+                StatusCode::NOT_FOUND
+            })?
+        }
+    };
+
+    // Determine content type from extension
+    let content_type = match file_extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    };
+
+    // Set response headers
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        content_type.parse().unwrap(),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        "public, max-age=2592000".parse().unwrap(), // 30 days cache
+    );
+    
+    Ok((headers, file_data))
+}
+
 pub async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(json!({
         "status": "healthy",
@@ -2602,15 +2670,38 @@ pub async fn search_logo_assets(
     Query(params): Query<crate::models::logo_asset::LogoAssetSearchRequest>,
     State(state): State<AppState>,
 ) -> Result<Json<crate::models::logo_asset::LogoAssetSearchResult>, StatusCode> {
-    match state
-        .logo_asset_service
-        .search_assets(params, &state.config.web.base_url)
-        .await
-    {
-        Ok(result) => Ok(Json(result)),
-        Err(e) => {
-            error!("Failed to search logo assets: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+    let include_cached = params.include_cached.unwrap_or(true); // Default to include cached
+    
+    if include_cached && state.logo_cache_scanner.is_some() {
+        // Use the enhanced search with cached logos
+        match state
+            .logo_asset_service
+            .search_assets_with_cached(
+                params,
+                &state.config.web.base_url,
+                state.logo_cache_scanner.as_ref(),
+                include_cached,
+            )
+            .await
+        {
+            Ok(result) => Ok(Json(result)),
+            Err(e) => {
+                error!("Failed to search logo assets with cached: {}", e);
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    } else {
+        // Fall back to database-only search
+        match state
+            .logo_asset_service
+            .search_assets(params, &state.config.web.base_url)
+            .await
+        {
+            Ok(result) => Ok(Json(result)),
+            Err(e) => {
+                error!("Failed to search logo assets: {}", e);
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     }
 }
@@ -2670,7 +2761,9 @@ pub async fn get_logo_asset_with_formats(
 pub async fn get_logo_cache_stats(
     State(state): State<AppState>,
 ) -> Result<Json<crate::models::logo_asset::LogoCacheStats>, StatusCode> {
-    match state.logo_asset_service.get_cache_stats().await {
+    match state.logo_asset_service.get_cache_stats_with_filesystem(
+        state.logo_cache_scanner.as_ref()
+    ).await {
         Ok(stats) => Ok(Json(stats)),
         Err(e) => {
             error!("Failed to get logo cache stats: {}", e);

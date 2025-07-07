@@ -94,6 +94,13 @@ pub trait StageStrategy: Send + Sync {
         channels: Vec<Channel>,
     ) -> Result<Vec<NumberedChannel>>;
 
+    /// Execute logo prefetch stage
+    async fn execute_logo_prefetch(
+        &self,
+        context: &StageContext,
+        channels: Vec<Channel>,
+    ) -> Result<Vec<Channel>>;
+
     /// Execute M3U generation stage
     async fn execute_m3u_generation(
         &self,
@@ -110,8 +117,19 @@ pub trait StageStrategy: Send + Sync {
     /// Get strategy name for logging/metrics
     fn strategy_name(&self) -> &str;
 
-    /// Get estimated memory usage for this strategy
-    fn estimated_memory_usage(&self, input_size: usize) -> Option<usize>;
+
+    /// Get plugin information for logging and debugging
+    fn get_info(&self) -> crate::plugins::shared::PluginInfo {
+        crate::plugins::shared::PluginInfo {
+            name: self.strategy_name().to_string(),
+            version: "1.0.0".to_string(),
+            author: "Native".to_string(),
+            license: "MIT".to_string(),
+            description: format!("Native {} strategy", self.strategy_name()),
+            plugin_type: crate::plugins::shared::PluginType::Pipeline,
+            supported_features: vec!["all".to_string()],
+        }
+    }
 }
 
 /// Registry of available strategies for each stage

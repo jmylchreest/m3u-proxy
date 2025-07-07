@@ -238,31 +238,26 @@ io_buffer_size_kb = 64
 # Enable WASM plugin system - when disabled, all stages use native implementations
 enabled = true
 
-# Directory containing WASM plugin files (.wasm files and their manifests)
-plugin_directory = "./plugins"
+# Optional: Directory containing WASM plugin files (.wasm files and their manifests)
+# Default: "./target/wasm-plugins"
+# plugin_directory = "./target/wasm-plugins"
 
-# Maximum memory per plugin in MB - limits memory usage to prevent system overload
-max_memory_per_plugin_mb = 64
+# Optional: Plugin execution timeout in seconds - prevents stuck plugins from hanging the system
+# Default: 30 seconds
+# timeout_seconds = 30
 
-# Plugin execution timeout in seconds - prevents stuck plugins from hanging the system
-timeout_seconds = 30
-
-# Enable hot reload of plugins (development feature) - automatically reload plugins when files change
+# Optional: Enable hot reload of plugins (development feature) - automatically reload plugins when files change
 # WARNING: Only use in development, not recommended for production
-enable_hot_reload = false
+# Default: false
+# enable_hot_reload = false
 
 # Pipeline Strategy Configuration
 # Define different strategies for which plugins to use at each pipeline stage.
 # This allows you to have multiple configurations (e.g., performance vs memory-optimized)
 # and switch between them by changing the 'strategy' setting below.
 
-# DEFAULT STRATEGY - Balanced approach using chunked loading for large datasets
+# DEFAULT STRATEGY - Balanced approach with plugin support
 [pipeline_strategies.default]
-# Source Loading: Load channel data from stream sources
-# - "chunked_source_loader": Loads data in chunks to manage memory usage
-# - "passthrough_plugin": Uses native implementation (no plugin)
-source_loading = "chunked_source_loader"
-
 # Data Mapping: Transform channel data using mapping rules
 # - "passthrough_plugin": Uses native data mapping service
 data_mapping = "passthrough_plugin"
@@ -289,9 +284,7 @@ epg_processing = "passthrough_plugin"
 
 # MEMORY OPTIMIZED STRATEGY - Optimized for systems with limited memory
 [pipeline_strategies.memory_optimized]
-# Use chunked loading to minimize memory usage during source loading
-source_loading = "chunked_source_loader"
-# All other stages use native implementations for memory efficiency
+# All stages use native implementations for memory efficiency
 data_mapping = "passthrough_plugin"
 filtering = "passthrough_plugin"
 logo_prefetch = "passthrough_plugin" 
@@ -303,7 +296,6 @@ epg_processing = "passthrough_plugin"
 [pipeline_strategies.performance]
 # All stages use native implementations for maximum performance
 # This bypasses all plugin overhead and uses optimized native code
-source_loading = "passthrough_plugin"
 data_mapping = "passthrough_plugin"
 filtering = "passthrough_plugin"
 logo_prefetch = "passthrough_plugin"
@@ -319,15 +311,9 @@ strategy = "default"
 
 # Per-plugin configuration (optional, plugin-specific settings)
 # These settings are passed to plugins when they are loaded and executed
-[pipeline.plugin_configs.chunked_source_loader]
-# Number of channels to load in each chunk (higher = more memory, potentially faster)
-chunk_size = 2000
-
-# Number of channels to process before spilling to temporary files (memory pressure relief)
-temp_file_threshold = 10000
-
-# Memory threshold in MB - when exceeded, the plugin will use more aggressive memory management
-memory_threshold_mb = 256
+[pipeline.plugin_configs.passthrough_plugin]
+# Sample logging frequency (1 in N messages will be logged)
+sample_log_frequency = 750
 
 # Example: You could add configs for other plugins
 # [pipeline.plugin_configs.custom_filter_plugin]

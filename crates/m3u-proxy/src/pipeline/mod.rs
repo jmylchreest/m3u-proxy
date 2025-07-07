@@ -26,7 +26,6 @@ pub use rolling_buffer_iterator::{ActiveDataLoader, BufferConfig, RollingBufferI
 
 /// Pipeline stage names for consistent naming across the system
 pub mod stage_names {
-    pub const SOURCE_LOADING: &str = "source_loading";
     pub const DATA_MAPPING: &str = "data_mapping";
     pub const FILTERING: &str = "filtering";
     pub const LOGO_PREFETCH: &str = "logo_prefetch";

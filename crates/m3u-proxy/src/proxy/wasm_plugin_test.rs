@@ -9,7 +9,7 @@ mod tests {
     use crate::proxy::wasm_host_interface::{
         PluginCapabilities, WasmHostInterface, WasmHostInterfaceFactory,
     };
-    use crate::proxy::wasm_plugin::{WasmPlugin, WasmPluginConfig, WasmPluginManager};
+    use crate::plugins::pipeline::wasm::{WasmPlugin, WasmPluginConfig, WasmPluginManager};
     use crate::utils::SimpleMemoryMonitor;
     use sandboxed_file_manager::SandboxedManager;
     use std::collections::HashMap;
@@ -279,9 +279,6 @@ mod tests {
         assert!(plugin.supports_mid_stage_switching());
         assert_eq!(plugin.strategy_name(), "test_plugin");
 
-        let estimated_memory = plugin.estimated_memory_usage(1000);
-        assert!(estimated_memory.is_some());
-        assert!(estimated_memory.unwrap() > 0);
     }
 
     #[tokio::test]

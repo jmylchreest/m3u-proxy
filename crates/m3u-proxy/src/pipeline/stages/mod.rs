@@ -7,11 +7,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::models::*;
-use super::iterator_traits::{IteratorResult, PluginIterator};
+use super::iterator_traits::PluginIterator;
 
 /// Core pipeline stages
 pub const STAGES: &[&str] = &[
-    super::stage_names::SOURCE_LOADING,
     super::stage_names::DATA_MAPPING,
     super::stage_names::FILTERING,
     super::stage_names::LOGO_PREFETCH,
@@ -40,33 +39,6 @@ pub trait PipelineStage<I, O>: Send + Sync {
     }
 }
 
-/// Source loading stage
-pub struct SourceLoadingStage {
-    database: std::sync::Arc<crate::database::Database>,
-}
-
-impl SourceLoadingStage {
-    pub fn new(database: std::sync::Arc<crate::database::Database>) -> Self {
-        Self { database }
-    }
-}
-
-#[async_trait]
-impl PipelineStage<Vec<uuid::Uuid>, Vec<Channel>> for SourceLoadingStage {
-    async fn execute(&mut self, source_ids: Vec<uuid::Uuid>) -> Result<Vec<Channel>> {
-        // TODO: Implement actual source loading
-        tracing::info!("Loading channels from {} sources", source_ids.len());
-        Ok(Vec::new())
-    }
-    
-    fn stage_name(&self) -> &str {
-        super::stage_names::SOURCE_LOADING
-    }
-    
-    fn supports_streaming(&self) -> bool {
-        true
-    }
-}
 
 /// Data mapping stage
 pub struct DataMappingStage {
@@ -218,10 +190,6 @@ impl StageFactory {
         }
     }
     
-    /// Create a source loading stage
-    pub fn create_source_loading_stage(&self) -> SourceLoadingStage {
-        SourceLoadingStage::new(self.database.clone())
-    }
     
     /// Create a data mapping stage
     pub fn create_data_mapping_stage(&self) -> DataMappingStage {

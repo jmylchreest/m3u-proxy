@@ -46,6 +46,10 @@ pub mod channel;
 pub mod filter;
 pub mod data_mapping;
 pub mod proxy_regeneration;
+pub mod file_categories;
+pub mod sandboxed_file_trait;
+pub mod sandboxed_file;
+pub mod logo_cache_scanner;
 
 // Re-export main traits and services
 pub use traits::*;

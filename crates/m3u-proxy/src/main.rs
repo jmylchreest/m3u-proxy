@@ -13,10 +13,8 @@ use m3u_proxy::{
         scheduler::{SchedulerService, create_cache_invalidation_channel},
     },
     logo_assets::{LogoAssetService, LogoAssetStorage},
-    proxy::{
-        wasm_plugin::{WasmPluginManager, WasmPluginConfig},
-        wasm_host_interface::{WasmHostInterface, WasmHostInterfaceFactory, PluginCapabilities},
-    },
+    plugins::pipeline::wasm::{WasmPluginManager, WasmPluginConfig},
+    proxy::wasm_host_interface::{WasmHostInterfaceFactory, PluginCapabilities},
     services::ProxyRegenerationService,
     utils::{
         memory_config::{MemoryMonitoringConfig, MemoryVerbosity, init_global_memory_config},
@@ -252,19 +250,25 @@ async fn main() -> Result<()> {
     let shared_plugin_manager = if let Some(wasm_config) = &config.wasm_plugins {
         if wasm_config.enabled {
             info!("Initializing shared WASM plugin system");
-            info!("Plugin directory: {:?}", wasm_config.plugin_directory);
-            info!("Max memory per plugin: {} MB", wasm_config.max_memory_per_plugin_mb);
-            info!("Plugin timeout: {} seconds", wasm_config.timeout_seconds);
-            info!("Hot reload: {}", if wasm_config.enable_hot_reload { "ENABLED" } else { "DISABLED" });
+            
+            // Use default values for optional config fields
+            let default_dir = std::path::PathBuf::from("./target/wasm-plugins");
+            let plugin_directory = wasm_config.plugin_directory.as_ref().unwrap_or(&default_dir);
+            let timeout_seconds = wasm_config.timeout_seconds.unwrap_or(30);
+            let enable_hot_reload = wasm_config.enable_hot_reload.unwrap_or(false);
+            
+            info!("Plugin directory: {:?}", plugin_directory);
+            info!("Plugin timeout: {} seconds", timeout_seconds);
+            info!("Hot reload: {}", if enable_hot_reload { "ENABLED" } else { "DISABLED" });
 
-            // Create memory monitor for plugins
-            let memory_monitor = SimpleMemoryMonitor::new(Some(wasm_config.max_memory_per_plugin_mb));
+            // Create memory monitor for plugins (memory pressure is handled by plugins now)
+            let memory_monitor = SimpleMemoryMonitor::new(Some(512)); // Default 512MB limit
 
             // Create plugin capabilities
             let capabilities = PluginCapabilities {
                 allow_file_access: true,
                 allow_network_access: false,
-                max_memory_query_mb: Some(wasm_config.max_memory_per_plugin_mb),
+                max_memory_query_mb: Some(512), // Default memory limit
                 allowed_config_keys: vec![
                     "chunk_size".to_string(),
                     "compression_level".to_string(),
@@ -277,10 +281,10 @@ async fn main() -> Result<()> {
             // Create host interface factory
             let host_interface_factory = WasmHostInterfaceFactory::new(preview_file_manager.clone(), capabilities);
 
-            // Create plugin configuration
+            // Create plugin configuration (memory pressure handled by plugin itself)
             let plugin_config = HashMap::from([
                 ("chunk_size".to_string(), "1000".to_string()),
-                ("memory_threshold_mb".to_string(), wasm_config.max_memory_per_plugin_mb.to_string()),
+                ("memory_threshold_mb".to_string(), "512".to_string()), // Default threshold
                 ("temp_file_threshold".to_string(), "10000".to_string()),
             ]);
 
@@ -290,10 +294,10 @@ async fn main() -> Result<()> {
             // Create plugin manager configuration
             let plugin_manager_config = WasmPluginConfig {
                 enabled: wasm_config.enabled,
-                plugin_directory: wasm_config.plugin_directory.to_string_lossy().to_string(),
-                max_memory_per_plugin: wasm_config.max_memory_per_plugin_mb,
-                timeout_seconds: wasm_config.timeout_seconds,
-                enable_hot_reload: wasm_config.enable_hot_reload,
+                plugin_directory: plugin_directory.to_string_lossy().to_string(),
+                max_memory_per_plugin: 512, // Default memory limit (plugins manage themselves)
+                timeout_seconds,
+                enable_hot_reload,
                 max_plugin_failures: 3,
                 fallback_timeout_ms: 5000,
             };
@@ -304,7 +308,7 @@ async fn main() -> Result<()> {
             // Load plugins once at startup
             match manager.load_plugins().await {
                 Ok(()) => {
-                    match manager.get_detailed_statistics().await {
+                    match manager.get_detailed_statistics() {
                         Ok(stats) => {
                             info!("Shared plugin system initialized successfully!");
                             info!("Plugin Statistics:");

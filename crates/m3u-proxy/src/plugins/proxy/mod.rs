@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use super::shared::{Plugin, PluginCapabilities, PluginInfo};
+use super::shared::{Plugin, PluginInfo};
 
 /// Proxy-specific plugin trait
 #[async_trait]

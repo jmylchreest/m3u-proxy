@@ -31,49 +31,11 @@ pub struct PluginInfo {
     pub supported_features: Vec<String>,
 }
 
-/// Plugin capabilities and configuration
-#[derive(Debug, Clone)]
-pub struct PluginCapabilities {
-    /// Memory efficiency rating
-    pub memory_efficiency: MemoryEfficiency,
-    /// Whether plugin supports hot reloading
-    pub supports_hot_reload: bool,
-    /// Whether plugin requires exclusive access
-    pub requires_exclusive_access: bool,
-    /// Maximum concurrent instances
-    pub max_concurrent_instances: usize,
-    /// Estimated CPU usage
-    pub estimated_cpu_usage: CpuUsage,
-    /// Estimated memory usage in MB
-    pub estimated_memory_usage_mb: usize,
-}
-
-/// Memory efficiency rating
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub enum MemoryEfficiency {
-    High,
-    Medium, 
-    Low,
-    Adaptive,
-}
-
-/// CPU usage estimation
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub enum CpuUsage {
-    Low,
-    Medium,
-    High,
-    Variable,
-}
-
 /// Core plugin trait implemented by all plugin types
 #[async_trait]
 pub trait Plugin: Send + Sync {
     /// Get plugin information
     fn info(&self) -> &PluginInfo;
-    
-    /// Get plugin capabilities
-    fn capabilities(&self) -> &PluginCapabilities;
     
     /// Initialize plugin with configuration
     async fn initialize(&mut self, config: HashMap<String, String>) -> Result<()>;

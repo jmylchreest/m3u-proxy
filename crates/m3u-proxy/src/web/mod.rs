@@ -28,6 +28,7 @@ use axum::{
     routing::{get, post},
 };
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tower_http::cors::CorsLayer;
 
 use crate::{
@@ -38,7 +39,7 @@ use crate::{
     logo_assets::{LogoAssetService, LogoAssetStorage},
     metrics::MetricsLogger,
     proxy::wasm_host_interface::{PluginCapabilities, WasmHostInterfaceFactory},
-    proxy::wasm_plugin::{WasmPluginConfig, WasmPluginManager},
+    plugins::pipeline::wasm::{WasmPluginConfig, WasmPluginManager},
     services::ProxyRegenerationService,
     utils::SimpleMemoryMonitor,
 };
@@ -75,7 +76,7 @@ impl WebServer {
         preview_file_manager: SandboxedManager,
         logo_file_manager: SandboxedManager,
         proxy_output_file_manager: SandboxedManager,
-        shared_plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
+        shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
     ) -> Result<Self> {
         // Use shared plugin manager if provided, otherwise create one
         let plugin_manager = if let Some(shared_manager) = shared_plugin_manager {
@@ -84,30 +85,32 @@ impl WebServer {
         } else if let Some(wasm_config) = &config.wasm_plugins {
             if wasm_config.enabled {
                 tracing::info!("WASM plugin system is ENABLED (creating new manager)");
-                tracing::info!("Plugin directory: {:?}", wasm_config.plugin_directory);
-                tracing::info!(
-                    "Max memory per plugin: {} MB",
-                    wasm_config.max_memory_per_plugin_mb
-                );
-                tracing::info!("Plugin timeout: {} seconds", wasm_config.timeout_seconds);
+                
+                // Use default values for optional config fields
+                let default_dir = PathBuf::from("./target/wasm-plugins");
+                let plugin_directory = wasm_config.plugin_directory.as_ref().unwrap_or(&default_dir);
+                let timeout_seconds = wasm_config.timeout_seconds.unwrap_or(30);
+                let enable_hot_reload = wasm_config.enable_hot_reload.unwrap_or(false);
+                
+                tracing::info!("Plugin directory: {:?}", plugin_directory);
+                tracing::info!("Plugin timeout: {} seconds", timeout_seconds);
                 tracing::info!(
                     "Hot reload: {}",
-                    if wasm_config.enable_hot_reload {
+                    if enable_hot_reload {
                         "ENABLED"
                     } else {
                         "DISABLED"
                     }
                 );
 
-                // Create memory monitor for plugins
-                let memory_monitor =
-                    SimpleMemoryMonitor::new(Some(wasm_config.max_memory_per_plugin_mb));
+                // Create memory monitor for plugins (memory pressure handled by plugins now)
+                let memory_monitor = SimpleMemoryMonitor::new(Some(512)); // Default 512MB limit
 
                 // Create plugin capabilities
                 let capabilities = PluginCapabilities {
                     allow_file_access: true,
                     allow_network_access: false,
-                    max_memory_query_mb: Some(wasm_config.max_memory_per_plugin_mb),
+                    max_memory_query_mb: Some(512), // Default memory limit
                     allowed_config_keys: vec![
                         "chunk_size".to_string(),
                         "compression_level".to_string(),
@@ -121,13 +124,10 @@ impl WebServer {
                 let host_interface_factory =
                     WasmHostInterfaceFactory::new(preview_file_manager.clone(), capabilities);
 
-                // Create plugin configuration
+                // Create plugin configuration (memory pressure handled by plugin itself)
                 let plugin_config = std::collections::HashMap::from([
                     ("chunk_size".to_string(), "1000".to_string()),
-                    (
-                        "memory_threshold_mb".to_string(),
-                        wasm_config.max_memory_per_plugin_mb.to_string(),
-                    ),
+                    ("memory_threshold_mb".to_string(), "512".to_string()), // Default threshold
                     ("temp_file_threshold".to_string(), "10000".to_string()),
                 ]);
 
@@ -138,10 +138,10 @@ impl WebServer {
                 // Create plugin manager configuration
                 let plugin_manager_config = WasmPluginConfig {
                     enabled: wasm_config.enabled,
-                    plugin_directory: wasm_config.plugin_directory.to_string_lossy().to_string(),
-                    max_memory_per_plugin: wasm_config.max_memory_per_plugin_mb,
-                    timeout_seconds: wasm_config.timeout_seconds,
-                    enable_hot_reload: wasm_config.enable_hot_reload,
+                    plugin_directory: plugin_directory.to_string_lossy().to_string(),
+                    max_memory_per_plugin: 512, // Default memory limit (plugins manage themselves)
+                    timeout_seconds,
+                    enable_hot_reload,
                     max_plugin_failures: 3,
                     fallback_timeout_ms: 5000,
                 };
@@ -152,7 +152,7 @@ impl WebServer {
                 // Load plugins and log results
                 match manager.load_plugins().await {
                     Ok(_) => {
-                        match manager.get_detailed_statistics().await {
+                        match manager.get_detailed_statistics() {
                             Ok(stats) => {
                                 tracing::info!("Web server plugin system initialized successfully!");
                                 tracing::info!("Plugin Statistics:");
@@ -170,9 +170,9 @@ impl WebServer {
                         }
 
                         // Start hot reload if enabled
-                        if wasm_config.enable_hot_reload {
+                        if enable_hot_reload {
                             tracing::info!("Starting hot reload monitoring...");
-                            if let Err(e) = manager.start_hot_reload_monitoring().await {
+                            if let Err(e) = manager.start_hot_reload_monitoring() {
                                 tracing::warn!("Failed to start hot reload monitoring: {}", e);
                             }
                         }
@@ -193,6 +193,20 @@ impl WebServer {
             None
         };
 
+        // Create logo cache scanner for cached logo discovery
+        let logo_cache_scanner = {
+            use crate::services::file_categories::get_default_base_directory;
+            let base_path = config.storage.cached_logo_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf();
+            
+            Some(crate::services::logo_cache_scanner::LogoCacheScanner::new(
+                logo_file_manager.clone(),
+                base_path
+            ))
+        };
+
         let app = Self::create_router(AppState {
             database,
             config: config.clone(),
@@ -207,6 +221,7 @@ impl WebServer {
             proxy_output_file_manager,
             metrics_logger: MetricsLogger::new(),
             plugin_manager,
+            logo_cache_scanner,
         })
         .await;
 
@@ -319,6 +334,8 @@ impl WebServer {
                 get(api::get_logo_asset_format),
             )
             .route("/logos/upload", post(api::upload_logo_asset))
+            // Cached logo endpoint (uses sandboxed file manager, no database)
+            .route("/logos/cached/:cache_id", get(api::get_cached_logo_asset))
             // Filters
             .route("/filters", get(api::list_filters).post(api::create_filter))
             .route(
@@ -438,7 +455,8 @@ pub struct AppState {
     pub logo_file_manager: SandboxedManager,
     pub proxy_output_file_manager: SandboxedManager,
     pub metrics_logger: MetricsLogger,
-    pub plugin_manager: Option<std::sync::Arc<crate::proxy::wasm_plugin::WasmPluginManager>>,
+    pub plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
+    pub logo_cache_scanner: Option<crate::services::logo_cache_scanner::LogoCacheScanner>,
 }
 
 impl AppState {

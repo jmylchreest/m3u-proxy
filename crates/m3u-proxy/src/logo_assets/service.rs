@@ -149,6 +149,10 @@ impl LogoAssetService {
             let type_str = format!("{:?}", asset_type).to_lowercase();
             query.push_str(&format!(" AND asset_type = '{}'", type_str));
             count_query.push_str(&format!(" AND asset_type = '{}'", type_str));
+        } else if !request.include_cached.unwrap_or(true) {
+            // If include_cached is explicitly false, only show uploaded
+            query.push_str(" AND asset_type = 'uploaded'");
+            count_query.push_str(" AND asset_type = 'uploaded'");
         }
 
         query.push_str(&format!(
@@ -269,10 +273,11 @@ impl LogoAssetService {
         base_url: &str,
     ) -> Result<LogoAssetSearchResult, sqlx::Error> {
         let limit = request.limit.unwrap_or(20);
-
         let search_query = request.query.unwrap_or_default();
+        
+        // First get uploaded logos from database
         let query = format!(
-            "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original' AND name LIKE '%{}%' ORDER BY name LIMIT {}",
+            "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original' AND asset_type = 'uploaded' AND name LIKE '%{}%' ORDER BY name LIMIT {}",
             search_query, limit
         );
 
@@ -280,11 +285,7 @@ impl LogoAssetService {
 
         let mut assets = Vec::new();
         for row in rows {
-            let asset_type = match row.get::<String, _>("asset_type").as_str() {
-                "uploaded" => LogoAssetType::Uploaded,
-                "cached" => LogoAssetType::Cached,
-                _ => LogoAssetType::Uploaded,
-            };
+            let asset_type = LogoAssetType::Uploaded; // Only uploaded assets from database
 
             let format_type = match row
                 .get::<Option<String>, _>("format_type")
@@ -327,6 +328,73 @@ impl LogoAssetService {
             assets,
         })
     }
+    
+    /// Search assets with support for cached logos from filesystem
+    pub async fn search_assets_with_cached(
+        &self,
+        request: LogoAssetSearchRequest,
+        base_url: &str,
+        logo_cache_scanner: Option<&crate::services::logo_cache_scanner::LogoCacheScanner>,
+        include_cached: bool,
+    ) -> Result<LogoAssetSearchResult, anyhow::Error> {
+        let limit = request.limit.unwrap_or(20);
+        let search_query = request.query.as_deref();
+        
+        let mut all_assets = Vec::new();
+        
+        // Get uploaded logos from database
+        let mut db_request = request.clone();
+        db_request.include_cached = None; // Don't pass this to the simpler search method
+        let db_result = self.search_assets(db_request, base_url).await
+            .map_err(|e| anyhow::anyhow!("Failed to search database assets: {}", e))?;
+        all_assets.extend(db_result.assets);
+        
+        // Add cached logos from filesystem if requested and scanner is available
+        if include_cached {
+            if let Some(scanner) = logo_cache_scanner {
+                let cached_logos = scanner.search_cached_logos(search_query, None).await
+                    .map_err(|e| anyhow::anyhow!("Failed to search cached logos: {}", e))?;
+                
+                // Convert cached logos to LogoAssetWithUrl format
+                for cached_logo in cached_logos {
+                    // Create a synthetic LogoAsset from cached logo info
+                    let synthetic_asset = LogoAsset {
+                        id: Uuid::new_v4(), // Generate a synthetic UUID
+                        name: cached_logo.file_name.clone(),
+                        description: Some(format!("Cached logo: {}", cached_logo.cache_id)),
+                        file_name: cached_logo.file_name.clone(),
+                        file_path: format!("cached/{}", cached_logo.file_name),
+                        file_size: cached_logo.size_bytes as i64,
+                        mime_type: cached_logo.content_type.clone(),
+                        asset_type: LogoAssetType::Cached,
+                        source_url: cached_logo.inferred_source_url.clone(),
+                        width: None, // We don't store dimensions for cached logos
+                        height: None,
+                        parent_asset_id: None,
+                        format_type: crate::models::logo_asset::LogoFormatType::Original,
+                        created_at: cached_logo.created_at,
+                        updated_at: cached_logo.last_accessed,
+                    };
+                    
+                    // Use the cached logo serving URL
+                    let url = format!("{}/api/v1/logos/cached/{}", base_url.trim_end_matches('/'), cached_logo.cache_id);
+                    all_assets.push(LogoAssetWithUrl { asset: synthetic_asset, url });
+                }
+            }
+        }
+        
+        // Sort by name
+        all_assets.sort_by(|a, b| a.asset.name.cmp(&b.asset.name));
+        
+        // Apply limit
+        let total_count = all_assets.len();
+        all_assets.truncate(limit as usize);
+        
+        Ok(LogoAssetSearchResult {
+            total_count,
+            assets: all_assets,
+        })
+    }
 
     pub async fn get_cache_stats(&self) -> Result<LogoCacheStats, sqlx::Error> {
         let row = sqlx::query(
@@ -352,7 +420,38 @@ impl LogoAssetService {
                 .get::<Option<i64>, _>("total_linked_assets")
                 .unwrap_or(0),
             cache_hit_rate: None,
+            filesystem_cached_logos: 0, // Will be updated by caller with scanner data
+            filesystem_cached_storage: 0, // Will be updated by caller with scanner data
         })
+    }
+    
+    /// Get cache stats with filesystem-based cached logos included
+    pub async fn get_cache_stats_with_filesystem(
+        &self,
+        logo_cache_scanner: Option<&crate::services::logo_cache_scanner::LogoCacheScanner>,
+    ) -> Result<LogoCacheStats, anyhow::Error> {
+        // Get database-based stats first
+        let mut stats = self.get_cache_stats().await
+            .map_err(|e| anyhow::anyhow!("Failed to get database cache stats: {}", e))?;
+        
+        // Add filesystem-based stats if scanner is available
+        if let Some(scanner) = logo_cache_scanner {
+            let cached_logos = scanner.scan_cached_logos().await
+                .map_err(|e| anyhow::anyhow!("Failed to scan cached logos: {}", e))?;
+            
+            stats.filesystem_cached_logos = cached_logos.len() as i64;
+            stats.filesystem_cached_storage = cached_logos.iter()
+                .map(|logo| logo.size_bytes as i64)
+                .sum();
+            
+            tracing::info!(
+                "Filesystem cache stats: {} logos, {} bytes total",
+                stats.filesystem_cached_logos,
+                stats.filesystem_cached_storage
+            );
+        }
+        
+        Ok(stats)
     }
 
     /// Convert image data to PNG format if it's not already PNG

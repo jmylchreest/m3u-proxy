@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::shared::{Plugin, PluginCapabilities, PluginInfo};
+use crate::plugins::shared::{Plugin, PluginInfo};
 
 /// Relay-specific plugin trait
 #[async_trait]

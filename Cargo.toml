@@ -3,7 +3,6 @@ members = [
     "crates/m3u-proxy",
     "crates/sandboxed-file-manager",
     "crates/m3u-proxy/plugins/passthrough-plugin",
-    "crates/m3u-proxy/plugins/chunked-source-loader",
 ]
 exclude = [
     "examples/wasm-plugins/*",

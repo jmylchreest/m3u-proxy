@@ -536,6 +536,7 @@ impl DataMappingService {
                     asset_type: None,
                     page: Some(1),
                     limit: Some(1000), // Get a reasonable number of logos
+                    include_cached: Some(true),
                 },
                 base_url,
             )

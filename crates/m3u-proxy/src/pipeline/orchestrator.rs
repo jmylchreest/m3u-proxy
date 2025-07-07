@@ -147,10 +147,46 @@ pub struct DataMappingLoader;
 
 #[async_trait]
 impl SingleSourceLoader<DataMappingRule> for DataMappingLoader {
-    async fn load_chunk(&self, _database: &Arc<Database>, _source_id: Uuid, _offset: usize, _limit: usize) -> Result<Vec<DataMappingRule>> {
-        // TODO: Implement actual data mapping rule fetching from database
-        // For now, return empty to maintain structure
-        Ok(Vec::new())
+    async fn load_chunk(&self, database: &Arc<Database>, _source_id: Uuid, offset: usize, limit: usize) -> Result<Vec<DataMappingRule>> {
+        // Fetch active data mapping rules using the actual database schema
+        let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, i32)>(
+            r#"
+            SELECT 
+                id,
+                name,
+                description,
+                expression,
+                sort_order
+            FROM data_mapping_rules
+            WHERE scope = 'individual'
+                AND is_active = true
+            ORDER BY sort_order ASC, created_at ASC
+            LIMIT ? OFFSET ?
+            "#
+        )
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&database.pool())
+        .await?;
+
+        let rules: Vec<DataMappingRule> = rows
+            .into_iter()
+            .map(|(id, name, description, expression, sort_order)| {
+                // Map from database schema to pipeline struct
+                // Since the database schema doesn't have source_field/target_field,
+                // we'll use the name as both source and target, and expression as transformation
+                DataMappingRule {
+                    rule_id: Uuid::parse_str(&id).unwrap_or_else(|_| Uuid::new_v4()),
+                    source_field: name.clone(), // Use name as source field
+                    target_field: name,         // Use name as target field  
+                    transformation: expression.unwrap_or_else(|| "passthrough".to_string()),
+                    priority: sort_order,
+                }
+            })
+            .collect();
+
+        tracing::info!("Loaded {} data mapping rules from database", rules.len());
+        Ok(rules)
     }
     
     fn get_type_name(&self) -> &'static str {

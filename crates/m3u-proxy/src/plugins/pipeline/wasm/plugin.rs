@@ -736,6 +736,7 @@ impl WasmPlugin {
                 0 // Success for now
             })?;
 
+
             // Standard libc functions
             linker.func_wrap("env", "malloc", |size: u32| -> u32 {
                 // Simple bump allocator - allocate from high memory

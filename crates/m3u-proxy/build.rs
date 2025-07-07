@@ -301,8 +301,6 @@ fn generate_manifest_if_missing(plugin_name: &str, target_dir: &Path, plugin_pat
 
 /// Extract manifest from WASM plugin_get_info function
 fn extract_manifest_from_wasm(wasm_path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    use std::process::Command;
-
     // Read the WASM file
     let wasm_bytes = std::fs::read(wasm_path)?;
 
@@ -316,7 +314,7 @@ fn extract_manifest_from_wasm(wasm_path: &Path) -> Result<String, Box<dyn std::e
 
     // Check if the WASM file has the required exports
     let has_plugin_get_info = check_wasm_exports(&wasm_bytes, "plugin_get_info")?;
-    let has_plugin_init = check_wasm_exports(&wasm_bytes, "plugin_init")?;
+    let _has_plugin_init = check_wasm_exports(&wasm_bytes, "plugin_init")?;
 
     if !has_plugin_get_info {
         return Err("WASM plugin missing required plugin_get_info export".into());

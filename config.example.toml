@@ -260,7 +260,8 @@ enabled = true
 [pipeline_strategies.default]
 # Data Mapping: Transform channel data using mapping rules
 # - "passthrough_plugin": Uses native data mapping service
-data_mapping = "passthrough_plugin"
+# - "library_test_plugin": Tests WASM library compatibility
+data_mapping = "library_test_plugin"
 
 # Filtering: Apply filters to channels based on configured rules
 # - "passthrough_plugin": Uses native filter engine

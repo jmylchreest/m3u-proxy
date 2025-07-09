@@ -165,7 +165,7 @@ pub struct StageChunkStats {
 impl Default for ChunkSizeManager {
     fn default() -> Self {
         Self::new(
-            1000,    // 1K default chunk size
+            1500,    // 1.5K default chunk size
             50000,   // 50K max chunk size (safety limit)
         )
     }

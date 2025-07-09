@@ -3,14 +3,14 @@
 //! This module provides buffered iterator implementations that can dynamically
 //! resize their buffers and serve variable chunk sizes efficiently.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
 
-use crate::pipeline::iterator_traits::{IteratorResult, PluginIterator};
+use crate::pipeline::iterator_traits::{IteratorResult, PipelineIterator};
 use crate::pipeline::chunk_manager::ChunkSizeManager;
 
 /// Production-ready buffered iterator with dynamic resizing
@@ -159,7 +159,7 @@ where
 }
 
 #[async_trait]
-impl<T> PluginIterator<T> for BufferedIterator<T>
+impl<T> PipelineIterator<T> for BufferedIterator<T>
 where
     T: Clone + Send + Sync + 'static,
 {
@@ -269,6 +269,11 @@ where
         
         info!("Iterator '{}' closed and cleaned up", self.stage_name);
         Ok(())
+    }
+    
+    /// Reset iterator (not supported for buffered iterators)
+    fn reset(&mut self) -> Result<()> {
+        Err(anyhow::anyhow!("Reset not supported for buffered iterators"))
     }
 }
 

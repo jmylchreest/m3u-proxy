@@ -20,6 +20,7 @@ use crate::{
     data_mapping::DataMappingService,
     logo_assets::LogoAssetService,
     proxy::ProxyService,
+    plugins::pipeline::wasm::WasmPluginManager,
     utils::sqlite::SqliteRowExt,
 };
 
@@ -74,6 +75,7 @@ pub struct ProxyRegenerationService {
     config: RegenerationConfig,
     running_tasks: Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
     is_processing: Arc<RwLock<bool>>,
+    shared_plugin_manager: Option<Arc<WasmPluginManager>>,
 }
 
 impl ProxyRegenerationService {
@@ -83,7 +85,13 @@ impl ProxyRegenerationService {
             config: config.unwrap_or_default(),
             running_tasks: Arc::new(Mutex::new(HashMap::new())),
             is_processing: Arc::new(RwLock::new(false)),
+            shared_plugin_manager: None,
         }
+    }
+
+    pub fn with_shared_plugin_manager(mut self, plugin_manager: Arc<WasmPluginManager>) -> Self {
+        self.shared_plugin_manager = Some(plugin_manager);
+        self
     }
 
     /// Queue a proxy for regeneration due to source update
@@ -185,6 +193,7 @@ impl ProxyRegenerationService {
         let regeneration_config = self.config.clone();
         let is_processing = self.is_processing.clone();
         let running_tasks = self.running_tasks.clone();
+        let shared_plugin_manager = self.shared_plugin_manager.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -228,6 +237,7 @@ impl ProxyRegenerationService {
                                 data_mapping_service.clone(),
                                 logo_asset_service.clone(),
                                 config.clone(),
+                                shared_plugin_manager.clone(),
                             );
 
                             running_tasks.lock().await.insert(proxy_id, task);
@@ -309,6 +319,7 @@ impl ProxyRegenerationService {
         data_mapping_service: DataMappingService,
         logo_asset_service: LogoAssetService,
         config: Config,
+        shared_plugin_manager: Option<Arc<WasmPluginManager>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let start_time = Instant::now();
@@ -336,8 +347,12 @@ impl ProxyRegenerationService {
                 }
             };
 
-            // Use the new dependency injection architecture
-            let proxy_service = ProxyService::new(config.storage.clone());
+            // Use the new dependency injection architecture with shared plugin manager
+            let proxy_service = if let Some(plugin_manager) = &shared_plugin_manager {
+                ProxyService::with_plugin_manager(config.storage.clone(), plugin_manager.clone())
+            } else {
+                ProxyService::new(config.storage.clone())
+            };
             
             // Create config resolver
             use crate::repositories::{StreamProxyRepository, StreamSourceRepository, FilterRepository};

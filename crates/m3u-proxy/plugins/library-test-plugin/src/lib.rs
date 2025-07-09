@@ -278,6 +278,7 @@ pub extern "C" fn plugin_execute_data_mapping(
     out_ptr: *mut *mut u8,
     out_len: *mut usize,
 ) -> i32 {
+    log_info("=== LIBRARY TEST PLUGIN EXECUTING ===");
     log_info("Data mapping stage - running library compatibility tests");
     
     // Run library tests
@@ -299,6 +300,7 @@ pub extern "C" fn plugin_execute_data_mapping(
         *out_len = output_len;
     }
     
+    log_info("=== LIBRARY TEST PLUGIN COMPLETE ===");
     log_info("Data mapping stage completed - library tests passed");
     0
 }

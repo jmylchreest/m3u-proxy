@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::database::Database;
 use crate::pipeline::chunk_manager::ChunkSizeManager;
-use crate::pipeline::iterator_traits::{IteratorResult, PluginIterator};
+use crate::pipeline::iterator_traits::{IteratorResult, PipelineIterator};
 
 /// Configuration for rolling buffer behavior with cascading buffer integration
 #[derive(Debug, Clone)]
@@ -410,7 +410,7 @@ where
 }
 
 #[async_trait]
-impl<T, S, L> PluginIterator<T> for RollingBufferIterator<T, S, L>
+impl<T, S, L> PipelineIterator<T> for RollingBufferIterator<T, S, L>
 where
     T: Send + Sync,
     S: Send + Sync,
@@ -525,5 +525,23 @@ where
 
     fn get_chunk_size(&self) -> usize {
         self.current_chunk_size
+    }
+    
+    fn reset(&mut self) -> Result<()> {
+        self.buffer.clear();
+        self.current_source_index = 0;
+        // Reset all source states
+        for state in &mut self.source_states {
+            state.current_offset = 0;
+            state.is_exhausted = false;
+        }
+        self.total_processed = 0;
+        self.exhausted = false;
+        self.closed = false;
+        info!(
+            "{} rolling buffer iterator reset to beginning", 
+            self.loader.get_type_name()
+        );
+        Ok(())
     }
 }

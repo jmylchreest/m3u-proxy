@@ -6,7 +6,7 @@ use crate::models::{
     FilterOperator, LogicalOperator,
 };
 use anyhow::{Result, anyhow};
-use tracing::{debug, trace, warn};
+use tracing::{trace, warn};
 
 #[derive(Debug, Clone)]
 pub struct FilterParser {
@@ -54,7 +54,7 @@ impl FilterParser {
     /// Example: "channel_name contains \"sport\" SET group_title = \"Sports\""
     /// Advanced: "(channel_name matches \"regex\" SET tvg_shift = $1$2 AND channel_name not matches \"regex\" AND tvg_id matches \"regex\")"
     pub fn parse_extended(&self, expression: &str) -> Result<ExtendedExpression> {
-        debug!(
+        trace!(
             "Parsing filter expression (length: {} chars)",
             expression.len()
         );
@@ -92,7 +92,7 @@ impl FilterParser {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            debug!("Filter expression parsed successfully");
+            trace!("Filter expression parsed successfully");
             return Ok(ExtendedExpression::ConditionalActionGroups(groups));
         }
 
@@ -132,7 +132,7 @@ impl FilterParser {
                     .join(", ")
             );
 
-            debug!("Filter expression parsed successfully");
+            trace!("Filter expression parsed successfully");
             Ok(ExtendedExpression::ConditionWithActions { condition, actions })
         } else {
             // Ensure we've consumed all tokens
@@ -151,7 +151,7 @@ impl FilterParser {
                 self.count_conditions(&condition)
             );
 
-            debug!("Filter expression parsed successfully");
+            trace!("Filter expression parsed successfully");
             Ok(ExtendedExpression::ConditionOnly(condition))
         }
     }
@@ -217,7 +217,7 @@ impl FilterParser {
                     return Err(anyhow!("Expected conditional group after logical operator"));
                 }
             } else {
-                debug!("No more logical operators found, finished parsing groups");
+                trace!("No more logical operators found, finished parsing groups");
                 break;
             }
         }
@@ -280,7 +280,7 @@ impl FilterParser {
                     break;
                 }
                 Token::SetKeyword if paren_depth == 0 => {
-                    debug!(
+                    trace!(
                         "Found SET keyword at position {}, collected {} condition tokens",
                         *pos,
                         condition_tokens.len()
@@ -297,7 +297,7 @@ impl FilterParser {
         }
 
         if !found_set {
-            debug!("No SET keyword found in conditional group");
+            trace!("No SET keyword found in conditional group");
             return Err(anyhow!("Expected SET keyword in conditional group"));
         }
 
@@ -307,14 +307,14 @@ impl FilterParser {
         let conditions = ConditionTree {
             root: condition_root,
         };
-        debug!(
+        trace!(
             "Parsed conditions with {} total condition nodes",
             self.count_conditions(&conditions)
         );
 
         // Parse actions until closing parenthesis
         let actions = self.parse_action_list(tokens, pos)?;
-        debug!("Parsed {} actions", actions.len());
+        trace!("Parsed {} actions", actions.len());
 
         // Expect closing parenthesis
         if !matches!(tokens.get(*pos), Some(Token::RightParen)) {
@@ -328,7 +328,7 @@ impl FilterParser {
             ));
         }
         *pos += 1; // consume ')'
-        debug!("Consumed closing parenthesis, conditional group complete");
+        trace!("Consumed closing parenthesis, conditional group complete");
 
         Ok(crate::models::ConditionalActionGroup {
             conditions,
@@ -851,11 +851,11 @@ impl FilterParser {
 
     /// Validate an extended expression for semantic correctness
     pub fn validate_extended(&self, expression: &ExtendedExpression) -> Result<()> {
-        debug!("Validating extended expression");
+        trace!("Validating extended expression");
 
         match expression {
             ExtendedExpression::ConditionOnly(condition) => {
-                debug!(
+                trace!(
                     "Validating condition-only expression with {} conditions",
                     self.count_conditions(condition)
                 );
@@ -863,7 +863,7 @@ impl FilterParser {
                 self.validate_condition_tree_fields(condition)
             }
             ExtendedExpression::ConditionWithActions { condition, actions } => {
-                debug!(
+                trace!(
                     "Validating condition-with-actions expression: {} conditions, {} actions",
                     self.count_conditions(condition),
                     actions.len()
@@ -879,7 +879,7 @@ impl FilterParser {
                 );
                 // Validate each group's conditions and actions
                 for (i, group) in groups.iter().enumerate() {
-                    debug!(
+                    trace!(
                         "Validating group {}: {} conditions, {} actions",
                         i + 1,
                         self.count_conditions(&group.conditions),
@@ -888,7 +888,7 @@ impl FilterParser {
                     self.validate_condition_tree_fields(&group.conditions)?;
                     self.validate_actions(&group.actions)?;
                 }
-                debug!(
+                trace!(
                     "Successfully validated all {} conditional action groups",
                     groups.len()
                 );

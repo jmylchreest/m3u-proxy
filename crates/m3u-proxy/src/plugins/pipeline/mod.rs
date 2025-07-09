@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::models::*;
-use crate::pipeline::{ChunkSizeManager, PluginIterator, IteratorResult};
+use crate::pipeline::{ChunkSizeManager, PipelineIterator, IteratorResult};
 use super::shared::{Plugin, PluginDiscoveryConfig, PluginInfo, PluginRegistry};
 
 /// Pipeline-specific plugin trait
@@ -57,10 +57,10 @@ pub struct PipelineStageContext {
 
 /// Available iterators for pipeline stage execution
 pub struct PipelineIterators {
-    pub channel_iterator: Option<Box<dyn PluginIterator<Channel> + Send + Sync>>,
-    pub epg_iterator: Option<Box<dyn PluginIterator<crate::pipeline::orchestrator::EpgEntry> + Send + Sync>>,
-    pub data_mapping_iterator: Option<Box<dyn PluginIterator<crate::pipeline::orchestrator::DataMappingRule> + Send + Sync>>,
-    pub filter_iterator: Option<Box<dyn PluginIterator<crate::pipeline::orchestrator::FilterRule> + Send + Sync>>,
+    pub channel_iterator: Option<Box<dyn PipelineIterator<Channel> + Send + Sync>>,
+    pub epg_iterator: Option<Box<dyn PipelineIterator<crate::pipeline::orchestrator::EpgEntry> + Send + Sync>>,
+    pub data_mapping_iterator: Option<Box<dyn PipelineIterator<crate::pipeline::orchestrator::DataMappingRule> + Send + Sync>>,
+    pub filter_iterator: Option<Box<dyn PipelineIterator<crate::pipeline::orchestrator::FilterRule> + Send + Sync>>,
 }
 
 /// Result returned by pipeline plugins

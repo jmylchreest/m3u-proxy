@@ -232,6 +232,9 @@ mod tests {
             available_memory_mb: Some(256),
             current_stage: "test_stage".to_string(),
             stats: crate::models::GenerationStats::new("test".to_string()),
+            database: None,
+            logo_service: None,
+            iterator_registry: None,
         };
 
         // Test source loading execution

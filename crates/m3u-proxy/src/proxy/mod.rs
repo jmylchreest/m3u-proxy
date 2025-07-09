@@ -24,6 +24,7 @@ pub mod wasm_plugin_test;
 pub struct ProxyService {
     storage_config: StorageConfig,
     shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
+    shared_memory_monitor: Option<crate::utils::SimpleMemoryMonitor>,
 }
 
 impl ProxyService {
@@ -31,6 +32,7 @@ impl ProxyService {
         Self { 
             storage_config,
             shared_plugin_manager: None,
+            shared_memory_monitor: None,
         }
     }
 
@@ -38,6 +40,19 @@ impl ProxyService {
         Self {
             storage_config,
             shared_plugin_manager: Some(plugin_manager),
+            shared_memory_monitor: None,
+        }
+    }
+
+    pub fn with_plugin_manager_and_memory_monitor(
+        storage_config: StorageConfig, 
+        plugin_manager: std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>,
+        memory_monitor: crate::utils::SimpleMemoryMonitor,
+    ) -> Self {
+        Self {
+            storage_config,
+            shared_plugin_manager: Some(plugin_manager),
+            shared_memory_monitor: Some(memory_monitor),
         }
     }
 
@@ -87,6 +102,11 @@ impl ProxyService {
         // Add shared plugin manager if available
         if let Some(plugin_manager) = &self.shared_plugin_manager {
             pipeline_builder = pipeline_builder.with_shared_plugin_manager(plugin_manager.clone());
+        }
+
+        // Add shared memory monitor if available
+        if let Some(memory_monitor) = &self.shared_memory_monitor {
+            pipeline_builder = pipeline_builder.with_shared_memory_monitor(memory_monitor.clone());
         }
 
         let mut pipeline = pipeline_builder.build()?;

@@ -150,7 +150,16 @@ async fn main() -> Result<()> {
     // Create cache invalidation channel for scheduler
     let (cache_invalidation_tx, cache_invalidation_rx) = create_cache_invalidation_channel();
 
-    // Initialize proxy regeneration service
+    // Create shared WASM plugin manager to avoid duplicate plugin loading
+    let temp_path = config.storage.temp_path.as_deref().unwrap_or("/tmp/m3u-proxy");
+    let temp_file_manager = SandboxedManager::builder()
+        .base_directory(temp_path)
+        .build()
+        .await?;
+    
+    // Plugin manager will be initialized later based on configuration
+    
+    // Initialize proxy regeneration service (will get shared plugin manager later)
     let proxy_regeneration_service = ProxyRegenerationService::new(database.pool(), None);
     info!("Proxy regeneration service initialized");
 
@@ -246,6 +255,10 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Create shared memory monitor for global memory management
+    let shared_memory_monitor = SimpleMemoryMonitor::new(memory_limit);
+    info!("Shared memory monitor initialized with limit: {:?}MB", memory_limit);
+
     // Initialize shared WASM plugin system if enabled
     let shared_plugin_manager = if let Some(wasm_config) = &config.wasm_plugins {
         if wasm_config.enabled {
@@ -261,8 +274,8 @@ async fn main() -> Result<()> {
             info!("Plugin timeout: {} seconds", timeout_seconds);
             info!("Hot reload: {}", if enable_hot_reload { "ENABLED" } else { "DISABLED" });
 
-            // Create memory monitor for plugins (memory pressure is handled by plugins now)
-            let memory_monitor = SimpleMemoryMonitor::new(Some(512)); // Default 512MB limit
+            // Use shared memory monitor for plugins
+            let memory_monitor = shared_memory_monitor.clone();
 
             // Create plugin capabilities
             let capabilities = PluginCapabilities {
@@ -335,6 +348,13 @@ async fn main() -> Result<()> {
     } else {
         info!("WASM plugin system not configured");
         None
+    };
+
+    // Update proxy regeneration service with shared plugin manager
+    let proxy_regeneration_service = if let Some(ref shared_mgr) = shared_plugin_manager {
+        proxy_regeneration_service.with_shared_plugin_manager(shared_mgr.clone())
+    } else {
+        proxy_regeneration_service
     };
 
     let web_server = WebServer::new(

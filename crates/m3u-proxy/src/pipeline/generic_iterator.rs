@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 use crate::database::Database;
-use crate::pipeline::iterator_traits::{IteratorResult, PluginIterator};
+use crate::pipeline::iterator_traits::{IteratorResult, PipelineIterator};
 
 /// Generic trait for loading data from a source with pagination
 #[async_trait]
@@ -27,8 +27,9 @@ pub trait DataLoader<T, S> {
     fn get_type_name(&self) -> &'static str;
 }
 
-/// Generic ordered multi-source iterator that can work with any data type and source type
-pub struct OrderedMultiSourceIterator<T, S, L> {
+/// Multi-source iterator that can work with any data type and source type
+/// (Renamed for consistency - was OrderedMultiSourceIterator)
+pub struct MultiSourceIterator<T, S, L> {
     database: Arc<Database>,
     sources: Vec<S>,
     loader: L,
@@ -41,7 +42,7 @@ pub struct OrderedMultiSourceIterator<T, S, L> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T, S, L> OrderedMultiSourceIterator<T, S, L>
+impl<T, S, L> MultiSourceIterator<T, S, L>
 where
     L: DataLoader<T, S>,
 {
@@ -123,7 +124,7 @@ where
 }
 
 #[async_trait]
-impl<T, S, L> PluginIterator<T> for OrderedMultiSourceIterator<T, S, L>
+impl<T, S, L> PipelineIterator<T> for MultiSourceIterator<T, S, L>
 where
     T: Send + Sync,
     S: Send + Sync,
@@ -202,10 +203,25 @@ where
     fn get_chunk_size(&self) -> usize {
         self.chunk_size
     }
+    
+    fn reset(&mut self) -> Result<()> {
+        self.current_source_index = 0;
+        self.current_offset = 0;
+        self.total_processed = 0;
+        self.exhausted = false;
+        self.closed = false;
+        info!(
+            "{} iterator reset to beginning", 
+            self.loader.get_type_name()
+        );
+        Ok(())
+    }
 }
 
 /// Single-source iterator for data that doesn't come from multiple prioritized sources
-pub struct OrderedSingleSourceIterator<T, L> {
+/// Single-source iterator for consistent naming
+/// (Renamed for consistency - was OrderedSingleSourceIterator)
+pub struct SingleSourceIterator<T, L> {
     database: Arc<Database>,
     loader: L,
     source_id: uuid::Uuid,
@@ -227,7 +243,7 @@ pub trait SingleSourceLoader<T> {
     fn get_type_name(&self) -> &'static str;
 }
 
-impl<T, L> OrderedSingleSourceIterator<T, L>
+impl<T, L> SingleSourceIterator<T, L>
 where
     L: SingleSourceLoader<T>,
 {
@@ -259,7 +275,7 @@ where
 }
 
 #[async_trait]
-impl<T, L> PluginIterator<T> for OrderedSingleSourceIterator<T, L>
+impl<T, L> PipelineIterator<T> for SingleSourceIterator<T, L>
 where
     T: Send + Sync,
     L: SingleSourceLoader<T> + Send + Sync,
@@ -331,5 +347,18 @@ where
     
     fn get_chunk_size(&self) -> usize {
         self.chunk_size
+    }
+    
+    fn reset(&mut self) -> Result<()> {
+        self.current_offset = 0;
+        self.total_processed = 0;
+        self.exhausted = false;
+        self.closed = false;
+        info!(
+            "{} iterator reset to beginning for source {}", 
+            self.loader.get_type_name(),
+            self.source_id
+        );
+        Ok(())
     }
 }

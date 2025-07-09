@@ -43,7 +43,7 @@ pub trait SandboxedFileManager: Send + Sync {
         category: &str,
         file_id: &str,
         extension: &str,
-    ) -> Result<Option<Vec<u8>>>;
+    ) -> Result<Vec<u8>>;
     
     /// Check if a file exists
     async fn file_exists(

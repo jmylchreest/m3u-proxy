@@ -27,44 +27,61 @@ impl WasmHostFunctionFactory {
         Self { context }
     }
 
-    /// Create logging host functions
+    /// Create logging host functions (standardized naming)
     pub fn create_logging_functions(&self, store: &mut Store<()>) -> Vec<(&'static str, Func)> {
         vec![
-            ("host_log", self.create_host_log(store)),
+            ("host_log_write", self.create_host_log_write(store)),
         ]
     }
 
-    /// Create memory management host functions
+    /// Create memory management host functions (standardized naming)
     pub fn create_memory_functions(&self, store: &mut Store<()>) -> Vec<(&'static str, Func)> {
         vec![
-            ("host_get_memory_usage", self.create_host_get_memory_usage(store)),
-            ("host_get_memory_pressure", self.create_host_get_memory_pressure(store)),
+            ("host_memory_get_usage", self.create_host_memory_get_usage(store)),
+            ("host_memory_get_pressure", self.create_host_memory_get_pressure(store)),
+            ("host_system_flush_memory", self.create_host_system_flush_memory(store)),
+            // Backward compatibility
+            ("host_get_memory_usage", self.create_host_memory_get_usage(store)),
+            ("host_get_memory_pressure", self.create_host_memory_get_pressure(store)),
         ]
     }
 
-    /// Create progress reporting host functions
+    /// Create progress reporting host functions (standardized naming)
     pub fn create_progress_functions(&self, store: &mut Store<()>) -> Vec<(&'static str, Func)> {
         vec![
-            ("host_report_progress", self.create_host_report_progress(store)),
+            ("host_progress_report", self.create_host_progress_report(store)),
+            // Backward compatibility
+            ("host_report_progress", self.create_host_progress_report(store)),
         ]
     }
 
-    /// Create logo caching host functions
+    /// Create logo caching host functions (standardized naming)
     pub fn create_logo_functions(&self, store: &mut Store<()>) -> Vec<(&'static str, Func)> {
         if self.context.logo_service.is_some() {
             vec![
-                ("host_cache_logo", self.create_host_cache_logo(store)),
+                ("host_logo_cache", self.create_host_logo_cache(store)),
+                // Backward compatibility
+                ("host_cache_logo", self.create_host_logo_cache(store)),
             ]
         } else {
             vec![]
         }
     }
 
-    /// Create iterator management host functions
+    /// Create iterator management host functions (standardized naming)
     pub fn create_iterator_functions(&self, store: &mut Store<()>) -> Vec<(&'static str, Func)> {
         vec![
-            ("host_iterator_next_chunk", self.create_host_iterator_next_chunk(store)),
+            // Input iterator functions (standardized)
+            ("host_iterator_read_chunk", self.create_host_iterator_read_chunk(store)),
             ("host_iterator_close", self.create_host_iterator_close(store)),
+            
+            // Output iterator functions (standardized)
+            ("host_iterator_create", self.create_host_iterator_create(store)),
+            ("host_iterator_write_chunk", self.create_host_iterator_write_chunk(store)),
+            ("host_iterator_finalize", self.create_host_iterator_finalize(store)),
+            
+            // Backward compatibility
+            ("host_iterator_next_chunk", self.create_host_iterator_read_chunk(store)),
         ]
     }
 
@@ -81,7 +98,7 @@ impl WasmHostFunctionFactory {
 
     // Individual host function implementations
 
-    fn create_host_log(&self, store: &mut Store<()>) -> Func {
+    fn create_host_log_write(&self, store: &mut Store<()>) -> Func {
         Func::wrap(store, |level: u32, msg_ptr: u32, msg_len: u32| {
             let log_level = match level {
                 1 => "ERROR",
@@ -94,25 +111,25 @@ impl WasmHostFunctionFactory {
         })
     }
 
-    fn create_host_get_memory_usage(&self, store: &mut Store<()>) -> Func {
+    fn create_host_memory_get_usage(&self, store: &mut Store<()>) -> Func {
         Func::wrap(store, || -> u64 {
             256 * 1024 * 1024 // 256MB - could be made configurable
         })
     }
 
-    fn create_host_get_memory_pressure(&self, store: &mut Store<()>) -> Func {
+    fn create_host_memory_get_pressure(&self, store: &mut Store<()>) -> Func {
         Func::wrap(store, || -> u32 {
             1 // Optimal - could integrate with real memory monitoring
         })
     }
 
-    fn create_host_report_progress(&self, store: &mut Store<()>) -> Func {
+    fn create_host_progress_report(&self, store: &mut Store<()>) -> Func {
         Func::wrap(store, |stage_ptr: u32, stage_len: u32, processed: u32, total: u32| {
             info!("WASM plugin progress: stage@{}:{}, {}/{}", stage_ptr, stage_len, processed, total);
         })
     }
 
-    fn create_host_cache_logo(&self, store: &mut Store<()>) -> Func {
+    fn create_host_logo_cache(&self, store: &mut Store<()>) -> Func {
         let memory_ref = self.context.memory.clone();
         let logo_service = self.context.logo_service.clone();
         let base_url = self.context.base_url.clone();
@@ -155,7 +172,7 @@ impl WasmHostFunctionFactory {
         })
     }
 
-    fn create_host_iterator_next_chunk(&self, store: &mut Store<()>) -> Func {
+    fn create_host_iterator_read_chunk(&self, store: &mut Store<()>) -> Func {
         Func::wrap(store, |iterator_id: u32| -> i32 {
             info!("host_iterator_next_chunk called: iterator_id={}", iterator_id);
             // TODO: Implement actual iterator integration
@@ -167,6 +184,43 @@ impl WasmHostFunctionFactory {
         Func::wrap(store, |iterator_id: u32| -> i32 {
             info!("host_iterator_close called: iterator_id={}", iterator_id);
             // TODO: Implement actual iterator cleanup
+            0 // Success
+        })
+    }
+    
+    /// Create host function for system memory flushing
+    fn create_host_system_flush_memory(&self, store: &mut Store<()>) -> Func {
+        Func::wrap(store, || -> i32 {
+            info!("host_system_flush_memory called");
+            // TODO: Implement actual memory flushing
+            0 // Success
+        })
+    }
+    
+    /// Create host function for creating output iterators
+    fn create_host_iterator_create(&self, store: &mut Store<()>) -> Func {
+        Func::wrap(store, |iterator_type: u32| -> u32 {
+            info!("host_iterator_create called: iterator_type={}", iterator_type);
+            // TODO: Implement actual iterator creation with registry
+            999 // Mock iterator ID
+        })
+    }
+    
+    /// Create host function for writing chunks to output iterators
+    fn create_host_iterator_write_chunk(&self, store: &mut Store<()>) -> Func {
+        Func::wrap(store, |iterator_id: u32, data_ptr: u32, data_len: u32, items_count: u32| -> i32 {
+            info!("host_iterator_write_chunk called: iterator_id={}, data_len={}, items_count={}", 
+                  iterator_id, data_len, items_count);
+            // TODO: Implement actual chunk writing to iterator registry
+            0 // Success
+        })
+    }
+    
+    /// Create host function for finalizing output iterators
+    fn create_host_iterator_finalize(&self, store: &mut Store<()>) -> Func {
+        Func::wrap(store, |iterator_id: u32| -> i32 {
+            info!("host_iterator_finalize called: iterator_id={}", iterator_id);
+            // TODO: Implement actual iterator finalization
             0 // Success
         })
     }

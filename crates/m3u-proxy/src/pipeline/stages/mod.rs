@@ -7,7 +7,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::models::*;
-use super::iterator_traits::PluginIterator;
+use super::iterator_traits::PipelineIterator;
 
 /// Core pipeline stages
 pub const STAGES: &[&str] = &[

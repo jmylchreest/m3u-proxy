@@ -1,7 +1,7 @@
-//! Plugin iterator interface for streaming data between pipeline stages
+//! Pipeline iterator interface for streaming data between pipeline stages
 //!
-//! This module provides the core iterator interface that allows plugins to stream
-//! data through the pipeline with bounded memory usage and backpressure.
+//! This module provides the core iterator interface that enables consistent data
+//! streaming throughout the pipeline with bounded memory usage and backpressure.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -16,9 +16,12 @@ pub enum IteratorResult<T> {
     Exhausted,
 }
 
-/// Plugin iterator trait for streaming data with dynamic chunk sizing
+/// Pipeline iterator trait for streaming data with dynamic chunk sizing
+/// 
+/// This trait defines the core interface for iterators throughout the pipeline,
+/// enabling consistent data streaming between stages, plugins, and components.
 #[async_trait]
-pub trait PluginIterator<T>: Send + Sync {
+pub trait PipelineIterator<T>: Send + Sync {
     /// Get next chunk of data or exhaustion signal with default chunk size
     async fn next_chunk(&mut self) -> Result<IteratorResult<T>>;
     
@@ -39,6 +42,9 @@ pub trait PluginIterator<T>: Send + Sync {
     
     /// Close iterator early and signal upstream providers
     async fn close(&mut self) -> Result<()>;
+    
+    /// Reset iterator to beginning (if supported)
+    fn reset(&mut self) -> Result<()>;
 }
 
 /// Bounded buffer for stage bridging with backpressure
@@ -88,7 +94,7 @@ impl<T: Send + Sync + 'static> BoundedBuffer<T> {
 
 /// Bridge between pipeline stages with bounded memory
 pub struct StageBridge<T> {
-    producer_iterator: Box<dyn PluginIterator<T>>,
+    producer_iterator: Box<dyn PipelineIterator<T>>,
     buffer: BoundedBuffer<T>,
     exhausted: bool,
     closed: bool,
@@ -99,7 +105,7 @@ where
     T: Send + Sync + Clone + 'static,
 {
     pub fn new(
-        producer_iterator: Box<dyn PluginIterator<T>>,
+        producer_iterator: Box<dyn PipelineIterator<T>>,
         buffer_size: usize,
     ) -> Self {
         Self {

@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::database::Database;
 use crate::models::*;
-use crate::pipeline::iterator_traits::PluginIterator;
-use crate::pipeline::generic_iterator::{DataLoader, OrderedMultiSourceIterator, SingleSourceLoader, OrderedSingleSourceIterator};
+use crate::pipeline::iterator_traits::PipelineIterator;
+use crate::pipeline::generic_iterator::{DataLoader, MultiSourceIterator, SingleSourceLoader, SingleSourceIterator};
 use crate::pipeline::rolling_buffer_iterator::{ActiveDataLoader, BufferConfig, RollingBufferIterator};
 
 /// Data loader for channels
@@ -82,15 +82,15 @@ impl ActiveDataLoader<Channel, ProxySource> for ActiveChannelLoader {
 
 /// Ordered channel aggregate iterator that streams channels from multiple sources
 /// in the order specified by the proxy configuration
-pub type OrderedChannelAggregateIterator = OrderedMultiSourceIterator<Channel, ProxySource, ChannelLoader>;
+pub type OrderedChannelAggregateIterator = MultiSourceIterator<Channel, ProxySource, ChannelLoader>;
 
 /// Rolling buffer channel iterator for sophisticated buffer management
 pub type RollingBufferChannelIterator = RollingBufferIterator<Channel, ProxySource, ActiveChannelLoader>;
 
-// The PluginIterator trait is automatically implemented by OrderedMultiSourceIterator
+// The PipelineIterator trait is automatically implemented by MultiSourceIterator
 
 /// EPG data structure for streaming
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EpgEntry {
     pub channel_id: String,
     pub program_id: String,
@@ -128,12 +128,12 @@ impl DataLoader<EpgEntry, ProxyEpgSourceConfig> for EpgLoader {
 
 /// Ordered EPG aggregate iterator that streams EPG data from multiple sources
 /// in priority order with deduplication
-pub type OrderedEpgAggregateIterator = OrderedMultiSourceIterator<EpgEntry, ProxyEpgSourceConfig, EpgLoader>;
+pub type OrderedEpgAggregateIterator = MultiSourceIterator<EpgEntry, ProxyEpgSourceConfig, EpgLoader>;
 
-// The PluginIterator trait is automatically implemented by OrderedMultiSourceIterator
+// The PipelineIterator trait is automatically implemented by MultiSourceIterator
 
 /// Data mapping rule entry for streaming
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DataMappingRule {
     pub rule_id: Uuid,
     pub source_field: String,
@@ -195,9 +195,9 @@ impl SingleSourceLoader<DataMappingRule> for DataMappingLoader {
 }
 
 /// Ordered data mapping iterator that streams mapping rules in specified order
-pub type OrderedDataMappingIterator = OrderedSingleSourceIterator<DataMappingRule, DataMappingLoader>;
+pub type OrderedDataMappingIterator = SingleSourceIterator<DataMappingRule, DataMappingLoader>;
 
-// The PluginIterator trait is automatically implemented by OrderedSingleSourceIterator
+// The PipelineIterator trait is automatically implemented by SingleSourceIterator
 
 /// Filter rule entry for streaming
 #[derive(Debug, Clone)]
@@ -234,9 +234,9 @@ impl DataLoader<FilterRule, ProxyFilterConfig> for FilterLoader {
 }
 
 /// Ordered filter iterator that streams filter rules in priority order
-pub type OrderedFilterIterator = OrderedMultiSourceIterator<FilterRule, ProxyFilterConfig, FilterLoader>;
+pub type OrderedFilterIterator = MultiSourceIterator<FilterRule, ProxyFilterConfig, FilterLoader>;
 
-// The PluginIterator trait is automatically implemented by OrderedMultiSourceIterator
+// The PipelineIterator trait is automatically implemented by MultiSourceIterator
 
 /// Factory for creating orchestrator iterators for the complete pipeline
 pub struct OrchestratorIteratorFactory;
@@ -284,8 +284,8 @@ impl OrchestratorIteratorFactory {
         database: Arc<Database>,
         proxy_sources: Vec<ProxySource>, // Should be pre-sorted by priority_order
         chunk_size: usize,
-    ) -> Box<dyn PluginIterator<Channel>> {
-        Box::new(OrderedMultiSourceIterator::new(database, proxy_sources, ChannelLoader {}, chunk_size))
+    ) -> Box<dyn PipelineIterator<Channel>> {
+        Box::new(MultiSourceIterator::new(database, proxy_sources, ChannelLoader {}, chunk_size))
     }
 
     /// Create rolling buffer channel iterator for sophisticated buffer management
@@ -293,7 +293,7 @@ impl OrchestratorIteratorFactory {
         database: Arc<Database>,
         proxy_sources: Vec<ProxySource>, // Should be pre-sorted by priority_order and filtered to active
         buffer_config: BufferConfig,
-    ) -> Box<dyn PluginIterator<Channel>> {
+    ) -> Box<dyn PipelineIterator<Channel>> {
         // Note: Active filtering should have been done before creating ProxySource objects
         Box::new(RollingBufferIterator::new(database, proxy_sources, ActiveChannelLoader {}, buffer_config))
     }
@@ -304,7 +304,7 @@ impl OrchestratorIteratorFactory {
         proxy_id: uuid::Uuid,
         source_configs: Vec<ProxySourceConfig>,
         buffer_config: BufferConfig,
-    ) -> Box<dyn PluginIterator<Channel>> {
+    ) -> Box<dyn PipelineIterator<Channel>> {
         // Filter to only active sources and convert to ProxySource
         let active_configs = Self::filter_active_source_configs(source_configs);
         let proxy_sources = Self::convert_to_proxy_sources(proxy_id, active_configs);
@@ -319,7 +319,7 @@ impl OrchestratorIteratorFactory {
         buffer_config: BufferConfig,
         chunk_manager: Option<Arc<crate::pipeline::chunk_manager::ChunkSizeManager>>,
         stage_name: String,
-    ) -> Box<dyn PluginIterator<Channel>> {
+    ) -> Box<dyn PipelineIterator<Channel>> {
         // Filter to only active sources and convert to ProxySource
         let active_configs = Self::filter_active_source_configs(source_configs);
         let proxy_sources = Self::convert_to_proxy_sources(proxy_id, active_configs);
@@ -338,9 +338,9 @@ impl OrchestratorIteratorFactory {
         database: Arc<Database>,
         proxy_sources: Vec<ProxySource>, // Should be pre-sorted by priority_order
         chunk_size: usize,
-    ) -> Box<dyn PluginIterator<Channel>> {
+    ) -> Box<dyn PipelineIterator<Channel>> {
         // Note: Active filtering should have been done before creating ProxySource objects
-        Box::new(OrderedMultiSourceIterator::new(database, proxy_sources, ChannelLoader {}, chunk_size))
+        Box::new(MultiSourceIterator::new(database, proxy_sources, ChannelLoader {}, chunk_size))
     }
     
     /// Create ordered EPG aggregate iterator from proxy configuration
@@ -348,8 +348,8 @@ impl OrchestratorIteratorFactory {
         database: Arc<Database>,
         epg_sources: Vec<ProxyEpgSourceConfig>, // Should be pre-sorted by priority_order
         chunk_size: usize,
-    ) -> Box<dyn PluginIterator<EpgEntry>> {
-        Box::new(OrderedMultiSourceIterator::new(database, epg_sources, EpgLoader {}, chunk_size))
+    ) -> Box<dyn PipelineIterator<EpgEntry>> {
+        Box::new(MultiSourceIterator::new(database, epg_sources, EpgLoader {}, chunk_size))
     }
     
     /// Create ordered data mapping iterator
@@ -357,8 +357,8 @@ impl OrchestratorIteratorFactory {
         database: Arc<Database>,
         proxy_id: Uuid,
         chunk_size: usize,
-    ) -> Box<dyn PluginIterator<DataMappingRule>> {
-        Box::new(OrderedSingleSourceIterator::new(database, DataMappingLoader {}, proxy_id, chunk_size))
+    ) -> Box<dyn PipelineIterator<DataMappingRule>> {
+        Box::new(SingleSourceIterator::new(database, DataMappingLoader {}, proxy_id, chunk_size))
     }
     
     /// Create ordered filter iterator from proxy configuration
@@ -366,7 +366,7 @@ impl OrchestratorIteratorFactory {
         database: Arc<Database>,
         proxy_filters: Vec<ProxyFilterConfig>, // Should be pre-sorted by priority_order
         chunk_size: usize,
-    ) -> Box<dyn PluginIterator<FilterRule>> {
-        Box::new(OrderedMultiSourceIterator::new(database, proxy_filters, FilterLoader {}, chunk_size))
+    ) -> Box<dyn PipelineIterator<FilterRule>> {
+        Box::new(MultiSourceIterator::new(database, proxy_filters, FilterLoader {}, chunk_size))
     }
 }

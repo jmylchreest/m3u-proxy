@@ -91,7 +91,7 @@ fn main() {
     }
 }
 
-/// Check if the wasm32-wasip1 target is installed
+/// Check if the wasm32-unknown-unknown target is installed
 fn check_wasm_target() -> bool {
     let output = Command::new("rustup")
         .args(&["target", "list", "--installed"])
@@ -102,7 +102,7 @@ fn check_wasm_target() -> bool {
     match output {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout.contains("wasm32-wasip1")
+            stdout.contains("wasm32-unknown-unknown")
         }
         Err(_) => {
             // If rustup command fails, assume target is not available
@@ -155,7 +155,7 @@ fn build_plugin(plugin_path: &Path, target_dir: &Path) -> bool {
     // Build the plugin with cargo
     let mut cmd = Command::new("cargo");
     cmd.current_dir(plugin_path)
-        .args(&["build", "--target", "wasm32-wasip1", "--release", "--quiet"])
+        .args(&["build", "--target", "wasm32-unknown-unknown", "--release", "--quiet"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
@@ -192,7 +192,7 @@ fn build_plugin(plugin_path: &Path, target_dir: &Path) -> bool {
         .unwrap_or_else(|_| PathBuf::from("../../"));
 
     let source_wasm = workspace_root
-        .join("target/wasm32-wasip1/release")
+        .join("target/wasm32-unknown-unknown/release")
         .join(format!("{}.wasm", wasm_name));
     let target_wasm = target_dir.join(format!("{}.wasm", plugin_name));
 

@@ -17,8 +17,10 @@ use crate::models::*;
 use crate::pipeline::chunk_manager::ChunkSizeManager;
 use crate::pipeline::orchestrator::OrchestratorIteratorFactory;
 use crate::pipeline::rolling_buffer_iterator::BufferConfig;
-use crate::pipeline::generic_iterator::{OrderedMultiSourceIterator, OrderedSingleSourceIterator};
-use crate::pipeline::iterator_traits::PluginIterator;
+use crate::pipeline::generic_iterator::{MultiSourceIterator, SingleSourceIterator};
+use crate::pipeline::iterator_traits::PipelineIterator;
+use crate::pipeline::{IteratorRegistry, ImmutableLogoEnrichedChannelSource, IteratorType, AccumulatorFactory, AccumulationStrategy};
+use crate::services::sandboxed_file::SandboxedFileManager;
 use crate::proxy::simple_strategies::*;
 use crate::proxy::stage_contracts::*;
 use crate::proxy::stage_strategy::{MemoryPressureLevel, StageContext};
@@ -38,6 +40,7 @@ pub struct AdaptivePipeline {
     chunk_manager: Arc<ChunkSizeManager>,
     memory_limit_mb: Option<usize>,
     plugin_resolver: Option<PluginResolver>,
+    iterator_registry: Arc<IteratorRegistry>,
 }
 
 impl AdaptivePipeline {
@@ -48,17 +51,28 @@ impl AdaptivePipeline {
         memory_limit_mb: Option<usize>,
         temp_file_manager: SandboxedManager,
         shared_plugin_manager: Option<Arc<WasmPluginManager>>,
+        shared_memory_monitor: Option<SimpleMemoryMonitor>,
     ) -> Self {
-        let memory_monitor = memory_limit_mb.map(|limit| SimpleMemoryMonitor::new(Some(limit)));
+        let memory_monitor = shared_memory_monitor.or_else(|| {
+            memory_limit_mb.map(|limit| SimpleMemoryMonitor::new(Some(limit)))
+        });
 
-        // Use shared plugin manager if provided, otherwise create a new one
+        // Use shared plugin manager if provided, otherwise create a minimal disabled manager
         let plugin_manager = if let Some(shared_manager) = shared_plugin_manager {
             tracing::debug!("AdaptivePipeline using shared plugin manager");
             shared_manager
         } else {
-            tracing::debug!("AdaptivePipeline creating new plugin manager");
-            // Initialize plugin manager with host interface  
-            let plugin_config = WasmPluginConfig::default();
+            tracing::debug!("AdaptivePipeline: No shared plugin manager provided, WASM plugins will be disabled");
+            // Create a minimal disabled plugin manager to avoid duplicates
+            let plugin_config = WasmPluginConfig {
+                enabled: false,
+                plugin_directory: String::new(),
+                max_memory_per_plugin: 0,
+                timeout_seconds: 1,
+                enable_hot_reload: false,
+                max_plugin_failures: 0,
+                fallback_timeout_ms: 0,
+            };
             let host_interface = WasmHostInterface::new(
                 temp_file_manager.clone(),
                 memory_monitor.clone(),
@@ -73,6 +87,9 @@ impl AdaptivePipeline {
             memory_limit_mb.unwrap_or(512) * 10, // max_chunk_size (10x memory limit)
         ));
 
+        // Initialize iterator registry for pipeline data sharing
+        let iterator_registry = Arc::new(IteratorRegistry::new());
+
         Self {
             database,
             data_mapping_service,
@@ -83,6 +100,7 @@ impl AdaptivePipeline {
             chunk_manager,
             memory_limit_mb,
             plugin_resolver: None, // Will be set when processing with config
+            iterator_registry,
         }
     }
 
@@ -150,12 +168,20 @@ impl AdaptivePipeline {
         if plugin_count > 0 {
             info!("Using shared plugin manager with {} already loaded plugins", plugin_count);
         } else {
-            // Load WASM plugins if not already loaded
-            if let Err(e) = self.plugin_manager.load_plugins().await {
-                warn!(
-                    "Failed to load WASM plugins: {}, continuing with native implementations",
-                    e
-                );
+            // Only load plugins if the manager appears to be enabled (has plugin directory)
+            // We check if this is the disabled fallback manager by seeing if plugin directory is empty
+            if self.plugin_manager.get_plugin_directory().is_empty() {
+                info!("WASM plugin system is disabled (fallback manager), using native implementations only");
+            } else {
+                // Load WASM plugins if not already loaded
+                if let Err(e) = self.plugin_manager.load_plugins().await {
+                    warn!(
+                        "Failed to load WASM plugins: {}, continuing with native implementations",
+                        e
+                    );
+                } else {
+                    info!("WASM plugins loaded successfully");
+                }
             }
         }
 
@@ -443,7 +469,7 @@ impl AdaptivePipeline {
         let memory_pressure = self.get_current_memory_pressure(memory_context);
 
         // Create OrderedDataMappingIterator for mapping rules
-        let mut mapping_iterator = OrderedSingleSourceIterator::new(
+        let mut mapping_iterator = SingleSourceIterator::new(
             Arc::new(self.database.clone()),
             crate::pipeline::orchestrator::DataMappingLoader {},
             config.proxy.id,
@@ -451,8 +477,9 @@ impl AdaptivePipeline {
         );
 
         // Request optimal chunk size from chunk manager (coordinates with upstream)
+        let default_chunk_size = self.chunk_manager.get_chunk_size("data_mapping").await;
         let requested_chunk_size = self.chunk_manager
-            .request_chunk_size("data_mapping", channels.len().min(1000))
+            .request_chunk_size("data_mapping", channels.len().min(default_chunk_size))
             .await?;
 
         info!("Data mapping using chunk size: {}", requested_chunk_size);
@@ -606,7 +633,7 @@ impl AdaptivePipeline {
         let memory_pressure = self.get_current_memory_pressure(memory_context);
 
         // Create OrderedFilterIterator for filter rules
-        let mut filter_iterator = OrderedMultiSourceIterator::new(
+        let mut filter_iterator = MultiSourceIterator::new(
             Arc::new(self.database.clone()),
             config.filters.clone(),
             crate::pipeline::orchestrator::FilterLoader {},
@@ -614,8 +641,9 @@ impl AdaptivePipeline {
         );
 
         // Request optimal chunk size from chunk manager (coordinates with upstream)
+        let default_chunk_size = self.chunk_manager.get_chunk_size("filtering").await;
         let requested_chunk_size = self.chunk_manager
-            .request_chunk_size("filtering", channels.len().min(1500))
+            .request_chunk_size("filtering", channels.len().min(default_chunk_size))
             .await?;
 
         info!("Filtering using chunk size: {}", requested_chunk_size);
@@ -802,8 +830,9 @@ impl AdaptivePipeline {
         let memory_pressure = self.get_current_memory_pressure(memory_context);
 
         // Request optimal chunk size from chunk manager
+        let default_chunk_size = self.chunk_manager.get_chunk_size("logo_prefetch").await;
         let requested_chunk_size = self.chunk_manager
-            .request_chunk_size("logo_prefetch", channels.len().min(500))
+            .request_chunk_size("logo_prefetch", channels.len().min(default_chunk_size))
             .await?;
 
         info!("Logo prefetch using chunk size: {}", requested_chunk_size);
@@ -857,6 +886,11 @@ impl AdaptivePipeline {
                             stage_info.duration_ms,
                             stage_info.pressure_level
                         );
+                        
+                        // Register logo-enriched channels in iterator registry for multi-instance access
+                        if let Err(e) = self.register_logo_enriched_channels(&processed_channels).await {
+                            warn!("Failed to register logo-enriched channels in iterator registry: {}", e);
+                        }
                         
                         return Ok(processed_channels);
                     }
@@ -936,6 +970,11 @@ impl AdaptivePipeline {
             stage_info.duration_ms,
             stage_info.pressure_level
         );
+
+        // Register logo-enriched channels in iterator registry for multi-instance access
+        if let Err(e) = self.register_logo_enriched_channels(&processed_channels).await {
+            warn!("Failed to register logo-enriched channels in iterator registry: {}", e);
+        }
 
         Ok(processed_channels)
     }
@@ -1103,8 +1142,9 @@ impl AdaptivePipeline {
         let memory_pressure = self.get_current_memory_pressure(memory_context);
 
         // Request optimal chunk size from chunk manager
+        let default_chunk_size = self.chunk_manager.get_chunk_size("m3u_generation").await;
         let requested_chunk_size = self.chunk_manager
-            .request_chunk_size("m3u_generation", numbered_channels.len().min(5000))
+            .request_chunk_size("m3u_generation", numbered_channels.len().min(default_chunk_size))
             .await?;
 
         info!("M3U generation using chunk size: {}", requested_chunk_size);
@@ -1298,7 +1338,7 @@ impl AdaptivePipeline {
         let memory_pressure = self.get_current_memory_pressure(memory_context);
 
         // Create OrderedEpgAggregateIterator for EPG data
-        let mut epg_iterator = OrderedMultiSourceIterator::new(
+        let mut epg_iterator = MultiSourceIterator::new(
             Arc::new(self.database.clone()),
             config.epg_sources.clone(),
             crate::pipeline::orchestrator::EpgLoader {},
@@ -1306,8 +1346,9 @@ impl AdaptivePipeline {
         );
 
         // Request optimal chunk size from chunk manager
+        let default_chunk_size = self.chunk_manager.get_chunk_size("epg_processing").await;
         let requested_chunk_size = self.chunk_manager
-            .request_chunk_size("epg_processing", 1000)
+            .request_chunk_size("epg_processing", default_chunk_size)
             .await?;
 
         info!("EPG processing using chunk size: {}", requested_chunk_size);
@@ -1319,7 +1360,7 @@ impl AdaptivePipeline {
                 .get_plugin_for_stage("epg_processing", memory_pressure)
             {
             // For WASM plugin, we would need to provide EPG iterator context
-            // This is a more complex integration that would require PluginIteratorContext
+            // This is a more complex integration that would require PipelineIteratorContext
             let stage_context = self.create_stage_context("epg_processing", config, base_url, memory_pressure, None);
 
             // Note: This would require a specialized EPG processing plugin method
@@ -1560,7 +1601,7 @@ impl AdaptivePipeline {
         chunk_size: usize,
     ) -> Result<Vec<T>>
     where
-        I: crate::pipeline::iterator_traits::PluginIterator<T>,
+        I: crate::pipeline::iterator_traits::PipelineIterator<T>,
     {
         let mut all_items = Vec::new();
 
@@ -1667,6 +1708,7 @@ impl AdaptivePipeline {
             stats: GenerationStats::new("unified_iterator_wasm".to_string()),
             database: Some(Arc::new(self.database.clone())),
             logo_service: Some(Arc::new(self.logo_service.clone())),
+            iterator_registry: Some(self.iterator_registry.clone()),
         }
     }
 
@@ -1710,6 +1752,7 @@ impl AdaptivePipeline {
             stats: GenerationStats::new("unified_iterator_wasm".to_string()),
             database: Some(Arc::new(self.database.clone())),
             logo_service: Some(Arc::new(self.logo_service.clone())),
+            iterator_registry: Some(self.iterator_registry.clone()),
         }
     }
 
@@ -1774,6 +1817,7 @@ impl AdaptivePipeline {
                 stats: GenerationStats::new("adaptive_wasm".to_string()),
                 database: Some(Arc::new(self.database.clone())),
                 logo_service: Some(Arc::new(self.logo_service.clone())),
+                iterator_registry: None,
             };
 
             match plugin.execute_source_loading(&stage_context, source_ids.clone()).await {
@@ -1953,6 +1997,7 @@ impl AdaptivePipeline {
                 stats: GenerationStats::new("adaptive_wasm".to_string()),
                 database: Some(Arc::new(self.database.clone())),
                 logo_service: Some(Arc::new(self.logo_service.clone())),
+                iterator_registry: None,
             };
 
             match plugin.execute_data_mapping(&stage_context, channels.clone()).await {
@@ -2117,6 +2162,7 @@ impl AdaptivePipeline {
                 stats: GenerationStats::new("adaptive_wasm".to_string()),
                 database: Some(Arc::new(self.database.clone())),
                 logo_service: Some(Arc::new(self.logo_service.clone())),
+                iterator_registry: None,
             };
 
             match plugin.execute_filtering(&stage_context, channels.clone()).await {
@@ -2269,6 +2315,7 @@ impl AdaptivePipeline {
                 stats: GenerationStats::new("adaptive_wasm".to_string()),
                 database: Some(Arc::new(self.database.clone())),
                 logo_service: Some(Arc::new(self.logo_service.clone())),
+                iterator_registry: None,
             };
 
             match plugin.execute_channel_numbering(&stage_context, channels.clone()).await {
@@ -2421,6 +2468,7 @@ impl AdaptivePipeline {
                 stats: GenerationStats::new("adaptive_wasm".to_string()),
                 database: Some(Arc::new(self.database.clone())),
                 logo_service: Some(Arc::new(self.logo_service.clone())),
+                iterator_registry: None,
             };
 
             match plugin.execute_m3u_generation(&stage_context, numbered_channels.clone()).await {
@@ -2545,6 +2593,40 @@ impl AdaptivePipeline {
     pub async fn reload_plugins(&self) -> Result<()> {
         self.plugin_manager.reload_plugins().await
     }
+
+    /// Register logo-enriched channels as an immutable source in the iterator registry
+    async fn register_logo_enriched_channels(&self, channels: &[Channel]) -> Result<()> {
+        if channels.is_empty() {
+            debug!("No channels to register in iterator registry");
+            return Ok(());
+        }
+
+        // Create immutable source directly from channels
+        let immutable_source = Arc::new(ImmutableLogoEnrichedChannelSource::new(
+            channels.to_vec(),
+            IteratorType::LogoChannels,
+        ));
+
+        // Register in the iterator registry
+        self.iterator_registry.register_channel_source(
+            "logo_channels".to_string(),
+            immutable_source,
+        )?;
+
+        // Calculate logo enrichment statistics
+        let logo_enriched_count = channels.iter()
+            .filter(|ch| ch.tvg_logo.is_some())
+            .count();
+
+        info!(
+            "Registered {} logo-enriched channels in iterator registry ({} with logos, {:.1}% enriched)",
+            channels.len(),
+            logo_enriched_count,
+            if channels.len() > 0 { (logo_enriched_count as f64 / channels.len() as f64) * 100.0 } else { 0.0 }
+        );
+
+        Ok(())
+    }
 }
 
 /// Builder for creating adaptive pipelines
@@ -2555,6 +2637,7 @@ pub struct AdaptivePipelineBuilder {
     memory_limit_mb: Option<usize>,
     temp_file_manager: Option<SandboxedManager>,
     shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
+    shared_memory_monitor: Option<SimpleMemoryMonitor>,
 }
 
 impl AdaptivePipelineBuilder {
@@ -2566,6 +2649,7 @@ impl AdaptivePipelineBuilder {
             memory_limit_mb: None,
             temp_file_manager: None,
             shared_plugin_manager: None,
+            shared_memory_monitor: None,
         }
     }
 
@@ -2599,6 +2683,11 @@ impl AdaptivePipelineBuilder {
         self
     }
 
+    pub fn with_shared_memory_monitor(mut self, memory_monitor: SimpleMemoryMonitor) -> Self {
+        self.shared_memory_monitor = Some(memory_monitor);
+        self
+    }
+
     pub fn build(self) -> Result<AdaptivePipeline> {
         Ok(AdaptivePipeline::new(
             self.database
@@ -2611,6 +2700,7 @@ impl AdaptivePipelineBuilder {
             self.temp_file_manager
                 .ok_or_else(|| anyhow::anyhow!("Temp file manager is required"))?,
             self.shared_plugin_manager,
+            self.shared_memory_monitor,
         ))
     }
 }

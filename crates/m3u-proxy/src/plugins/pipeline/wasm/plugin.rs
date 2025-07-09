@@ -4,15 +4,16 @@
 //! dynamic chunk size management, and orchestrator integration.
 
 use anyhow::Result;
+use serde_json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 // Time imports removed - not used in current implementation
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use wasmtime::*;
 
-use crate::pipeline::{ChunkSizeManager, PluginIterator, IteratorResult};
+use crate::pipeline::{ChunkSizeManager, PipelineIterator, IteratorResult, IteratorRegistry};
 use crate::models::*;
 use crate::database::Database;
 use crate::plugins::shared::{Plugin, PluginInfo, PluginType};
@@ -128,17 +129,17 @@ impl Default for WasmPluginConfig {
 
 /// Production-ready iterator context for WASM plugins
 pub struct PluginIteratorContext {
-    pub channel_iterator: Option<Box<dyn PluginIterator<Channel> + Send + Sync>>,
-    pub epg_iterator: Option<Box<dyn PluginIterator<crate::pipeline::orchestrator::EpgEntry> + Send + Sync>>,
-    pub data_mapping_iterator: Option<Box<dyn PluginIterator<crate::pipeline::orchestrator::DataMappingRule> + Send + Sync>>,
-    pub filter_iterator: Option<Box<dyn PluginIterator<crate::pipeline::orchestrator::FilterRule> + Send + Sync>>,
+    pub channel_iterator: Option<Box<dyn PipelineIterator<Channel> + Send + Sync>>,
+    pub epg_iterator: Option<Box<dyn PipelineIterator<crate::pipeline::orchestrator::EpgEntry> + Send + Sync>>,
+    pub data_mapping_iterator: Option<Box<dyn PipelineIterator<crate::pipeline::orchestrator::DataMappingRule> + Send + Sync>>,
+    pub filter_iterator: Option<Box<dyn PipelineIterator<crate::pipeline::orchestrator::FilterRule> + Send + Sync>>,
     pub database: Option<Arc<Database>>,
     pub logo_service: Option<Arc<crate::logo_assets::service::LogoAssetService>>,
     pub base_url: String,
     /// Production-ready chunk size manager for dynamic resizing
     pub chunk_manager: Arc<ChunkSizeManager>,
-    /// Iterator ID to name mapping for host function lookups
-    pub iterator_registry: HashMap<u32, String>,
+    /// Central iterator registry for managing all iterators
+    pub iterator_registry: Arc<IteratorRegistry>,
     /// HTTP client for downloading logos
     pub http_client: Option<reqwest::Client>,
     /// Storage config for saving logos
@@ -147,11 +148,7 @@ pub struct PluginIteratorContext {
 
 impl PluginIteratorContext {
     pub fn new() -> Self {
-        let mut registry = HashMap::new();
-        registry.insert(1, "channel_iterator".to_string());
-        registry.insert(2, "epg_iterator".to_string());
-        registry.insert(3, "data_mapping_iterator".to_string());
-        registry.insert(4, "filter_iterator".to_string());
+        let registry = Arc::new(IteratorRegistry::new());
         
         Self {
             channel_iterator: None,
@@ -228,10 +225,15 @@ impl WasmPlugin {
         plugin_context.logo_service = context.logo_service.clone();
         plugin_context.base_url = context.base_url.clone();
         
+        // Use the iterator registry from the stage context if available
+        if let Some(registry) = &context.iterator_registry {
+            plugin_context.iterator_registry = registry.clone();
+        }
+        
         // Create real iterators based on stage
         if stage == "data_mapping" {
             // For data mapping, create a data mapping iterator
-            let data_mapping_iterator = crate::pipeline::generic_iterator::OrderedSingleSourceIterator::new(
+            let data_mapping_iterator = crate::pipeline::generic_iterator::SingleSourceIterator::new(
                 database.clone(),
                 crate::pipeline::orchestrator::DataMappingLoader {},
                 context.proxy_config.proxy.id,
@@ -257,7 +259,7 @@ impl WasmPlugin {
                 })
                 .collect();
 
-            let channel_iterator = crate::pipeline::generic_iterator::OrderedMultiSourceIterator::new(
+            let channel_iterator = crate::pipeline::generic_iterator::MultiSourceIterator::new(
                 database.clone(),
                 proxy_sources,
                 crate::pipeline::orchestrator::ChannelLoader {},
@@ -278,18 +280,21 @@ impl WasmPlugin {
         stage: &str,
         plugin_context: PluginIteratorContext,
     ) -> Result<Vec<Channel>> {
+        let module = self.module.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("WASM module not loaded"))?
+            .clone();
+        
         let engine = self.engine.clone();
-        let module = self.module.as_ref().unwrap().clone();
-        let stage_name = stage.to_string();
         let plugin_name = self.info.name.clone();
-
-        // Move the iterator context into the task
-        let result = tokio::task::spawn_blocking(move || {
-            // Create store
+        let stage_name = stage.to_string();
+        
+        tokio::task::spawn_blocking(move || -> Result<Vec<Channel>> {
             let mut store = Store::new(&engine, ());
             
-            // Create memory for WASM instance
-            let memory_type = MemoryType::new(16, Some(256)); // 16 pages minimum, 256 pages maximum
+            // Create memory for WASM instance with unlimited growth
+            let initial_pages = 16; // 1MB initial
+            let max_pages = None; // No limit - plugins can grow as needed
+            let memory_type = MemoryType::new(initial_pages, max_pages);
             let memory = Memory::new(&mut store, memory_type)?;
 
             // Extract all needed values from plugin_context before moving into closures
@@ -309,7 +314,7 @@ impl WasmPlugin {
             // Define function imports in the "env" namespace
             let memory_for_log = memory.clone();
             let plugin_name_for_log = plugin_name.clone();
-            linker.func_wrap("env", "host_log", move |caller: Caller<'_, ()>, level: u32, msg_ptr: u32, msg_len: u32| {
+            linker.func_wrap("env", "host_log_write", move |mut caller: Caller<'_, ()>, level: u32, msg_ptr: u32, msg_len: u32| -> i32 {
                 let memory_data = memory_for_log.data(&caller);
                 if msg_ptr as usize + msg_len as usize <= memory_data.len() {
                     let msg_bytes = &memory_data[msg_ptr as usize..(msg_ptr + msg_len) as usize];
@@ -322,21 +327,60 @@ impl WasmPlugin {
                             _ => "INFO",
                         };
                         info!("WASM plugin [{}] [{}]: {}", plugin_name_for_log, log_level, message);
+                        0 // Success
+                    } else {
+                        -1 // Invalid UTF-8
                     }
+                } else {
+                    -1 // Memory bounds error
                 }
             })?;
 
             let plugin_name_for_flush = plugin_name.clone();
-            linker.func_wrap("env", "host_memory_flush", move || -> i32 {
+            linker.func_wrap("env", "host_system_flush_memory", move || -> i32 {
                 // Signal to plugin that it should shrink_to_fit any memory structures
                 // Plugin calls this before outputting data to shrink memory usage
                 info!("WASM plugin [{}] called memory flush/shrink_to_fit", plugin_name_for_flush);
+                
+                // In a real implementation, you might trigger host-side cleanup
+                // or suggest the plugin reorganize its memory layout
                 0 // Success
+            })?;
+
+            let plugin_name_for_iterator_create = plugin_name.clone();
+            let registry_for_create = iterator_registry.clone();
+            linker.func_wrap("env", "host_iterator_create", move |iterator_type: u32| -> u32 {
+                info!("WASM plugin [{}] called host_iterator_create: iterator_type={}", plugin_name_for_iterator_create, iterator_type);
+                
+                // Convert iterator_type to IteratorType enum and create plugin output iterator
+                let iterator_type_enum = match iterator_type {
+                    1 => crate::pipeline::IteratorType::Channel,
+                    2 => crate::pipeline::IteratorType::DataMappingRule,
+                    3 => crate::pipeline::IteratorType::EpgEntry,
+                    _ => {
+                        warn!("WASM plugin [{}] requested unknown iterator type: {}", plugin_name_for_iterator_create, iterator_type);
+                        return 0; // Error
+                    }
+                };
+                
+                let registry = registry_for_create.clone();
+                match futures::executor::block_on(async {
+                    registry.create_plugin_output_iterator(iterator_type_enum).await
+                }) {
+                    Ok(id) => {
+                        info!("WASM plugin [{}] created plugin output iterator: type={}, id={}", plugin_name_for_iterator_create, iterator_type, id);
+                        id
+                    }
+                    Err(e) => {
+                        warn!("WASM plugin [{}] failed to create plugin output iterator: {}", plugin_name_for_iterator_create, e);
+                        0 // Error
+                    }
+                }
             })?;
 
             let memory_for_progress = memory.clone();
             let plugin_name_for_progress = plugin_name.clone();
-            linker.func_wrap("env", "host_report_progress", move |caller: Caller<'_, ()>, stage_ptr: u32, stage_len: u32, message_ptr: u32, message_len: u32| {
+            linker.func_wrap("env", "host_progress_report", move |caller: Caller<'_, ()>, stage_ptr: u32, stage_len: u32, message_ptr: u32, message_len: u32| -> i32 {
                 let memory_data = memory_for_progress.data(&caller);
                 
                 // Read stage name
@@ -356,25 +400,34 @@ impl WasmPlugin {
                 };
                 
                 info!("WASM plugin [{}] progress [{}]: {}", plugin_name_for_progress, stage, message);
+                0 // Success
             })?;
 
             // Memory pressure reporting - allows plugins to adjust chunk sizes based on memory pressure
-            linker.func_wrap("env", "host_get_memory_pressure", || -> u32 {
+            linker.func_wrap("env", "host_memory_get_pressure", || -> u32 {
                 // Return memory pressure level:
                 // 0 = Low pressure (optimal)
                 // 1 = Medium pressure (should reduce chunk sizes) 
                 // 2 = High pressure (use smallest chunk sizes)
                 // 3 = Critical pressure (consider stopping)
                 
-                // Use the existing memory monitor to check current pressure
-                use crate::utils::memory_monitor::{SimpleMemoryMonitor, MemoryLimitStatus};
+                // Use existing memory monitor to check system pressure
+                use crate::utils::memory_monitor::SimpleMemoryMonitor;
                 
-                let mut monitor = SimpleMemoryMonitor::new(Some(512)); // Default 512MB limit
-                match monitor.check_memory_limit() {
-                    Ok(MemoryLimitStatus::Ok) => 0,
-                    Ok(MemoryLimitStatus::Warning) => 1, 
-                    Ok(MemoryLimitStatus::Exceeded) => 2,
-                    Err(_) => 0, // Default to no pressure on error
+                // Get current process memory usage
+                let monitor = SimpleMemoryMonitor::new(None); // No limit - use for monitoring only
+                let current_usage_mb = monitor.get_current_rss().unwrap_or(0) as f64 / 1024.0 / 1024.0;
+                
+                // Simple heuristic based on process memory usage
+                // In production, this could be enhanced with system-wide memory monitoring
+                if current_usage_mb < 500.0 {
+                    0 // Low pressure: < 500MB process memory
+                } else if current_usage_mb < 1000.0 {
+                    1 // Medium pressure: 500MB-1GB process memory
+                } else if current_usage_mb < 2000.0 {
+                    2 // High pressure: 1GB-2GB process memory
+                } else {
+                    3 // Critical pressure: > 2GB process memory
                 }
             })?;
 
@@ -384,7 +437,7 @@ impl WasmPlugin {
             let http_client_for_logo = http_client.clone();
             let storage_config_for_logo = storage_config.clone();
             
-            linker.func_wrap("env", "host_cache_logo", move |mut caller: Caller<'_, ()>, url_ptr: u32, url_len: u32, result_ptr: u32, result_len: u32| -> i32 {
+            linker.func_wrap("env", "host_logo_cache", move |mut caller: Caller<'_, ()>, url_ptr: u32, url_len: u32, result_ptr: u32, result_len: u32| -> i32 {
                 let memory_data = memory_for_logo.data(&caller);
                 
                 // Read URL from WASM memory
@@ -436,179 +489,134 @@ impl WasmPlugin {
 
 
             let plugin_name_for_close = plugin_name.clone();
-            linker.func_wrap("env", "host_iterator_close", move |iterator_id: u32| -> i32 {
-                info!("WASM plugin [{}] host_iterator_close: iterator_id={}", plugin_name_for_close, iterator_id);
-                // In a real implementation, this would close the iterator and clean up resources
-                0 // Success
-            })?;
-            
-            // Wrap iterators in Arc<Mutex<>> for thread-safe access from closures
-            let channel_iterator = Arc::new(tokio::sync::Mutex::new(plugin_context.channel_iterator));
-            let epg_iterator = Arc::new(tokio::sync::Mutex::new(plugin_context.epg_iterator));
-            let data_mapping_iterator = Arc::new(tokio::sync::Mutex::new(plugin_context.data_mapping_iterator));
-            let filter_iterator = Arc::new(tokio::sync::Mutex::new(plugin_context.filter_iterator));
-            
-            // Iterator host function - real implementation with actual data fetching
-            let memory_for_iterator = memory.clone();
-            let plugin_name_for_iterator = plugin_name.clone();
-            let channel_iter_for_host = channel_iterator.clone();
-            let epg_iter_for_host = epg_iterator.clone();
-            let data_mapping_iter_for_host = data_mapping_iterator.clone();
-            let filter_iter_for_host = filter_iterator.clone();
             let iterator_registry_for_host = iterator_registry.clone();
             
-            linker.func_wrap("env", "host_iterator_next_chunk", move |mut caller: Caller<'_, ()>, iterator_id: u32, out_ptr: u32, out_len: u32, requested_chunk_size: u32| -> i32 {
-                info!("WASM plugin [{}] host_iterator_next_chunk: iterator_id={}, requested_chunk_size={}", plugin_name_for_iterator, iterator_id, requested_chunk_size);
+            // Add new host function for cloning iterators (for non-consuming reads)
+            let registry_for_clone = iterator_registry_for_host.clone();
+            linker.func_wrap("env", "host_iterator_clone", move |source_iterator_id: u32, new_iterator_id: u32| -> i32 {
+                // Clone the iterator to create an independent instance
+                // This allows copying reads without affecting the original iterator
+                info!("WASM plugin requesting iterator clone: source={}, new={}", source_iterator_id, new_iterator_id);
                 
-                // Get iterator name for logging
-                let stage_name = match iterator_registry_for_host.get(&iterator_id) {
-                    Some(name) => name.clone(),
-                    None => {
-                        error!("WASM plugin [{}] Unknown iterator_id: {}", plugin_name_for_iterator, iterator_id);
+                let registry = registry_for_clone.clone();
+                match futures::executor::block_on(async {
+                    registry.clone_iterator(source_iterator_id, new_iterator_id).await
+                }) {
+                    Ok(_) => {
+                        info!("Successfully cloned iterator {} -> {}", source_iterator_id, new_iterator_id);
+                        0 // Success
+                    },
+                    Err(e) => {
+                        error!("Failed to clone iterator {} -> {}: {}", source_iterator_id, new_iterator_id, e);
+                        -1 // Error
+                    }
+                }
+            })?;
+            
+            let registry_for_close = iterator_registry_for_host.clone();
+            linker.func_wrap("env", "host_iterator_close", move |iterator_id: u32| -> i32 {
+                info!("WASM plugin [{}] host_iterator_close: iterator_id={}", plugin_name_for_close, iterator_id);
+                
+                let registry = registry_for_close.clone();
+                match futures::executor::block_on(async {
+                    registry.close_iterator(iterator_id).await
+                }) {
+                    Ok(_) => {
+                        info!("Successfully closed iterator {}", iterator_id);
+                        0 // Success
+                    },
+                    Err(e) => {
+                        error!("Failed to close iterator {}: {}", iterator_id, e);
+                        0 // Return success even on error since cleanup is best-effort
+                    }
+                }
+            })?;
+            
+            // Host functions for writing to plugin output iterators
+            let memory_for_write_chunk = memory.clone();
+            let plugin_name_for_write_chunk = plugin_name.clone();
+            let registry_for_write_chunk = iterator_registry.clone();
+            linker.func_wrap("env", "host_iterator_write_chunk", move |mut caller: Caller<'_, ()>, iterator_id: u32, data_ptr: u32, data_len: u32, items_count: u32| -> i32 {
+                info!("WASM plugin [{}] host_iterator_write_chunk: iterator_id={}, data_len={}, items_count={}", plugin_name_for_write_chunk, iterator_id, data_len, items_count);
+                
+                let memory_data = memory_for_write_chunk.data(&caller);
+                
+                // Read data from WASM memory
+                if data_ptr as usize + data_len as usize > memory_data.len() {
+                    error!("WASM plugin [{}] host_iterator_write_chunk: Data memory access out of bounds", plugin_name_for_write_chunk);
+                    return -1;
+                }
+                
+                let data_bytes = &memory_data[data_ptr as usize..(data_ptr + data_len) as usize];
+                
+                // Push data to the plugin output iterator
+                let registry = registry_for_write_chunk.clone();
+                match futures::executor::block_on(async {
+                    registry.push_to_plugin_iterator(iterator_id, data_bytes).await
+                }) {
+                    Ok(_) => {
+                        info!("WASM plugin [{}] successfully wrote {} items to iterator {}", plugin_name_for_write_chunk, items_count, iterator_id);
+                        0 // Success
+                    },
+                    Err(e) => {
+                        error!("WASM plugin [{}] failed to write to iterator {}: {}", plugin_name_for_write_chunk, iterator_id, e);
+                        -1 // Error
+                    }
+                }
+            })?;
+            
+            let plugin_name_for_finalize = plugin_name.clone();
+            let registry_for_finalize = iterator_registry.clone();
+            linker.func_wrap("env", "host_iterator_finalize", move |iterator_id: u32| -> i32 {
+                info!("WASM plugin [{}] host_iterator_finalize: iterator_id={}", plugin_name_for_finalize, iterator_id);
+                
+                // Finalize the plugin output iterator
+                let registry = registry_for_finalize.clone();
+                match futures::executor::block_on(async {
+                    registry.finalize_plugin_iterator(iterator_id).await
+                }) {
+                    Ok(_) => {
+                        info!("WASM plugin [{}] successfully finalized iterator {}", plugin_name_for_finalize, iterator_id);
+                        0 // Success
+                    },
+                    Err(e) => {
+                        error!("WASM plugin [{}] failed to finalize iterator {}: {}", plugin_name_for_finalize, iterator_id, e);
+                        -1 // Error
+                    }
+                }
+            })?;
+            
+            // Iterator host function - use the iterator registry for all data fetching
+            let memory_for_iterator = memory.clone();
+            let plugin_name_for_iterator = plugin_name.clone();
+            let stage_name_for_iterator = stage_name.clone();
+            
+            let registry_for_next_chunk = iterator_registry_for_host.clone();
+            linker.func_wrap("env", "host_iterator_read_chunk", move |mut caller: Caller<'_, ()>, iterator_id: u32, out_ptr: u32, out_len: u32, requested_chunk_size: u32| -> i32 {
+                info!("WASM plugin [{}] host_iterator_read_chunk: iterator_id={}, requested_chunk_size={}", plugin_name_for_iterator, iterator_id, requested_chunk_size);
+                
+                // Use new iterator registry for data fetching
+                let registry = registry_for_next_chunk.clone();
+                let response_data = match futures::executor::block_on(async {
+                    registry.next_chunk(iterator_id, requested_chunk_size as usize).await
+                }) {
+                    Ok(data) => {
+                        if data.is_empty() {
+                            info!("WASM plugin [{}] Iterator {} exhausted", plugin_name_for_iterator, iterator_id);
+                            serde_json::json!("Exhausted").to_string()
+                        } else {
+                            info!("WASM plugin [{}] Iterator {} returned {} items", plugin_name_for_iterator, iterator_id, data.len());
+                            serde_json::json!({"Chunk": data}).to_string()
+                        }
+                    },
+                    Err(e) => {
+                        error!("WASM plugin [{}] Iterator {} error: {}", plugin_name_for_iterator, iterator_id, e);
                         return -1;
                     }
                 };
                 
-                // Real implementation: fetch data from the appropriate iterator using blocking executor
-                let response_json = match iterator_id {
-                    1 => {
-                        // channel_iterator - fetch real channel data
-                        let iter_mutex = channel_iter_for_host.clone();
-                        match futures::executor::block_on(async {
-                            let mut iter_guard = iter_mutex.lock().await;
-                            if let Some(ref mut iter) = *iter_guard {
-                                iter.next_chunk().await
-                            } else {
-                                Ok(crate::pipeline::IteratorResult::Exhausted)
-                            }
-                        }) {
-                            Ok(crate::pipeline::IteratorResult::Chunk(channels)) => {
-                                info!("WASM plugin [{}] host_iterator_next_chunk: Fetched {} channels", plugin_name_for_iterator, channels.len());
-                                serde_json::json!({"Chunk": channels}).to_string()
-                            },
-                            Ok(crate::pipeline::IteratorResult::Exhausted) => {
-                                info!("WASM plugin [{}] host_iterator_next_chunk: Channel iterator exhausted", plugin_name_for_iterator);
-                                serde_json::json!("Exhausted").to_string()
-                            },
-                            Err(e) => {
-                                error!("WASM plugin [{}] host_iterator_next_chunk: Channel iterator error: {}", plugin_name_for_iterator, e);
-                                return -1;
-                            }
-                        }
-                    },
-                    2 => {
-                        // epg_iterator - fetch real EPG data
-                        let iter_mutex = epg_iter_for_host.clone();
-                        match futures::executor::block_on(async {
-                            let mut iter_guard = iter_mutex.lock().await;
-                            if let Some(ref mut iter) = *iter_guard {
-                                iter.next_chunk().await
-                            } else {
-                                Ok(crate::pipeline::IteratorResult::Exhausted)
-                            }
-                        }) {
-                            Ok(crate::pipeline::IteratorResult::Chunk(epg_entries)) => {
-                                info!("WASM plugin [{}] host_iterator_next_chunk: Fetched {} EPG entries", plugin_name_for_iterator, epg_entries.len());
-                                // Convert EPG entries to JSON-serializable format
-                                let serializable_entries: Vec<serde_json::Value> = epg_entries.iter()
-                                    .map(|entry| serde_json::json!({
-                                        "channel_id": entry.channel_id,
-                                        "program_id": entry.program_id,
-                                        "title": entry.title,
-                                        "description": entry.description,
-                                        "start_time": entry.start_time,
-                                        "end_time": entry.end_time,
-                                        "source_id": entry.source_id,
-                                        "priority": entry.priority
-                                    }))
-                                    .collect();
-                                serde_json::json!({"Chunk": serializable_entries}).to_string()
-                            },
-                            Ok(crate::pipeline::IteratorResult::Exhausted) => {
-                                info!("WASM plugin [{}] host_iterator_next_chunk: EPG iterator exhausted", plugin_name_for_iterator);
-                                serde_json::json!("Exhausted").to_string()
-                            },
-                            Err(e) => {
-                                error!("WASM plugin [{}] host_iterator_next_chunk: EPG iterator error: {}", plugin_name_for_iterator, e);
-                                return -1;
-                            }
-                        }
-                    },
-                    3 => {
-                        // data_mapping_iterator - fetch real data mapping rules
-                        let iter_mutex = data_mapping_iter_for_host.clone();
-                        match futures::executor::block_on(async {
-                            let mut iter_guard = iter_mutex.lock().await;
-                            if let Some(ref mut iter) = *iter_guard {
-                                iter.next_chunk().await
-                            } else {
-                                Ok(crate::pipeline::IteratorResult::Exhausted)
-                            }
-                        }) {
-                            Ok(crate::pipeline::IteratorResult::Chunk(rules)) => {
-                                info!("WASM plugin [{}] host_iterator_next_chunk: Fetched {} data mapping rules", plugin_name_for_iterator, rules.len());
-                                // Convert data mapping rules to JSON-serializable format
-                                let serializable_rules: Vec<serde_json::Value> = rules.iter()
-                                    .map(|rule| serde_json::json!({
-                                        "rule_id": rule.rule_id,
-                                        "source_field": rule.source_field,
-                                        "target_field": rule.target_field,
-                                        "transformation": rule.transformation,
-                                        "priority": rule.priority
-                                    }))
-                                    .collect();
-                                serde_json::json!({"Chunk": serializable_rules}).to_string()
-                            },
-                            Ok(crate::pipeline::IteratorResult::Exhausted) => {
-                                info!("WASM plugin [{}] host_iterator_next_chunk: Data mapping iterator exhausted", plugin_name_for_iterator);
-                                serde_json::json!("Exhausted").to_string()
-                            },
-                            Err(e) => {
-                                error!("WASM plugin [{}] host_iterator_next_chunk: Data mapping iterator error: {}", plugin_name_for_iterator, e);
-                                return -1;
-                            }
-                        }
-                    },
-                    4 => {
-                        // filter_iterator - fetch real filter rules
-                        let iter_mutex = filter_iter_for_host.clone();
-                        match futures::executor::block_on(async {
-                            let mut iter_guard = iter_mutex.lock().await;
-                            if let Some(ref mut iter) = *iter_guard {
-                                iter.next_chunk().await
-                            } else {
-                                Ok(crate::pipeline::IteratorResult::Exhausted)
-                            }
-                        }) {
-                            Ok(crate::pipeline::IteratorResult::Chunk(filters)) => {
-                                info!("WASM plugin [{}] host_iterator_next_chunk: Fetched {} filter rules", plugin_name_for_iterator, filters.len());
-                                // Convert filter rules to JSON-serializable format
-                                let serializable_filters: Vec<serde_json::Value> = filters.iter()
-                                    .map(|filter| serde_json::json!({
-                                        "filter_id": filter.filter_id,
-                                        "rule_type": filter.rule_type,
-                                        "condition": filter.condition,
-                                        "action": filter.action,
-                                        "priority": filter.priority
-                                    }))
-                                    .collect();
-                                serde_json::json!({"Chunk": serializable_filters}).to_string()
-                            },
-                            Ok(crate::pipeline::IteratorResult::Exhausted) => {
-                                info!("WASM plugin [{}] host_iterator_next_chunk: Filter iterator exhausted", plugin_name_for_iterator);
-                                serde_json::json!("Exhausted").to_string()
-                            },
-                            Err(e) => {
-                                error!("WASM plugin [{}] host_iterator_next_chunk: Filter iterator error: {}", plugin_name_for_iterator, e);
-                                return -1;
-                            }
-                        }
-                    },
-                    _ => {
-                        error!("WASM plugin [{}] Unknown iterator_id: {}", plugin_name_for_iterator, iterator_id);
-                        return -1;
-                    }
-                };
+                // Write response to WASM memory
+                let response_json = response_data;
                 
                 let response_bytes = response_json.as_bytes();
                 if response_bytes.len() > out_len as usize {
@@ -625,7 +633,7 @@ impl WasmPlugin {
                 memory_data_mut[out_ptr as usize..(out_ptr as usize + response_bytes.len())]
                     .copy_from_slice(response_bytes);
                 
-                info!("WASM plugin [{}] host_iterator_next_chunk: Returned {} bytes for stage: {}", plugin_name_for_iterator, response_bytes.len(), stage_name);
+                info!("WASM plugin [{}] host_iterator_read_chunk: Returned {} bytes for stage: {}", plugin_name_for_iterator, response_bytes.len(), stage_name_for_iterator);
                 response_bytes.len() as i32
             })?;
             
@@ -690,7 +698,7 @@ impl WasmPlugin {
 
             let memory_for_read = memory.clone();
             let plugin_name_for_read = plugin_name.clone();
-            linker.func_wrap("env", "host_file_read", move |mut caller: Caller<'_, ()>, path_ptr: u32, path_len: u32, out_ptr: u32, out_len: u32| -> i32 {
+            linker.func_wrap("env", "host_file_read", move |caller: Caller<'_, ()>, path_ptr: u32, path_len: u32, out_ptr: u32, out_len: u32| -> i32 {
                 let memory_data = memory_for_read.data(&caller);
                 
                 if path_ptr as usize + path_len as usize > memory_data.len() {
@@ -758,16 +766,130 @@ impl WasmPlugin {
             })?;
 
             // Create WASM instance using linker
-            let _instance = linker.instantiate(&mut store, &module)
+            let instance = linker.instantiate(&mut store, &module)
                 .map_err(|e| anyhow::anyhow!("Failed to instantiate WASM module: {}", e))?;
 
-            info!("WASM plugin executed successfully for stage: {}", stage_name);
-            
-            // Return empty channels for now - in production this would process real data
-            Ok::<Vec<Channel>, anyhow::Error>(Vec::new())
-        }).await??;
+            // Call plugin_init first
+            if let Ok(init_func) = instance.get_typed_func::<(u32, u32), i32>(&mut store, "plugin_init") {
+                let init_result = init_func.call(&mut store, (0, 0))?;
+                if init_result != 0 {
+                    return Err(anyhow::anyhow!("Plugin initialization failed with code: {}", init_result));
+                }
+                info!("WASM plugin initialized successfully for stage: {}", stage_name);
+            } else {
+                warn!("Plugin missing plugin_init function - continuing without initialization");
+            }
 
-        Ok(result)
+            // Execute stage-specific function with proper data and iterator context
+            let result = match stage_name.as_str() {
+                "data_mapping" => {
+                    // TODO: Implement data mapping with proper iterator integration
+                    warn!("Data mapping stage plugin integration not yet complete");
+                    Vec::new()
+                },
+                "filtering" => {
+                    // TODO: Implement filtering stage
+                    warn!("Filtering stage not yet implemented for WASM plugins");
+                    Vec::new()
+                },
+                "logo_prefetch" => {
+                    // TODO: Implement logo prefetch stage  
+                    warn!("Logo prefetch stage not yet implemented for WASM plugins");
+                    Vec::new()
+                },
+                "channel_numbering" => {
+                    // TODO: Implement channel numbering stage
+                    warn!("Channel numbering stage not yet implemented for WASM plugins");
+                    Vec::new()
+                },
+                "m3u_generation" => {
+                    // TODO: Implement M3U generation stage
+                    warn!("M3U generation stage not yet implemented for WASM plugins");
+                    Vec::new()
+                },
+                "epg_processing" => {
+                    // TODO: Implement EPG processing stage
+                    warn!("EPG processing stage not yet implemented for WASM plugins");
+                    Vec::new()
+                },
+                _ => {
+                    warn!("Unknown stage: {}", stage_name);
+                    Vec::new()
+                }
+            };
+
+            Ok(result)
+        }).await?
+    }
+    
+    /// Allocate memory in WASM for data passing
+    fn allocate_wasm_memory(&self, store: &mut Store<()>, memory: &Memory, size: usize) -> Result<usize> {
+        // For now, use a simple memory allocation strategy
+        // In production, this would call a WASM allocator function
+        let data_size = memory.data_size(&mut *store);
+        let current_size = memory.size(&mut *store) * 65536; // 64KB pages
+        
+        // If we need more memory, grow the memory
+        if data_size + size > current_size.try_into().unwrap() {
+            let additional_pages = ((size + 65535) / 65536) + 1; // Round up to pages
+            memory.grow(&mut *store, additional_pages as u64)
+                .map_err(|e| anyhow::anyhow!("Failed to grow WASM memory: {}", e))?;
+        }
+        
+        // Return offset where data can be written
+        Ok(data_size)
+    }
+    
+    /// Free memory in WASM (no-op for now, real implementation would call WASM free function)
+    fn free_wasm_memory(&self, _store: &mut Store<()>, _instance: &Instance, _ptr: u32, _size: usize) -> Result<()> {
+        // For now, no-op since we don't have a sophisticated allocator
+        // In production, this would call the plugin's free function
+        Ok(())
+    }
+    
+    /// Retrieve processed data from plugin output
+    fn get_plugin_output(&self, store: &mut Store<()>, instance: &Instance, memory: &Memory) -> Result<Vec<Channel>> {
+        // Try to get the plugin's output using a standard output function
+        match instance.get_typed_func::<(), (u32, u32)>(&mut *store, "plugin_get_output") {
+            Ok(output_func) => {
+                let (output_ptr, output_len) = output_func.call(&mut *store, ())?;
+                
+                if output_len == 0 {
+                    // Plugin returned no data
+                    return Ok(Vec::new());
+                }
+                
+                // Read output data from WASM memory
+                let mut output_data = vec![0u8; output_len as usize];
+                memory.read(&mut *store, output_ptr as usize, &mut output_data)
+                    .map_err(|e| anyhow::anyhow!("Failed to read output data from WASM memory: {}", e))?;
+                
+                // Deserialize output data
+                let channels: Vec<Channel> = serde_json::from_slice(&output_data)
+                    .map_err(|e| anyhow::anyhow!("Failed to deserialize output data: {}", e))?;
+                
+                Ok(channels)
+            },
+            Err(_) => {
+                // Plugin doesn't have output function, assume passthrough
+                // This means the plugin processes data in-place and we should return the input
+                warn!("Plugin missing plugin_get_output function - assuming passthrough behavior");
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// Execute data mapping stage with proper iterator integration
+    async fn execute_data_mapping_plugin(
+        &self,
+        instance: &wasmtime::Instance,
+        store: &mut wasmtime::Store<()>,
+        plugin_context: &PluginIteratorContext,
+    ) -> Result<Vec<Channel>> {
+        // For now, just return empty channels to avoid borrow checker complexity
+        // TODO: Implement full WASM plugin integration when ready
+        info!("Data mapping stage: WASM plugin integration not yet complete, returning empty channels");
+        Ok(Vec::new())
     }
 }
 
@@ -1184,6 +1306,11 @@ impl WasmPluginManager {
         }
         Ok(())
     }
+
+    /// Get the plugin directory path
+    pub fn get_plugin_directory(&self) -> &str {
+        &self.config.plugin_directory
+    }
 }
 
 /// Simple wrapper to make WASM plugins work with StageStrategy
@@ -1226,8 +1353,8 @@ impl crate::proxy::stage_strategy::StageStrategy for WasmPluginWrapper {
                           self.plugin_name);
                 }
                 Err(e) => {
-                    tracing::warn!("WASM plugin '{}' execution failed: {}, falling back to native implementation", 
-                                  self.plugin_name, e);
+                    tracing::error!("WASM plugin '{}' execution failed: {}, falling back to native implementation", 
+                                   self.plugin_name, e);
                 }
             }
         } else {

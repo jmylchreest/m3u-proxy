@@ -4,18 +4,27 @@
 //! data through multiple stages with dynamic chunk size management,
 //! buffered iterators, and efficient memory usage.
 
+pub mod accumulator;
 pub mod buffered_iterator;
 pub mod chunk_manager;
 pub mod generic_iterator;
+pub mod immutable_sources;
 pub mod iterator_traits;
+pub mod iterator_types;
+pub mod iterator_registry;
 pub mod orchestrator;
+pub mod plugin_output_iterator;
 pub mod rolling_buffer_iterator;
 pub mod stages;
 
 // Re-export key types for easier access
+pub use accumulator::{IteratorAccumulator, ChannelAccumulator, AccumulatorFactory, AccumulationStrategy};
 pub use buffered_iterator::{BufferedIterator, DataSource};
 pub use chunk_manager::{ChunkSizeManager, ChunkSizeStats, StageChunkStats};
-pub use iterator_traits::{IteratorResult, PluginIterator};
+pub use immutable_sources::{ImmutableLogoEnrichedChannelSource, ImmutableProxyConfigSource, ImmutableLogoEnrichedEpgSource, ImmutableSourceManager, VersionedSource};
+pub use iterator_traits::{IteratorResult, PipelineIterator};
+pub use iterator_types::{IteratorType, ConfigType, IteratorMetadata, well_known_ids};
+pub use iterator_registry::{IteratorRegistry, IteratorInstance};
 pub use orchestrator::{
     OrderedChannelAggregateIterator, OrderedDataMappingIterator, 
     OrderedEpgAggregateIterator, OrderedFilterIterator,

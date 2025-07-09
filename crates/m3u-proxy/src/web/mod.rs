@@ -78,120 +78,14 @@ impl WebServer {
         proxy_output_file_manager: SandboxedManager,
         shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
     ) -> Result<Self> {
-        // Use shared plugin manager if provided, otherwise create one
-        let plugin_manager = if let Some(shared_manager) = shared_plugin_manager {
-            tracing::info!("Using shared WASM plugin manager");
-            Some(shared_manager)
-        } else if let Some(wasm_config) = &config.wasm_plugins {
-            if wasm_config.enabled {
-                tracing::info!("WASM plugin system is ENABLED (creating new manager)");
-                
-                // Use default values for optional config fields
-                let default_dir = PathBuf::from("./target/wasm-plugins");
-                let plugin_directory = wasm_config.plugin_directory.as_ref().unwrap_or(&default_dir);
-                let timeout_seconds = wasm_config.timeout_seconds.unwrap_or(30);
-                let enable_hot_reload = wasm_config.enable_hot_reload.unwrap_or(false);
-                
-                tracing::info!("Plugin directory: {:?}", plugin_directory);
-                tracing::info!("Plugin timeout: {} seconds", timeout_seconds);
-                tracing::info!(
-                    "Hot reload: {}",
-                    if enable_hot_reload {
-                        "ENABLED"
-                    } else {
-                        "DISABLED"
-                    }
-                );
-
-                // Create memory monitor for plugins (memory pressure handled by plugins now)
-                let memory_monitor = SimpleMemoryMonitor::new(Some(512)); // Default 512MB limit
-
-                // Create plugin capabilities
-                let capabilities = PluginCapabilities {
-                    allow_file_access: true,
-                    allow_network_access: false,
-                    max_memory_query_mb: Some(512), // Default memory limit
-                    allowed_config_keys: vec![
-                        "chunk_size".to_string(),
-                        "compression_level".to_string(),
-                        "temp_dir".to_string(),
-                        "memory_threshold_mb".to_string(),
-                        "temp_file_threshold".to_string(),
-                    ],
-                };
-
-                // Create host interface factory
-                let host_interface_factory =
-                    WasmHostInterfaceFactory::new(preview_file_manager.clone(), capabilities);
-
-                // Create plugin configuration (memory pressure handled by plugin itself)
-                let plugin_config = std::collections::HashMap::from([
-                    ("chunk_size".to_string(), "1000".to_string()),
-                    ("memory_threshold_mb".to_string(), "512".to_string()), // Default threshold
-                    ("temp_file_threshold".to_string(), "10000".to_string()),
-                ]);
-
-                // Create host interface
-                let host_interface =
-                    host_interface_factory.create_interface(Some(memory_monitor), plugin_config);
-
-                // Create plugin manager configuration
-                let plugin_manager_config = WasmPluginConfig {
-                    enabled: wasm_config.enabled,
-                    plugin_directory: plugin_directory.to_string_lossy().to_string(),
-                    max_memory_per_plugin: 512, // Default memory limit (plugins manage themselves)
-                    timeout_seconds,
-                    enable_hot_reload,
-                    max_plugin_failures: 3,
-                    fallback_timeout_ms: 5000,
-                };
-
-                // Create plugin manager
-                let manager = WasmPluginManager::new(plugin_manager_config, host_interface);
-
-                // Load plugins and log results
-                match manager.load_plugins().await {
-                    Ok(_) => {
-                        match manager.get_detailed_statistics() {
-                            Ok(stats) => {
-                                tracing::info!("Web server plugin system initialized successfully!");
-                                tracing::info!("Plugin Statistics:");
-                                tracing::info!("   Total plugins loaded: {}", stats.len());
-                                
-                                // Log each plugin's status
-                                for (name, plugin_stats) in &stats {
-                                    tracing::info!("   Plugin '{}': {:?}", name, plugin_stats);
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to get plugin statistics: {}", e);
-                                tracing::info!("Web server plugin system initialized successfully!");
-                            }
-                        }
-
-                        // Start hot reload if enabled
-                        if enable_hot_reload {
-                            tracing::info!("Starting hot reload monitoring...");
-                            if let Err(e) = manager.start_hot_reload_monitoring() {
-                                tracing::warn!("Failed to start hot reload monitoring: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to load plugins in web server: {}", e);
-                        tracing::warn!("Plugin system will continue in fallback mode");
-                    }
-                }
-
-                Some(std::sync::Arc::new(manager))
-            } else {
-                tracing::info!("WASM plugin system is DISABLED in configuration");
-                None
-            }
+        // Use shared plugin manager (no fallback creation in WebServer)
+        let plugin_manager = shared_plugin_manager;
+        
+        if plugin_manager.is_some() {
+            tracing::info!("WebServer using shared WASM plugin manager");
         } else {
-            tracing::info!("WASM plugin system configuration not found - running without plugins");
-            None
-        };
+            tracing::info!("WebServer: No plugin manager available");
+        }
 
         // Create logo cache scanner for cached logo discovery
         let logo_cache_scanner = {

@@ -12,7 +12,6 @@ use uuid::Uuid;
 
 use crate::models::*;
 use crate::proxy::streaming_stages::*;
-use crate::proxy::wasm_examples::*;
 
 /// Pipeline configuration for streaming execution
 pub struct StreamingPipelineConfig {
@@ -255,6 +254,7 @@ impl StreamingPipeline {
             m3u_content,
             created_at: chrono::Utc::now(),
             stats: Some(self.create_generation_stats(channels.len(), duration_ms)),
+            processed_channels: None,
         };
 
         // Handle output (simplified)
@@ -322,26 +322,8 @@ impl StreamingPipelineBuilder {
 
     /// Build with chunked source loading strategy
     pub fn build_chunked(self) -> Result<StreamingPipeline> {
-        let database = self.database.ok_or_else(|| anyhow::anyhow!("Database required"))?;
-        let data_mapping_service = self.data_mapping_service.ok_or_else(|| anyhow::anyhow!("Data mapping service required"))?;
-        let logo_service = self.logo_service.ok_or_else(|| anyhow::anyhow!("Logo service required"))?;
-
-        let source_loading: Box<dyn StreamingSourceLoadingStage> = Box::new(
-            WasmChunkedSourceLoader::new(
-                database,
-                self.config.default_chunk_size,
-                self.config.memory_threshold_mb,
-            )
-        );
-
-        let data_mapping: Box<dyn StreamingDataMappingStage> = Box::new(
-            WasmStreamingDataMapper::new(
-                data_mapping_service,
-                logo_service,
-            )
-        );
-
-        Ok(StreamingPipeline::new(self.config, source_loading, data_mapping))
+        // TODO: Implement native streaming stages to replace WASM implementations
+        Err(anyhow::anyhow!("Streaming pipeline not available without WASM plugins"))
     }
 
     /// Build with WASM-based strategies (when available)

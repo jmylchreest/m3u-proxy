@@ -1,100 +1,66 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::info;
 
 pub mod duration_serde;
 pub mod file_categories;
-pub mod plugin_resolver;
 
 pub use file_categories::FileManagerConfig;
-pub use plugin_resolver::{PluginResolver, create_plugin_resolver};
 
-/// WASM plugin system configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WasmPluginsConfig {
-    pub enabled: bool,
-    #[serde(default = "default_plugin_directory")]
-    pub plugin_directory: Option<PathBuf>,
-    #[serde(default = "default_timeout_seconds")]
-    pub timeout_seconds: Option<u64>,
-    #[serde(default = "default_enable_hot_reload")]
-    pub enable_hot_reload: Option<bool>,
-}
-
-fn default_plugin_directory() -> Option<PathBuf> {
-    Some(PathBuf::from("./target/wasm-plugins"))
-}
-
-fn default_timeout_seconds() -> Option<u64> {
-    Some(30)
-}
-
-fn default_enable_hot_reload() -> Option<bool> {
-    Some(false)
-}
-
-/// Pipeline strategies configuration - maps strategy names to stage->plugin mappings
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PipelineStrategiesConfig {
-    #[serde(flatten)]
-    pub strategies: HashMap<String, HashMap<String, String>>,
-}
-
-/// Main pipeline configuration
+/// Simplified pipeline configuration for native-only implementation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineConfig {
-    /// Which pipeline strategy to use
-    pub strategy: String,
-    /// Per-plugin configuration (optional, plugin-specific settings)
-    pub plugin_configs: Option<HashMap<String, HashMap<String, toml::Value>>>,
+    /// Maximum memory usage in MB before spilling to disk
+    pub max_memory_mb: Option<usize>,
 }
 
-impl Default for WasmPluginsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false, // Disabled by default for security
-            plugin_directory: Some(PathBuf::from("./target/wasm-plugins")),
-            timeout_seconds: Some(30),
-            enable_hot_reload: Some(false),
-        }
-    }
+/// Metrics configuration for stream access tracking and retention
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    /// Retention period for raw access logs
+    #[serde(default = "default_raw_log_retention")]
+    pub raw_log_retention: String,
+    
+    /// Retention period for hourly aggregates
+    #[serde(default = "default_hourly_stats_retention")]
+    pub hourly_stats_retention: String,
+    
+    /// Retention period for daily aggregates
+    #[serde(default = "default_daily_stats_retention")]
+    pub daily_stats_retention: String,
+    
+    /// Client session timeout
+    #[serde(default = "default_session_timeout")]
+    pub session_timeout: String,
+    
+    /// Housekeeper run interval
+    #[serde(default = "default_housekeeper_interval")]
+    pub housekeeper_interval: String,
 }
 
-impl Default for PipelineStrategiesConfig {
-    fn default() -> Self {
-        let mut strategies = HashMap::new();
-        
-        // Default strategy - 6 stages using passthrough plugins
-        let mut default_strategy = HashMap::new();
-        default_strategy.insert("data_mapping".to_string(), "passthrough_plugin".to_string());
-        default_strategy.insert("filtering".to_string(), "passthrough_plugin".to_string());
-        default_strategy.insert("logo_prefetch".to_string(), "passthrough_plugin".to_string());
-        default_strategy.insert("channel_numbering".to_string(), "passthrough_plugin".to_string());
-        default_strategy.insert("m3u_generation".to_string(), "passthrough_plugin".to_string());
-        default_strategy.insert("epg_processing".to_string(), "passthrough_plugin".to_string());
-        strategies.insert("default".to_string(), default_strategy);
-        
-        // Performance strategy - all passthrough for maximum speed
-        let mut performance_strategy = HashMap::new();
-        performance_strategy.insert("data_mapping".to_string(), "passthrough_plugin".to_string());
-        performance_strategy.insert("filtering".to_string(), "passthrough_plugin".to_string());
-        performance_strategy.insert("logo_prefetch".to_string(), "passthrough_plugin".to_string());
-        performance_strategy.insert("channel_numbering".to_string(), "passthrough_plugin".to_string());
-        performance_strategy.insert("m3u_generation".to_string(), "passthrough_plugin".to_string());
-        performance_strategy.insert("epg_processing".to_string(), "passthrough_plugin".to_string());
-        strategies.insert("performance".to_string(), performance_strategy);
-        
-        Self { strategies }
-    }
-}
+fn default_raw_log_retention() -> String { "7d".to_string() }
+fn default_hourly_stats_retention() -> String { "30d".to_string() }
+fn default_daily_stats_retention() -> String { "365d".to_string() }
+fn default_session_timeout() -> String { "15s".to_string() }
+fn default_housekeeper_interval() -> String { "1m".to_string() }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
-            strategy: "default".to_string(),
-            plugin_configs: None, // No plugin configs needed for passthrough
+            max_memory_mb: Some(512), // 512MB default limit
+        }
+    }
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            raw_log_retention: default_raw_log_retention(),
+            hourly_stats_retention: default_hourly_stats_retention(),
+            daily_stats_retention: default_daily_stats_retention(),
+            session_timeout: default_session_timeout(),
+            housekeeper_interval: default_housekeeper_interval(),
         }
     }
 }
@@ -109,9 +75,8 @@ pub struct Config {
     pub data_mapping_engine: Option<DataMappingEngineConfig>,
     pub proxy_generation: Option<ProxyGenerationConfig>,
     pub file_manager: Option<FileManagerConfig>,
-    pub wasm_plugins: Option<WasmPluginsConfig>,
-    pub pipeline_strategies: Option<PipelineStrategiesConfig>,
     pub pipeline: Option<PipelineConfig>,
+    pub metrics: Option<MetricsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +112,14 @@ pub struct StorageConfig {
     pub cached_logo_path: PathBuf,
     pub proxy_versions_to_keep: u32,
     pub temp_path: Option<String>,
+
+    /// Automatically clean up orphaned logo database entries when uploaded_logo_path changes
+    #[serde(default = "default_true")]
+    pub clean_orphan_logos: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,8 +179,6 @@ pub struct EpgGenerationConfig {
     pub days_ahead: u32,
     /// Number of days of past EPG data to include
     pub days_behind: u32,
-    /// Normalize all EPG times to UTC
-    pub normalize_to_utc: bool,
     /// Remove duplicate programs with same title and time
     pub deduplicate_programs: bool,
     /// Maximum number of programs per channel (None for unlimited)
@@ -224,7 +195,7 @@ impl DatabaseBatchConfig {
     const EPG_CHANNEL_FIELDS: usize = 9;
 
     /// Number of fields per EPG program record
-    const EPG_PROGRAM_FIELDS: usize = 17;
+    const EPG_PROGRAM_FIELDS: usize = 18;
 
     /// Validate batch sizes to ensure they don't exceed SQLite limits
     pub fn validate(&self) -> Result<(), String> {
@@ -276,8 +247,8 @@ impl Default for DatabaseBatchConfig {
             // SQLite 3.32.0+ supports up to 32,766 variables per query
             // EPG channels: 9 fields * 3600 = 32,400 variables (safe margin)
             epg_channels: Some(3600),
-            // EPG programs: 17 fields * 1900 = 32,300 variables (safe margin)
-            epg_programs: Some(1900),
+            // EPG programs: 18 fields * 1800 = 32,400 variables (safe margin)
+            epg_programs: Some(1800),
             // Stream channels: reduced for better SQLite performance with large datasets
             stream_channels: Some(500),
         }
@@ -322,7 +293,6 @@ impl Default for EpgGenerationConfig {
             include_past_programs: false,
             days_ahead: 7,
             days_behind: 1,
-            normalize_to_utc: true,
             deduplicate_programs: true,
             max_programs_per_channel: Some(1000),
             source_timezone: None, // Auto-detect from EPG source
@@ -349,6 +319,7 @@ impl Default for Config {
                 cached_logo_path: PathBuf::from("./data/logos/cached"),
                 proxy_versions_to_keep: 3,
                 temp_path: Some("./data/temp".to_string()),
+                clean_orphan_logos: true,
             },
             ingestion: IngestionConfig {
                 progress_update_interval: 1000,
@@ -360,9 +331,8 @@ impl Default for Config {
             data_mapping_engine: Some(DataMappingEngineConfig::default()),
             proxy_generation: Some(ProxyGenerationConfig::default()),
             file_manager: None,
-            wasm_plugins: Some(WasmPluginsConfig::default()),
-            pipeline_strategies: Some(PipelineStrategiesConfig::default()),
             pipeline: Some(PipelineConfig::default()),
+            metrics: Some(MetricsConfig::default()),
         }
     }
 }

@@ -12,6 +12,7 @@ pub mod memory_monitor;
 pub mod sqlite;
 pub mod time;
 pub mod url;
+pub mod uuid_parser;
 pub mod validation;
 
 // Re-export commonly used types for convenience
@@ -21,3 +22,4 @@ pub use memory_cleanup::{
 pub use memory_config::{MemoryMonitoringConfig, MemoryVerbosity};
 pub use memory_context::{MemoryAnalysis, MemoryContext, MemoryEfficiencyTrend, StageMemoryInfo};
 pub use memory_monitor::{MemoryLimitStatus, MemorySnapshot, MemoryStats, SimpleMemoryMonitor};
+pub use uuid_parser::{resolve_proxy_id, uuid_to_base64, uuid_to_hex32};

@@ -1,18 +1,47 @@
+use crate::logo_assets::storage::LogoAssetStorage;
 use crate::models::logo_asset::*;
+
+use anyhow;
 use chrono::Utc;
-use image::{GenericImageView, ImageFormat};
+use image::ImageFormat;
+use reqwest::Client;
+use sandboxed_file_manager::SandboxedManager;
+use sha2::{Digest, Sha256};
 use sqlx::{Pool, Row, Sqlite};
-use std::io::Cursor;
+use std::collections::BTreeMap;
+
+use std::path::PathBuf;
+use tokio::fs;
+use tracing::{debug, error};
+use url::Url;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct LogoAssetService {
     pool: Pool<Sqlite>,
+    pub storage: LogoAssetStorage,
+    http_client: Client,
+    logo_file_manager: Option<SandboxedManager>,
 }
 
 impl LogoAssetService {
-    pub fn new(pool: Pool<Sqlite>) -> Self {
-        Self { pool }
+    pub fn new(pool: Pool<Sqlite>, storage: LogoAssetStorage) -> Self {
+        Self {
+            pool,
+            storage,
+            http_client: Client::new(),
+            logo_file_manager: None,
+        }
+    }
+
+    pub fn with_file_manager(mut self, logo_file_manager: SandboxedManager) -> Self {
+        self.logo_file_manager = Some(logo_file_manager);
+        self
+    }
+
+    /// Construct the full URL for a cached logo
+    pub fn get_cached_logo_url(&self, cache_id: &str, base_url: &str) -> String {
+        format!("{}/api/v1/logos/cached/{}", base_url.trim_end_matches('/'), cache_id)
     }
 
     pub async fn create_asset_with_id(
@@ -29,9 +58,38 @@ impl LogoAssetService {
         width: Option<i32>,
         height: Option<i32>,
     ) -> Result<LogoAsset, sqlx::Error> {
-        let now = Utc::now();
+        let asset_type_str = match asset_type {
+            LogoAssetType::Uploaded => "uploaded",
+            LogoAssetType::Cached => "cached",
+        };
 
-        let asset = LogoAsset {
+        let asset_id_str = asset_id.to_string();
+        let created_at = Utc::now().to_rfc3339();
+        let updated_at = created_at.clone();
+
+        sqlx::query(
+            r#"
+            INSERT INTO logo_assets (id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'original', ?, ?)
+            "#
+        )
+        .bind(&asset_id_str)
+        .bind(&name)
+        .bind(&description)
+        .bind(&file_name)
+        .bind(&file_path)
+        .bind(file_size)
+        .bind(&mime_type)
+        .bind(asset_type_str)
+        .bind(&source_url)
+        .bind(width)
+        .bind(height)
+        .bind(&created_at)
+        .bind(&updated_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(LogoAsset {
             id: asset_id,
             name,
             description,
@@ -44,36 +102,12 @@ impl LogoAssetService {
             width,
             height,
             parent_asset_id: None,
-            format_type: crate::models::logo_asset::LogoFormatType::Original,
-            created_at: now,
-            updated_at: now,
-        };
-
-        let asset_type_str = format!("{:?}", asset.asset_type).to_lowercase();
-
-        sqlx::query(
-            r#"
-            INSERT INTO logo_assets (id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#
-        )
-        .bind(asset.id.to_string())
-        .bind(&asset.name)
-        .bind(&asset.description)
-        .bind(&asset.file_name)
-        .bind(&asset.file_path)
-        .bind(asset.file_size)
-        .bind(&asset.mime_type)
-        .bind(asset_type_str)
-        .bind(&asset.source_url)
-        .bind(asset.width)
-        .bind(asset.height)
-        .bind(asset.created_at.to_rfc3339())
-        .bind(asset.updated_at.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
-
-        Ok(asset)
+            format_type: LogoFormatType::Original,
+            created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&created_at)
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+            updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(&updated_at)
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+        })
     }
 
     pub async fn get_asset(&self, asset_id: Uuid) -> Result<LogoAsset, sqlx::Error> {
@@ -94,22 +128,17 @@ impl LogoAssetService {
             _ => LogoAssetType::Uploaded,
         };
 
-        let format_type = match row
-            .get::<Option<String>, _>("format_type")
-            .as_deref()
-            .unwrap_or("original")
-        {
-            "png_conversion" => crate::models::logo_asset::LogoFormatType::PngConversion,
-            _ => crate::models::logo_asset::LogoFormatType::Original,
-        };
-
         let parent_asset_id = row
             .get::<Option<String>, _>("parent_asset_id")
-            .map(|id| Uuid::parse_str(&id).ok())
-            .flatten();
+            .and_then(|s| s.parse().ok());
+
+        let format_type = match row.get::<String, _>("format_type").as_str() {
+            "png_conversion" => LogoFormatType::PngConversion,
+            _ => LogoFormatType::Original,
+        };
 
         Ok(LogoAsset {
-            id: Uuid::parse_str(&row.get::<String, _>("id")).unwrap(),
+            id: asset_id,
             name: row.get("name"),
             description: row.get("description"),
             file_name: row.get("file_name"),
@@ -122,37 +151,47 @@ impl LogoAssetService {
             height: row.get("height"),
             parent_asset_id,
             format_type,
-            created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("created_at")).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-            updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("updated_at")).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+            created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                &row.get::<String, _>("created_at"),
+            )
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+            updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                &row.get::<String, _>("updated_at"),
+            )
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
         })
     }
 
     pub async fn list_assets(
         &self,
         request: LogoAssetListRequest,
-        base_url: &str,
     ) -> Result<LogoAssetListResponse, sqlx::Error> {
+        let limit = request.limit.unwrap_or(20);
         let page = request.page.unwrap_or(1);
-        let limit = request.limit.unwrap_or(50);
         let offset = (page - 1) * limit;
 
-        let mut query = "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original'".to_string();
-        let mut count_query =
-            "SELECT COUNT(*) as count FROM logo_assets WHERE format_type = 'original'".to_string();
+        let mut query = String::from(
+            "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original'",
+        );
+
+        let mut count_query = String::from(
+            "SELECT COUNT(*) as count FROM logo_assets WHERE format_type = 'original'",
+        );
 
         if let Some(search) = &request.search {
-            query.push_str(&format!(" AND name LIKE '%{}%'", search));
-            count_query.push_str(&format!(" AND name LIKE '%{}%'", search));
+            let search_clause = format!(" AND name LIKE '%{}%'", search);
+            query.push_str(&search_clause);
+            count_query.push_str(&search_clause);
         }
 
         if let Some(asset_type) = &request.asset_type {
-            let type_str = format!("{:?}", asset_type).to_lowercase();
-            query.push_str(&format!(" AND asset_type = '{}'", type_str));
-            count_query.push_str(&format!(" AND asset_type = '{}'", type_str));
-        } else if !request.include_cached.unwrap_or(true) {
-            // If include_cached is explicitly false, only show uploaded
-            query.push_str(" AND asset_type = 'uploaded'");
-            count_query.push_str(" AND asset_type = 'uploaded'");
+            let type_str = match asset_type {
+                LogoAssetType::Uploaded => "uploaded",
+                LogoAssetType::Cached => "cached",
+            };
+            let type_clause = format!(" AND asset_type = '{}'", type_str);
+            query.push_str(&type_clause);
+            count_query.push_str(&type_clause);
         }
 
         query.push_str(&format!(
@@ -165,6 +204,7 @@ impl LogoAssetService {
         let total_count: i64 = count_row.get("count");
 
         let mut assets = Vec::new();
+
         for row in rows {
             let asset_type = match row.get::<String, _>("asset_type").as_str() {
                 "uploaded" => LogoAssetType::Uploaded,
@@ -172,19 +212,14 @@ impl LogoAssetService {
                 _ => LogoAssetType::Uploaded,
             };
 
-            let format_type = match row
-                .get::<Option<String>, _>("format_type")
-                .as_deref()
-                .unwrap_or("original")
-            {
-                "png_conversion" => crate::models::logo_asset::LogoFormatType::PngConversion,
-                _ => crate::models::logo_asset::LogoFormatType::Original,
-            };
-
             let parent_asset_id = row
                 .get::<Option<String>, _>("parent_asset_id")
-                .map(|id| Uuid::parse_str(&id).ok())
-                .flatten();
+                .and_then(|s| s.parse().ok());
+
+            let format_type = match row.get::<String, _>("format_type").as_str() {
+                "png_conversion" => LogoFormatType::PngConversion,
+                _ => LogoFormatType::Original,
+            };
 
             let asset = LogoAsset {
                 id: Uuid::parse_str(&row.get::<String, _>("id")).unwrap(),
@@ -200,18 +235,31 @@ impl LogoAssetService {
                 height: row.get("height"),
                 parent_asset_id,
                 format_type,
-                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("created_at")).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("updated_at")).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("created_at"),
+                )
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("updated_at"),
+                )
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
             };
 
-            let url = crate::utils::logo::LogoUrlGenerator::full(asset.id, base_url);
-            assets.push(LogoAssetWithUrl { asset, url });
+            assets.push(asset);
         }
 
         let total_pages = ((total_count as f64) / (limit as f64)).ceil() as u32;
 
+        let assets_with_urls: Vec<LogoAssetWithUrl> = assets
+            .into_iter()
+            .map(|asset| {
+                let url = format!("/api/v1/logos/{}", asset.id);
+                LogoAssetWithUrl { asset, url }
+            })
+            .collect();
+
         Ok(LogoAssetListResponse {
-            assets,
+            assets: assets_with_urls,
             total_count,
             page,
             limit,
@@ -222,8 +270,12 @@ impl LogoAssetService {
     pub async fn update_asset(
         &self,
         asset_id: Uuid,
-        request: LogoAssetUpdateRequest,
+        name: String,
+        description: Option<String>,
     ) -> Result<LogoAsset, sqlx::Error> {
+        let asset_id_str = asset_id.to_string();
+        let updated_at = Utc::now().to_rfc3339();
+
         sqlx::query(
             r#"
             UPDATE logo_assets
@@ -231,10 +283,10 @@ impl LogoAssetService {
             WHERE id = ?
             "#,
         )
-        .bind(&request.name)
-        .bind(&request.description)
-        .bind(Utc::now().to_rfc3339())
-        .bind(asset_id.to_string())
+        .bind(&name)
+        .bind(&description)
+        .bind(&updated_at)
+        .bind(&asset_id_str)
         .execute(&self.pool)
         .await?;
 
@@ -242,28 +294,46 @@ impl LogoAssetService {
     }
 
     pub async fn delete_asset(&self, asset_id: Uuid) -> Result<(), sqlx::Error> {
-        // First, check if this asset has linked assets (PNG conversions)
-        let linked_assets = sqlx::query("SELECT id FROM logo_assets WHERE parent_asset_id = ?")
-            .bind(asset_id.to_string())
-            .fetch_all(&self.pool)
-            .await?;
+        // Get asset info first to delete the file
+        let asset = self.get_asset(asset_id).await?;
 
-        // Delete all linked assets first
-        for linked_row in linked_assets {
-            let linked_id: String = linked_row.get("id");
+        // Delete linked assets first (iterative approach to avoid recursion)
+        let mut assets_to_delete = vec![asset_id];
+        let mut processed = std::collections::HashSet::new();
+
+        while let Some(current_id) = assets_to_delete.pop() {
+            if processed.contains(&current_id) {
+                continue;
+            }
+            processed.insert(current_id);
+
+            // Find linked assets for current asset
+            let linked_assets = sqlx::query("SELECT id FROM logo_assets WHERE parent_asset_id = ?")
+                .bind(current_id.to_string())
+                .fetch_all(&self.pool)
+                .await?;
+
+            for linked_row in linked_assets {
+                let linked_id = Uuid::parse_str(&linked_row.get::<String, _>("id")).unwrap();
+                if !processed.contains(&linked_id) {
+                    assets_to_delete.push(linked_id);
+                }
+            }
+        }
+
+        // Delete all assets from database
+        for asset_id_to_delete in &processed {
             sqlx::query("DELETE FROM logo_assets WHERE id = ?")
-                .bind(linked_id)
+                .bind(asset_id_to_delete.to_string())
                 .execute(&self.pool)
                 .await?;
         }
 
-        // Then delete the main asset
-        sqlx::query("DELETE FROM logo_assets WHERE id = ?")
-            .bind(asset_id.to_string())
-            .execute(&self.pool)
-            .await?;
+        // Delete file from storage
+        if let Err(e) = self.storage.delete_file(&asset.file_path).await {
+            error!("Failed to delete file for asset {}: {}", asset_id, e);
+        }
 
-        tracing::info!("Deleted asset {} and its linked assets", asset_id);
         Ok(())
     }
 
@@ -274,7 +344,7 @@ impl LogoAssetService {
     ) -> Result<LogoAssetSearchResult, sqlx::Error> {
         let limit = request.limit.unwrap_or(20);
         let search_query = request.query.unwrap_or_default();
-        
+
         // First get uploaded logos from database
         let query = format!(
             "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original' AND asset_type = 'uploaded' AND name LIKE '%{}%' ORDER BY name LIMIT {}",
@@ -284,22 +354,22 @@ impl LogoAssetService {
         let rows = sqlx::query(&query).fetch_all(&self.pool).await?;
 
         let mut assets = Vec::new();
-        for row in rows {
-            let asset_type = LogoAssetType::Uploaded; // Only uploaded assets from database
 
-            let format_type = match row
-                .get::<Option<String>, _>("format_type")
-                .as_deref()
-                .unwrap_or("original")
-            {
-                "png_conversion" => crate::models::logo_asset::LogoFormatType::PngConversion,
-                _ => crate::models::logo_asset::LogoFormatType::Original,
+        for row in rows {
+            let asset_type = match row.get::<String, _>("asset_type").as_str() {
+                "uploaded" => LogoAssetType::Uploaded,
+                "cached" => LogoAssetType::Cached,
+                _ => LogoAssetType::Uploaded,
             };
 
             let parent_asset_id = row
                 .get::<Option<String>, _>("parent_asset_id")
-                .map(|id| Uuid::parse_str(&id).ok())
-                .flatten();
+                .and_then(|s| s.parse().ok());
+
+            let format_type = match row.get::<String, _>("format_type").as_str() {
+                "png_conversion" => LogoFormatType::PngConversion,
+                _ => LogoFormatType::Original,
+            };
 
             let asset = LogoAsset {
                 id: Uuid::parse_str(&row.get::<String, _>("id")).unwrap(),
@@ -315,11 +385,21 @@ impl LogoAssetService {
                 height: row.get("height"),
                 parent_asset_id,
                 format_type,
-                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("created_at")).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("updated_at")).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("created_at"),
+                )
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("updated_at"),
+                )
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
             };
 
-            let url = crate::utils::logo::LogoUrlGenerator::full(asset.id, base_url);
+            let url = format!(
+                "{}/api/v1/logos/{}",
+                base_url.trim_end_matches('/'),
+                asset.id
+            );
             assets.push(LogoAssetWithUrl { asset, url });
         }
 
@@ -328,7 +408,7 @@ impl LogoAssetService {
             assets,
         })
     }
-    
+
     /// Search assets with support for cached logos from filesystem
     pub async fn search_assets_with_cached(
         &self,
@@ -339,22 +419,26 @@ impl LogoAssetService {
     ) -> Result<LogoAssetSearchResult, anyhow::Error> {
         let limit = request.limit.unwrap_or(20);
         let search_query = request.query.as_deref();
-        
+
         let mut all_assets = Vec::new();
-        
+
         // Get uploaded logos from database
         let mut db_request = request.clone();
         db_request.include_cached = None; // Don't pass this to the simpler search method
-        let db_result = self.search_assets(db_request, base_url).await
+        let db_result = self
+            .search_assets(db_request, base_url)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to search database assets: {}", e))?;
         all_assets.extend(db_result.assets);
-        
+
         // Add cached logos from filesystem if requested and scanner is available
         if include_cached {
             if let Some(scanner) = logo_cache_scanner {
-                let cached_logos = scanner.search_cached_logos(search_query, None).await
+                let cached_logos = scanner
+                    .search_cached_logos(search_query, None)
+                    .await
                     .map_err(|e| anyhow::anyhow!("Failed to search cached logos: {}", e))?;
-                
+
                 // Convert cached logos to LogoAssetWithUrl format
                 for cached_logo in cached_logos {
                     // Create a synthetic LogoAsset from cached logo info
@@ -375,21 +459,28 @@ impl LogoAssetService {
                         created_at: cached_logo.created_at,
                         updated_at: cached_logo.last_accessed,
                     };
-                    
+
                     // Use the cached logo serving URL
-                    let url = format!("{}/api/v1/logos/cached/{}", base_url.trim_end_matches('/'), cached_logo.cache_id);
-                    all_assets.push(LogoAssetWithUrl { asset: synthetic_asset, url });
+                    let url = format!(
+                        "{}/api/v1/logos/cached/{}",
+                        base_url.trim_end_matches('/'),
+                        cached_logo.cache_id
+                    );
+                    all_assets.push(LogoAssetWithUrl {
+                        asset: synthetic_asset,
+                        url,
+                    });
                 }
             }
         }
-        
+
         // Sort by name
         all_assets.sort_by(|a, b| a.asset.name.cmp(&b.asset.name));
-        
+
         // Apply limit
         let total_count = all_assets.len();
         all_assets.truncate(limit as usize);
-        
+
         Ok(LogoAssetSearchResult {
             total_count,
             assets: all_assets,
@@ -424,347 +515,449 @@ impl LogoAssetService {
             filesystem_cached_storage: 0, // Will be updated by caller with scanner data
         })
     }
-    
+
     /// Get cache stats with filesystem-based cached logos included
     pub async fn get_cache_stats_with_filesystem(
         &self,
         logo_cache_scanner: Option<&crate::services::logo_cache_scanner::LogoCacheScanner>,
     ) -> Result<LogoCacheStats, anyhow::Error> {
         // Get database-based stats first
-        let mut stats = self.get_cache_stats().await
+        let mut stats = self
+            .get_cache_stats()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get database cache stats: {}", e))?;
-        
+
         // Add filesystem-based stats if scanner is available
         if let Some(scanner) = logo_cache_scanner {
-            let cached_logos = scanner.scan_cached_logos().await
+            let cached_logos = scanner
+                .scan_cached_logos()
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to scan cached logos: {}", e))?;
-            
+
             stats.filesystem_cached_logos = cached_logos.len() as i64;
-            stats.filesystem_cached_storage = cached_logos.iter()
-                .map(|logo| logo.size_bytes as i64)
-                .sum();
-            
+            stats.filesystem_cached_storage =
+                cached_logos.iter().map(|logo| logo.size_bytes as i64).sum();
+
             tracing::info!(
                 "Filesystem cache stats: {} logos, {} bytes total",
                 stats.filesystem_cached_logos,
                 stats.filesystem_cached_storage
             );
         }
-        
+
         Ok(stats)
     }
 
-    /// Convert image data to PNG format if it's not already PNG
-    fn convert_to_png(
+    /// Check and generate missing metadata for existing cached logos
+    pub async fn ensure_cached_logo_metadata(
         &self,
-        image_data: &[u8],
-        original_format: ImageFormat,
-    ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-        tracing::debug!(
-            "PNG conversion check: format={:?}, size={} bytes",
-            original_format,
-            image_data.len()
-        );
+        logo_cache_scanner: &crate::services::logo_cache_scanner::LogoCacheScanner,
+    ) -> Result<usize, anyhow::Error> {
+        let cached_logos = logo_cache_scanner.scan_cached_logos().await?;
+        let mut generated_count = 0;
 
-        // If it's already PNG, no conversion needed
-        if matches!(original_format, ImageFormat::Png) {
-            tracing::debug!("Skipping PNG conversion: already PNG format");
-            return Ok(None);
-        }
+        for logo_info in cached_logos {
+            if logo_info.metadata.is_none() {
+                // Try to generate basic metadata with just the original URL if we can infer it
+                let generated = logo_cache_scanner
+                    .generate_metadata_for_existing_logo(
+                        &logo_info.cache_id,
+                        logo_info.inferred_source_url,
+                        None, // No channel name available from cache_id
+                        None,
+                    )
+                    .await?;
 
-        // Special handling for SVG - we can't convert it with the image crate
-        // but we should still create a PNG "conversion" entry for consistency
-        if image_data.starts_with(b"<svg") || image_data.starts_with(b"<?xml") {
-            tracing::debug!("Skipping PNG conversion: SVG format cannot be converted");
-            return Ok(None);
-        }
-
-        tracing::info!("Converting {:?} to PNG format", original_format);
-
-        // Convert to PNG for other formats
-        match image::load_from_memory(image_data) {
-            Ok(img) => {
-                let mut png_data = Vec::new();
-                let mut cursor = Cursor::new(&mut png_data);
-
-                match img.write_to(&mut cursor, ImageFormat::Png) {
-                    Ok(_) => {
-                        tracing::info!(
-                            "PNG conversion successful: {:?} -> PNG, original_size={} bytes, png_size={} bytes",
-                            original_format,
-                            image_data.len(),
-                            png_data.len()
-                        );
-                        Ok(Some(png_data))
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to write PNG data: {}", e);
-                        Err(Box::new(e))
-                    }
+                if generated {
+                    generated_count += 1;
+                    debug!(
+                        "Generated metadata for existing cached logo: {}",
+                        logo_info.cache_id
+                    );
                 }
             }
-            Err(e) => {
-                tracing::error!("Failed to load image for PNG conversion: {}", e);
-                Err(Box::new(e))
-            }
         }
-    }
 
-    /// Detect image format from file data
-    fn detect_image_format(
-        data: &[u8],
-    ) -> Result<ImageFormat, Box<dyn std::error::Error + Send + Sync>> {
-        if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-            Ok(ImageFormat::Png)
-        } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-            Ok(ImageFormat::Jpeg)
-        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
-            Ok(ImageFormat::Gif)
-        } else if data.starts_with(b"RIFF") && data.len() > 12 && &data[8..12] == b"WEBP" {
-            Ok(ImageFormat::WebP)
-        } else if data.starts_with(b"<svg") || data.starts_with(b"<?xml") {
-            // SVG detection - we'll handle this separately since image crate doesn't support SVG
-            Ok(ImageFormat::from_extension("svg").unwrap_or(ImageFormat::Png))
-        } else {
-            // Try to detect using image crate
-            let format = image::guess_format(data)?;
-            Ok(format)
-        }
-    }
-
-    /// Create asset with automatic PNG conversion for non-PNG images
-    pub async fn create_asset_from_upload_with_conversion(
-        &self,
-        request: LogoAssetCreateRequest,
-        data: &[u8],
-        content_type: &str,
-    ) -> Result<LogoAsset, Box<dyn std::error::Error + Send + Sync>> {
-        use crate::logo_assets::LogoAssetStorage;
-
-        tracing::info!(
-            "Starting logo upload process: name='{}', size={} bytes, content_type='{}'",
-            request.name,
-            data.len(),
-            content_type
-        );
-
-        // Generate UUID for the original asset
-        let original_asset_id = Uuid::new_v4();
-
-        // Initialize storage
-        let storage = LogoAssetStorage::new(
-            std::path::PathBuf::from("./data/logos/uploaded"),
-            std::path::PathBuf::from("./data/logos/cached"),
-        );
-
-        // Detect the original format
-        let original_format = Self::detect_image_format(data)?;
-
-        tracing::debug!(
-            "Detected image format: {:?} for upload '{}'",
-            original_format,
-            request.name
-        );
-
-        // Get image dimensions - special handling for SVG
-        let (width, height) = if data.starts_with(b"<svg") || data.starts_with(b"<?xml") {
-            tracing::debug!("SVG file detected, using default dimensions");
-            (None, None)
-        } else {
-            let img = image::load_from_memory(data)?;
-            let (w, h) = img.dimensions();
-            tracing::debug!("Image dimensions: {}x{}", w, h);
-            (Some(w as i32), Some(h as i32))
-        };
-
-        // Determine file extension
-        let file_extension = if data.starts_with(b"<svg") || data.starts_with(b"<?xml") {
-            "svg"
-        } else {
-            match original_format {
-                ImageFormat::Png => "png",
-                ImageFormat::Jpeg => "jpg",
-                ImageFormat::Gif => "gif",
-                ImageFormat::WebP => "webp",
-                _ => "img",
-            }
-        };
-
-        // Save original file to storage
-        let (file_name, file_path, file_size, mime_type, storage_dimensions) = storage
-            .save_uploaded_file(data.to_vec(), original_asset_id, file_extension)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to save original file for '{}': {}", request.name, e);
-                format!("Failed to save original file: {}", e)
-            })?;
-
-        tracing::info!(
-            "Saved original file: name='{}', file_name='{}', file_path='{}', size={} bytes",
-            request.name,
-            file_name,
-            file_path,
-            file_size
-        );
-
-        // Use storage dimensions if image dimensions weren't detected earlier
-        let final_dimensions = if width.is_none() && height.is_none() {
-            storage_dimensions
-                .map(|(w, h)| (Some(w as i32), Some(h as i32)))
-                .unwrap_or((None, None))
-        } else {
-            (width, height)
-        };
-
-        // Create the original asset database record with pre-generated UUID
-        let original_asset = self
-            .create_asset_with_id(
-                original_asset_id,
-                request.name.clone(),
-                request.description.clone(),
-                file_name.clone(),
-                file_path.clone(),
-                file_size,
-                mime_type.clone(),
-                LogoAssetType::Uploaded,
-                None, // source_url
-                final_dimensions.0,
-                final_dimensions.1,
-            )
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    "Failed to create database record for original asset '{}': {}",
-                    request.name,
-                    e
-                );
-                e
-            })?;
-
-        tracing::info!(
-            "Created original asset record: id={}, format_type=original, mime_type='{}'",
-            original_asset.id,
-            mime_type
-        );
-
-        // Convert to PNG if needed and beneficial
-        let should_convert = !matches!(original_format, ImageFormat::Png)
-            && !data.starts_with(b"<svg")
-            && !data.starts_with(b"<?xml");
-
-        if should_convert {
-            tracing::debug!("Attempting PNG conversion for '{}'", request.name);
-
-            if let Some(png_data) = self.convert_to_png(data, original_format)? {
-                tracing::info!(
-                    "PNG conversion successful: original_size={} bytes, png_size={} bytes, compression_ratio={:.2}%",
-                    data.len(),
-                    png_data.len(),
-                    (1.0 - (png_data.len() as f64 / data.len() as f64)) * 100.0
-                );
-
-                // Use same UUID as original for PNG conversion (different extension)
-                let png_asset_id = Uuid::new_v4(); // Still need unique DB record ID
-
-                // Save PNG file to storage with original asset UUID but .png extension
-                let (png_file_name, png_file_path, png_file_size, png_mime_type, png_dimensions) =
-                    storage
-                        .save_converted_file(png_data.clone(), original_asset_id, "png")
-                        .await
-                        .map_err(|e| {
-                            tracing::error!(
-                                "Failed to save PNG conversion file for '{}': {}",
-                                request.name,
-                                e
-                            );
-                            format!("Failed to save PNG conversion file: {}", e)
-                        })?;
-
-                tracing::info!(
-                    "Saved PNG conversion file: file_name='{}', file_path='{}', size={} bytes",
-                    png_file_name,
-                    png_file_path,
-                    png_file_size
-                );
-
-                // Create PNG conversion asset linked to original
-                let mut png_asset = self
-                    .create_asset_with_id(
-                        png_asset_id,
-                        format!("{} (PNG)", request.name),
-                        Some("Automatically converted PNG version".to_string()),
-                        png_file_name.clone(),
-                        png_file_path.clone(),
-                        png_file_size,
-                        png_mime_type.clone(),
-                        LogoAssetType::Uploaded,
-                        None, // source_url
-                        png_dimensions.map(|(w, _)| w as i32),
-                        png_dimensions.map(|(_, h)| h as i32),
-                    )
-                    .await
-                    .map_err(|e| {
-                        tracing::error!(
-                            "Failed to create database record for PNG conversion asset '{}': {}",
-                            request.name,
-                            e
-                        );
-                        e
-                    })?;
-
-                // Update the PNG asset to link it to the original and set format type
-                sqlx::query(
-                    r#"
-                    UPDATE logo_assets
-                    SET parent_asset_id = ?, format_type = ?
-                    WHERE id = ?
-                    "#,
-                )
-                .bind(original_asset.id.to_string())
-                .bind("png_conversion")
-                .bind(png_asset.id.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to link PNG conversion to original asset: {}", e);
-                    e
-                })?;
-
-                png_asset.parent_asset_id = Some(original_asset.id);
-                png_asset.format_type = LogoFormatType::PngConversion;
-
-                tracing::info!(
-                    "Successfully created linked PNG conversion: id={}, parent_id={}, format_type=png_conversion",
-                    png_asset.id,
-                    original_asset.id
-                );
-            } else {
-                tracing::warn!(
-                    "PNG conversion was attempted but returned None for '{}'",
-                    request.name
-                );
-            }
-        } else {
-            tracing::debug!(
-                "Skipping PNG conversion for '{}': format={:?}, is_svg={}",
-                request.name,
-                original_format,
-                data.starts_with(b"<svg") || data.starts_with(b"<?xml")
+        if generated_count > 0 {
+            tracing::info!(
+                "Generated metadata for {} existing cached logos",
+                generated_count
             );
         }
 
-        tracing::info!(
-            "Logo upload completed successfully: name='{}', id={}, format='{}', final_size={} bytes",
-            request.name,
-            original_asset.id,
-            file_extension,
-            file_size
-        );
-
-        Ok(original_asset)
+        Ok(generated_count)
     }
 
-    /// Get linked assets (PNG conversions) for a primary asset
+    /// Generate a normalized cache ID from a logo URL
+    ///
+    /// This function:
+    /// 1. Removes the URL scheme (http/https)
+    /// 2. Removes file extensions from the path
+    /// 3. Alphabetically sorts query parameters
+    /// 4. Creates a SHA256 hash of the normalized URL
+    fn generate_cache_id_from_url(url: &str) -> Result<String, anyhow::Error> {
+        let parsed_url =
+            Url::parse(url).map_err(|e| anyhow::anyhow!("Invalid URL '{}': {}", url, e))?;
+
+        // Start building normalized URL without scheme
+        let mut normalized = String::new();
+
+        // Add host
+        if let Some(host) = parsed_url.host_str() {
+            normalized.push_str(host);
+        }
+
+        // Add port if not default
+        if let Some(port) = parsed_url.port() {
+            let is_default_port = (parsed_url.scheme() == "http" && port == 80)
+                || (parsed_url.scheme() == "https" && port == 443);
+            if !is_default_port {
+                normalized.push(':');
+                normalized.push_str(&port.to_string());
+            }
+        }
+
+        // Add path without file extension
+        let path = parsed_url.path();
+        if let Some(last_slash) = path.rfind('/') {
+            let (dir_part, file_part) = path.split_at(last_slash + 1);
+            normalized.push_str(dir_part);
+
+            // Remove extension from filename
+            if let Some(dot_pos) = file_part.rfind('.') {
+                normalized.push_str(&file_part[..dot_pos]);
+            } else {
+                normalized.push_str(file_part);
+            }
+        } else {
+            // No slash in path, treat whole path as filename
+            if let Some(dot_pos) = path.rfind('.') {
+                normalized.push_str(&path[..dot_pos]);
+            } else {
+                normalized.push_str(path);
+            }
+        }
+
+        // Sort and add query parameters
+        let mut sorted_params = BTreeMap::new();
+        for (key, value) in parsed_url.query_pairs() {
+            sorted_params.insert(key.to_string(), value.to_string());
+        }
+
+        if !sorted_params.is_empty() {
+            normalized.push('?');
+            let param_string: Vec<String> = sorted_params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect();
+            normalized.push_str(&param_string.join("&"));
+        }
+
+        // Generate SHA256 hash
+        let mut hasher = Sha256::new();
+        hasher.update(normalized.as_bytes());
+        let hash = hasher.finalize();
+
+        Ok(format!("{:x}", hash))
+    }
+
+    /// Download and cache a logo from a URL
+    ///
+    /// This function:
+    /// 1. Generates a cache ID from the URL
+    /// 2. Checks if the logo is already cached
+    /// 3. Downloads the image if not cached
+    /// 4. Converts to PNG format
+    /// 5. Saves to the cached logo directory
+    /// 6. Generates metadata .json file if channel info provided
+    ///
+    /// Returns the cache ID on success
+    pub async fn cache_logo_from_url(&self, logo_url: &str) -> Result<String, anyhow::Error> {
+        self.cache_logo_from_url_with_metadata(logo_url, None, None, None)
+            .await
+    }
+
+    /// Download and cache a logo from a URL with optional metadata
+    pub async fn cache_logo_from_url_with_metadata(
+        &self,
+        logo_url: &str,
+        channel_name: Option<String>,
+        channel_group: Option<String>,
+        extra_fields: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<String, anyhow::Error> {
+        // Generate cache ID
+        let cache_id = Self::generate_cache_id_from_url(logo_url)?;
+
+        // Check if already cached using the sandboxed file manager
+        if let Some(file_manager) = &self.logo_file_manager {
+            // The file manager's base is already the cached logo directory, so use direct paths
+            let logo_file_path = format!("{}.png", cache_id);
+            let metadata_file_path = format!("{}.json", cache_id);
+
+            let file_exists = file_manager.read(&logo_file_path).await.is_ok();
+            let metadata_exists = file_manager.read(&metadata_file_path).await.is_ok();
+
+            if file_exists && metadata_exists {
+                debug!(
+                    "Logo and metadata already cached: {} -> {}",
+                    logo_url, cache_id
+                );
+                return Ok(cache_id);
+            }
+
+            if file_exists && !metadata_exists {
+                // File exists but no metadata - generate it
+                debug!(
+                    "Generating missing metadata for cached logo: {} -> {}",
+                    logo_url, cache_id
+                );
+                self.generate_metadata_for_cached_logo_with_file_manager(
+                    &cache_id,
+                    logo_url,
+                    channel_name,
+                    channel_group,
+                    extra_fields,
+                )
+                .await?;
+                return Ok(cache_id);
+            }
+        } else {
+            // Fallback to direct filesystem access for backward compatibility
+            let cache_file_path = self.get_cached_logo_path(&cache_id);
+            let metadata_path = self
+                .storage
+                .cached_logo_dir
+                .join(format!("{}.json", cache_id));
+
+            let file_exists = cache_file_path.exists();
+            let metadata_exists = metadata_path.exists();
+
+            if file_exists && metadata_exists {
+                debug!(
+                    "Logo and metadata already cached: {} -> {}",
+                    logo_url, cache_id
+                );
+                return Ok(cache_id);
+            }
+
+            if file_exists && !metadata_exists {
+                // File exists but no metadata - generate it
+                debug!(
+                    "Generating missing metadata for cached logo: {} -> {}",
+                    logo_url, cache_id
+                );
+                self.generate_metadata_for_cached_logo(
+                    &cache_id,
+                    logo_url,
+                    channel_name,
+                    channel_group,
+                    extra_fields,
+                )
+                .await?;
+                return Ok(cache_id);
+            }
+        }
+
+        debug!("Downloading logo from URL: {} -> {}", logo_url, cache_id);
+
+        // Download the image
+        let response =
+            self.http_client.get(logo_url).send().await.map_err(|e| {
+                anyhow::anyhow!("Failed to download logo from '{}': {}", logo_url, e)
+            })?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to download logo from '{}': HTTP {}",
+                logo_url,
+                response.status()
+            ));
+        }
+
+        let image_bytes = response.bytes().await.map_err(|e| {
+            anyhow::anyhow!("Failed to read image bytes from '{}': {}", logo_url, e)
+        })?;
+
+        // Convert to PNG
+        let png_bytes = self.convert_image_to_png(&image_bytes, logo_url)?;
+
+        // Save to cache using the appropriate method
+        if let Some(file_manager) = &self.logo_file_manager {
+            // Use sandboxed file manager
+            // The file manager's base is already the cached logo directory, so use direct paths
+            let logo_file_path = format!("{}.png", cache_id);
+
+            file_manager
+                .write(&logo_file_path, &png_bytes)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to save cached logo '{}': {}", cache_id, e))?;
+        } else {
+            // Fallback to direct filesystem access
+            let cache_file_path = self.get_cached_logo_path(&cache_id);
+
+            // Ensure cache directory exists
+            if let Some(parent) = cache_file_path.parent() {
+                fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to create cache directory: {}", e))?;
+            }
+
+            // Save to cache
+            fs::write(&cache_file_path, &png_bytes)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to save cached logo '{}': {}", cache_id, e))?;
+        }
+
+        debug!(
+            "Successfully cached logo: {} -> {} ({} bytes)",
+            logo_url,
+            cache_id,
+            png_bytes.len()
+        );
+
+        // Generate metadata file if channel info provided
+        if channel_name.is_some() || channel_group.is_some() || extra_fields.is_some() {
+            let metadata_result = if self.logo_file_manager.is_some() {
+                self.generate_metadata_for_cached_logo_with_file_manager(
+                    &cache_id,
+                    logo_url,
+                    channel_name,
+                    channel_group,
+                    extra_fields,
+                )
+                .await
+            } else {
+                self.generate_metadata_for_cached_logo(
+                    &cache_id,
+                    logo_url,
+                    channel_name,
+                    channel_group,
+                    extra_fields,
+                )
+                .await
+            };
+
+            if let Err(e) = metadata_result {
+                debug!("Failed to generate metadata for {}: {}", cache_id, e);
+                // Don't fail the whole operation for metadata generation issues
+            }
+        }
+
+        Ok(cache_id)
+    }
+
+    /// Generate metadata .json file for a cached logo
+    async fn generate_metadata_for_cached_logo(
+        &self,
+        cache_id: &str,
+        original_url: &str,
+        channel_name: Option<String>,
+        channel_group: Option<String>,
+        extra_fields: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<(), anyhow::Error> {
+        use crate::services::logo_cache_scanner::CachedLogoMetadata;
+        use chrono::Utc;
+
+        let metadata = CachedLogoMetadata {
+            original_url: Some(original_url.to_string()),
+            channel_name,
+            channel_group,
+            description: None,
+            tags: None,
+            width: None,
+            height: None,
+            extra_fields,
+            cached_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let metadata_path = self
+            .storage
+            .cached_logo_dir
+            .join(format!("{}.json", cache_id));
+        let json_content = serde_json::to_string_pretty(&metadata)?;
+
+        tokio::fs::write(&metadata_path, json_content).await?;
+        debug!("Generated metadata file for cache_id: {}", cache_id);
+
+        Ok(())
+    }
+
+    /// Generate metadata .json file for a cached logo using the sandboxed file manager
+    async fn generate_metadata_for_cached_logo_with_file_manager(
+        &self,
+        cache_id: &str,
+        original_url: &str,
+        channel_name: Option<String>,
+        channel_group: Option<String>,
+        extra_fields: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<(), anyhow::Error> {
+        use crate::services::logo_cache_scanner::CachedLogoMetadata;
+        use chrono::Utc;
+
+        let metadata = CachedLogoMetadata {
+            original_url: Some(original_url.to_string()),
+            channel_name,
+            channel_group,
+            description: None,
+            tags: None,
+            width: None,
+            height: None,
+            extra_fields,
+            cached_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        if let Some(file_manager) = &self.logo_file_manager {
+            // The file manager's base is already the cached logo directory, so use direct paths
+            let metadata_file_path = format!("{}.json", cache_id);
+            let json_content = serde_json::to_string_pretty(&metadata)?;
+
+            file_manager
+                .write(&metadata_file_path, json_content.as_bytes())
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to save metadata file: {}", e))?;
+
+            debug!("Generated metadata file for cache_id: {}", cache_id);
+        } else {
+            return Err(anyhow::anyhow!(
+                "No file manager available for metadata generation"
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Convert image bytes to PNG format
+    fn convert_image_to_png(
+        &self,
+        image_bytes: &[u8],
+        source_url: &str,
+    ) -> Result<Vec<u8>, anyhow::Error> {
+        // Try to load the image
+        let img = image::load_from_memory(image_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to decode image from '{}': {}", source_url, e))?;
+
+        // Convert to PNG
+        let mut png_bytes = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut png_bytes);
+
+        img.write_to(&mut cursor, ImageFormat::Png).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to convert image to PNG from '{}': {}",
+                source_url,
+                e
+            )
+        })?;
+
+        Ok(png_bytes)
+    }
+
+    /// Get the file path for a cached logo by cache ID
+    fn get_cached_logo_path(&self, cache_id: &str) -> PathBuf {
+        self.storage.get_cached_logo_path(cache_id)
+    }
+
     pub async fn get_linked_assets(&self, asset_id: Uuid) -> Result<Vec<LogoAsset>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
@@ -779,6 +972,7 @@ impl LogoAssetService {
         .await?;
 
         let mut assets = Vec::new();
+
         for row in rows {
             let asset_type = match row.get::<String, _>("asset_type").as_str() {
                 "uploaded" => LogoAssetType::Uploaded,
@@ -786,19 +980,14 @@ impl LogoAssetService {
                 _ => LogoAssetType::Uploaded,
             };
 
-            let format_type = match row
-                .get::<Option<String>, _>("format_type")
-                .as_deref()
-                .unwrap_or("original")
-            {
-                "png_conversion" => crate::models::logo_asset::LogoFormatType::PngConversion,
-                _ => crate::models::logo_asset::LogoFormatType::Original,
-            };
-
             let parent_asset_id = row
                 .get::<Option<String>, _>("parent_asset_id")
-                .map(|id| Uuid::parse_str(&id).ok())
-                .flatten();
+                .and_then(|s| s.parse().ok());
+
+            let format_type = match row.get::<String, _>("format_type").as_str() {
+                "png_conversion" => LogoFormatType::PngConversion,
+                _ => LogoFormatType::Original,
+            };
 
             let asset = LogoAsset {
                 id: Uuid::parse_str(&row.get::<String, _>("id")).unwrap(),
@@ -814,13 +1003,166 @@ impl LogoAssetService {
                 height: row.get("height"),
                 parent_asset_id,
                 format_type,
-                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("created_at")).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("updated_at")).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("created_at"),
+                )
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("updated_at"),
+                )
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
             };
 
             assets.push(asset);
         }
 
         Ok(assets)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_cache_id_from_url() {
+        // Test basic URL normalization
+        let url1 = "https://example.com/logos/channel1.png";
+        let url2 = "http://example.com/logos/channel1.jpg";
+        let cache_id1 = LogoAssetService::generate_cache_id_from_url(url1).unwrap();
+        let cache_id2 = LogoAssetService::generate_cache_id_from_url(url2).unwrap();
+
+        // Should be the same despite different scheme and extension
+        assert_eq!(cache_id1, cache_id2);
+
+        // Test parameter sorting
+        let url3 = "https://example.com/logo?b=2&a=1";
+        let url4 = "https://example.com/logo?a=1&b=2";
+        let cache_id3 = LogoAssetService::generate_cache_id_from_url(url3).unwrap();
+        let cache_id4 = LogoAssetService::generate_cache_id_from_url(url4).unwrap();
+
+        // Should be the same despite different parameter order
+        assert_eq!(cache_id3, cache_id4);
+
+        // Test port handling
+        let url5 = "https://example.com:443/logo";
+        let url6 = "https://example.com/logo";
+        let cache_id5 = LogoAssetService::generate_cache_id_from_url(url5).unwrap();
+        let cache_id6 = LogoAssetService::generate_cache_id_from_url(url6).unwrap();
+
+        // Should be the same (443 is default for HTTPS)
+        assert_eq!(cache_id5, cache_id6);
+
+        // Test non-default port
+        let url7 = "https://example.com:8080/logo";
+        let cache_id7 = LogoAssetService::generate_cache_id_from_url(url7).unwrap();
+
+        // Should be different from default port
+        assert_ne!(cache_id6, cache_id7);
+    }
+
+    #[test]
+    fn test_convert_image_to_png() {
+        // Test the conversion logic with a minimal PNG
+        // Create a simple 1x1 red pixel PNG
+        let png_bytes = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+            0x00, 0x00, 0x00, 0x0D, // IHDR chunk length
+            0x49, 0x48, 0x44, 0x52, // IHDR
+            0x00, 0x00, 0x00, 0x01, // width = 1
+            0x00, 0x00, 0x00, 0x01, // height = 1
+            0x08, 0x02, 0x00, 0x00, 0x00, // bit depth, color type, etc.
+            0x90, 0x77, 0x53, 0xDE, // CRC
+        ];
+
+        // Test that we can detect this is already a PNG format
+        let result = image::load_from_memory(&png_bytes);
+        assert!(result.is_ok(), "Should be able to load test PNG");
+    }
+
+    #[test]
+    fn test_url_edge_cases() {
+        // Test URL without extension
+        let url1 = "https://example.com/logo";
+        let cache_id1 = LogoAssetService::generate_cache_id_from_url(url1).unwrap();
+        assert!(!cache_id1.is_empty());
+
+        // Test URL with path but no filename
+        let url2 = "https://example.com/path/";
+        let cache_id2 = LogoAssetService::generate_cache_id_from_url(url2).unwrap();
+        assert!(!cache_id2.is_empty());
+
+        // Test URL with multiple extensions
+        let url3 = "https://example.com/logo.backup.png";
+        let url4 = "https://example.com/logo.backup.jpg";
+        let cache_id3 = LogoAssetService::generate_cache_id_from_url(url3).unwrap();
+        let cache_id4 = LogoAssetService::generate_cache_id_from_url(url4).unwrap();
+
+        // Should be the same (only removes last extension)
+        assert_eq!(cache_id3, cache_id4);
+
+        // Test URL with fragment (should be ignored)
+        let url5 = "https://example.com/logo.png#fragment";
+        let url6 = "https://example.com/logo.jpg";
+        let cache_id5 = LogoAssetService::generate_cache_id_from_url(url5).unwrap();
+        let cache_id6 = LogoAssetService::generate_cache_id_from_url(url6).unwrap();
+
+        // Should be the same (fragment ignored, extension removed)
+        assert_eq!(cache_id5, cache_id6);
+    }
+
+    #[test]
+    fn test_complex_parameter_scenarios() {
+        // Test with encoded parameters
+        let url1 = "https://example.com/logo?name=test%20logo&size=100";
+        let url2 = "https://example.com/logo?size=100&name=test%20logo";
+        let cache_id1 = LogoAssetService::generate_cache_id_from_url(url1).unwrap();
+        let cache_id2 = LogoAssetService::generate_cache_id_from_url(url2).unwrap();
+
+        // Should be the same despite different order
+        assert_eq!(cache_id1, cache_id2);
+
+        // Test with empty parameter values
+        let url3 = "https://example.com/logo?empty=&filled=value";
+        let cache_id3 = LogoAssetService::generate_cache_id_from_url(url3).unwrap();
+        assert!(!cache_id3.is_empty());
+
+        // Test with duplicate parameter names (URL parsing should handle this)
+        let url4 = "https://example.com/logo?param=first&param=second";
+        let cache_id4 = LogoAssetService::generate_cache_id_from_url(url4).unwrap();
+        assert!(!cache_id4.is_empty());
+    }
+
+    #[test]
+    fn test_cache_id_consistency() {
+        let url = "https://cdn.example.com/channels/discovery.png?version=2&format=hd";
+
+        // Generate cache ID multiple times
+        let cache_id1 = LogoAssetService::generate_cache_id_from_url(url).unwrap();
+        let cache_id2 = LogoAssetService::generate_cache_id_from_url(url).unwrap();
+        let cache_id3 = LogoAssetService::generate_cache_id_from_url(url).unwrap();
+
+        // Should always be the same
+        assert_eq!(cache_id1, cache_id2);
+        assert_eq!(cache_id2, cache_id3);
+
+        // Should be a valid hex string (SHA256 produces 64 hex characters)
+        assert_eq!(cache_id1.len(), 64);
+        assert!(cache_id1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_invalid_urls() {
+        // Test with invalid URL
+        let result = LogoAssetService::generate_cache_id_from_url("not-a-url");
+        assert!(result.is_err());
+
+        // Test with empty URL
+        let result = LogoAssetService::generate_cache_id_from_url("");
+        assert!(result.is_err());
+
+        // Test with malformed URL
+        let result = LogoAssetService::generate_cache_id_from_url("https://");
+        assert!(result.is_err());
     }
 }

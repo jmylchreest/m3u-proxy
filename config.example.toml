@@ -37,6 +37,9 @@ cached_logo_path = "./data/logos/cached"
 # Number of proxy versions to keep (0 = only current)
 proxy_versions_to_keep = 3
 
+# Automatically clean up orphaned logo database entries when uploaded_logo_path changes
+clean_orphan_logos = true
+
 [ingestion]
 # How often to update progress during channel processing (in number of channels)
 # Lower values = more frequent updates but higher overhead
@@ -141,27 +144,8 @@ base_directory = "/tmp/m3u-proxy"
 # Configuration for different file categories
 # Each category can have its own retention policy and cleanup settings
 
-[file_manager.categories.preview]
-# Subdirectory for preview files (relative to base_directory)
-subdirectory = "previews"
-# How long to keep preview files (human-readable durations supported)
-# Examples: "5m", "1h", "30s", "2h30m", "1d", "1w", "3months"
-retention_duration = "5m"
-# Which timestamp to use for cleanup decisions
-# Options: "LastAccess", "Modified", "Created"
-time_match = "LastAccess"
-# Whether cleanup is enabled for this category
-enabled = true
-# Optional: Override cleanup interval (default: automatically calculated based on retention)
-# cleanup_interval = "1m"
-
-[file_manager.categories.logo]
-subdirectory = "logos"
-# Cache logos for 3 months
-retention_duration = "3months"
-time_match = "LastAccess"
-enabled = true
-# cleanup_interval = "12h"
+# Note: preview category removed - temp category is used for both temp and preview operations
+# Note: logo category removed - logo storage is managed via storage.cached_logo_path and storage.uploaded_logo_path
 
 [file_manager.categories.proxy_output]
 subdirectory = "proxy-output"
@@ -173,19 +157,13 @@ enabled = true
 
 [file_manager.categories.temp]
 subdirectory = "temp"
-# Temporary files for memory spilling during proxy generation
-retention_duration = "1h"
+# Temporary files for memory spilling and preview operations
+retention_duration = "5m"
 time_match = "LastAccess"
 enabled = true
-# cleanup_interval = "10m"
+# cleanup_interval = "1m"
 
-[file_manager.categories.cache]
-subdirectory = "cache"
-# General cache files
-retention_duration = "7days"
-time_match = "LastAccess"
-enabled = true
-# cleanup_interval = "2h"
+# Note: cache category removed - no longer needed
 
 # Sandboxed file manager configuration for secure operations
 [sandboxed_file_manager]
@@ -233,90 +211,7 @@ max_concurrent_operations = 10
 # Buffer size for file I/O operations (in KB)
 io_buffer_size_kb = 64
 
-# WASM Plugin System Configuration
-[wasm_plugins]
-# Enable WASM plugin system - when disabled, all stages use native implementations
-enabled = true
-
-# Optional: Directory containing WASM plugin files (.wasm files and their manifests)
-# Default: "./target/wasm-plugins"
-# plugin_directory = "./target/wasm-plugins"
-
-# Optional: Plugin execution timeout in seconds - prevents stuck plugins from hanging the system
-# Default: 30 seconds
-# timeout_seconds = 30
-
-# Optional: Enable hot reload of plugins (development feature) - automatically reload plugins when files change
-# WARNING: Only use in development, not recommended for production
-# Default: false
-# enable_hot_reload = false
-
-# Pipeline Strategy Configuration
-# Define different strategies for which plugins to use at each pipeline stage.
-# This allows you to have multiple configurations (e.g., performance vs memory-optimized)
-# and switch between them by changing the 'strategy' setting below.
-
-# DEFAULT STRATEGY - Balanced approach with plugin support
-[pipeline_strategies.default]
-# Data Mapping: Transform channel data using mapping rules
-# - "passthrough_plugin": Uses native data mapping service
-# - "library_test_plugin": Tests WASM library compatibility
-data_mapping = "library_test_plugin"
-
-# Filtering: Apply filters to channels based on configured rules
-# - "passthrough_plugin": Uses native filter engine
-filtering = "passthrough_plugin" 
-
-# Logo Prefetch: Download and cache channel logos
-# - "passthrough_plugin": Uses native logo service
-logo_prefetch = "passthrough_plugin"
-
-# Channel Numbering: Assign channel numbers to channels
-# - "passthrough_plugin": Uses native numbering logic
-channel_numbering = "passthrough_plugin"
-
-# M3U Generation: Generate the final M3U playlist file
-# - "passthrough_plugin": Uses native M3U generator
-m3u_generation = "passthrough_plugin"
-
-# EPG Processing: Process Electronic Program Guide data
-# - "passthrough_plugin": Uses native EPG processing
-epg_processing = "passthrough_plugin"
-
-# MEMORY OPTIMIZED STRATEGY - Optimized for systems with limited memory
-[pipeline_strategies.memory_optimized]
-# All stages use native implementations for memory efficiency
-data_mapping = "passthrough_plugin"
-filtering = "passthrough_plugin"
-logo_prefetch = "passthrough_plugin" 
-channel_numbering = "passthrough_plugin"
-m3u_generation = "passthrough_plugin"
-epg_processing = "passthrough_plugin"
-
-# PERFORMANCE STRATEGY - Maximum speed using native implementations
-[pipeline_strategies.performance]
-# All stages use native implementations for maximum performance
-# This bypasses all plugin overhead and uses optimized native code
-data_mapping = "passthrough_plugin"
-filtering = "passthrough_plugin"
-logo_prefetch = "passthrough_plugin"
-channel_numbering = "passthrough_plugin"
-m3u_generation = "passthrough_plugin"
-epg_processing = "passthrough_plugin"
-
-# Main pipeline configuration
+# Native Pipeline Configuration
 [pipeline]
-# Which pipeline strategy to use from the strategies defined above
-# Options: "default", "memory_optimized", "performance", or any custom strategy you define
-strategy = "default"
-
-# Per-plugin configuration (optional, plugin-specific settings)
-# These settings are passed to plugins when they are loaded and executed
-[pipeline.plugin_configs.passthrough_plugin]
-# Sample logging frequency (1 in N messages will be logged)
-sample_log_frequency = 750
-
-# Example: You could add configs for other plugins
-# [pipeline.plugin_configs.custom_filter_plugin]
-# filter_mode = "strict"
-# max_channels = 5000
+# Maximum memory usage in MB before spilling to disk (default: 512MB)
+max_memory_mb = 512

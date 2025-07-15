@@ -67,7 +67,7 @@ impl crate::database::Database {
         // Get sources first (simple query)
         let source_rows = sqlx::query(
             "SELECT id, name, source_type, url, update_cron,
-             username, password, timezone, timezone_detected, time_offset, created_at, updated_at, last_ingested_at, is_active
+             username, password, original_timezone, time_offset, created_at, updated_at, last_ingested_at, is_active
              FROM epg_sources ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -95,8 +95,7 @@ impl crate::database::Database {
                 update_cron: row.get("update_cron"),
                 username: row.get("username"),
                 password: row.get("password"),
-                timezone: row.get("timezone"),
-                timezone_detected: row.get("timezone_detected"),
+                original_timezone: row.get("original_timezone"),
                 time_offset: row.get("time_offset"),
                 created_at: parse_datetime(&created_at)?,
                 updated_at: parse_datetime(&updated_at)?,
@@ -143,7 +142,7 @@ impl crate::database::Database {
     pub async fn list_epg_sources(&self) -> Result<Vec<EpgSource>> {
         let rows = sqlx::query(
             "SELECT id, name, source_type, url, update_cron,
-             username, password, timezone, timezone_detected, time_offset, created_at, updated_at, last_ingested_at, is_active
+             username, password, original_timezone, time_offset, created_at, updated_at, last_ingested_at, is_active
              FROM epg_sources ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -171,8 +170,7 @@ impl crate::database::Database {
                 update_cron: row.get("update_cron"),
                 username: row.get("username"),
                 password: row.get("password"),
-                timezone: row.get("timezone"),
-                timezone_detected: row.get("timezone_detected"),
+                original_timezone: row.get("original_timezone"),
                 time_offset: row.get("time_offset"),
                 created_at: parse_datetime(&created_at)?,
                 updated_at: parse_datetime(&updated_at)?,
@@ -190,7 +188,7 @@ impl crate::database::Database {
     pub async fn get_epg_source(&self, id: Uuid) -> Result<Option<EpgSource>> {
         let row = sqlx::query(
             "SELECT id, name, source_type, url, update_cron,
-             username, password, timezone, timezone_detected, time_offset, created_at, updated_at, last_ingested_at, is_active
+             username, password, original_timezone, time_offset, created_at, updated_at, last_ingested_at, is_active
              FROM epg_sources WHERE id = ?",
         )
         .bind(id.to_string())
@@ -217,8 +215,7 @@ impl crate::database::Database {
                 update_cron: row.get("update_cron"),
                 username: row.get("username"),
                 password: row.get("password"),
-                timezone: row.get("timezone"),
-                timezone_detected: row.get("timezone_detected"),
+                original_timezone: row.get("original_timezone"),
                 time_offset: row.get("time_offset"),
                 created_at: parse_datetime(&created_at)?,
                 updated_at: parse_datetime(&updated_at)?,
@@ -250,7 +247,7 @@ impl crate::database::Database {
         let time_offset = source.time_offset.as_deref().unwrap_or("0");
 
         sqlx::query(
-            "INSERT INTO epg_sources (id, name, source_type, url, update_cron, username, password, timezone, timezone_detected, time_offset, created_at, updated_at, is_active)
+            "INSERT INTO epg_sources (id, name, source_type, url, update_cron, username, password, original_timezone, time_offset, created_at, updated_at, last_ingested_at, is_active)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
@@ -261,10 +258,10 @@ impl crate::database::Database {
         .bind(&source.username)
         .bind(&source.password)
         .bind(timezone)
-        .bind(false) // timezone_detected - will be updated during ingestion
         .bind(time_offset)
         .bind(now.format("%Y-%m-%d %H:%M:%S").to_string())
         .bind(now.format("%Y-%m-%d %H:%M:%S").to_string())
+        .bind::<Option<String>>(None) // last_ingested_at - null initially
         .bind(true)
         .execute(&self.pool)
         .await?;
@@ -279,8 +276,7 @@ impl crate::database::Database {
             update_cron: source.update_cron.clone(),
             username: source.username.clone(),
             password: source.password.clone(),
-            timezone: timezone.to_string(),
-            timezone_detected: false,
+            original_timezone: None,
             time_offset: time_offset.to_string(),
             created_at: now,
             updated_at: now,
@@ -305,7 +301,10 @@ impl crate::database::Database {
                     check_xtream_stream_availability(&source.url, username, password).await;
 
                 if has_streams {
-                    info!("Xtream EPG source '{}' provides stream data - automatically creating stream source", source.name);
+                    info!(
+                        "Xtream EPG source '{}' provides stream data - automatically creating stream source",
+                        source.name
+                    );
 
                     let stream_source_request = StreamSourceCreateRequest {
                         name: format!("{} (Stream)", source.name),
@@ -323,8 +322,10 @@ impl crate::database::Database {
                         .await
                     {
                         Ok(stream_source) => {
-                            info!("Successfully created linked stream source '{}' ({}) for EPG source '{}'",
-                                  stream_source.name, stream_source.id, source.name);
+                            info!(
+                                "Successfully created linked stream source '{}' ({}) for EPG source '{}'",
+                                stream_source.name, stream_source.id, source.name
+                            );
 
                             // Create a linked entry to track the relationship
                             let link_id = Uuid::new_v4();
@@ -347,8 +348,14 @@ impl crate::database::Database {
                             .await;
 
                             match link_result {
-                                Ok(_) => info!("Successfully linked EPG source '{}' with stream source '{}'", source.name, stream_source.name),
-                                Err(e) => warn!("Failed to create link between EPG source '{}' and stream source '{}': {}", source.name, stream_source.name, e),
+                                Ok(_) => info!(
+                                    "Successfully linked EPG source '{}' with stream source '{}'",
+                                    source.name, stream_source.name
+                                ),
+                                Err(e) => warn!(
+                                    "Failed to create link between EPG source '{}' and stream source '{}': {}",
+                                    source.name, stream_source.name, e
+                                ),
                             }
                         }
                         Err(e) => {
@@ -359,10 +366,16 @@ impl crate::database::Database {
                         }
                     }
                 } else {
-                    info!("Xtream EPG source '{}' does not provide stream data - skipping stream source creation", source.name);
+                    info!(
+                        "Xtream EPG source '{}' does not provide stream data - skipping stream source creation",
+                        source.name
+                    );
                 }
             } else {
-                info!("Xtream EPG source '{}' has no credentials - cannot check for stream availability", source.name);
+                info!(
+                    "Xtream EPG source '{}' has no credentials - cannot check for stream availability",
+                    source.name
+                );
             }
         }
 
@@ -545,7 +558,7 @@ impl crate::database::Database {
             }
 
             // Insert programs using bulk inserts with progress tracking
-            // SQLite 3.32.0+ supports up to 32,766 variables per query, programs have 17 fields each
+            // SQLite 3.32.0+ supports up to 32,766 variables per query, programs have 18 fields each
             let program_batch_size = self.batch_config.safe_epg_program_batch_size();
             let total_programs = programs.len();
             let mut programs_saved = 0;
@@ -554,7 +567,7 @@ impl crate::database::Database {
                 if !chunk.is_empty() {
                     // Prepare bulk insert statement
                     let mut query_builder = sqlx::QueryBuilder::new(
-                        "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, created_at, updated_at) "
+                        "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, program_icon, created_at, updated_at) "
                     );
 
                     query_builder.push_values(chunk, |mut b, program| {
@@ -573,6 +586,7 @@ impl crate::database::Database {
                             .push_bind(&program.language)
                             .push_bind(&program.subtitles)
                             .push_bind(&program.aspect_ratio)
+                            .push_bind(&program.program_icon)
                             .push_bind(program.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
                             .push_bind(program.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
                     });
@@ -631,14 +645,14 @@ impl crate::database::Database {
         Ok(now)
     }
 
+    /// Update the detected timezone for an EPG source
     pub async fn update_epg_source_detected_timezone(
         &self,
         source_id: Uuid,
         detected_timezone: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE epg_sources SET timezone = ?, timezone_detected = ? WHERE id = ?")
+        sqlx::query("UPDATE epg_sources SET original_timezone = ? WHERE id = ?")
             .bind(detected_timezone)
-            .bind(true)
             .bind(source_id.to_string())
             .execute(&self.pool)
             .await?;
@@ -754,7 +768,7 @@ impl crate::database::Database {
 
             // Get programs for this channel
             let program_rows = sqlx::query(
-                "SELECT id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, created_at, updated_at
+                "SELECT id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, program_icon, created_at, updated_at
                  FROM epg_programs
                  WHERE source_id = ? AND channel_id = ? AND start_time <= ? AND end_time >= ?
                  ORDER BY start_time",
@@ -790,6 +804,7 @@ impl crate::database::Database {
                     language: program_row.get("language"),
                     subtitles: program_row.get("subtitles"),
                     aspect_ratio: program_row.get("aspect_ratio"),
+                    program_icon: program_row.get("program_icon"),
                     created_at: parse_datetime(&program_created_at)?,
                     updated_at: parse_datetime(&program_updated_at)?,
                 });

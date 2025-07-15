@@ -69,7 +69,6 @@ pub struct StreamingStageContext {
     pub memory_pressure: crate::proxy::stage_strategy::MemoryPressureLevel,
     pub progress: HashMap<String, StageProgress>,
     pub proxy_config: ResolvedProxyConfig,
-    pub host_interface: Option<crate::proxy::wasm_host_interface::WasmHostInterface>,
 }
 
 impl StreamingStageContext {
@@ -80,7 +79,6 @@ impl StreamingStageContext {
             memory_pressure: crate::proxy::stage_strategy::MemoryPressureLevel::Optimal,
             progress: HashMap::new(),
             proxy_config,
-            host_interface: None,
         }
     }
 

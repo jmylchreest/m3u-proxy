@@ -3,55 +3,39 @@
 use crate::models::{EpgSource, EpgSourceType};
 use crate::utils::time::{detect_timezone_from_xmltv, log_timezone_detection, parse_time_offset};
 use anyhow::Result;
-use tracing::{info, warn};
+use tracing::warn;
 
 impl EpgSource {
-    /// Detect and update timezone from EPG content
+    /// Detect timezone from EPG content (simplified after migration 004)
+    /// Note: Timezone handling was simplified - all times are normalized to UTC
     #[allow(dead_code)]
-    pub async fn detect_and_update_timezone(
-        &mut self,
-        _pool: &sqlx::SqlitePool,
+    pub async fn detect_timezone_from_content(
+        &self,
         epg_content: &str,
-    ) -> Result<bool> {
+    ) -> Result<Option<String>> {
         let detected_tz = match self.source_type {
             EpgSourceType::Xmltv => detect_timezone_from_xmltv(epg_content),
             EpgSourceType::Xtream => {
                 // Xtream Codes EPG usually doesn't contain timezone info in the content
-                // We might need to make additional API calls or use server location
                 None
             }
         };
 
-        let mut timezone_updated = false;
-
         if let Some(detected) = detected_tz {
             if crate::utils::time::validate_timezone(&detected).is_ok() {
-                // Only update if we haven't manually set the timezone
-                if self.timezone == "UTC" && !self.timezone_detected {
-                    log_timezone_detection(&self.name, Some(&detected), &detected);
-
-                    self.timezone = detected;
-                    self.timezone_detected = true;
-                    timezone_updated = true;
-
-                    info!(
-                        "Updated EPG source '{}' timezone to '{}'",
-                        self.name, self.timezone
-                    );
-                } else {
-                    log_timezone_detection(&self.name, Some(&detected), &self.timezone);
-                }
+                log_timezone_detection(&self.name, Some(&detected), &detected);
+                return Ok(Some(detected));
             } else {
                 warn!(
-                    "EPG source '{}': Detected invalid timezone '{}', keeping '{}'",
-                    self.name, detected, self.timezone
+                    "EPG source '{}': Detected invalid timezone '{}', ignoring",
+                    self.name, detected
                 );
             }
         } else {
-            log_timezone_detection(&self.name, None, &self.timezone);
+            log_timezone_detection(&self.name, None, "UTC");
         }
 
-        Ok(timezone_updated)
+        Ok(None)
     }
 
     /// Get parsed time offset in seconds

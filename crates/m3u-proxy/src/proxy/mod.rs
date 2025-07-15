@@ -7,56 +7,50 @@ use crate::database::Database;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 
-pub mod adaptive_pipeline;
 pub mod config_resolver;
 pub mod epg_generator;
 pub mod filter_engine;
 pub mod generator;
+pub mod native_pipeline;
+pub mod robust_streaming;
+pub mod session_tracker;
 pub mod simple_strategies;
 pub mod stage_contracts;
 pub mod stage_strategy;
 pub mod streaming_pipeline;
 pub mod streaming_stages;
-pub mod wasm_examples;
-pub mod wasm_host_interface; // Temporary compatibility stub
-pub mod wasm_plugin_test;
 
 pub struct ProxyService {
     storage_config: StorageConfig,
-    shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
     shared_memory_monitor: Option<crate::utils::SimpleMemoryMonitor>,
+    temp_file_manager: sandboxed_file_manager::SandboxedManager,
 }
 
 impl ProxyService {
-    pub fn new(storage_config: StorageConfig) -> Self {
-        Self { 
-            storage_config,
-            shared_plugin_manager: None,
-            shared_memory_monitor: None,
-        }
-    }
-
-    pub fn with_plugin_manager(storage_config: StorageConfig, plugin_manager: std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>) -> Self {
+    pub fn new(
+        storage_config: StorageConfig,
+        temp_file_manager: sandboxed_file_manager::SandboxedManager,
+    ) -> Self {
         Self {
             storage_config,
-            shared_plugin_manager: Some(plugin_manager),
             shared_memory_monitor: None,
+            temp_file_manager,
         }
     }
 
-    pub fn with_plugin_manager_and_memory_monitor(
-        storage_config: StorageConfig, 
-        plugin_manager: std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>,
+    pub fn with_memory_monitor(
+        storage_config: StorageConfig,
+        temp_file_manager: sandboxed_file_manager::SandboxedManager,
         memory_monitor: crate::utils::SimpleMemoryMonitor,
     ) -> Self {
         Self {
             storage_config,
-            shared_plugin_manager: Some(plugin_manager),
             shared_memory_monitor: Some(memory_monitor),
+            temp_file_manager,
         }
     }
 
-    /// Generate a proxy using the adaptive pipeline with WASM plugin support
+    /// Generate a proxy using the native pipeline
     pub async fn generate_proxy_with_config(
         &self,
         config: ResolvedProxyConfig,
@@ -68,41 +62,22 @@ impl ProxyService {
         engine_config: Option<crate::config::DataMappingEngineConfig>,
         app_config: &crate::config::Config,
     ) -> Result<ProxyGeneration> {
-        use crate::proxy::adaptive_pipeline::AdaptivePipelineBuilder;
-        use sandboxed_file_manager::SandboxedManager;
-        use std::path::PathBuf;
+        use crate::proxy::native_pipeline::NativePipelineBuilder;
 
         info!(
-            "Starting generation proxy={} pipeline=adaptive sources={} filters={}",
+            "Starting generation proxy={} pipeline=native sources={} filters={}",
             config.proxy.name,
             config.sources.len(),
             config.filters.len()
         );
 
-        // Create temp file manager for the pipeline
-        let temp_file_manager = SandboxedManager::builder()
-            .base_directory(PathBuf::from(
-                &self
-                    .storage_config
-                    .temp_path
-                    .clone()
-                    .unwrap_or_else(|| "/tmp/m3u-proxy".to_string()),
-            ))
-            .build()
-            .await?;
-
-        // Create adaptive pipeline with WASM plugin support
-        let mut pipeline_builder = AdaptivePipelineBuilder::new()
+        // Create native pipeline using the managed temp file manager
+        let mut pipeline_builder = NativePipelineBuilder::new()
             .with_database(database.clone())
             .with_data_mapping_service(data_mapping_service.clone())
             .with_logo_service(logo_service.clone())
             .with_memory_limit(512) // 512MB limit
-            .with_temp_file_manager(temp_file_manager);
-
-        // Add shared plugin manager if available
-        if let Some(plugin_manager) = &self.shared_plugin_manager {
-            pipeline_builder = pipeline_builder.with_shared_plugin_manager(plugin_manager.clone());
-        }
+            .with_temp_file_manager(self.temp_file_manager.clone());
 
         // Add shared memory monitor if available
         if let Some(memory_monitor) = &self.shared_memory_monitor {
@@ -111,10 +86,10 @@ impl ProxyService {
 
         let mut pipeline = pipeline_builder.build()?;
 
-        // Initialize the pipeline (loads WASM plugins)
+        // Initialize the pipeline
         pipeline.initialize().await?;
 
-        // Generate proxy using adaptive pipeline
+        // Generate proxy using native pipeline
         let generation = pipeline
             .generate_with_dynamic_strategies(config.clone(), base_url, engine_config, app_config)
             .await?;
@@ -123,7 +98,7 @@ impl ProxyService {
         self.write_output(&generation, &output, &config).await?;
 
         info!(
-            "Generation completed proxy={} pipeline=adaptive channels={} total_time={}ms",
+            "Generation completed proxy={} pipeline=native channels={} total_time={}ms",
             config.proxy.name,
             generation.channel_count,
             generation.stats.as_ref().map_or(0, |s| s.total_duration_ms)
@@ -156,7 +131,7 @@ impl ProxyService {
                 file_manager,
                 update_database,
             } => {
-                let m3u_file_id = format!("{}-{}.m3u", config.proxy.ulid, uuid::Uuid::new_v4());
+                let m3u_file_id = format!("{}-{}.m3u", config.proxy.id, uuid::Uuid::new_v4());
                 file_manager
                     .write(&m3u_file_id, &generation.m3u_content)
                     .await
@@ -173,20 +148,6 @@ impl ProxyService {
             }
         }
         Ok(())
-    }
-
-    /// Generate XMLTV EPG for a proxy based on its generated channel list
-    pub async fn generate_epg_for_proxy(
-        &self,
-        proxy: &StreamProxy,
-        database: &Database,
-        channel_ids: &[String],
-        epg_config: Option<epg_generator::EpgGenerationConfig>,
-    ) -> Result<(String, epg_generator::EpgGenerationStatistics)> {
-        let epg_generator = epg_generator::EpgGenerator::new(database.clone());
-        epg_generator
-            .generate_xmltv_for_proxy(proxy, channel_ids, epg_config)
-            .await
     }
 
     /// Apply filters to a list of channels (utility method)
@@ -210,10 +171,10 @@ impl ProxyService {
         generator.save_m3u_file(proxy_id, content).await
     }
 
-    /// Save M3U content to storage using proxy ULID and optional file manager
+    /// Save M3U content to storage using proxy ID and optional file manager
     pub async fn save_m3u_file_with_manager(
         &self,
-        proxy_ulid: &str,
+        proxy_id: &str,
         content: &str,
         file_manager: Option<sandboxed_file_manager::SandboxedManager>,
     ) -> Result<std::path::PathBuf> {
@@ -222,7 +183,7 @@ impl ProxyService {
         } else {
             generator::ProxyGenerator::new(self.storage_config.clone())
         };
-        generator.save_m3u_file_by_ulid(proxy_ulid, content).await
+        generator.save_m3u_file_by_id(proxy_id, content).await
     }
 
     /// Clean up old proxy versions

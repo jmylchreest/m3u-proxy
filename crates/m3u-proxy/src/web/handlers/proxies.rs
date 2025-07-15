@@ -12,11 +12,13 @@ use uuid::Uuid;
 
 use crate::{
     models::{StreamProxy, StreamProxyMode},
+    proxy::session_tracker::{ClientInfo, SessionStats},
+    utils::resolve_proxy_id,
     web::{
         AppState,
         extractors::{ListParams, RequestContext},
         responses::ok,
-        utils::{extract_uuid_param, log_request},
+        utils::log_request,
     },
 };
 
@@ -36,6 +38,14 @@ pub struct CreateStreamProxyRequest {
     pub is_active: bool,
     #[serde(default)]
     pub auto_regenerate: bool, // TODO: Implement auto-regeneration functionality
+    #[serde(default = "default_cache_channel_logos")]
+    pub cache_channel_logos: bool,
+    #[serde(default)]
+    pub cache_program_logos: bool,
+}
+
+fn default_cache_channel_logos() -> bool {
+    true
 }
 
 /// Stream source assignment for proxy
@@ -76,13 +86,16 @@ pub struct UpdateStreamProxyRequest {
     pub is_active: bool,
     #[serde(default)]
     pub auto_regenerate: bool, // TODO: Implement auto-regeneration functionality
+    #[serde(default = "default_cache_channel_logos")]
+    pub cache_channel_logos: bool,
+    #[serde(default)]
+    pub cache_program_logos: bool,
 }
 
 /// Response DTO for stream proxy
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamProxyResponse {
     pub id: Uuid,
-    pub ulid: String,
     pub name: String,
     pub description: Option<String>,
     pub proxy_mode: String,
@@ -95,6 +108,8 @@ pub struct StreamProxyResponse {
     pub last_generated_at: Option<chrono::DateTime<chrono::Utc>>,
     pub is_active: bool,
     pub auto_regenerate: bool,
+    pub cache_channel_logos: bool,
+    pub cache_program_logos: bool,
     pub stream_sources: Vec<ProxySourceResponse>,
     pub epg_sources: Vec<ProxyEpgSourceResponse>,
     pub filters: Vec<ProxyFilterResponse>,
@@ -123,6 +138,9 @@ pub struct ProxyFilterResponse {
     pub filter_name: String,
     pub priority_order: i32,
     pub is_active: bool,
+    pub is_inverse: bool,
+    pub source_type: crate::models::FilterSourceType,
+    pub starting_channel_number: i32,
 }
 
 impl CreateStreamProxyRequest {
@@ -169,6 +187,8 @@ impl CreateStreamProxyRequest {
                 .collect(),
             is_active: self.is_active,
             auto_regenerate: self.auto_regenerate,
+            cache_channel_logos: self.cache_channel_logos,
+            cache_program_logos: self.cache_program_logos,
         })
     }
 }
@@ -177,7 +197,6 @@ impl From<StreamProxy> for StreamProxyResponse {
     fn from(proxy: StreamProxy) -> Self {
         Self {
             id: proxy.id,
-            ulid: proxy.ulid,
             name: proxy.name,
             description: proxy.description,
             proxy_mode: match proxy.proxy_mode {
@@ -193,6 +212,8 @@ impl From<StreamProxy> for StreamProxyResponse {
             last_generated_at: proxy.last_generated_at,
             is_active: proxy.is_active,
             auto_regenerate: proxy.auto_regenerate,
+            cache_channel_logos: proxy.cache_channel_logos,
+            cache_program_logos: proxy.cache_program_logos,
             stream_sources: vec![], // Will be populated by service layer
             epg_sources: vec![],    // Will be populated by service layer
             filters: vec![],        // Will be populated by service layer
@@ -236,6 +257,13 @@ pub struct PreviewChannel {
     pub stream_url: String,
     pub source_name: String,
     pub channel_number: i32,
+    pub tvg_chno: Option<String>,
+    pub tvg_shift: Option<String>,
+    pub tvg_language: Option<String>,
+    pub tvg_country: Option<String>,
+    pub group_logo: Option<String>,
+    pub radio: Option<String>,
+    pub extinf_line: String,
 }
 
 /// Statistics for preview
@@ -320,8 +348,8 @@ pub async fn list_proxies(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
-        state.plugin_manager.clone(),
         state.config.clone(),
+        state.temp_file_manager.clone(),
     );
 
     // Get proxies with pagination
@@ -355,9 +383,11 @@ pub async fn get_proxy(
         &context,
     );
 
-    let uuid = match extract_uuid_param(&id) {
+    let uuid = match resolve_proxy_id(&id) {
         Ok(uuid) => uuid,
-        Err(error) => return crate::web::responses::bad_request(&error).into_response(),
+        Err(error) => {
+            return crate::web::responses::bad_request(&error.to_string()).into_response();
+        }
     };
 
     // Create service instances
@@ -379,8 +409,8 @@ pub async fn get_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
-        state.plugin_manager.clone(),
         state.config.clone(),
+        state.temp_file_manager.clone(),
     );
 
     match service.get_by_id(uuid).await {
@@ -426,8 +456,8 @@ pub async fn create_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
-        state.plugin_manager.clone(),
         state.config.clone(),
+        state.temp_file_manager.clone(),
     );
 
     match service.create(service_request).await {
@@ -449,9 +479,11 @@ pub async fn update_proxy(
         &context,
     );
 
-    let uuid = match extract_uuid_param(&id) {
+    let uuid = match resolve_proxy_id(&id) {
         Ok(uuid) => uuid,
-        Err(error) => return crate::web::responses::bad_request(&error).into_response(),
+        Err(error) => {
+            return crate::web::responses::bad_request(&error.to_string()).into_response();
+        }
     };
 
     let service_request = crate::models::StreamProxyUpdateRequest {
@@ -499,6 +531,8 @@ pub async fn update_proxy(
             .collect(),
         is_active: request.is_active,
         auto_regenerate: request.auto_regenerate,
+        cache_channel_logos: request.cache_channel_logos,
+        cache_program_logos: request.cache_program_logos,
     };
 
     // Create service instances
@@ -520,8 +554,8 @@ pub async fn update_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
-        state.plugin_manager.clone(),
         state.config.clone(),
+        state.temp_file_manager.clone(),
     );
 
     match service.update(uuid, service_request).await {
@@ -542,9 +576,11 @@ pub async fn delete_proxy(
         &context,
     );
 
-    let uuid = match extract_uuid_param(&id) {
+    let uuid = match resolve_proxy_id(&id) {
         Ok(uuid) => uuid,
-        Err(error) => return crate::web::responses::bad_request(&error).into_response(),
+        Err(error) => {
+            return crate::web::responses::bad_request(&error.to_string()).into_response();
+        }
     };
 
     // Create service instances
@@ -566,8 +602,8 @@ pub async fn delete_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
-        state.plugin_manager.clone(),
         state.config.clone(),
+        state.temp_file_manager.clone(),
     );
 
     match service.delete(uuid).await {
@@ -614,8 +650,8 @@ pub async fn preview_proxy_config(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
-        state.plugin_manager.clone(),
         state.config.clone(),
+        state.temp_file_manager.clone(),
     );
 
     match service.generate_preview(request).await {
@@ -643,9 +679,11 @@ pub async fn preview_existing_proxy(
         &context,
     );
 
-    let uuid = match extract_uuid_param(&id) {
+    let uuid = match resolve_proxy_id(&id) {
         Ok(uuid) => uuid,
-        Err(error) => return crate::web::responses::bad_request(&error).into_response(),
+        Err(error) => {
+            return crate::web::responses::bad_request(&error.to_string()).into_response();
+        }
     };
 
     // Create service instances
@@ -667,8 +705,8 @@ pub async fn preview_existing_proxy(
         state.data_mapping_service.clone(),
         state.logo_asset_service.clone(),
         state.config.storage.clone(),
-        state.plugin_manager.clone(),
         state.config.clone(),
+        state.temp_file_manager.clone(),
     );
 
     // Get the existing proxy first
@@ -725,20 +763,39 @@ pub async fn preview_existing_proxy(
 
 /// Serve M3U8 content for a proxy (from static file)
 pub async fn serve_proxy_m3u(
-    axum::extract::Path(ulid): axum::extract::Path<String>,
+    axum::extract::Path(id): axum::extract::Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    use crate::utils::resolve_proxy_id;
     use axum::http::{HeaderMap, StatusCode};
     use tokio::fs;
     use tracing::{error, info, warn};
 
-    info!("Serving static M3U8 for proxy: {}", ulid);
+    info!("Serving static M3U8 for proxy: {}", id);
 
-    // 1. Look up proxy by ULID to validate it exists and is active
-    let _proxy = match state.database.get_proxy_by_ulid(&ulid).await {
+    // 1. Resolve proxy ID from any format and look up proxy
+    let resolved_uuid = match resolve_proxy_id(&id) {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            error!("Invalid proxy ID format '{}': {}", id, e);
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", "application/x-mpegurl".parse().unwrap());
+            return (
+                StatusCode::BAD_REQUEST,
+                headers,
+                format!("Invalid proxy ID format: {}", e),
+            );
+        }
+    };
+
+    let _proxy = match state
+        .database
+        .get_proxy_by_id(&resolved_uuid.to_string())
+        .await
+    {
         Ok(proxy) => {
             if !proxy.is_active {
-                warn!("Proxy {} is not active", ulid);
+                warn!("Proxy {} is not active", id);
                 let mut headers = HeaderMap::new();
                 headers.insert(
                     "content-type",
@@ -753,7 +810,7 @@ pub async fn serve_proxy_m3u(
             proxy
         }
         Err(e) => {
-            error!("Failed to find proxy {}: {}", ulid, e);
+            error!("Failed to find proxy {}: {}", id, e);
             let mut headers = HeaderMap::new();
             headers.insert(
                 "content-type",
@@ -767,14 +824,18 @@ pub async fn serve_proxy_m3u(
         }
     };
 
-    // 2. Try to serve static M3U8 file from disk
-    let m3u_file_path = state.config.storage.m3u_path.join(format!("{}.m3u8", ulid));
+    // 2. Try to serve static M3U8 file from disk using resolved UUID
+    let m3u_file_path = state
+        .config
+        .storage
+        .m3u_path
+        .join(format!("{}.m3u8", resolved_uuid));
 
     match fs::read_to_string(&m3u_file_path).await {
         Ok(content) => {
             info!(
                 "Served static M3U8 for proxy {} from {}",
-                ulid,
+                id,
                 m3u_file_path.display()
             );
 
@@ -790,7 +851,7 @@ pub async fn serve_proxy_m3u(
         Err(e) => {
             error!(
                 "Failed to read M3U8 file for proxy {} at {}: {}",
-                ulid,
+                id,
                 m3u_file_path.display(),
                 e
             );
@@ -803,7 +864,7 @@ pub async fn serve_proxy_m3u(
             );
             let content = format!(
                 "#EXTM3U\n# Proxy {} M3U8 not generated yet - trigger regeneration\n",
-                ulid
+                id
             );
             (StatusCode::NOT_FOUND, headers, content)
         }
@@ -812,20 +873,39 @@ pub async fn serve_proxy_m3u(
 
 /// Serve XMLTV content for a proxy (from static file)
 pub async fn serve_proxy_xmltv(
-    axum::extract::Path(ulid): axum::extract::Path<String>,
+    axum::extract::Path(id): axum::extract::Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    use crate::utils::resolve_proxy_id;
     use axum::http::{HeaderMap, StatusCode};
     use tokio::fs;
     use tracing::{error, info, warn};
 
-    info!("Serving static XMLTV for proxy: {}", ulid);
+    info!("Serving static XMLTV for proxy: {}", id);
 
-    // 1. Look up proxy by ULID to validate it exists and is active
-    let proxy = match state.database.get_proxy_by_ulid(&ulid).await {
+    // 1. Resolve proxy ID from any format and look up proxy
+    let resolved_uuid = match resolve_proxy_id(&id) {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            error!("Invalid proxy ID format '{}': {}", id, e);
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", "application/xml".parse().unwrap());
+            return (
+                StatusCode::BAD_REQUEST,
+                headers,
+                format!("<!-- Invalid proxy ID format: {} -->", e),
+            );
+        }
+    };
+
+    let proxy = match state
+        .database
+        .get_proxy_by_id(&resolved_uuid.to_string())
+        .await
+    {
         Ok(proxy) => {
             if !proxy.is_active {
-                warn!("Proxy {} is not active", ulid);
+                warn!("Proxy {} is not active", id);
                 let mut headers = HeaderMap::new();
                 headers.insert("content-type", "application/xml".parse().unwrap());
                 return (StatusCode::NOT_FOUND, headers, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv><!-- Proxy not active --></tv>".to_string());
@@ -833,7 +913,7 @@ pub async fn serve_proxy_xmltv(
             proxy
         }
         Err(e) => {
-            error!("Failed to find proxy {}: {}", ulid, e);
+            error!("Failed to find proxy {}: {}", id, e);
             let mut headers = HeaderMap::new();
             headers.insert("content-type", "application/xml".parse().unwrap());
             return (
@@ -850,13 +930,13 @@ pub async fn serve_proxy_xmltv(
         .config
         .storage
         .m3u_path
-        .join(format!("{}.xmltv", ulid));
+        .join(format!("{}.xmltv", resolved_uuid));
 
     match fs::read_to_string(&xmltv_file_path).await {
         Ok(content) => {
             info!(
                 "Served static XMLTV for proxy {} from {}",
-                ulid,
+                id,
                 xmltv_file_path.display()
             );
 
@@ -869,7 +949,7 @@ pub async fn serve_proxy_xmltv(
         Err(e) => {
             error!(
                 "Failed to read XMLTV file for proxy {} at {}: {}",
-                ulid,
+                id,
                 xmltv_file_path.display(),
                 e
             );
@@ -892,40 +972,66 @@ pub async fn serve_proxy_xmltv(
 
 /// Proxy stream requests to original sources or relays
 pub async fn proxy_stream(
-    axum::extract::Path((proxy_ulid, channel_id)): axum::extract::Path<(String, uuid::Uuid)>,
+    axum::extract::Path((proxy_id, channel_id)): axum::extract::Path<(String, uuid::Uuid)>,
     headers: axum::http::HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     use axum::http::StatusCode;
-    use tracing::{error, info, warn};
+    use tracing::{debug, error, info, warn};
 
     let client_ip = headers
         .get("x-forwarded-for")
         .or_else(|| headers.get("x-real-ip"))
         .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown");
+        .unwrap_or("unknown")
+        .to_string();
 
     let user_agent = headers
         .get("user-agent")
         .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown");
+        .map(|s| s.to_string());
 
-    info!(
+    let referer = headers
+        .get("referer")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    debug!(
         "Stream proxy request: proxy={}, channel={}, client_ip={}, user_agent={}",
-        proxy_ulid, channel_id, client_ip, user_agent
+        proxy_id, 
+        channel_id, 
+        client_ip, 
+        user_agent.as_deref().unwrap_or("unknown")
     );
 
-    // 1. Look up proxy to get its configuration
-    let proxy = match state.database.get_proxy_by_ulid(&proxy_ulid).await {
+    // 1. Resolve proxy ID from any supported format
+    let resolved_uuid = match resolve_proxy_id(&proxy_id) {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            error!("Invalid proxy ID format '{}': {}", proxy_id, e);
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid proxy ID format: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // 2. Look up proxy to get its configuration
+    let proxy = match state
+        .database
+        .get_proxy_by_id(&resolved_uuid.to_string())
+        .await
+    {
         Ok(proxy) => {
             if !proxy.is_active {
-                warn!("Proxy {} is not active", proxy_ulid);
+                warn!("Proxy {} is not active", proxy_id);
                 return (StatusCode::NOT_FOUND, "Proxy not active".to_string()).into_response();
             }
             proxy
         }
         Err(e) => {
-            error!("Failed to find proxy {}: {}", proxy_ulid, e);
+            error!("Failed to find proxy {}: {}", proxy_id, e);
             return (StatusCode::NOT_FOUND, "Proxy not found".to_string()).into_response();
         }
     };
@@ -933,14 +1039,14 @@ pub async fn proxy_stream(
     // 2. Look up channel within proxy context
     let channel = match state
         .database
-        .get_channel_for_proxy(&proxy_ulid, channel_id)
+        .get_channel_for_proxy(&proxy_id, channel_id)
         .await
     {
         Ok(Some(channel)) => channel,
         Ok(None) => {
             warn!(
                 "Channel {} not found in proxy {} or proxy not active",
-                channel_id, proxy_ulid
+                channel_id, proxy_id
             );
             return (
                 StatusCode::NOT_FOUND,
@@ -951,7 +1057,7 @@ pub async fn proxy_stream(
         Err(e) => {
             error!(
                 "Failed to lookup channel {} in proxy {}: {}",
-                channel_id, proxy_ulid, e
+                channel_id, proxy_id, e
             );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -964,14 +1070,14 @@ pub async fn proxy_stream(
     // 3. Check if relay is active for this channel (placeholder for now)
     // TODO: Implement relay lookup when relay manager is ready
 
-    // 4. Log access metrics
+    // 4. Log access metrics and create active session
     let session = state
         .metrics_logger
         .log_stream_start(
-            proxy_ulid.clone(),
+            proxy_id.clone(),
             channel_id,
-            client_ip.to_string(),
-            Some(user_agent.to_string()),
+            client_ip.clone(),
+            user_agent.clone(),
             headers
                 .get("referer")
                 .and_then(|h| h.to_str().ok())
@@ -986,9 +1092,54 @@ pub async fn proxy_stream(
                 channel.channel_name, channel.stream_url
             );
 
+            // Create active session for redirect (will be cleaned up quickly by housekeeper)
+            let session_id = match state.metrics_logger.create_active_session(
+                proxy_id.clone(),
+                channel_id,
+                client_ip.clone(),
+                user_agent.clone(),
+                referer.clone(),
+                "redirect"
+            ).await {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("Failed to create active session: {}", e);
+                    // Continue with redirect even if metrics fail
+                    String::new()
+                }
+            };
+
+            // Create session tracker entry
+            let client_info = ClientInfo {
+                ip: client_ip.clone(),
+                user_agent: user_agent.clone(),
+                referer: referer.clone(),
+            };
+            
+            let session_stats = SessionStats::new(
+                session_id.clone(),
+                client_info,
+                proxy_id.clone(),
+                proxy.name.clone(),
+                channel_id.to_string(),
+                channel.channel_name.clone(),
+                channel.stream_url.clone(),
+            );
+            
+            state.session_tracker.start_session(session_stats).await;
+
             // For redirects, immediately finish the session since we're not tracking the stream
+            let state_clone = state.clone();
+            let session_id_clone = session_id.clone();
             tokio::spawn(async move {
-                session.finish(&state.metrics_logger, 0).await;
+                session.finish(&state_clone.metrics_logger, 0).await;
+                if !session_id_clone.is_empty() {
+                    if let Err(e) = state_clone.metrics_logger.complete_active_session(&session_id_clone).await {
+                        error!("Failed to complete active session: {}", e);
+                    }
+                }
+                // End session tracking for redirect
+                state_clone.session_tracker.end_session(&session_id_clone).await;
             });
 
             use axum::response::Redirect;
@@ -1000,8 +1151,43 @@ pub async fn proxy_stream(
                 channel.channel_name, channel.stream_url
             );
 
+            // Create active session for proxy tracking
+            let session_id = match state.metrics_logger.create_active_session(
+                proxy_id.clone(),
+                channel_id,
+                client_ip.clone(),
+                user_agent.clone(),
+                referer.clone(),
+                "proxy"
+            ).await {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("Failed to create active session: {}", e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create session".to_string()).into_response();
+                }
+            };
+
+            // Create session tracker entry for proxy mode
+            let client_info = ClientInfo {
+                ip: client_ip.clone(),
+                user_agent: user_agent.clone(),
+                referer: referer.clone(),
+            };
+            
+            let session_stats = SessionStats::new(
+                session_id.clone(),
+                client_info,
+                proxy_id.clone(),
+                proxy.name.clone(),
+                channel_id.to_string(),
+                channel.channel_name.clone(),
+                channel.stream_url.clone(),
+            );
+            
+            state.session_tracker.start_session(session_stats).await;
+
             // Implement HTTP proxying
-            proxy_http_stream(state, proxy, &channel.stream_url, headers, session).await
+            proxy_http_stream(state, proxy, &channel.stream_url, headers, session, session_id).await
         }
     }
 }
@@ -1013,6 +1199,7 @@ async fn proxy_http_stream(
     upstream_url: &str,
     incoming_headers: axum::http::HeaderMap,
     session: crate::metrics::StreamAccessSession,
+    session_id: String,
 ) -> axum::response::Response {
     use axum::body::Body;
     use axum::http::{HeaderMap, StatusCode, header};
@@ -1020,20 +1207,29 @@ async fn proxy_http_stream(
     use futures::StreamExt;
     use tracing::{debug, error, warn};
 
-    let timeout_secs = proxy.upstream_timeout.unwrap_or(30) as u64;
+    let connection_timeout_secs = 10u64; // Connection timeout
+    let read_timeout_secs = proxy.upstream_timeout.unwrap_or(120) as u64; // Read timeout between chunks
     let _buffer_size = proxy.buffer_size.unwrap_or(8192) as usize;
 
-    // Create HTTP client with timeout
+    // Create HTTP client with proper timeouts for streaming
     let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .connect_timeout(std::time::Duration::from_secs(connection_timeout_secs))
+        // Set a very large timeout for streaming (24 hours)
+        .timeout(std::time::Duration::from_secs(24 * 60 * 60))
+        .tcp_keepalive(std::time::Duration::from_secs(30))
+        .tcp_nodelay(true)
         .build()
     {
         Ok(client) => client,
         Err(e) => {
             error!("Failed to create HTTP client: {}", e);
             let state_clone = state.clone();
+            let session_id_clone = session_id.clone();
             tokio::spawn(async move {
                 session.finish(&state_clone.metrics_logger, 0).await;
+                if let Err(e) = state_clone.metrics_logger.complete_active_session(&session_id_clone).await {
+                    error!("Failed to complete active session: {}", e);
+                }
             });
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1068,7 +1264,8 @@ async fn proxy_http_stream(
         }
     }
 
-    debug!("Making upstream request to: {}", upstream_url);
+    debug!("Making upstream request to: {} (connect_timeout={}s, stream_timeout=disabled)", 
+           upstream_url, connection_timeout_secs);
 
     // Make upstream request
     let upstream_response = match client
@@ -1081,8 +1278,12 @@ async fn proxy_http_stream(
         Err(e) => {
             error!("Failed to connect to upstream {}: {}", upstream_url, e);
             let state_clone = state.clone();
+            let session_id_clone = session_id.clone();
             tokio::spawn(async move {
                 session.finish(&state_clone.metrics_logger, 0).await;
+                if let Err(e) = state_clone.metrics_logger.complete_active_session(&session_id_clone).await {
+                    error!("Failed to complete active session: {}", e);
+                }
             });
             return (
                 StatusCode::BAD_GATEWAY,
@@ -1127,38 +1328,134 @@ async fn proxy_http_stream(
     let status =
         StatusCode::from_u16(upstream_status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
-    // Create streaming body
+    // Create streaming body with proper completion tracking
     let stream = upstream_response.bytes_stream();
-    let mut bytes_served = 0u64;
-
-    // Create a stream that tracks bytes for metrics
-    let _state_clone = state.clone();
-    let _session_clone = session.clone();
-    let tracked_stream = stream.map(move |chunk_result| match chunk_result {
-        Ok(chunk) => {
-            bytes_served += chunk.len() as u64;
-            debug!("Served {} bytes, total: {}", chunk.len(), bytes_served);
-            Ok(chunk)
-        }
-        Err(e) => {
-            warn!("Error streaming chunk: {}", e);
-            Err(e)
+    
+    // Create a stream that tracks bytes for metrics and handles completion
+    let state_clone = state.clone();
+    let session_id_clone = session_id.clone();
+    let session_clone = session.clone();
+    
+    // Use a shared counter for total bytes served
+    let total_bytes_served = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let stream_ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    
+    debug!("Starting stream for session: {} (upstream: {})", session_id_clone, upstream_url);
+    
+    let tracked_stream = stream.map({
+        let total_bytes_served = total_bytes_served.clone();
+        let stream_ended = stream_ended.clone();
+        move |chunk_result| {
+            match chunk_result {
+                Ok(chunk) => {
+                    let bytes_len = chunk.len() as u64;
+                    let total = total_bytes_served.fetch_add(bytes_len, std::sync::atomic::Ordering::Relaxed) + bytes_len;
+                    tracing::trace!("Served {} bytes, total: {}", bytes_len, total);
+                    
+                    // Update active session with new bytes (fire and forget)
+                    let state_update = state_clone.clone();
+                    let session_update = session_id_clone.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = state_update.metrics_logger.update_active_session(&session_update, bytes_len).await {
+                            debug!("Failed to update active session metrics: {}", e);
+                        }
+                        // Update session tracker with bytes served
+                        state_update.session_tracker.update_session_bytes(&session_update, bytes_len).await;
+                    });
+                    
+                    Ok(chunk)
+                }
+                Err(e) => {
+                    warn!("Error streaming chunk: {}", e);
+                    
+                    // Record error in session tracker
+                    let state_error = state_clone.clone();
+                    let session_error = session_id_clone.clone();
+                    let error_msg = e.to_string();
+                    tokio::spawn(async move {
+                        state_error.session_tracker.record_session_error(&session_error, error_msg).await;
+                    });
+                    
+                    // Mark stream as ended on error (only once)
+                    if !stream_ended.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        let final_state = state_clone.clone();
+                        let final_session = session_clone.clone();
+                        let final_session_id = session_id_clone.clone();
+                        let final_bytes = total_bytes_served.load(std::sync::atomic::Ordering::Relaxed);
+                        tokio::spawn(async move {
+                            debug!("Stream ended with error for session: {}", final_session_id);
+                            
+                            // Finish metrics tracking
+                            final_session.finish(&final_state.metrics_logger, final_bytes).await;
+                            
+                            // Complete the active session
+                            if let Err(e) = final_state.metrics_logger.complete_active_session(&final_session_id).await {
+                                error!("Failed to complete active session: {}", e);
+                            }
+                            
+                            // End session tracking
+                            final_state.session_tracker.end_session(&final_session_id).await;
+                        });
+                    }
+                    
+                    Err(e)
+                }
+            }
         }
     });
 
+    // Wrap the stream to detect completion (both success and error)
+    let completion_state = state.clone();
+    let completion_session = session.clone();
+    let completion_session_id = session_id.clone();
+    let completion_bytes = total_bytes_served.clone();
+    let completion_ended = stream_ended.clone();
+    
+    let stream_with_completion = futures::stream::unfold((tracked_stream, false), move |(mut stream, completed)| {
+        let state_ref = completion_state.clone();
+        let session_ref = completion_session.clone();
+        let session_id_ref = completion_session_id.clone();
+        let bytes_ref = completion_bytes.clone();
+        let ended_ref = completion_ended.clone();
+        
+        async move {
+            use futures::StreamExt;
+            
+            match stream.next().await {
+                Some(result) => {
+                    Some((result, (stream, completed)))
+                }
+                None => {
+                    // Stream completed (either successfully or client disconnected)
+                    if !completed && !ended_ref.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        let final_bytes = bytes_ref.load(std::sync::atomic::Ordering::Relaxed);
+                        debug!("Stream completed normally for session: {} ({} bytes)", session_id_ref, final_bytes);
+                        
+                        // Handle completion asynchronously
+                        let final_state = state_ref.clone();
+                        let final_session = session_ref.clone();
+                        let final_session_id = session_id_ref.clone();
+                        tokio::spawn(async move {
+                            // Finish metrics tracking
+                            final_session.finish(&final_state.metrics_logger, final_bytes).await;
+                            
+                            // Complete the active session
+                            if let Err(e) = final_state.metrics_logger.complete_active_session(&final_session_id).await {
+                                error!("Failed to complete active session: {}", e);
+                            }
+                            
+                            // End session tracking
+                            final_state.session_tracker.end_session(&final_session_id).await;
+                        });
+                    }
+                    None
+                }
+            }
+        }
+    });
+    
     // Convert to axum Body
-    let body = Body::from_stream(tracked_stream);
-
-    // Spawn task to finish metrics when stream completes
-    let final_state = state.clone();
-    let final_session = session;
-    tokio::spawn(async move {
-        // Note: In a real implementation, we'd need to track when the stream actually completes
-        // For now, we'll just log the start of the stream
-        final_session
-            .finish(&final_state.metrics_logger, bytes_served)
-            .await;
-    });
+    let body = Body::from_stream(stream_with_completion);
 
     // Build response
     let mut response = Response::builder().status(status);

@@ -9,27 +9,30 @@ pub mod buffered_iterator;
 pub mod chunk_manager;
 pub mod generic_iterator;
 pub mod immutable_sources;
+pub mod iterator_registry;
 pub mod iterator_traits;
 pub mod iterator_types;
-pub mod iterator_registry;
 pub mod orchestrator;
-pub mod plugin_output_iterator;
 pub mod rolling_buffer_iterator;
 pub mod stages;
 
 // Re-export key types for easier access
-pub use accumulator::{IteratorAccumulator, ChannelAccumulator, AccumulatorFactory, AccumulationStrategy};
+pub use accumulator::{
+    AccumulationStrategy, AccumulatorFactory, ChannelAccumulator, IteratorAccumulator,
+};
 pub use buffered_iterator::{BufferedIterator, DataSource};
 pub use chunk_manager::{ChunkSizeManager, ChunkSizeStats, StageChunkStats};
-pub use immutable_sources::{ImmutableLogoEnrichedChannelSource, ImmutableProxyConfigSource, ImmutableLogoEnrichedEpgSource, ImmutableSourceManager, VersionedSource};
+pub use immutable_sources::{
+    ImmutableLogoEnrichedChannelSource, ImmutableLogoEnrichedEpgSource, ImmutableProxyConfigSource,
+    ImmutableSourceManager, VersionedSource,
+};
+pub use iterator_registry::{IteratorInstance, IteratorRegistry};
 pub use iterator_traits::{IteratorResult, PipelineIterator};
-pub use iterator_types::{IteratorType, ConfigType, IteratorMetadata, well_known_ids};
-pub use iterator_registry::{IteratorRegistry, IteratorInstance};
+pub use iterator_types::{ConfigType, IteratorMetadata, IteratorType, well_known_ids};
 pub use orchestrator::{
-    OrderedChannelAggregateIterator, OrderedDataMappingIterator, 
-    OrderedEpgAggregateIterator, OrderedFilterIterator,
-    RollingBufferChannelIterator, OrchestratorIteratorFactory,
-    ActiveChannelLoader
+    ActiveChannelLoader, OrchestratorIteratorFactory, OrderedChannelAggregateIterator,
+    OrderedDataMappingIterator, OrderedEpgAggregateIterator, OrderedFilterIterator,
+    RollingBufferChannelIterator,
 };
 pub use rolling_buffer_iterator::{ActiveDataLoader, BufferConfig, RollingBufferIterator};
 
@@ -38,6 +41,7 @@ pub mod stage_names {
     pub const DATA_MAPPING: &str = "data_mapping";
     pub const FILTERING: &str = "filtering";
     pub const LOGO_PREFETCH: &str = "logo_prefetch";
+    pub const PROGRAM_LOGO_PREFETCH: &str = "program_logo_prefetch";
     pub const CHANNEL_NUMBERING: &str = "channel_numbering";
     pub const M3U_GENERATION: &str = "m3u_generation";
     pub const EPG_PROCESSING: &str = "epg_processing";
@@ -83,23 +87,23 @@ impl PipelineFactory {
             config.default_chunk_size,
             config.max_chunk_size,
         ));
-        
+
         Self {
             config,
             chunk_manager,
         }
     }
-    
+
     /// Get shared chunk manager for coordinating across pipeline stages
     pub fn chunk_manager(&self) -> std::sync::Arc<ChunkSizeManager> {
         self.chunk_manager.clone()
     }
-    
+
     /// Get pipeline configuration
     pub fn config(&self) -> &PipelineConfig {
         &self.config
     }
-    
+
     /// Create a buffered iterator for a specific stage
     pub fn create_buffered_iterator<T>(
         &self,

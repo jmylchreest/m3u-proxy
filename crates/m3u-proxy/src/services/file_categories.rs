@@ -3,7 +3,6 @@
 //! This module defines the file categories and their retention policies
 //! for the sandboxed file service integration.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// File categories used in m3u-proxy

@@ -2,12 +2,8 @@
 members = [
     "crates/m3u-proxy",
     "crates/sandboxed-file-manager",
-    "crates/m3u-proxy/plugins/passthrough-plugin",
-    "crates/m3u-proxy/plugins/library-test-plugin",
 ]
-exclude = [
-    "examples/wasm-plugins/*",
-]
+exclude = []
 resolver = "3"
 
 [workspace.package]

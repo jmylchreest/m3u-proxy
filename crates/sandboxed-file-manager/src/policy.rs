@@ -28,8 +28,9 @@ pub struct CleanupPolicy {
     pub retention_duration: Duration,
     /// Which timestamp to use for cleanup decisions
     pub time_match: TimeMatch,
-    /// Whether cleanup is enabled
-    pub enabled: bool,
+    /// Whether files should never be cleaned up (infinite retention)
+    /// When true, files are kept forever regardless of retention_duration
+    pub infinite_retention: bool,
 }
 
 impl CleanupPolicy {
@@ -40,7 +41,7 @@ impl CleanupPolicy {
         Self {
             retention_duration: Duration::from_secs(24 * 60 * 60), // 24 hours
             time_match: TimeMatch::LastAccess,
-            enabled: true,
+            infinite_retention: false,
         }
     }
 
@@ -56,9 +57,9 @@ impl CleanupPolicy {
         self
     }
 
-    /// Enable or disable cleanup.
+    /// Enable or disable cleanup (inverse of infinite retention).
     pub fn enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
+        self.infinite_retention = !enabled;
         self
     }
 
@@ -67,7 +68,17 @@ impl CleanupPolicy {
         Self {
             retention_duration: Duration::ZERO,
             time_match: TimeMatch::LastAccess,
-            enabled: false,
+            infinite_retention: true,
+        }
+    }
+
+    /// Create a policy for infinite retention (never cleanup).
+    /// This is semantically clearer than disabled() for files that should never expire.
+    pub fn infinite_retention() -> Self {
+        Self {
+            retention_duration: Duration::MAX,
+            time_match: TimeMatch::LastAccess,
+            infinite_retention: true,
         }
     }
     
@@ -101,7 +112,7 @@ impl CleanupPolicy {
         modified: DateTime<Utc>, 
         created: DateTime<Utc>
     ) -> bool {
-        if !self.enabled {
+        if self.infinite_retention {
             return false;
         }
 

@@ -113,16 +113,20 @@ class EpgSourcesManager {
                         <small>${this.escapeHtml(source.url)}</small>
                     </div>
                     ${
-                      source.timezone !== "UTC"
+                      source.original_timezone && source.timezone_detected
                         ? `<div class="source-timezone text-muted">
-                            <small>🌍 ${source.timezone}${source.timezone_detected ? " (auto-detected)" : ""}</small>
+                            <small>🌍 ${source.original_timezone} (detected) → UTC</small>
                         </div>`
-                        : ""
+                        : source.timezone !== "UTC"
+                          ? `<div class="source-timezone text-muted">
+                            <small>🌍 ${source.timezone} (manual)</small>
+                        </div>`
+                          : ""
                     }
                     ${
                       source.time_offset !== "0"
                         ? `<div class="source-offset text-muted">
-                            <small>⏰ ${source.time_offset}</small>
+                            <small>⏰ Offset: ${source.time_offset}</small>
                         </div>`
                         : ""
                     }
@@ -402,6 +406,9 @@ class EpgSourcesManager {
       document.getElementById("timeOffset").value = source.time_offset || "0";
       document.getElementById("isActive").checked = source.is_active;
 
+      // Show detected timezone if available
+      this.updateDetectedTimezoneDisplay(source);
+
       if (source.username) {
         document.getElementById("epgUsername").value = source.username;
       }
@@ -415,10 +422,38 @@ class EpgSourcesManager {
       document.getElementById("timeOffset").value = "0";
       document.getElementById("isActive").checked = true;
       document.getElementById("epgSourceType").value = "xtream";
+
+      // Hide detected timezone for new sources
+      this.updateDetectedTimezoneDisplay(null);
     }
 
     this.toggleSourceTypeFields(document.getElementById("epgSourceType").value);
     modal.classList.add("show");
+  }
+
+  updateDetectedTimezoneDisplay(source) {
+    const detectedGroup = document.getElementById("detectedTimezoneGroup");
+    const detectedText = document.getElementById("detectedTimezoneText");
+
+    if (source && source.timezone_detected && source.original_timezone) {
+      detectedGroup.style.display = "block";
+      detectedText.innerHTML = `
+        <strong>${source.original_timezone}</strong> was auto-detected from EPG source.<br>
+        <small>Times are normalized to UTC for consistency.</small>
+      `;
+    } else if (
+      source &&
+      source.timezone_detected &&
+      source.timezone !== "UTC"
+    ) {
+      detectedGroup.style.display = "block";
+      detectedText.innerHTML = `
+        <strong>${source.timezone}</strong> was auto-detected from EPG source.<br>
+        <small>Times are normalized to UTC for consistency.</small>
+      `;
+    } else {
+      detectedGroup.style.display = "none";
+    }
   }
 
   hideSourceModal() {
@@ -601,9 +636,12 @@ class EpgSourcesManager {
 
     for (const source of activeSources) {
       try {
-        const response = await fetch(`/api/v1/sources/epg/${source.id}/refresh`, {
-          method: "POST",
-        });
+        const response = await fetch(
+          `/api/v1/sources/epg/${source.id}/refresh`,
+          {
+            method: "POST",
+          },
+        );
 
         if (response.ok) {
           successCount++;

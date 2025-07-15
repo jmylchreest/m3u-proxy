@@ -51,8 +51,8 @@ async function loadLogos(page = 1) {
       params.append("search", searchQuery);
     }
 
-    if (typeFilter) {
-      params.append("asset_type", typeFilter);
+    if (typeFilter === "uploaded") {
+      params.append("include_cached", "false");
     }
 
     const url = `/api/v1/logos?${params}&_t=${new Date().getTime()}`;
@@ -85,15 +85,14 @@ async function loadLogos(page = 1) {
     console.log("Set currentLogos count:", currentLogos.length); // Debug log
     console.log("currentLogos array:", currentLogos); // Debug log
 
-    // Fetch linked assets for each logo
-    console.log("Loading linked assets..."); // Debug log
-    try {
-      await loadLinkedAssetsForLogos();
-      console.log("Linked assets loaded successfully"); // Debug log
-    } catch (linkedError) {
-      console.error("Error loading linked assets:", linkedError);
-      // Continue anyway - linked assets are optional
-    }
+    // Initialize linked assets for each logo (no additional API calls needed)
+    console.log("Initializing logo data..."); // Debug log
+    currentLogos.forEach((logo) => {
+      // Initialize empty arrays if not present
+      logo.linked_assets = logo.linked_assets || [];
+      logo.available_formats = logo.available_formats || [];
+    });
+    console.log("Logo data initialized successfully"); // Debug log
 
     console.log("About to render logos..."); // Debug log
     renderLogos();
@@ -122,41 +121,26 @@ async function loadLinkedAssetsForLogos() {
     return;
   }
 
-  const promises = currentLogos.map(async (logo, index) => {
-    try {
-      console.log(
-        `Loading linked assets for logo ${index}: ${logo.id} (${logo.name})`,
-      );
-      const response = await fetch(`/api/v1/logos/${logo.id}/info`);
-      console.log(`Linked assets response for ${logo.id}:`, response.status);
+  // Initialize linked assets data from main API response
+  currentLogos.forEach((logo, index) => {
+    console.log(
+      `Initializing linked assets for logo ${index}: ${logo.id} (${logo.name})`,
+    );
 
-      if (response.ok) {
-        const data = await response.json();
-        logo.linked_assets = data.linked_assets || [];
-        logo.available_formats = data.available_formats || [];
-        console.log(
-          `Linked assets loaded for ${logo.id}:`,
-          logo.linked_assets.length,
-          "linked,",
-          logo.available_formats.length,
-          "formats",
-        );
-      } else {
-        console.warn(
-          `Failed to load linked assets for logo ${logo.id}: ${response.status}`,
-        );
-        logo.linked_assets = [];
-        logo.available_formats = [];
-      }
-    } catch (error) {
-      console.error(`Failed to load linked assets for logo ${logo.id}:`, error);
-      logo.linked_assets = [];
-      logo.available_formats = [];
-    }
+    // Initialize empty arrays if not present - data will come from main API or separate calls when needed
+    logo.linked_assets = logo.linked_assets || [];
+    logo.available_formats = logo.available_formats || [];
+
+    console.log(
+      `Linked assets initialized for ${logo.id}:`,
+      logo.linked_assets.length,
+      "linked,",
+      logo.available_formats.length,
+      "formats",
+    );
   });
 
-  await Promise.all(promises);
-  console.log("All linked assets loaded");
+  console.log("All linked assets initialized");
 }
 
 // Load cache statistics
@@ -794,11 +778,24 @@ async function performUpload() {
 // Edit logo asset
 async function editLogoAsset(logoId) {
   try {
-    // Fetch full logo details with linked assets
+    // Find logo in current logos array first
+    let logoData = currentLogos.find(
+      (logo) => logo.id === logoId || logo.asset.id === logoId,
+    );
+
+    if (logoData) {
+      // Use data from current logos list
+      editingLogo = logoData;
+      populateEditForm(logoData);
+      SharedUtils.showStandardModal("editModal");
+      return;
+    }
+
+    // If not found in current list, try to fetch from API
     const response = await fetch(`/api/v1/logos/${logoId}/info`);
     if (!response.ok) throw new Error("Failed to fetch logo details");
 
-    const logoData = await response.json();
+    logoData = await response.json();
     editingLogo = logoData;
     populateEditForm(logoData);
 
@@ -812,19 +809,24 @@ async function editLogoAsset(logoId) {
 
 // Populate edit form
 function populateEditForm(logo) {
-  document.getElementById("editLogoId").value = logo.id;
-  document.getElementById("editLogoName").value = logo.name;
-  document.getElementById("editLogoDescription").value = logo.description || "";
-  document.getElementById("editPreviewImage").src = logo.url;
+  // Handle both direct logo objects and LogoAssetWithUrl format
+  const logoAsset = logo.asset || logo;
+  const logoUrl = logo.url || "";
+
+  document.getElementById("editLogoId").value = logoAsset.id;
+  document.getElementById("editLogoName").value = logoAsset.name;
+  document.getElementById("editLogoDescription").value =
+    logoAsset.description || "";
+  document.getElementById("editPreviewImage").src = logoUrl;
 
   // File info
   const fileInfo = `
-        <strong>File:</strong> ${escapeHtml(logo.file_name)}<br>
-        <strong>Size:</strong> ${formatFileSize(logo.file_size)}<br>
-        <strong>Type:</strong> ${escapeHtml(logo.mime_type)}<br>
-        ${logo.width && logo.height ? `<strong>Dimensions:</strong> ${logo.width}×${logo.height}px<br>` : ""}
-        <strong>Asset Type:</strong> ${logo.asset_type === "uploaded" ? "Uploaded" : "Cached"}<br>
-        <strong>Created:</strong> ${new Date(logo.created_at).toLocaleDateString()}
+        <strong>File:</strong> ${escapeHtml(logoAsset.file_name)}<br>
+        <strong>Size:</strong> ${formatFileSize(logoAsset.file_size)}<br>
+        <strong>Type:</strong> ${escapeHtml(logoAsset.mime_type)}<br>
+        ${logoAsset.width && logoAsset.height ? `<strong>Dimensions:</strong> ${logoAsset.width}×${logoAsset.height}px<br>` : ""}
+        <strong>Asset Type:</strong> ${logoAsset.asset_type === "uploaded" ? "Uploaded" : "Cached"}<br>
+        <strong>Created:</strong> ${new Date(logoAsset.created_at).toLocaleDateString()}
     `;
 
   document.getElementById("editFileInfo").innerHTML = fileInfo;

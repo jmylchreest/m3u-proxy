@@ -58,37 +58,15 @@ pub async fn detailed_health_check(
         serde_json::to_value(&db_health).unwrap_or_default(),
     );
 
-    // Plugin system health
-    if let Some(ref plugin_manager) = state.plugin_manager {
-        match plugin_manager.get_detailed_statistics() {
-            Ok(plugin_stats) => {
-                health_details.insert(
-                    "plugins".to_string(),
-                    serde_json::json!({
-                        "status": "healthy",
-                        "statistics": plugin_stats
-                    }),
-                );
-            }
-            Err(e) => {
-                health_details.insert(
-                    "plugins".to_string(),
-                    serde_json::json!({
-                        "status": "error",
-                        "error": e.to_string()
-                    }),
-                );
-            }
-        }
-    } else {
-        health_details.insert(
-            "plugins".to_string(),
-            serde_json::json!({
-                "status": "disabled",
-                "message": "WASM plugin system is disabled"
-            }),
-        );
-    }
+    // Native pipeline health (no plugins)
+    health_details.insert(
+        "pipeline".to_string(),
+        serde_json::json!({
+            "status": "active",
+            "type": "native",
+            "message": "Native pipeline processing enabled"
+        }),
+    );
 
     // Ingestion state manager health
     health_details.insert(

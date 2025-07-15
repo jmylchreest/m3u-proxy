@@ -28,7 +28,6 @@ use axum::{
     routing::{get, post},
 };
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use tower_http::cors::CorsLayer;
 
 use crate::{
@@ -38,10 +37,7 @@ use crate::{
     ingestor::{IngestionStateManager, scheduler::CacheInvalidationSender},
     logo_assets::{LogoAssetService, LogoAssetStorage},
     metrics::MetricsLogger,
-    proxy::wasm_host_interface::{PluginCapabilities, WasmHostInterfaceFactory},
-    plugins::pipeline::wasm::{WasmPluginConfig, WasmPluginManager},
     services::ProxyRegenerationService,
-    utils::SimpleMemoryMonitor,
 };
 use sandboxed_file_manager::SandboxedManager;
 
@@ -73,36 +69,25 @@ impl WebServer {
         logo_asset_service: LogoAssetService,
         logo_asset_storage: LogoAssetStorage,
         proxy_regeneration_service: ProxyRegenerationService,
-        preview_file_manager: SandboxedManager,
-        logo_file_manager: SandboxedManager,
+        temp_file_manager: SandboxedManager, // Use temp for both temp and preview operations
+        logos_cached_file_manager: SandboxedManager,
         proxy_output_file_manager: SandboxedManager,
-        shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
     ) -> Result<Self> {
-        // Use shared plugin manager (no fallback creation in WebServer)
-        let plugin_manager = shared_plugin_manager;
-        
-        if plugin_manager.is_some() {
-            tracing::info!("WebServer using shared WASM plugin manager");
-        } else {
-            tracing::info!("WebServer: No plugin manager available");
-        }
+        tracing::info!("WebServer using native pipeline");
 
         // Create logo cache scanner for cached logo discovery
+        // Use the same path that the logo asset storage is configured with
         let logo_cache_scanner = {
-            use crate::services::file_categories::get_default_base_directory;
-            let base_path = config.storage.cached_logo_path
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .to_path_buf();
-            
+            let base_path = logo_asset_storage.cached_logo_dir.clone();
+
             Some(crate::services::logo_cache_scanner::LogoCacheScanner::new(
-                logo_file_manager.clone(),
-                base_path
+                logos_cached_file_manager.clone(),
+                base_path,
             ))
         };
 
         let app = Self::create_router(AppState {
-            database,
+            database: database.clone(),
             config: config.clone(),
             state_manager,
             cache_invalidation_tx,
@@ -110,12 +95,13 @@ impl WebServer {
             logo_asset_service,
             logo_asset_storage,
             proxy_regeneration_service,
-            preview_file_manager,
-            logo_file_manager,
+            preview_file_manager: temp_file_manager.clone(), // Use temp for preview operations
+            logo_file_manager: logos_cached_file_manager,
             proxy_output_file_manager,
-            metrics_logger: MetricsLogger::new(),
-            plugin_manager,
+            temp_file_manager,
+            metrics_logger: MetricsLogger::new(database.pool()),
             logo_cache_scanner,
+            session_tracker: std::sync::Arc::new(crate::proxy::session_tracker::SessionTracker::default()),
         })
         .await;
 
@@ -191,6 +177,10 @@ impl WebServer {
                 "/sources/stream/:id/refresh",
                 post(api::refresh_stream_source),
             )
+            .route(
+                "/sources/stream/:id/channels",
+                get(api::get_stream_source_channels),
+            )
             // EPG sources
             .route(
                 "/sources/epg",
@@ -205,6 +195,10 @@ impl WebServer {
             .route(
                 "/sources/epg/:id/refresh",
                 post(api::refresh_epg_source_unified),
+            )
+            .route(
+                "/sources/epg/:id/channels",
+                get(api::get_epg_source_channels_unified),
             )
             // Unified sources
             .route("/sources", get(api::list_all_sources))
@@ -228,6 +222,10 @@ impl WebServer {
                 get(api::get_logo_asset_format),
             )
             .route("/logos/upload", post(api::upload_logo_asset))
+            .route(
+                "/logos/generate-metadata",
+                post(api::generate_cached_logo_metadata),
+            )
             // Cached logo endpoint (uses sandboxed file manager, no database)
             .route("/logos/cached/:cache_id", get(api::get_cached_logo_asset))
             // Filters
@@ -305,6 +303,11 @@ impl WebServer {
             .route("/relays/:config_id/status", get(api::get_relay_status))
             .route("/relays/:config_id/start", post(api::start_relay))
             .route("/relays/:config_id/stop", post(api::stop_relay))
+            // Metrics and analytics
+            .route("/metrics/dashboard", get(api::get_dashboard_metrics))
+            .route("/metrics/realtime", get(api::get_realtime_metrics))
+            .route("/metrics/usage", get(api::get_usage_metrics))
+            .route("/metrics/channels/popular", get(api::get_popular_channels))
     }
 
     /// Web interface routes
@@ -321,6 +324,29 @@ impl WebServer {
         let listener = tokio::net::TcpListener::bind(&self.addr).await?;
         axum::serve(listener, self.app).await?;
         Ok(())
+    }
+
+    /// Serve with a notification when the server is actually listening or fails to bind
+    pub async fn serve_with_signal(
+        self,
+        ready_signal: tokio::sync::oneshot::Sender<Result<()>>,
+    ) -> Result<()> {
+        match tokio::net::TcpListener::bind(&self.addr).await {
+            Ok(listener) => {
+                // Signal that we're now actually listening on the port
+                let _ = ready_signal.send(Ok(()));
+
+                // Now serve until shutdown
+                axum::serve(listener, self.app).await?;
+                Ok(())
+            }
+            Err(bind_error) => {
+                // Signal the bind failure immediately
+                let bind_err_msg = format!("Failed to bind to {}: {}", self.addr, bind_error);
+                let _ = ready_signal.send(Err(anyhow::anyhow!("{}", bind_err_msg)));
+                Err(anyhow::anyhow!("{}", bind_err_msg))
+            }
+        }
     }
 
     /// Get the host address
@@ -348,9 +374,10 @@ pub struct AppState {
     pub preview_file_manager: SandboxedManager,
     pub logo_file_manager: SandboxedManager,
     pub proxy_output_file_manager: SandboxedManager,
+    pub temp_file_manager: SandboxedManager,
     pub metrics_logger: MetricsLogger,
-    pub plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
     pub logo_cache_scanner: Option<crate::services::logo_cache_scanner::LogoCacheScanner>,
+    pub session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
 }
 
 impl AppState {

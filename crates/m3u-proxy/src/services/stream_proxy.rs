@@ -36,8 +36,8 @@ pub struct StreamProxyService {
     data_mapping_service: DataMappingService,
     logo_service: LogoAssetService,
     storage_config: StorageConfig,
-    shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
     app_config: crate::config::Config,
+    temp_file_manager: SandboxedManager,
 }
 
 impl StreamProxyService {
@@ -52,8 +52,8 @@ impl StreamProxyService {
         data_mapping_service: DataMappingService,
         logo_service: LogoAssetService,
         storage_config: StorageConfig,
-        shared_plugin_manager: Option<std::sync::Arc<crate::plugins::pipeline::wasm::WasmPluginManager>>,
         app_config: crate::config::Config,
+        temp_file_manager: SandboxedManager,
     ) -> Self {
         Self {
             proxy_repo,
@@ -66,8 +66,8 @@ impl StreamProxyService {
             data_mapping_service,
             logo_service,
             storage_config,
-            shared_plugin_manager,
             app_config,
+            temp_file_manager,
         }
     }
 
@@ -137,11 +137,11 @@ impl StreamProxyService {
         }
     }
 
-    /// Get a stream proxy by ULID with all relationships
-    pub async fn get_by_ulid(&self, ulid: &str) -> Result<Option<StreamProxyResponse>, AppError> {
+    /// Get a stream proxy by ID string with all relationships
+    pub async fn get_by_id_string(&self, id: &str) -> Result<Option<StreamProxyResponse>, AppError> {
         let proxy = self
             .proxy_repo
-            .get_by_ulid(ulid)
+            .get_by_id(id)
             .await
             .map_err(|e| AppError::Repository(e))?;
 
@@ -223,12 +223,11 @@ impl StreamProxyService {
             proxy_name: request.name.clone(),
         };
 
-        // Use the new generator architecture
-        let proxy_service = if let Some(plugin_manager) = &self.shared_plugin_manager {
-            crate::proxy::ProxyService::with_plugin_manager(self.storage_config.clone(), plugin_manager.clone())
-        } else {
-            crate::proxy::ProxyService::new(self.storage_config.clone())
-        };
+        // Use the native pipeline
+        let proxy_service = crate::proxy::ProxyService::new(
+            self.storage_config.clone(),
+            self.temp_file_manager.clone(),
+        );
         let proxy_generation = proxy_service
             .generate_proxy_with_config(
                 resolved_config.clone(),
@@ -388,13 +387,13 @@ impl StreamProxyService {
         request: &PreviewProxyRequest,
     ) -> Result<Vec<crate::web::handlers::proxies::PreviewChannel>, AppError> {
         let mut preview_channels = Vec::new();
-        let limit = 20; // Limit for performance
+        // No limit - show all channels
 
         let lines: Vec<&str> = m3u_content.lines().collect();
         let mut i = 0;
         let mut channel_count = 0;
 
-        while i < lines.len() && channel_count < limit {
+        while i < lines.len() {
             let line = lines[i].trim();
             if line.starts_with("#EXTINF:") {
                 // Parse the EXTINF line
@@ -403,6 +402,11 @@ impl StreamProxyService {
                 let tvg_id = Self::extract_attribute(line, "tvg-id");
                 let tvg_logo = Self::extract_attribute(line, "tvg-logo");
                 let tvg_chno = Self::extract_attribute(line, "tvg-chno");
+                let tvg_shift = Self::extract_attribute(line, "tvg-shift");
+                let tvg_language = Self::extract_attribute(line, "tvg-language");
+                let tvg_country = Self::extract_attribute(line, "tvg-country");
+                let group_logo = Self::extract_attribute(line, "group-logo");
+                let radio = Self::extract_attribute(line, "radio");
 
                 // Get the stream URL from the next line
                 let stream_url = if i + 1 < lines.len() {
@@ -419,6 +423,7 @@ impl StreamProxyService {
                 };
 
                 let channel_number = tvg_chno
+                    .as_ref()
                     .and_then(|s| s.parse::<i32>().ok())
                     .unwrap_or(channel_count + 1);
 
@@ -430,6 +435,13 @@ impl StreamProxyService {
                     stream_url,
                     source_name: "Generated".to_string(),
                     channel_number,
+                    tvg_chno,
+                    tvg_shift,
+                    tvg_language,
+                    tvg_country,
+                    group_logo,
+                    radio,
+                    extinf_line: line.to_string(),
                 });
 
                 channel_count += 1;
@@ -514,9 +526,9 @@ impl StreamProxyService {
         request: &PreviewProxyRequest,
     ) -> Result<Vec<crate::web::handlers::proxies::PreviewChannel>, AppError> {
         let mut preview_channels = Vec::new();
-        let limit = 20; // Limit for performance
+        // No limit - show all channels
 
-        for (index, channel) in channels.iter().take(limit).enumerate() {
+        for (index, channel) in channels.iter().enumerate() {
             let channel_number = (index + 1) as i32 + request.starting_channel_number - 1;
 
             preview_channels.push(crate::web::handlers::proxies::PreviewChannel {
@@ -527,6 +539,18 @@ impl StreamProxyService {
                 stream_url: format!("http://localhost:8080/stream/preview/{}", channel.id),
                 source_name: "Preview".to_string(), // TODO: Get actual source name
                 channel_number,
+                tvg_chno: None, // Channel model doesn't have tvg_chno field
+                tvg_shift: channel.tvg_shift.clone(),
+                tvg_language: None, // Channel model doesn't have language field
+                tvg_country: None, // Channel model doesn't have country field
+                group_logo: None, // Channel model doesn't have group_logo field
+                radio: None, // Channel model doesn't have radio field
+                extinf_line: format!("#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" group-title=\"{}\",{}",
+                    channel.tvg_id.as_deref().unwrap_or(""),
+                    channel.channel_name,
+                    channel.tvg_logo.as_deref().unwrap_or(""),
+                    channel.group_title.as_deref().unwrap_or(""),
+                    channel.channel_name),
             });
         }
 
@@ -606,6 +630,9 @@ impl StreamProxyService {
                     filter_name: filter.name,
                     priority_order: proxy_filter.priority_order,
                     is_active: proxy_filter.is_active,
+                    is_inverse: filter.is_inverse,
+                    source_type: filter.source_type,
+                    starting_channel_number: filter.starting_channel_number,
                 });
             }
         }
@@ -663,47 +690,4 @@ impl StreamProxyService {
         Ok(())
     }
 
-    /// Generate a sample M3U playlist for preview
-    #[allow(dead_code)]
-    async fn generate_m3u_sample(
-        &self,
-        channels: &[Channel],
-        starting_number: i32,
-    ) -> Result<String, AppError> {
-        let mut m3u = String::from("#EXTM3U\n");
-
-        for (index, channel) in channels.iter().take(10).enumerate() {
-            let channel_number = starting_number + index as i32;
-
-            // Build EXTINF line
-            let mut extinf = format!("#EXTINF:-1");
-
-            if let Some(tvg_id) = &channel.tvg_id {
-                extinf.push_str(&format!(" tvg-id=\"{}\"", tvg_id));
-            }
-
-            if let Some(tvg_logo) = &channel.tvg_logo {
-                extinf.push_str(&format!(" tvg-logo=\"{}\"", tvg_logo));
-            }
-
-            if let Some(group_title) = &channel.group_title {
-                extinf.push_str(&format!(" group-title=\"{}\"", group_title));
-            }
-
-            extinf.push_str(&format!(" tvg-chno=\"{}\"", channel_number));
-            extinf.push_str(&format!(",{}\n", channel.channel_name));
-
-            m3u.push_str(&extinf);
-            m3u.push_str(&format!("{}\n", channel.stream_url));
-        }
-
-        if channels.len() > 10 {
-            m3u.push_str(&format!(
-                "\n# ... and {} more channels\n",
-                channels.len() - 10
-            ));
-        }
-
-        Ok(m3u)
-    }
 }

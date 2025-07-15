@@ -27,8 +27,7 @@ CREATE TABLE epg_sources (
     update_cron TEXT NOT NULL DEFAULT '0 0 */12 * * * *', -- Every 12 hours
     username TEXT, -- For Xtream Codes
     password TEXT, -- For Xtream Codes
-    timezone TEXT DEFAULT 'UTC',
-    timezone_detected BOOLEAN DEFAULT FALSE, -- Whether timezone was auto-detected
+    original_timezone TEXT, -- Original timezone for reference (all times stored as UTC)
     time_offset TEXT DEFAULT '0', -- Time offset like '+1h30m', '-45m', '+5s'
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -39,19 +38,20 @@ CREATE TABLE epg_sources (
 -- Stream Proxies Table (with all required fields from the start)
 CREATE TABLE stream_proxies (
     id TEXT PRIMARY KEY NOT NULL,
-    ulid TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     description TEXT,
     proxy_mode TEXT NOT NULL DEFAULT 'redirect' CHECK (proxy_mode IN ('redirect', 'proxy')),
     upstream_timeout INTEGER DEFAULT 30, -- Timeout in seconds
     buffer_size INTEGER DEFAULT 8192, -- Buffer size in bytes
-    max_concurrent_streams INTEGER DEFAULT 1000, -- Max concurrent streams for this proxy
+    max_concurrent_streams INTEGER DEFAULT 1, -- Max concurrent streams for this proxy
     starting_channel_number INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_generated_at TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    auto_regenerate BOOLEAN NOT NULL DEFAULT FALSE
+    auto_regenerate BOOLEAN NOT NULL DEFAULT FALSE,
+    cache_channel_logos BOOLEAN NOT NULL DEFAULT TRUE,
+    cache_program_logos BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- Junction table for proxy-source relationships (with priority ordering)
@@ -140,6 +140,7 @@ CREATE TABLE epg_programs (
     language TEXT,
     subtitles TEXT,
     aspect_ratio TEXT,
+    program_icon TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -215,7 +216,7 @@ CREATE TABLE relay_configs (
 -- Stream Access Logs Table (for metrics collection)
 CREATE TABLE stream_access_logs (
     id TEXT PRIMARY KEY NOT NULL,
-    proxy_ulid TEXT NOT NULL,
+    proxy_id TEXT NOT NULL,
     channel_id TEXT NOT NULL,
     client_ip TEXT NOT NULL,
     user_agent TEXT,
@@ -256,6 +257,27 @@ CREATE TABLE proxy_regeneration_queue (
     UNIQUE(proxy_id) -- Only one queue entry per proxy at a time
 );
 
+-- Migration Notes Table (for documenting schema changes and notes)
+CREATE TABLE migration_notes (
+    migration_id INTEGER PRIMARY KEY,
+    note TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Linked Xtream Sources Table (for automatic linking of stream and EPG sources)
+CREATE TABLE linked_xtream_sources (
+    id TEXT PRIMARY KEY NOT NULL,
+    link_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    username TEXT NOT NULL,
+    password TEXT NOT NULL,
+    stream_source_id TEXT REFERENCES stream_sources(id) ON DELETE SET NULL,
+    epg_source_id TEXT REFERENCES epg_sources(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- =============================================================================
 -- PERFORMANCE INDEXES
 -- =============================================================================
@@ -269,10 +291,10 @@ CREATE INDEX idx_epg_sources_active ON epg_sources(is_active);
 CREATE INDEX idx_epg_sources_type ON epg_sources(source_type);
 
 -- Stream Proxies
-CREATE INDEX idx_stream_proxies_ulid ON stream_proxies(ulid);
 CREATE INDEX idx_stream_proxies_active ON stream_proxies(is_active);
 CREATE INDEX idx_stream_proxies_proxy_mode ON stream_proxies(proxy_mode);
 CREATE INDEX idx_stream_proxies_auto_regenerate ON stream_proxies(auto_regenerate);
+CREATE INDEX idx_stream_proxies_cache_settings ON stream_proxies(cache_channel_logos, cache_program_logos);
 
 -- Proxy Sources
 CREATE INDEX idx_proxy_sources_priority ON proxy_sources(proxy_id, priority_order);
@@ -295,6 +317,7 @@ CREATE INDEX idx_epg_programs_source_id ON epg_programs(source_id);
 CREATE INDEX idx_epg_programs_channel_id ON epg_programs(source_id, channel_id);
 CREATE INDEX idx_epg_programs_time_range ON epg_programs(start_time, end_time);
 CREATE INDEX idx_epg_programs_start_time ON epg_programs(start_time);
+CREATE INDEX idx_epg_programs_program_icon ON epg_programs(program_icon) WHERE program_icon IS NOT NULL;
 
 -- Channel EPG Mapping
 CREATE INDEX idx_channel_epg_mapping_stream ON channel_epg_mapping(stream_channel_id);
@@ -327,8 +350,8 @@ CREATE INDEX idx_relay_configs_proxy_id ON relay_configs(proxy_id);
 CREATE INDEX idx_relay_configs_active ON relay_configs(is_active);
 CREATE INDEX idx_relay_configs_output_format ON relay_configs(output_format);
 
--- Stream Access Logs  
-CREATE INDEX idx_stream_access_logs_proxy_ulid ON stream_access_logs(proxy_ulid);
+-- Stream Access Logs
+CREATE INDEX idx_stream_access_logs_proxy_id ON stream_access_logs(proxy_id);
 CREATE INDEX idx_stream_access_logs_channel_id ON stream_access_logs(channel_id);
 CREATE INDEX idx_stream_access_logs_start_time ON stream_access_logs(start_time);
 CREATE INDEX idx_stream_access_logs_client_ip ON stream_access_logs(client_ip);
@@ -342,6 +365,12 @@ CREATE INDEX idx_relay_runtime_status_port ON relay_runtime_status(port);
 CREATE INDEX idx_proxy_regeneration_queue_scheduled ON proxy_regeneration_queue(scheduled_at, status);
 CREATE INDEX idx_proxy_regeneration_queue_status ON proxy_regeneration_queue(status);
 CREATE INDEX idx_proxy_regeneration_queue_proxy_id ON proxy_regeneration_queue(proxy_id);
+
+-- Linked Xtream Sources
+CREATE INDEX idx_linked_xtream_sources_link_id ON linked_xtream_sources(link_id);
+CREATE INDEX idx_linked_xtream_sources_stream_id ON linked_xtream_sources(stream_source_id);
+CREATE INDEX idx_linked_xtream_sources_epg_id ON linked_xtream_sources(epg_source_id);
+CREATE INDEX idx_linked_xtream_sources_credentials ON linked_xtream_sources(url, username, password);
 
 -- =============================================================================
 -- AUTOMATIC TIMESTAMP UPDATES
@@ -422,4 +451,11 @@ CREATE TRIGGER relay_runtime_status_updated_at
     FOR EACH ROW
     BEGIN
         UPDATE relay_runtime_status SET updated_at = datetime('now') WHERE config_id = NEW.config_id;
+    END;
+
+CREATE TRIGGER linked_xtream_sources_updated_at
+    AFTER UPDATE ON linked_xtream_sources
+    FOR EACH ROW
+    BEGIN
+        UPDATE linked_xtream_sources SET updated_at = datetime('now') WHERE id = NEW.id;
     END;

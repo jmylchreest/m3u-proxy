@@ -173,6 +173,89 @@ body.dark-theme {
     color: var(--text-color);
 }
 
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex: 1;
+}
+
+.stats-inline {
+    display: flex;
+    gap: 0.75rem;
+    margin-left: auto;
+}
+
+.stat-badge {
+    background: var(--primary-color);
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.channel-item {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.channel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.channel-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.channel-number {
+    background: var(--light-bg);
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--border-radius);
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.channel-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.channel-field {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.field-label {
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.field-value {
+    color: var(--text-color);
+    word-break: break-word;
+}
+
+.field-value code {
+    background: var(--light-bg);
+    padding: 0.125rem 0.25rem;
+    border-radius: 0.25rem;
+    font-size: 0.8rem;
+}
+
 /* Channel Preview Styles */
 .preview-channels-list {
     max-height: 400px;

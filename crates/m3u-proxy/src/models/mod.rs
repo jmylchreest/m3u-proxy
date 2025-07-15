@@ -48,7 +48,6 @@ pub enum StreamProxyMode {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct StreamProxy {
     pub id: Uuid,
-    pub ulid: String, // ULID for public identification
     pub name: String,
     pub description: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -61,6 +60,18 @@ pub struct StreamProxy {
     pub buffer_size: Option<i32>,
     pub max_concurrent_streams: Option<i32>,
     pub starting_channel_number: i32,
+    #[serde(default = "default_cache_channel_logos")]
+    pub cache_channel_logos: bool,
+    #[serde(default = "default_cache_program_logos")]
+    pub cache_program_logos: bool,
+}
+
+fn default_cache_channel_logos() -> bool {
+    true
+}
+
+fn default_cache_program_logos() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -123,6 +134,8 @@ pub struct StreamProxyCreateRequest {
     pub filters: Vec<ProxyFilterCreateRequest>,
     pub is_active: bool,
     pub auto_regenerate: bool, // TODO: Implement auto-regeneration functionality
+    pub cache_channel_logos: bool,
+    pub cache_program_logos: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +152,8 @@ pub struct StreamProxyUpdateRequest {
     pub filters: Vec<ProxyFilterCreateRequest>,
     pub is_active: bool,
     pub auto_regenerate: bool, // TODO: Implement auto-regeneration functionality
+    pub cache_channel_logos: bool,
+    pub cache_program_logos: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +204,8 @@ pub struct ProxyGeneration {
     pub applied_filters: Vec<String>,
     // Comprehensive performance and monitoring stats
     pub stats: Option<GenerationStats>,
+    // Add the processed channels for EPG generation
+    pub processed_channels: Option<Vec<NumberedChannel>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -809,7 +826,7 @@ pub struct ChannelNumberingState {
 }
 
 /// Channel with assigned number and assignment type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NumberedChannel {
     pub channel: Channel,
     pub assigned_number: i32,
@@ -817,7 +834,7 @@ pub struct NumberedChannel {
 }
 
 /// How a channel number was assigned
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ChannelNumberAssignmentType {
     /// Had explicit tvg-channo from data mapping
     Explicit,
@@ -899,8 +916,7 @@ pub struct EpgSource {
     pub update_cron: String,
     pub username: Option<String>,
     pub password: Option<String>,
-    pub timezone: String,
-    pub timezone_detected: bool,
+    pub original_timezone: Option<String>,
     pub time_offset: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -933,6 +949,7 @@ pub struct EpgProgram {
     pub language: Option<String>,
     pub subtitles: Option<String>,
     pub aspect_ratio: Option<String>,
+    pub program_icon: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -1103,8 +1120,7 @@ pub enum UnifiedSource {
         #[serde(flatten)]
         source: EpgSourceBase,
         // EPG-specific fields
-        timezone: String,
-        timezone_detected: bool,
+        original_timezone: Option<String>,
         time_offset: String,
     },
 }
@@ -1143,8 +1159,7 @@ pub enum UnifiedSourceWithStats {
         #[serde(flatten)]
         source: EpgSourceBase,
         // EPG-specific fields
-        timezone: String,
-        timezone_detected: bool,
+        original_timezone: Option<String>,
         time_offset: String,
         // EPG stats
         channel_count: i64,
@@ -1238,8 +1253,7 @@ impl UnifiedSourceWithStats {
 
     pub fn from_epg(epg_with_stats: EpgSourceWithStats) -> Self {
         Self::Epg {
-            timezone: epg_with_stats.source.timezone.clone(),
-            timezone_detected: epg_with_stats.source.timezone_detected,
+            original_timezone: epg_with_stats.source.original_timezone.clone(),
             time_offset: epg_with_stats.source.time_offset.clone(),
             source: EpgSourceBase {
                 id: epg_with_stats.source.id,

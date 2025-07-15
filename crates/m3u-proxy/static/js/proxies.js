@@ -1,10 +1,23 @@
 // Stream Proxies Management JavaScript
 
+// Utility function to convert UUID to base64 (URL safe, no padding)
+function uuidToBase64(uuid) {
+  // Remove hyphens and convert to bytes
+  const hex = uuid.replace(/-/g, "");
+  const bytes = [];
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(parseInt(hex.substr(i, 2), 16));
+  }
+  // Convert to base64 and make URL safe
+  let base64 = btoa(String.fromCharCode.apply(null, bytes));
+  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
 let currentProxies = [];
 let editingProxy = null;
 let previewData = null;
 let previewEpgData = null;
-let currentChannelView = "detailed";
+
 let currentStatsTab = "overview";
 let epgTooltip = null;
 let availableStreamSources = [];
@@ -308,20 +321,33 @@ function renderProxyStatusCell(proxy) {
 
 // Helper function to render proxy actions
 function renderProxyActionsCell(proxy) {
+  // Convert UUID to base64 for shorter URLs
+  const base64Id = uuidToBase64(proxy.id);
+
   return `
-        <div class="btn-group" role="group">
-            <button class="btn btn-sm btn-outline-primary" onclick="previewProxy('${proxy.id}')" title="Preview">
-                👁️
-            </button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="editProxy('${proxy.id}')" title="Edit">
-                ✏️
-            </button>
-            <button class="btn btn-sm btn-outline-success" onclick="regenerateProxy('${proxy.id}')" title="Regenerate">
-                🔄
-            </button>
-            <button class="btn btn-sm btn-outline-danger" onclick="deleteProxy('${proxy.id}')" title="Delete">
-                🗑️
-            </button>
+        <div class="btn-group-vertical" role="group">
+            <div class="btn-group mb-1" role="group">
+                <button class="btn btn-sm btn-outline-primary" onclick="previewProxy('${proxy.id}')" title="Preview">
+                    👁️
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="editProxy('${proxy.id}')" title="Edit">
+                    ✏️
+                </button>
+                <button class="btn btn-sm btn-outline-success" onclick="regenerateProxy('${proxy.id}')" title="Regenerate">
+                    🔄
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteProxy('${proxy.id}')" title="Delete">
+                    🗑️
+                </button>
+            </div>
+            <div class="btn-group" role="group">
+                <a href="/proxy/${base64Id}/m3u8" target="_blank" class="btn btn-sm btn-outline-info" title="M3U Playlist">
+                    📺 M3U
+                </a>
+                <a href="/proxy/${base64Id}/xmltv" target="_blank" class="btn btn-sm btn-outline-info" title="XMLTV EPG">
+                    📅 EPG
+                </a>
+            </div>
         </div>
     `;
 }
@@ -361,6 +387,8 @@ function clearProxyFormOld() {
   document.getElementById("proxyForm").reset();
   document.getElementById("proxyActive").checked = true;
   document.getElementById("proxyAutoRegenerate").checked = true;
+  document.getElementById("proxyCacheLogos").checked = true;
+  document.getElementById("proxyCacheProgramLogos").checked = false;
 
   // Reset priority selections
   selectedStreamSources = [];
@@ -380,6 +408,10 @@ function populateProxyForm(proxy) {
   document.getElementById("proxyActive").checked = proxy.is_active;
   document.getElementById("proxyAutoRegenerate").checked =
     proxy.auto_regenerate || false;
+  document.getElementById("proxyCacheLogos").checked =
+    proxy.cache_channel_logos !== undefined ? proxy.cache_channel_logos : true;
+  document.getElementById("proxyCacheProgramLogos").checked =
+    proxy.cache_program_logos !== undefined ? proxy.cache_program_logos : false;
 
   // Set streaming configuration
   document.getElementById("proxyMode").value = proxy.proxy_mode || "redirect";
@@ -387,7 +419,7 @@ function populateProxyForm(proxy) {
     proxy.upstream_timeout || 30;
   document.getElementById("bufferSize").value = proxy.buffer_size || 8192;
   document.getElementById("maxConcurrentStreams").value =
-    proxy.max_concurrent_streams || 1000;
+    proxy.max_concurrent_streams || 1;
   document.getElementById("startingChannelNumber").value =
     proxy.starting_channel_number || 1;
 
@@ -410,6 +442,9 @@ function populateProxyForm(proxy) {
     name: filter.filter_name,
     priority_order: filter.priority_order,
     is_active: filter.is_active,
+    is_inverse: filter.is_inverse,
+    source_type: filter.source_type,
+    starting_channel_number: filter.starting_channel_number,
   }));
 
   // Re-render all priority lists
@@ -470,6 +505,8 @@ async function saveProxy() {
     filters: filters,
     is_active: formData.has("is_active"),
     auto_regenerate: formData.has("auto_regenerate"),
+    cache_channel_logos: formData.has("cache_channel_logos"),
+    cache_program_logos: formData.has("cache_program_logos"),
   };
 
   try {
@@ -617,8 +654,33 @@ async function previewProxy(proxyId) {
     ).map((cb) => cb.value);
 
     const previewData = {
-      source_id: formData.get("source_id"),
-      filter_ids: filterIds,
+      name: formData.get("name") || "Preview",
+      description: formData.get("description") || null,
+      proxy_mode: formData.get("proxy_mode") || "direct",
+      upstream_timeout: formData.get("upstream_timeout")
+        ? parseInt(formData.get("upstream_timeout"))
+        : null,
+      buffer_size: formData.get("buffer_size")
+        ? parseInt(formData.get("buffer_size"))
+        : null,
+      max_concurrent_streams: formData.get("max_concurrent_streams")
+        ? parseInt(formData.get("max_concurrent_streams"))
+        : null,
+      starting_channel_number: formData.get("starting_channel_number")
+        ? parseInt(formData.get("starting_channel_number"))
+        : 1,
+      stream_sources: [
+        {
+          source_id: formData.get("source_id"),
+          priority_order: 1,
+        },
+      ],
+      epg_sources: [],
+      filters: filterIds.map((id, index) => ({
+        filter_id: id,
+        priority_order: index + 1,
+        is_active: true,
+      })),
     };
 
     await generatePreview(previewData);
@@ -627,13 +689,39 @@ async function previewProxy(proxyId) {
     const proxy = currentProxies.find((p) => p.id === proxyId);
     if (!proxy) return;
 
-    await generatePreview(proxy);
+    // Transform proxy object to PreviewProxyRequest format
+    const previewData = {
+      name: proxy.name,
+      description: proxy.description,
+      proxy_mode: proxy.proxy_mode || "direct",
+      upstream_timeout: proxy.upstream_timeout,
+      buffer_size: proxy.buffer_size,
+      max_concurrent_streams: proxy.max_concurrent_streams,
+      starting_channel_number: proxy.starting_channel_number || 1,
+      stream_sources: (proxy.stream_sources || []).map((source, index) => ({
+        source_id: source.source_id,
+        priority_order: source.priority_order || index + 1,
+      })),
+      epg_sources: (proxy.epg_sources || []).map((epg, index) => ({
+        epg_source_id: epg.epg_source_id,
+        priority_order: epg.priority_order || index + 1,
+      })),
+      filters: (proxy.filters || []).map((filter, index) => ({
+        filter_id: filter.filter_id,
+        priority_order: filter.priority_order || index + 1,
+        is_active: filter.is_active !== undefined ? filter.is_active : true,
+      })),
+    };
+
+    await generatePreview(previewData);
   }
 }
 
 // Generate preview data
 async function generatePreview(proxyData) {
   try {
+    console.log("Sending preview request with data:", proxyData);
+
     // Show loading modal immediately
     showPreviewModal(true); // Pass true to indicate loading state
 
@@ -645,7 +733,13 @@ async function generatePreview(proxyData) {
       body: JSON.stringify(proxyData),
     });
 
-    if (!response.ok) throw new Error("Failed to generate preview");
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Preview API error:", response.status, errorText);
+      throw new Error(
+        `Failed to generate preview: ${response.status} ${response.statusText}`,
+      );
+    }
 
     previewData = await response.json();
 
@@ -654,7 +748,13 @@ async function generatePreview(proxyData) {
   } catch (error) {
     console.error("Error generating preview:", error);
     SharedUtils.hideStandardModal("proxyPreviewModal");
-    SharedUtils.showError("Failed to generate preview");
+
+    // Show more detailed error message
+    const errorMessage = error.message.includes("Failed to fetch")
+      ? "Server connection failed. Please check if the server is running and try again."
+      : `Preview generation failed: ${error.message}`;
+
+    SharedUtils.showError(errorMessage);
   }
 }
 
@@ -730,26 +830,22 @@ function updateChannelsContent() {
   // Update group filter options
   populateGroupFilter();
 
-  let html = `
-    <div class="preview-stats">
-      <div class="stats-grid">
-        <div class="stat-item">
-          <span class="stat-label">Total Channels:</span>
-          <span class="stat-value">${stats.total_channels || stats.filtered_channels || channels.length}</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Unique Groups:</span>
-          <span class="stat-value">${Object.keys(stats.channels_by_group || {}).length}</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Applied Filters:</span>
-          <span class="stat-value">${stats.applied_filters?.length || 0}</span>
-        </div>
-      </div>
-    </div>
+  // Update inline stats badges
+  const totalChannelsBadge = document.getElementById("totalChannelsBadge");
+  const uniqueGroupsBadge = document.getElementById("uniqueGroupsBadge");
+  const appliedFiltersBadge = document.getElementById("appliedFiltersBadge");
 
-    <div class="preview-channels-list ${currentChannelView}" id="previewChannelsList">
-  `;
+  if (totalChannelsBadge) {
+    totalChannelsBadge.textContent = `${stats.total_channels || stats.filtered_channels || channels.length} channels`;
+  }
+  if (uniqueGroupsBadge) {
+    uniqueGroupsBadge.textContent = `${Object.keys(stats.channels_by_group || {}).length} groups`;
+  }
+  if (appliedFiltersBadge) {
+    appliedFiltersBadge.textContent = `${stats.applied_filters?.length || 0} filters`;
+  }
+
+  let html = "";
 
   if (channels.length === 0) {
     html += '<div class="no-results">No channels found</div>';
@@ -759,51 +855,70 @@ function updateChannelsContent() {
     });
   }
 
-  html += "</div>";
   channelsContainer.innerHTML = html;
 }
 
 function renderChannelItem(channel, index) {
   const channelData = channel.channel || channel;
-  const isDetailed = currentChannelView === "detailed";
 
   let html = `
-    <div class="channel-preview-item ${isDetailed ? "detailed" : "compact"}"
+    <div class="channel-item"
          data-channel-name="${escapeHtml(channelData.channel_name || "")}"
          data-group="${escapeHtml(channelData.group_title || channelData.channel_group || "")}">
       <div class="channel-header">
-        <span class="channel-name">${escapeHtml(channelData.channel_name || "Unknown Channel")}</span>
+        <span class="channel-title">${escapeHtml(channelData.channel_name || "Unknown Channel")}</span>
         <span class="channel-number">#${channelData.channel_number || index + 1}</span>
-        ${isDetailed ? '<button class="btn btn-sm btn-outline-secondary toggle-details" onclick="toggleChannelDetails(this)">▼</button>' : ""}
       </div>
+      <div class="channel-details">
   `;
 
-  if (isDetailed) {
-    html += `
-      <div class="channel-details">
-        <div class="channel-basic-info">
-          ${channelData.group_title || channelData.channel_group ? `<span class="channel-group">📁 ${escapeHtml(channelData.group_title || channelData.channel_group)}</span>` : ""}
-          ${channelData.tvg_id || channelData.channel_id ? `<span class="channel-tvg-id">🆔 ${escapeHtml(channelData.tvg_id || channelData.channel_id)}</span>` : ""}
-          ${channelData.language ? `<span class="channel-language">🌐 ${escapeHtml(channelData.language)}</span>` : ""}
-        </div>
-        <div class="channel-extended-info" style="display: none;">
-          ${channelData.tvg_logo || channelData.channel_logo ? `<div class="channel-logo"><img src="${escapeHtml(channelData.tvg_logo || channelData.channel_logo)}" alt="Logo" onerror="this.style.display='none'"></div>` : ""}
-          ${channelData.url ? `<div class="channel-url"><strong>URL:</strong> <code>${escapeHtml(channelData.url)}</code></div>` : ""}
-          ${channelData.created_at ? `<div class="channel-timestamp"><strong>Added:</strong> ${new Date(channelData.created_at).toLocaleString()}</div>` : ""}
-          ${channelData.updated_at ? `<div class="channel-timestamp"><strong>Updated:</strong> ${new Date(channelData.updated_at).toLocaleString()}</div>` : ""}
-        </div>
-      </div>
-    `;
-  } else {
-    html += `
-      <div class="channel-compact-info">
-        ${channelData.group_title || channelData.channel_group ? `<span class="channel-group">${escapeHtml(channelData.group_title || channelData.channel_group)}</span>` : ""}
-        ${channelData.tvg_logo || channelData.channel_logo ? `<img class="channel-logo-small" src="${escapeHtml(channelData.tvg_logo || channelData.channel_logo)}" alt="Logo" onerror="this.style.display='none'">` : ""}
-      </div>
-    `;
-  }
+  // Add channel fields if they exist
+  const fields = [
+    {
+      label: "Group",
+      value: channelData.group_title || channelData.channel_group,
+    },
+    { label: "TVG ID", value: channelData.tvg_id || channelData.channel_id },
+    {
+      label: "TVG Logo",
+      value: channelData.tvg_logo || channelData.channel_logo,
+    },
+    { label: "Stream URL", value: channelData.stream_url || channelData.url },
+    { label: "Channel Number", value: channelData.tvg_chno },
+    {
+      label: "Language",
+      value: channelData.tvg_language || channelData.language,
+    },
+    { label: "Country", value: channelData.tvg_country || channelData.country },
+    { label: "Time Shift", value: channelData.tvg_shift },
+    { label: "Group Logo", value: channelData.group_logo },
+    { label: "Radio", value: channelData.radio },
+    { label: "Source", value: channelData.source_name },
+  ];
 
-  html += "</div>";
+  fields.forEach((field) => {
+    if (field.value) {
+      const displayValue =
+        field.label === "Stream URL" ||
+        field.label === "TVG Logo" ||
+        field.label === "Group Logo"
+          ? `<code>${escapeHtml(field.value)}</code>`
+          : escapeHtml(field.value);
+
+      html += `
+        <div class="channel-field">
+          <span class="field-label">${field.label}:</span>
+          <span class="field-value">${displayValue}</span>
+        </div>
+      `;
+    }
+  });
+
+  html += `
+      </div>
+    </div>
+  `;
+
   return html;
 }
 
@@ -1065,7 +1180,7 @@ function filterPreviewChannels() {
   const searchTerm =
     document.getElementById("channelSearch")?.value.toLowerCase() || "";
   const groupFilter = document.getElementById("groupFilter")?.value || "";
-  const channelItems = document.querySelectorAll(".channel-preview-item");
+  const channelItems = document.querySelectorAll(".channel-item");
 
   channelItems.forEach((item) => {
     const channelName = item.dataset.channelName?.toLowerCase() || "";
@@ -1625,7 +1740,7 @@ function populateFilterSelection() {
       <div class="source-selection-item ${isSelected ? "selected" : ""}" onclick="toggleFilterSelection('${filter.id}')">
         <input type="checkbox" id="filter_${filter.id}" ${isSelected ? "checked" : ""} onchange="toggleFilterSelection('${filter.id}')" />
         <div class="source-selection-title">${title} <sup class="text-muted">${type}</sup></div>
-        <div class="source-selection-stats">${filter.source_type || "Filter"}</div>
+        <div class="source-selection-stats">${filter.source_type || "stream"}</div>
       </div>
     `;
   });
@@ -1737,6 +1852,8 @@ function clearProxyForm() {
   // Set default values
   document.getElementById("proxyActive").checked = true;
   document.getElementById("proxyAutoRegenerate").checked = true;
+  document.getElementById("proxyCacheLogos").checked = true;
+  document.getElementById("proxyCacheProgramLogos").checked = false;
 
   // Reset priority selections
   selectedStreamSources = [];
@@ -1750,34 +1867,6 @@ function clearProxyForm() {
 }
 
 // Enhanced Preview Functions
-
-function toggleChannelView(view) {
-  currentChannelView = view;
-
-  // Update button states
-  document
-    .getElementById("listViewBtn")
-    .classList.toggle("active", view === "list");
-  document
-    .getElementById("detailedViewBtn")
-    .classList.toggle("active", view === "detailed");
-
-  // Re-render channels
-  updateChannelsContent();
-}
-
-function toggleChannelDetails(button) {
-  const item = button.closest(".channel-preview-item");
-  const details = item.querySelector(".channel-extended-info");
-
-  if (details.style.display === "none") {
-    details.style.display = "block";
-    button.textContent = "▲";
-  } else {
-    details.style.display = "none";
-    button.textContent = "▼";
-  }
-}
 
 function showStatsTab(tabName) {
   currentStatsTab = tabName;
@@ -2208,7 +2297,7 @@ function filterPreviewChannels() {
     .value.toLowerCase();
   const selectedGroup = document.getElementById("groupFilter").value;
 
-  const channelItems = document.querySelectorAll(".channel-preview-item");
+  const channelItems = document.querySelectorAll(".channel-item");
 
   channelItems.forEach((item) => {
     const channelName = item.dataset.channelName.toLowerCase();

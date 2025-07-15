@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::StatusCode,
     response::Json,
 };
@@ -7,15 +7,15 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 use serde_json::json;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use uuid::Uuid;
+use serde::{Deserialize, Serialize};
 
 use super::AppState;
 
 use crate::data_mapping::DataMappingService;
 use crate::models::*;
 use crate::proxy::generator::ProxyGenerator;
-use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct ChannelQueryParams {
@@ -307,16 +307,72 @@ pub async fn regenerate_proxy(
                 .await
             {
                 Ok(_) => {
-                    info!(
-                        "Successfully regenerated proxy '{}' with {} channels",
-                        proxy.name, generation.channel_count
-                    );
-                    Ok(Json(serde_json::json!({
-                        "success": true,
-                        "message": format!("Proxy '{}' regenerated successfully", proxy.name),
-                        "channel_count": generation.channel_count,
-                        "regenerated_at": generation.created_at
-                    })))
+                    // Generate and save XMLTV content using processed channels
+                    let epg_generator =
+                        crate::proxy::epg_generator::EpgGenerator::new(state.database.clone());
+                    let epg_config =
+                        Some(crate::proxy::epg_generator::EpgGenerationConfig::default());
+
+                    // Use processed channels from the generation
+                    let processed_channels = generation
+                        .processed_channels
+                        .as_ref()
+                        .expect("Processed channels should be available after generation");
+
+                    match epg_generator
+                        .generate_xmltv_for_proxy_with_processed_channels(
+                            &proxy,
+                            processed_channels,
+                            &state.logo_asset_service,
+                            &state.config.web.base_url,
+                            epg_config,
+                        )
+                        .await
+                    {
+                        Ok((xmltv_content, _stats)) => {
+                            // Save the XMLTV file
+                            match proxy_generator
+                                .save_xmltv_file(proxy.id, &xmltv_content)
+                                .await
+                            {
+                                Ok(_) => {
+                                    info!(
+                                        "Successfully regenerated proxy '{}' with {} channels and EPG",
+                                        proxy.name, generation.channel_count
+                                    );
+                                    Ok(Json(serde_json::json!({
+                                        "success": true,
+                                        "message": format!("Proxy '{}' and EPG regenerated successfully", proxy.name),
+                                        "channel_count": generation.channel_count,
+                                        "regenerated_at": generation.created_at
+                                    })))
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to save regenerated XMLTV for proxy {}: {}",
+                                        proxy_id, e
+                                    );
+                                    // M3U was saved successfully, so we'll return partial success
+                                    Ok(Json(serde_json::json!({
+                                        "success": true,
+                                        "message": format!("Proxy '{}' regenerated successfully, but EPG generation failed: {}", proxy.name, e),
+                                        "channel_count": generation.channel_count,
+                                        "regenerated_at": generation.created_at
+                                    })))
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to generate XMLTV for proxy {}: {}", proxy_id, e);
+                            // M3U was saved successfully, so we'll return partial success
+                            Ok(Json(serde_json::json!({
+                                "success": true,
+                                "message": format!("Proxy '{}' regenerated successfully, but EPG generation failed: {}", proxy.name, e),
+                                "channel_count": generation.channel_count,
+                                "regenerated_at": generation.created_at
+                            })))
+                        }
+                    }
                 }
                 Err(e) => {
                     error!(
@@ -344,16 +400,21 @@ pub async fn list_filters(
             let enhanced_filters: Vec<serde_json::Value> = filters
                 .into_iter()
                 .map(|filter_with_usage| {
-                    let expression_tree = if !filter_with_usage.filter.condition_tree.trim().is_empty() {
-                        // Parse the condition_tree JSON to generate expression tree
-                        if let Ok(condition_tree) = serde_json::from_str::<crate::models::ConditionTree>(&filter_with_usage.filter.condition_tree) {
-                            Some(generate_expression_tree_json(&condition_tree))
+                    let expression_tree =
+                        if !filter_with_usage.filter.condition_tree.trim().is_empty() {
+                            // Parse the condition_tree JSON to generate expression tree
+                            if let Ok(condition_tree) =
+                                serde_json::from_str::<crate::models::ConditionTree>(
+                                    &filter_with_usage.filter.condition_tree,
+                                )
+                            {
+                                Some(generate_expression_tree_json(&condition_tree))
+                            } else {
+                                None
+                            }
                         } else {
                             None
-                        }
-                    } else {
-                        None
-                    };
+                        };
 
                     serde_json::json!({
                         "filter": filter_with_usage.filter,
@@ -828,9 +889,7 @@ pub async fn list_data_mapping_rules(
                                     groups,
                                 ) => {
                                     if let Some(first_group) = groups.first() {
-                                        Some(generate_expression_tree_json(
-                                            &first_group.conditions,
-                                        ))
+                                        Some(generate_expression_tree_json(&first_group.conditions))
                                     } else {
                                         None
                                     }
@@ -1732,22 +1791,127 @@ pub async fn list_logo_assets(
     Query(params): Query<crate::models::logo_asset::LogoAssetListRequest>,
     State(state): State<AppState>,
 ) -> Result<Json<crate::models::logo_asset::LogoAssetListResponse>, StatusCode> {
-    match state
-        .logo_asset_service
-        .list_assets(params, &state.config.web.base_url)
-        .await
-    {
-        Ok(response) => Ok(Json(response)),
-        Err(e) => {
-            error!("Failed to list logo assets: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+    let include_cached = params.include_cached.unwrap_or(true);
+
+    if include_cached && state.logo_cache_scanner.is_some() {
+        // Use enhanced listing with cached logos
+        match list_logo_assets_with_cached(params, &state).await {
+            Ok(response) => Ok(Json(response)),
+            Err(e) => {
+                error!("Failed to list logo assets with cached: {}", e);
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    } else {
+        // Use standard database-only listing
+        match state.logo_asset_service.list_assets(params).await {
+            Ok(response) => Ok(Json(response)),
+            Err(e) => {
+                error!("Failed to list logo assets: {}", e);
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     }
 }
 
+/// Enhanced logo listing that includes cached logos from filesystem
+async fn list_logo_assets_with_cached(
+    params: crate::models::logo_asset::LogoAssetListRequest,
+    state: &AppState,
+) -> Result<crate::models::logo_asset::LogoAssetListResponse, anyhow::Error> {
+    use crate::models::logo_asset::*;
+
+    let page = params.page.unwrap_or(1);
+    let limit = params.limit.unwrap_or(20);
+    let search_query = params.search.as_deref();
+
+    // Get database assets
+    let db_response = state.logo_asset_service.list_assets(params.clone()).await?;
+    let mut all_assets = db_response.assets;
+
+    // Add cached logos if scanner is available
+    if let Some(scanner) = &state.logo_cache_scanner {
+        debug!(
+            "Logo cache scanner available, searching for cached logos with query: {:?}",
+            search_query
+        );
+        let cached_logos = scanner
+            .search_cached_logos(search_query, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to search cached logos: {}", e))?;
+
+        debug!("Found {} cached logos from scanner", cached_logos.len());
+
+        // Convert cached logos to LogoAssetWithUrl format
+        let mut converted_count = 0;
+        for cached_logo in cached_logos {
+            let asset_like = cached_logo.to_logo_asset_like(&state.config.web.base_url);
+
+            // Convert JSON value to LogoAssetWithUrl
+            match serde_json::from_value::<LogoAssetWithUrl>(asset_like.clone()) {
+                Ok(logo_asset_with_url) => {
+                    all_assets.push(logo_asset_with_url);
+                    converted_count += 1;
+                }
+                Err(e) => {
+                    debug!(
+                        "Failed to convert cached logo to LogoAssetWithUrl: {}. JSON: {}",
+                        e, asset_like
+                    );
+                }
+            }
+        }
+        debug!(
+            "Successfully converted {} cached logos to LogoAssetWithUrl",
+            converted_count
+        );
+    } else {
+        debug!("No logo cache scanner available");
+    }
+
+    // Apply search filter if provided (for database assets that might not have been filtered)
+    if let Some(query) = search_query {
+        let query_lower = query.to_lowercase();
+        all_assets.retain(|asset| {
+            asset.asset.name.to_lowercase().contains(&query_lower)
+                || asset.asset.file_name.to_lowercase().contains(&query_lower)
+                || asset
+                    .asset
+                    .description
+                    .as_ref()
+                    .map(|desc| desc.to_lowercase().contains(&query_lower))
+                    .unwrap_or(false)
+        });
+    }
+
+    // Sort by updated_at descending (most recent first)
+    all_assets.sort_by(|a, b| b.asset.updated_at.cmp(&a.asset.updated_at));
+
+    // Calculate pagination
+    let total_count = all_assets.len() as i64;
+    let total_pages = ((total_count as f64) / (limit as f64)).ceil() as u32;
+
+    // Apply pagination
+    let start_idx = ((page - 1) * limit) as usize;
+    let end_idx = (start_idx + limit as usize).min(all_assets.len());
+    let paginated_assets = if start_idx < all_assets.len() {
+        all_assets[start_idx..end_idx].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    Ok(LogoAssetListResponse {
+        assets: paginated_assets,
+        total_count,
+        page,
+        limit,
+        total_pages,
+    })
+}
+
 pub async fn upload_logo_asset(
     State(state): State<AppState>,
-    mut multipart: axum::extract::Multipart,
+    mut multipart: Multipart,
 ) -> Result<Json<crate::models::logo_asset::LogoAssetUploadResponse>, StatusCode> {
     use crate::models::logo_asset::{LogoAssetCreateRequest, LogoAssetUploadResponse};
 
@@ -1808,20 +1972,49 @@ pub async fn upload_logo_asset(
         source_url: None,
     };
 
+    // For now, use a simplified upload approach until we implement the full conversion logic
+    let asset_id = uuid::Uuid::new_v4();
+    let file_extension = content_type.split('/').last().unwrap_or("img");
+
     match state
         .logo_asset_service
-        .create_asset_from_upload_with_conversion(create_request, &data, &content_type)
+        .storage
+        .save_uploaded_file(data.to_vec(), asset_id, file_extension)
         .await
     {
-        Ok(asset) => Ok(Json(LogoAssetUploadResponse {
-            id: asset.id,
-            name: asset.name,
-            file_name: asset.file_name,
-            file_size: asset.file_size,
-            url: format!("/logos/{}", asset.id),
-        })),
+        Ok((file_name, file_path, file_size, mime_type, dimensions)) => {
+            match state
+                .logo_asset_service
+                .create_asset_with_id(
+                    asset_id,
+                    create_request.name,
+                    create_request.description,
+                    file_name,
+                    file_path,
+                    file_size,
+                    mime_type,
+                    crate::models::logo_asset::LogoAssetType::Uploaded,
+                    None, // source_url
+                    dimensions.map(|(w, _)| w as i32),
+                    dimensions.map(|(_, h)| h as i32),
+                )
+                .await
+            {
+                Ok(asset) => Ok(Json(LogoAssetUploadResponse {
+                    id: asset.id,
+                    name: asset.name,
+                    file_name: asset.file_name,
+                    file_size: asset.file_size,
+                    url: format!("/api/v1/logos/{}", asset.id),
+                })),
+                Err(e) => {
+                    error!("Failed to create logo asset: {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        }
         Err(e) => {
-            error!("Failed to create logo asset: {}", e);
+            error!("Failed to save uploaded file: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -1946,7 +2139,11 @@ pub async fn update_logo_asset(
     State(state): State<AppState>,
     Json(payload): Json<crate::models::logo_asset::LogoAssetUpdateRequest>,
 ) -> Result<Json<crate::models::logo_asset::LogoAsset>, StatusCode> {
-    match state.logo_asset_service.update_asset(id, payload).await {
+    match state
+        .logo_asset_service
+        .update_asset(id, payload.name, payload.description)
+        .await
+    {
         Ok(asset) => Ok(Json(asset)),
         Err(e) => {
             error!("Failed to update logo asset {}: {}", id, e);
@@ -2012,38 +2209,37 @@ pub async fn get_cached_logo_asset(
     Path(cache_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<(axum::http::HeaderMap, Vec<u8>), StatusCode> {
-    use crate::services::file_categories::FileCategory;
-    
-    // Build the subdirectory path
-    let subdirectory = FileCategory::LogoCached.subdirectory();
-    
-    // Try PNG first (normalized format: cache_id.png)
+    // The file manager's base is already the cached logo directory, so use direct paths
     let mut file_extension = "png".to_string();
-    let file_data = match state.logo_file_manager.read(
-        &format!("{}/{}.png", subdirectory, cache_id)
-    ).await {
+    let file_data = match state
+        .logo_file_manager
+        .read(&format!("{}.png", cache_id))
+        .await
+    {
         Ok(data) => {
-            info!("Serving normalized cached logo: {}.png", cache_id);
+            debug!("Serving normalized cached logo: {}.png", cache_id);
             data
-        },
+        }
         Err(_) => {
             // Fall back to legacy format with other extensions
             let mut found_data = None;
             for ext in &["jpg", "jpeg", "gif", "webp", "svg"] {
-                match state.logo_file_manager.read(
-                    &format!("{}/{}.{}", subdirectory, cache_id, ext)
-                ).await {
+                match state
+                    .logo_file_manager
+                    .read(&format!("{}.{}", cache_id, ext))
+                    .await
+                {
                     Ok(data) => {
                         file_extension = ext.to_string();
                         found_data = Some(data);
-                        info!("Serving legacy cached logo: {}.{}", cache_id, ext);
+                        debug!("Serving legacy cached logo: {}.{}", cache_id, ext);
                         break;
                     }
                     Err(_) => continue,
                 }
             }
             found_data.ok_or_else(|| {
-                info!("Cached logo not found: {}", cache_id);
+                debug!("Cached logo not found: {}", cache_id);
                 StatusCode::NOT_FOUND
             })?
         }
@@ -2069,7 +2265,7 @@ pub async fn get_cached_logo_asset(
         axum::http::header::CACHE_CONTROL,
         "public, max-age=2592000".parse().unwrap(), // 30 days cache
     );
-    
+
     Ok((headers, file_data))
 }
 
@@ -2107,6 +2303,11 @@ pub async fn create_stream_source(
 ) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
     match state.database.create_stream_source(&payload).await {
         Ok(source) => {
+            // Try to auto-link with existing EPG sources if this is an Xtream source
+            if let Err(e) = state.database.auto_link_stream_source(&source).await {
+                error!("Failed to auto-link stream source '{}': {}", source.name, e);
+            }
+
             // Invalidate scheduler cache since we added a new source
             let _ = state.cache_invalidation_tx.send(());
 
@@ -2151,7 +2352,10 @@ pub async fn create_stream_source(
                                 } else if let Err(e) =
                                     database.update_source_last_ingested(source_id).await
                                 {
-                                    error!("Failed to update last_ingested_at for stream source '{}': {}", source_name, e);
+                                    error!(
+                                        "Failed to update last_ingested_at for stream source '{}': {}",
+                                        source_name, e
+                                    );
                                 } else {
                                     // Mark ingestion as completed with final channel count
                                     state_manager
@@ -2381,6 +2585,11 @@ pub async fn create_epg_source_unified(
 ) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
     match state.database.create_epg_source(&payload).await {
         Ok(source) => {
+            // Try to auto-link with existing stream sources if this is an Xtream source
+            if let Err(e) = state.database.auto_link_epg_source(&source).await {
+                error!("Failed to auto-link EPG source '{}': {}", source.name, e);
+            }
+
             let _ = state.cache_invalidation_tx.send(());
 
             // Trigger immediate refresh
@@ -2410,27 +2619,12 @@ pub async fn create_epg_source_unified(
                             .ingest_epg_source_with_trigger(&epg_source, ProcessingTrigger::Manual)
                             .await
                         {
-                            Ok((channels, mut programs, detected_timezone)) => {
+                            Ok((channels, mut programs, _detected_timezone)) => {
                                 // Update channel names in programs
                                 ingestor.update_channel_names(&channels, &mut programs);
 
-                                // Update detected timezone if found
-                                if let Some(ref detected_tz) = detected_timezone {
-                                    if detected_tz != &epg_source.timezone
-                                        && !epg_source.timezone_detected
-                                    {
-                                        info!(
-                                            "Updating EPG source '{}' timezone from '{}' to detected '{}'",
-                                            source_name, epg_source.timezone, detected_tz
-                                        );
-                                        let _ = database
-                                            .update_epg_source_detected_timezone(
-                                                source_id,
-                                                detected_tz,
-                                            )
-                                            .await;
-                                    }
-                                }
+                                // Note: Timezone detection was simplified in migration 004
+                                // All times are now normalized to UTC during processing
 
                                 // Save to database using cancellation-aware method
                                 match ingestor
@@ -2443,7 +2637,10 @@ pub async fn create_epg_source_unified(
                                             .update_epg_source_last_ingested(source_id)
                                             .await
                                         {
-                                            error!("Failed to update last_ingested_at for EPG source '{}': {}", source_name, e);
+                                            error!(
+                                                "Failed to update last_ingested_at for EPG source '{}': {}",
+                                                source_name, e
+                                            );
                                         }
 
                                         info!(
@@ -2671,7 +2868,7 @@ pub async fn search_logo_assets(
     State(state): State<AppState>,
 ) -> Result<Json<crate::models::logo_asset::LogoAssetSearchResult>, StatusCode> {
     let include_cached = params.include_cached.unwrap_or(true); // Default to include cached
-    
+
     if include_cached && state.logo_cache_scanner.is_some() {
         // Use the enhanced search with cached logos
         match state
@@ -2731,12 +2928,14 @@ pub async fn get_logo_asset_with_formats(
                 .collect();
 
             // Build available formats list
-            let mut available_formats = vec![asset
-                .mime_type
-                .split('/')
-                .last()
-                .unwrap_or("unknown")
-                .to_string()];
+            let mut available_formats = vec![
+                asset
+                    .mime_type
+                    .split('/')
+                    .last()
+                    .unwrap_or("unknown")
+                    .to_string(),
+            ];
             for linked in &linked_with_urls {
                 if let Some(format) = linked.asset.mime_type.split('/').last() {
                     if !available_formats.contains(&format.to_string()) {
@@ -2761,14 +2960,42 @@ pub async fn get_logo_asset_with_formats(
 pub async fn get_logo_cache_stats(
     State(state): State<AppState>,
 ) -> Result<Json<crate::models::logo_asset::LogoCacheStats>, StatusCode> {
-    match state.logo_asset_service.get_cache_stats_with_filesystem(
-        state.logo_cache_scanner.as_ref()
-    ).await {
+    match state
+        .logo_asset_service
+        .get_cache_stats_with_filesystem(state.logo_cache_scanner.as_ref())
+        .await
+    {
         Ok(stats) => Ok(Json(stats)),
         Err(e) => {
             error!("Failed to get logo cache stats: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
+    }
+}
+
+/// Generate missing metadata for cached logos
+pub async fn generate_cached_logo_metadata(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if let Some(scanner) = &state.logo_cache_scanner {
+        match state
+            .logo_asset_service
+            .ensure_cached_logo_metadata(scanner)
+            .await
+        {
+            Ok(generated_count) => Ok(Json(serde_json::json!({
+                "success": true,
+                "message": "Metadata generation completed",
+                "generated_count": generated_count
+            }))),
+            Err(e) => {
+                error!("Failed to generate cached logo metadata: {}", e);
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    } else {
+        error!("Logo cache scanner not available");
+        Err(StatusCode::SERVICE_UNAVAILABLE)
     }
 }
 
@@ -3038,7 +3265,6 @@ pub async fn auto_map_channels(
     }
 }
 
-
 /// Count conditions in a condition tree
 fn count_conditions_in_tree(tree: &crate::models::ConditionTree) -> usize {
     count_conditions_in_node(&tree.root)
@@ -3083,7 +3309,7 @@ fn generate_condition_node_json(node: &crate::models::ConditionNode) -> serde_js
                 crate::models::LogicalOperator::And => "AND",
                 crate::models::LogicalOperator::Or => "OR",
             };
-            
+
             json!({
                 "type": "group",
                 "operator": operator_str,
@@ -3099,7 +3325,10 @@ pub async fn get_sources_progress(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // Get progress for all active stream sources
     let stream_sources = match state.database.list_stream_sources().await {
-        Ok(sources) => sources.into_iter().filter(|s| s.is_active).collect::<Vec<_>>(),
+        Ok(sources) => sources
+            .into_iter()
+            .filter(|s| s.is_active)
+            .collect::<Vec<_>>(),
         Err(e) => {
             error!("Failed to list stream sources for progress: {}", e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -3110,7 +3339,7 @@ pub async fn get_sources_progress(
     for source in stream_sources {
         let progress = state.state_manager.get_progress(source.id).await;
         let processing_info = state.state_manager.get_processing_info(source.id).await;
-        
+
         sources_progress.push(json!({
             "source_id": source.id,
             "source_name": source.name,
@@ -3126,13 +3355,16 @@ pub async fn get_sources_progress(
     })))
 }
 
-/// Get progress for all EPG sources (used by frontend polling)  
+/// Get progress for all EPG sources (used by frontend polling)
 pub async fn get_epg_progress(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // Get progress for all active EPG sources
     let epg_sources = match state.database.list_epg_sources().await {
-        Ok(sources) => sources.into_iter().filter(|s| s.is_active).collect::<Vec<_>>(),
+        Ok(sources) => sources
+            .into_iter()
+            .filter(|s| s.is_active)
+            .collect::<Vec<_>>(),
         Err(e) => {
             error!("Failed to list EPG sources for progress: {}", e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -3143,7 +3375,7 @@ pub async fn get_epg_progress(
     for source in epg_sources {
         let progress = state.state_manager.get_progress(source.id).await;
         let processing_info = state.state_manager.get_processing_info(source.id).await;
-        
+
         sources_progress.push(json!({
             "source_id": source.id,
             "source_name": source.name,
@@ -3159,8 +3391,7 @@ pub async fn get_epg_progress(
     })))
 }
 
-
-/// Get stream fields for data mapping  
+/// Get stream fields for data mapping
 pub async fn get_stream_fields(
     _state: State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -3192,7 +3423,6 @@ pub async fn get_epg_fields(
         ]
     })))
 }
-
 
 /// Preview proxies (placeholder implementation)
 pub async fn preview_proxies(
@@ -3248,7 +3478,7 @@ pub async fn create_relay_config(
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    
+
     Ok(Json(config))
 }
 
@@ -3314,7 +3544,7 @@ pub async fn start_relay(
     // 3. Store process info in relay manager
     // 4. Return status
     let _ = config_id;
-    
+
     Ok(Json(json!({
         "success": false,
         "message": "Relay startup not yet implemented",
@@ -3333,10 +3563,147 @@ pub async fn stop_relay(
     // 3. Clean up resources
     // 4. Update status
     let _ = config_id;
-    
+
     Ok(Json(json!({
         "success": false,
         "message": "Relay shutdown not yet implemented",
         "config_id": config_id
     })))
+}
+
+// Metrics API structures
+#[derive(Debug, Serialize)]
+pub struct DashboardMetrics {
+    pub total_channels: u64,
+    pub active_streams: u64,
+    pub active_clients: u64,
+    pub total_proxies: u64,
+    pub system_uptime: String,
+    pub bytes_served_today: u64,
+    pub popular_channels: Vec<PopularChannel>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PopularChannel {
+    pub channel_id: String,
+    pub channel_name: String,
+    pub session_count: u64,
+    pub bytes_served: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RealtimeMetrics {
+    pub active_sessions: u64,
+    pub active_clients: u64,
+    pub bytes_per_second: u64,
+    pub proxy_breakdown: Vec<ProxyMetrics>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProxyMetrics {
+    pub proxy_id: String,
+    pub proxy_name: String,
+    pub active_sessions: u64,
+    pub active_clients: u64,
+    pub bytes_per_second: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UsageMetrics {
+    pub hourly_sessions: Vec<HourlyUsage>,
+    pub daily_sessions: Vec<DailyUsage>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HourlyUsage {
+    pub hour: String,
+    pub total_sessions: u64,
+    pub unique_clients: u64,
+    pub bytes_served: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DailyUsage {
+    pub date: String,
+    pub total_sessions: u64,
+    pub unique_clients: u64,
+    pub bytes_served: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UsageQuery {
+    pub proxy_id: Option<String>,
+    pub days: Option<u32>,
+    pub hours: Option<u32>,
+}
+
+
+/// Get dashboard metrics overview
+pub async fn get_dashboard_metrics(
+    State(state): State<AppState>,
+) -> Result<Json<DashboardMetrics>, StatusCode> {
+    let db = &state.database.pool();
+    
+    // Get total channels across all proxies
+    let total_channels = match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM channels")
+        .fetch_one(db)
+        .await {
+        Ok(count) => count as u64,
+        Err(e) => {
+            error!("Failed to get total channels: {}", e);
+            0
+        }
+    };
+    
+    // Get total proxies
+    let total_proxies = match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM stream_proxies")
+        .fetch_one(db)
+        .await {
+        Ok(count) => count as u64,
+        Err(e) => {
+            error!("Failed to get total proxies: {}", e);
+            0
+        }
+    };
+    
+    Ok(Json(DashboardMetrics {
+        total_channels,
+        active_streams: 0, // TODO: Query active_stream_sessions
+        active_clients: 0, // TODO: Query active_stream_sessions
+        total_proxies,
+        system_uptime: "99.8%".to_string(),
+        bytes_served_today: 0, // TODO: Query stream_stats_daily
+        popular_channels: Vec::new(), // TODO: Query popular channels
+    }))
+}
+
+/// Get real-time metrics
+pub async fn get_realtime_metrics(
+    State(_state): State<AppState>,
+) -> Result<Json<RealtimeMetrics>, StatusCode> {
+    Ok(Json(RealtimeMetrics {
+        active_sessions: 0,
+        active_clients: 0,
+        bytes_per_second: 0,
+        proxy_breakdown: Vec::new(),
+    }))
+}
+
+/// Get usage metrics over time
+pub async fn get_usage_metrics(
+    Query(_params): Query<UsageQuery>,
+    State(_state): State<AppState>,
+) -> Result<Json<UsageMetrics>, StatusCode> {
+    Ok(Json(UsageMetrics {
+        hourly_sessions: Vec::new(),
+        daily_sessions: Vec::new(),
+    }))
+}
+
+/// Get popular channels
+pub async fn get_popular_channels(
+    Query(_params): Query<UsageQuery>,
+    State(_state): State<AppState>,
+) -> Result<Json<Vec<PopularChannel>>, StatusCode> {
+    Ok(Json(Vec::new()))
 }

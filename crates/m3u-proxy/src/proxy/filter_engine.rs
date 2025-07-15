@@ -35,7 +35,9 @@ impl FilterEngine {
         let mut sorted_filters = filters;
         sorted_filters.sort_by_key(|(_, proxy_filter)| proxy_filter.priority_order);
 
-        let mut result_channels = channels.clone();
+        // Keep the original full channel set for INCLUDE filters to operate on
+        let original_channels = channels.clone();
+        let mut result_channels = Vec::new(); // Start with empty set
         let mut _current_channel_number = 1;
 
         for (filter_index, (filter, proxy_filter)) in sorted_filters.iter().enumerate() {
@@ -48,20 +50,20 @@ impl FilterEngine {
                 continue;
             }
 
-            let _channels_before_filter = result_channels.len();
-            let matched_channels = self.apply_single_filter(&result_channels, filter).await?;
-            let matched_count = matched_channels.len();
-
             if filter.is_inverse {
-                // For inverse filters, remove matches from the current result
-                let before_removal = result_channels.len();
+                // For EXCLUDE filters, operate on current result set
+                let channels_before_filter = result_channels.len();
+                let matched_channels = self.apply_single_filter(&result_channels, filter).await?;
+                let matched_count = matched_channels.len();
+
+                // Remove matches from the current result
                 result_channels.retain(|channel: &Channel| {
                     !matched_channels
                         .iter()
                         .any(|filtered_channel| filtered_channel.id == channel.id)
                 });
                 let after_removal = result_channels.len();
-                let removed_count = before_removal - after_removal;
+                let removed_count = channels_before_filter - after_removal;
 
                 info!(
                     "Filter #{} '{}' (EXCLUDE): {} channels matched filter criteria, {} channels removed, {} channels remaining",
@@ -72,14 +74,27 @@ impl FilterEngine {
                     after_removal
                 );
             } else {
-                // For normal filters, replace result with matches
-                result_channels = matched_channels;
+                // For INCLUDE filters, operate on the ORIGINAL full channel set
+                let matched_channels = self.apply_single_filter(&original_channels, filter).await?;
+                let matched_count = matched_channels.len();
+
+                // Add matched channels to result set (union operation)
+                let channels_before_add = result_channels.len();
+                for matched_channel in matched_channels {
+                    // Only add if not already in result set
+                    if !result_channels.iter().any(|ch| ch.id == matched_channel.id) {
+                        result_channels.push(matched_channel);
+                    }
+                }
+                let channels_after_add = result_channels.len();
+                let added_count = channels_after_add - channels_before_add;
 
                 info!(
-                    "Filter #{} '{}' (INCLUDE): {} channels matched filter criteria, {} channels remaining",
+                    "Filter #{} '{}' (INCLUDE): {} channels matched filter criteria, {} channels added, {} channels now in result",
                     filter_index + 1,
                     filter.name,
                     matched_count,
+                    added_count,
                     result_channels.len()
                 );
             }
@@ -89,13 +104,13 @@ impl FilterEngine {
         }
 
         let final_channel_count = result_channels.len();
-        let total_filtered = initial_channel_count as i32 - final_channel_count as i32;
+        let total_added = final_channel_count;
 
         info!(
-            "Filter application complete: {} initial channels → {} final channels ({} channels filtered out)",
+            "Filter application complete: {} initial channels → {} final channels ({} channels in final result)",
             initial_channel_count,
             final_channel_count,
-            total_filtered
+            total_added
         );
 
         Ok(result_channels)

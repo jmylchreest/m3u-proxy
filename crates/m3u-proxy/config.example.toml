@@ -4,7 +4,7 @@ max_connections = 10
 
 [database.batch_sizes]
 epg_channels = 3600
-epg_programs = 1900
+epg_programs = 1800
 stream_channels = 500
 
 [web]
@@ -49,31 +49,28 @@ normalize_to_utc = true
 deduplicate_programs = true
 max_programs_per_channel = 1000
 
-[wasm_plugins]
-enabled = true
-plugin_directory = "../../target/wasm-plugins"
-max_memory_per_plugin_mb = 64
-timeout_seconds = 30
-enable_hot_reload = false
 
-[pipeline_strategies.default]
-filtering = "passthrough_plugin"
-channel_numbering = "passthrough_plugin"
-epg_processing = "passthrough_plugin"
-m3u_generation = "passthrough_plugin"
-data_mapping = "library_test_plugin"
-logo_prefetch = "passthrough_plugin"
-
-[pipeline_strategies.performance]
-data_mapping = "passthrough_plugin"
-logo_prefetch = "passthrough_plugin"
-filtering = "passthrough_plugin"
-m3u_generation = "passthrough_plugin"
-channel_numbering = "passthrough_plugin"
-epg_processing = "passthrough_plugin"
-
+# Native Pipeline Configuration
 [pipeline]
-strategy = "default"
+# Maximum memory usage in MB before spilling to disk (default: 512MB)
+max_memory_mb = 512
+
+# Metrics and Analytics Configuration
+[metrics]
+# How long to keep raw stream access logs
+raw_log_retention = "7d"
+
+# How long to keep hourly aggregated statistics
+hourly_stats_retention = "30d"
+
+# How long to keep daily aggregated statistics
+daily_stats_retention = "365d"
+
+# How long to consider a client session active without activity
+session_timeout = "15s"
+
+# How often to run the metrics housekeeper for cleanup and aggregation
+housekeeper_interval = "1m"
 
 # Pipeline Accumulator Configuration
 # Controls how consuming iterators are converted to immutable sources for multi-instance access
@@ -98,7 +95,7 @@ memory_threshold_mb = 50
 # Estimated size per channel in KB for memory calculations (default: 2KB)
 estimated_size_per_item_kb = 2
 
-# EPG-specific accumulator settings  
+# EPG-specific accumulator settings
 [pipeline.accumulator.epg]
 # EPG data can be much larger, use lower memory threshold
 memory_threshold_mb = 32
@@ -112,12 +109,12 @@ memory_threshold_mb = 10
 estimated_size_per_item_kb = 0.5
 
 # Performance tuning notes:
-# 
+#
 # Small Channel Lists (<5,000 channels):
 #   - Use "in_memory" strategy for best performance
 #   - Set memory_threshold_mb = 100 or higher
 #
-# Medium Channel Lists (5,000-50,000 channels):  
+# Medium Channel Lists (5,000-50,000 channels):
 #   - Use "hybrid" strategy (recommended default)
 #   - memory_threshold_mb = 50-256 depending on available RAM
 #
@@ -126,7 +123,7 @@ estimated_size_per_item_kb = 0.5
 #   - Consider lower items_per_spill_file (5000-7500) for better streaming
 #
 # The accumulator automatically handles:
-#   - Converting consuming plugin iterators to reusable immutable sources
+#   - Converting consuming iterators to reusable immutable sources
 #   - Memory management with configurable spilling to temporary files
 #   - Automatic cleanup of temporary spill files via sandboxed file manager
 #   - Logo enrichment tracking for channels

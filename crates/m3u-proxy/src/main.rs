@@ -13,8 +13,6 @@ use m3u_proxy::{
         scheduler::{SchedulerService, create_cache_invalidation_channel},
     },
     logo_assets::{LogoAssetService, LogoAssetStorage},
-    plugins::pipeline::wasm::{WasmPluginManager, WasmPluginConfig},
-    proxy::wasm_host_interface::{WasmHostInterfaceFactory, PluginCapabilities},
     services::ProxyRegenerationService,
     utils::{
         memory_config::{MemoryMonitoringConfig, MemoryVerbosity, init_global_memory_config},
@@ -22,7 +20,7 @@ use m3u_proxy::{
     },
     web::WebServer,
 };
-use std::{collections::HashMap, sync::Arc};
+// use std::{collections::HashMap, sync::Arc};
 use sandboxed_file_manager::SandboxedManager;
 
 #[derive(Parser)]
@@ -140,60 +138,16 @@ async fn main() -> Result<()> {
     let data_mapping_service = DataMappingService::new(database.pool());
     info!("Data mapping service initialized");
 
-    // Initialize logo asset service and storage
+    // Initialize logo asset service and storage using config paths
     let logo_asset_storage = LogoAssetStorage::new(
         config.storage.uploaded_logo_path.clone(),
         config.storage.cached_logo_path.clone(),
     );
-    let logo_asset_service = LogoAssetService::new(database.pool());
+    let mut logo_asset_service = LogoAssetService::new(database.pool(), logo_asset_storage.clone());
 
     // Create cache invalidation channel for scheduler
     let (cache_invalidation_tx, cache_invalidation_rx) = create_cache_invalidation_channel();
 
-    // Create shared WASM plugin manager to avoid duplicate plugin loading
-    let temp_path = config.storage.temp_path.as_deref().unwrap_or("/tmp/m3u-proxy");
-    let temp_file_manager = SandboxedManager::builder()
-        .base_directory(temp_path)
-        .build()
-        .await?;
-    
-    // Plugin manager will be initialized later based on configuration
-    
-    // Initialize proxy regeneration service (will get shared plugin manager later)
-    let proxy_regeneration_service = ProxyRegenerationService::new(database.pool(), None);
-    info!("Proxy regeneration service initialized");
-
-    // Start the background processor for auto-regeneration
-    let regeneration_processor = proxy_regeneration_service.clone();
-    let regeneration_database = database.clone();
-    let regeneration_data_mapping = data_mapping_service.clone();
-    let regeneration_logo_service = logo_asset_service.clone();
-    let regeneration_config = config.clone();
-    tokio::spawn(async move {
-        regeneration_processor
-            .start_processor(
-                regeneration_database,
-                regeneration_data_mapping,
-                regeneration_logo_service,
-                regeneration_config,
-            )
-            .await;
-    });
-
-    // Start scheduler service
-    let scheduler = SchedulerService::new(
-        state_manager.clone(),
-        database.clone(),
-        config.ingestion.run_missed_immediately,
-        Some(cache_invalidation_rx),
-        Some(proxy_regeneration_service.clone()),
-    );
-
-    tokio::spawn(async move {
-        if let Err(e) = scheduler.start().await {
-            tracing::error!("Scheduler service failed: {}", e);
-        }
-    });
     info!("Logo asset service and storage initialized");
 
     // Initialize sandboxed file managers using configuration
@@ -203,7 +157,33 @@ async fn main() -> Result<()> {
         .clone()
         .unwrap_or_else(|| m3u_proxy::config::FileManagerConfig::with_defaults(cache_dir.clone()));
 
-    // Create file managers for each category
+    // Validate no duplicate base directories before creating any managers
+    let mut all_paths = std::collections::HashMap::new();
+    
+    // Check file manager config categories
+    for category in file_manager_config.category_names() {
+        if let Some(path) = file_manager_config.category_path(category) {
+            let canonical_path = path.canonicalize().unwrap_or(path.clone());
+            if let Some(existing_category) = all_paths.insert(canonical_path.clone(), category.clone()) {
+                return Err(anyhow::anyhow!(
+                    "Duplicate base directory detected! Categories '{}' and '{}' both use path: {:?}. This would cause cleanup conflicts.",
+                    existing_category, category, canonical_path
+                ));
+            }
+        }
+    }
+    
+    // Check logo paths
+    let cached_logo_canonical = config.storage.cached_logo_path.canonicalize()
+        .unwrap_or(config.storage.cached_logo_path.clone());
+    if let Some(existing_category) = all_paths.get(&cached_logo_canonical) {
+        return Err(anyhow::anyhow!(
+            "Duplicate base directory detected! Category '{}' and logos_cached both use path: {:?}. This would cause cleanup conflicts.",
+            existing_category, cached_logo_canonical
+        ));
+    }
+
+    // Create file managers for each category (now safe from duplicates)
     let create_manager = |category: &str| {
         let category = category.to_string(); // Take ownership
         let config = file_manager_config.clone();
@@ -235,127 +215,80 @@ async fn main() -> Result<()> {
         }
     };
 
-    let preview_file_manager = create_manager("preview").await?;
-    let logo_file_manager = create_manager("logo").await?;
+
+    // Create specialized logo file manager for cached logos (duplicate check already done above)
+    // Note: uploaded logos use LogoAssetStorage direct file operations (could be enhanced with sandboxing)
+    let logos_cached_file_manager = m3u_proxy::config::FileManagerConfig::create_logo_manager(
+        &config.storage.cached_logo_path,
+        false, // Regular retention with cleanup
+    ).await?;
+
+    // Update logo asset service with the cached logo file manager
+    logo_asset_service = logo_asset_service.with_file_manager(logos_cached_file_manager.clone());
+
     let proxy_output_file_manager = create_manager("proxy_output").await?;
+    let temp_file_manager = create_manager("temp").await?;
 
     info!("Sandboxed file managers initialized with configured retention policies:");
+    info!(
+        "  logos_cached: 3 months retention, cleanup every 12 hours, path: {:?}",
+        Some(&config.storage.cached_logo_path)
+    );
+    info!(
+        "  logos_uploaded: never expires (direct file ops via LogoAssetStorage), path: {:?}",
+        Some(&config.storage.uploaded_logo_path)
+    );
     for category in file_manager_config.category_names() {
         if let Some(config_cat) = file_manager_config.get_category(category) {
+            let path = file_manager_config.category_path(category);
             info!(
-                "  {}: {} retention, cleanup every {}",
+                "  {}: {} retention, cleanup every {}, path: {:?}",
                 category,
                 humantime::format_duration(config_cat.retention_duration),
                 humantime::format_duration(
                     file_manager_config
                         .cleanup_interval_for_category(category)
                         .unwrap_or_default()
-                )
+                ),
+                path
             );
         }
     }
 
     // Create shared memory monitor for global memory management
-    let shared_memory_monitor = SimpleMemoryMonitor::new(memory_limit);
-    info!("Shared memory monitor initialized with limit: {:?}MB", memory_limit);
+    let _shared_memory_monitor = SimpleMemoryMonitor::new(memory_limit);
+    info!(
+        "Shared memory monitor initialized with limit: {:?}MB",
+        memory_limit
+    );
 
-    // Initialize shared WASM plugin system if enabled
-    let shared_plugin_manager = if let Some(wasm_config) = &config.wasm_plugins {
-        if wasm_config.enabled {
-            info!("Initializing shared WASM plugin system");
-            
-            // Use default values for optional config fields
-            let default_dir = std::path::PathBuf::from("./target/wasm-plugins");
-            let plugin_directory = wasm_config.plugin_directory.as_ref().unwrap_or(&default_dir);
-            let timeout_seconds = wasm_config.timeout_seconds.unwrap_or(30);
-            let enable_hot_reload = wasm_config.enable_hot_reload.unwrap_or(false);
-            
-            info!("Plugin directory: {:?}", plugin_directory);
-            info!("Plugin timeout: {} seconds", timeout_seconds);
-            info!("Hot reload: {}", if enable_hot_reload { "ENABLED" } else { "DISABLED" });
+    // Initialize proxy regeneration service with managed temp file manager
+    let proxy_regeneration_service =
+        ProxyRegenerationService::new(database.pool(), None, temp_file_manager.clone());
+    info!("Proxy regeneration service initialized");
 
-            // Use shared memory monitor for plugins
-            let memory_monitor = shared_memory_monitor.clone();
+    // Create scheduler service now that proxy regeneration service exists
+    let scheduler = SchedulerService::new(
+        state_manager.clone(),
+        database.clone(),
+        config.ingestion.run_missed_immediately,
+        Some(cache_invalidation_rx),
+        Some(proxy_regeneration_service.clone()),
+    );
+    info!("Scheduler service initialized");
 
-            // Create plugin capabilities
-            let capabilities = PluginCapabilities {
-                allow_file_access: true,
-                allow_network_access: false,
-                max_memory_query_mb: Some(512), // Default memory limit
-                allowed_config_keys: vec![
-                    "chunk_size".to_string(),
-                    "compression_level".to_string(),
-                    "temp_dir".to_string(),
-                    "memory_threshold_mb".to_string(),
-                    "temp_file_threshold".to_string(),
-                ],
-            };
+    // Native pipeline only - no plugin system needed
 
-            // Create host interface factory
-            let host_interface_factory = WasmHostInterfaceFactory::new(preview_file_manager.clone(), capabilities);
-
-            // Create plugin configuration (memory pressure handled by plugin itself)
-            let plugin_config = HashMap::from([
-                ("chunk_size".to_string(), "1000".to_string()),
-                ("memory_threshold_mb".to_string(), "512".to_string()), // Default threshold
-                ("temp_file_threshold".to_string(), "10000".to_string()),
-            ]);
-
-            // Create host interface
-            let host_interface = host_interface_factory.create_interface(Some(memory_monitor), plugin_config);
-
-            // Create plugin manager configuration
-            let plugin_manager_config = WasmPluginConfig {
-                enabled: wasm_config.enabled,
-                plugin_directory: plugin_directory.to_string_lossy().to_string(),
-                max_memory_per_plugin: 512, // Default memory limit (plugins manage themselves)
-                timeout_seconds,
-                enable_hot_reload,
-                max_plugin_failures: 3,
-                fallback_timeout_ms: 5000,
-            };
-
-            // Create shared plugin manager
-            let manager = Arc::new(WasmPluginManager::new(plugin_manager_config, host_interface));
-
-            // Load plugins once at startup
-            match manager.load_plugins().await {
-                Ok(()) => {
-                    match manager.get_detailed_statistics() {
-                        Ok(stats) => {
-                            info!("Shared plugin system initialized successfully!");
-                            info!("Plugin Statistics:");
-                            info!("   Total plugins loaded: {}", stats.len());
-                            for (plugin_name, plugin_stats) in stats {
-                                info!("   Plugin '{}': {:?}", plugin_name, plugin_stats);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to get plugin statistics: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load plugins in shared plugin manager: {}", e);
-                }
-            }
-
-            Some(manager)
-        } else {
-            info!("WASM plugin system is DISABLED");
-            None
-        }
-    } else {
-        info!("WASM plugin system not configured");
-        None
-    };
-
-    // Update proxy regeneration service with shared plugin manager
-    let proxy_regeneration_service = if let Some(ref shared_mgr) = shared_plugin_manager {
-        proxy_regeneration_service.with_shared_plugin_manager(shared_mgr.clone())
-    } else {
-        proxy_regeneration_service
-    };
+    // Clone values needed for background services before moving into web server
+    let bg_proxy_regeneration_service = proxy_regeneration_service.clone();
+    let bg_database = database.clone();
+    let bg_data_mapping_service = data_mapping_service.clone();
+    let bg_logo_asset_service = logo_asset_service.clone();
+    let bg_config = config.clone();
+    
+    // Clone again for metrics housekeeper
+    let metrics_database = database.clone();
+    let metrics_config = config.clone();
 
     let web_server = WebServer::new(
         config,
@@ -366,10 +299,9 @@ async fn main() -> Result<()> {
         logo_asset_service,
         logo_asset_storage,
         proxy_regeneration_service,
-        preview_file_manager,
-        logo_file_manager,
+        temp_file_manager.clone(), // Use temp for both temp and preview operations
+        logos_cached_file_manager,
         proxy_output_file_manager,
-        shared_plugin_manager,
     )
     .await?;
 
@@ -378,7 +310,79 @@ async fn main() -> Result<()> {
         web_server.host(),
         web_server.port()
     );
-    web_server.serve().await?;
+
+    // Create a channel to signal when the server is ready or fails to bind
+    let (server_ready_tx, server_ready_rx) = tokio::sync::oneshot::channel();
+
+    // Get the bind address before moving web_server
+    let _bind_addr = format!("{}:{}", web_server.host(), web_server.port());
+
+    // Start the web server in a separate task
+    let server_handle = tokio::spawn(async move {
+        // This will signal immediately when bind succeeds/fails, then block until shutdown
+        if let Err(e) = web_server.serve_with_signal(server_ready_tx).await {
+            tracing::error!("Web server failed: {}", e);
+        }
+    });
+
+    // Wait for the server bind result (success or failure)
+    match server_ready_rx.await {
+        Ok(Ok(())) => {
+            info!("Web server is now listening, starting background services...");
+        }
+        Ok(Err(bind_error)) => {
+            tracing::error!("Failed to bind web server: {}", bind_error);
+            return Err(bind_error);
+        }
+        Err(_) => {
+            tracing::error!("Web server task completed without signaling");
+            return Err(anyhow::anyhow!("Web server failed to start"));
+        }
+    }
+
+    // Now start the background services after the web server is listening
+    info!("Starting background processor for auto-regeneration");
+    tokio::spawn(async move {
+        bg_proxy_regeneration_service
+            .start_processor(
+                bg_database,
+                bg_data_mapping_service,
+                bg_logo_asset_service,
+                bg_config,
+            )
+            .await;
+    });
+
+    info!("Starting scheduler service");
+    tokio::spawn(async move {
+        if let Err(e) = scheduler.start().await {
+            tracing::error!("Scheduler service failed: {}", e);
+        }
+    });
+
+    // Start metrics housekeeper service if configured
+    if let Some(metrics_config_section) = &metrics_config.metrics {
+        info!("Starting metrics housekeeper service");
+        let housekeeper_db = metrics_database.pool();
+        let housekeeper_config = metrics_config_section.clone();
+        tokio::spawn(async move {
+            match m3u_proxy::services::MetricsHousekeeper::from_config(housekeeper_db, &housekeeper_config) {
+                Ok(housekeeper) => {
+                    housekeeper.start().await;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to start metrics housekeeper: {}", e);
+                }
+            }
+        });
+    } else {
+        info!("Metrics housekeeper disabled (no configuration found)");
+    }
+
+    info!("All services started successfully");
+
+    // Wait for the server to complete (this will block until shutdown)
+    server_handle.await?;
 
     Ok(())
 }

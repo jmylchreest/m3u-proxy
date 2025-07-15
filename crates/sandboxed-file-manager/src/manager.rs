@@ -389,7 +389,7 @@ impl SandboxedManager {
 
     /// Manually trigger cleanup of expired files.
     pub async fn cleanup_expired_files(&self) -> Result<usize> {
-        if !self.cleanup_policy.enabled {
+        if self.cleanup_policy.infinite_retention {
             return Ok(0);
         }
 
@@ -457,7 +457,7 @@ impl SandboxedManager {
 
     /// Start the background cleanup task.
     fn start_cleanup_task(&self) {
-        if !self.cleanup_policy.enabled || self.cleanup_interval.is_zero() {
+        if self.cleanup_policy.infinite_retention || self.cleanup_interval.is_zero() {
             return;
         }
 
@@ -514,6 +514,47 @@ impl SandboxedManager {
         }
 
         Ok(())
+    }
+
+    /// Sandboxed version of `Path::exists` - checks if a file exists within the sandbox.
+    pub async fn exists<P: AsRef<str>>(&self, path: P) -> Result<bool> {
+        let path_str = path.as_ref();
+        let file_path = self.validate_and_get_path(path_str)?;
+        
+        Ok(file_path.exists())
+    }
+
+    /// Get the full filesystem path for a file within the sandbox.
+    /// Returns the absolute path that can be used for serving files.
+    pub fn get_full_path<P: AsRef<str>>(&self, path: P) -> Result<PathBuf> {
+        let path_str = path.as_ref();
+        self.validate_and_get_path(path_str)
+    }
+
+    /// List all files in a directory within the sandbox.
+    /// Returns a vector of relative path strings.
+    pub async fn list_files<P: AsRef<str>>(&self, dir_path: P) -> Result<Vec<String>> {
+        let dir_str = dir_path.as_ref();
+        let full_dir_path = self.validate_and_get_path(dir_str)?;
+        
+        let mut files = Vec::new();
+        
+        if full_dir_path.is_dir() {
+            let mut entries = fs::read_dir(&full_dir_path).await?;
+            
+            while let Some(entry) = entries.next_entry().await? {
+                let entry_path = entry.path();
+                
+                // Get relative path from the sandbox base
+                if let Ok(relative) = entry_path.strip_prefix(&self.base_dir) {
+                    if let Some(path_str) = relative.to_str() {
+                        files.push(path_str.to_string());
+                    }
+                }
+            }
+        }
+        
+        Ok(files)
     }
 
     /// Try to get filesystem access time (atime) from metadata.
@@ -627,7 +668,7 @@ impl SandboxedManagerBuilder {
             "SandboxedManager initialized - base_dir: {:?}, cleanup_interval: {:?}, cleanup_enabled: {}",
             manager.base_dir,
             manager.cleanup_interval,
-            manager.cleanup_policy.enabled
+            !manager.cleanup_policy.infinite_retention
         );
 
         Ok(manager)

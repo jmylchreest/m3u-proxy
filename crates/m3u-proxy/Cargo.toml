@@ -13,13 +13,9 @@ categories = ["multimedia", "web-programming", "network-programming"]
 name = "m3u-proxy"
 path = "src/main.rs"
 
-[[example]]
-name = "wasm-integration-demo"
-path = "../../examples/wasm-integration-demo.rs"
 
 [features]
-default = ["wasm-plugins"]
-wasm-plugins = []
+default = []
 
 [lib]
 name = "m3u_proxy"
@@ -29,6 +25,7 @@ path = "src/lib.rs"
 sandboxed-file-manager = { path = "../sandboxed-file-manager" }
 anyhow = "1.0"
 axum = { version = "0.7", features = ["macros", "multipart"] }
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.8"
 clap = { version = "4.4", features = ["derive"] }
@@ -76,7 +73,5 @@ mime = "0.3"
 mime_guess = "2.0"
 axum-extra = { version = "0.9", features = ["typed-header"] }
 include_dir = "0.7"
-wasmtime = "25.0"
-wasmtime-wasi = "25.0"
 
 [build-dependencies]

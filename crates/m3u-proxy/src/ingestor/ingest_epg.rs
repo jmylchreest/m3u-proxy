@@ -14,7 +14,7 @@
 use crate::database::Database;
 use crate::models::*;
 use crate::utils::time::{
-    detect_timezone_from_xmltv, log_timezone_detection, parse_time_offset, validate_timezone,
+    detect_timezone_from_xmltv, log_timezone_detection, parse_time_offset,
 };
 use crate::utils::url::UrlUtils;
 use anyhow::{Result, anyhow};
@@ -87,22 +87,12 @@ impl EpgIngestor {
             .ingest_epg_source_with_trigger(source, trigger.clone())
             .await
         {
-            Ok((channels, mut programs, detected_timezone)) => {
+            Ok((channels, mut programs, _detected_timezone)) => {
                 // Update channel names in programs
                 ingestor.update_channel_names(&channels, &mut programs);
 
-                // Update detected timezone if found
-                if let Some(ref detected_tz) = detected_timezone {
-                    if detected_tz != &source.timezone && !source.timezone_detected {
-                        info!(
-                            "Updating EPG source '{}' timezone from '{}' to detected '{}'",
-                            source_name, source.timezone, detected_tz
-                        );
-                        let _ = database
-                            .update_epg_source_detected_timezone(source_id, detected_tz)
-                            .await;
-                    }
-                }
+                // Note: Timezone detection was simplified in migration 004
+                // All times are normalized to UTC during ingestion
 
                 // Save to database using cancellation-aware method
                 match ingestor
@@ -209,37 +199,8 @@ impl EpgIngestor {
             EpgSourceType::Xtream => self.ingest_xtream_source(source).await,
         };
 
-        // If we detected a timezone and it's different from the current one, update the source
-        if let (Some(database), Ok((_, _, Some(detected_tz)))) = (&self.database, &result) {
-            if validate_timezone(detected_tz).is_ok()
-                && detected_tz != &source.timezone
-                && !source.timezone_detected
-            {
-                info!(
-                    "Auto-detected timezone '{}' for EPG source '{}', updating database",
-                    detected_tz, source.name
-                );
-
-                let update_request = EpgSourceUpdateRequest {
-                    name: source.name.clone(),
-                    source_type: source.source_type.clone(),
-                    url: source.url.clone(),
-                    update_cron: source.update_cron.clone(),
-                    username: source.username.clone(),
-                    password: source.password.clone(),
-                    timezone: Some(detected_tz.clone()),
-                    time_offset: Some(source.time_offset.clone()),
-                    is_active: source.is_active,
-                };
-
-                if let Err(e) = database.update_epg_source(source.id, &update_request).await {
-                    warn!(
-                        "Failed to update detected timezone for EPG source '{}': {}",
-                        source.name, e
-                    );
-                }
-            }
-        }
+        // Note: Timezone auto-detection was simplified in migration 004
+        // All times are now normalized to UTC during processing
 
         // Update progress based on result
         if let Some(state_manager) = &self.state_manager {
@@ -431,12 +392,16 @@ impl EpgIngestor {
         let detected_timezone = detect_timezone_from_xmltv(content);
 
         // Use detected timezone if found and not already detected, otherwise use configured
+        // Use detected timezone if available, otherwise use original_timezone or default to UTC
         let timezone_to_use = if let Some(ref detected_tz) = detected_timezone {
             log_timezone_detection(&source.name, Some(detected_tz), detected_tz);
             detected_tz
+        } else if let Some(ref original_tz) = source.original_timezone {
+            log_timezone_detection(&source.name, None, original_tz);
+            original_tz
         } else {
-            log_timezone_detection(&source.name, None, &source.timezone);
-            &source.timezone
+            log_timezone_detection(&source.name, None, "UTC");
+            "UTC"
         };
 
         // Parse the timezone
@@ -716,6 +681,12 @@ impl EpgIngestor {
             .as_ref()
             .map(|lang| lang.value.clone());
 
+        // Extract program icon if available
+        let program_icon = xmltv_program
+            .icons
+            .first()
+            .map(|icon| icon.src.clone());
+
         Some(EpgProgram {
             id: Uuid::new_v4(),
             source_id: source.id,
@@ -732,6 +703,7 @@ impl EpgIngestor {
             language,
             subtitles: None,    // Could be extracted if present
             aspect_ratio: None, // Could be extracted if present
+            program_icon,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         })

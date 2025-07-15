@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
 
@@ -10,6 +10,13 @@ use crate::models::*;
 pub struct EpgGenerator {
     /// Database connection for fetching EPG data
     database: Database,
+}
+
+/// Channel information from M3U including logos
+#[derive(Debug, Clone)]
+pub struct M3uChannelInfo {
+    pub channel_id: String,
+    pub channel_logo: Option<String>,
 }
 
 /// Represents a filtered EPG program with normalized time
@@ -36,8 +43,6 @@ pub struct EpgGenerationConfig {
     pub days_ahead: u32,
     /// How many days of EPG data to include (backward from now)
     pub days_behind: u32,
-    /// Whether to normalize all times to UTC
-    pub normalize_to_utc: bool,
     /// Whether to deduplicate programs with same title and time
     pub deduplicate_programs: bool,
     /// Maximum number of programs per channel
@@ -50,9 +55,8 @@ impl Default for EpgGenerationConfig {
             include_past_programs: false,
             days_ahead: 7,
             days_behind: 1,
-            normalize_to_utc: true,
-            deduplicate_programs: true,
-            max_programs_per_channel: Some(1000),
+            deduplicate_programs: false,
+            max_programs_per_channel: None,
         }
     }
 }
@@ -77,26 +81,29 @@ impl EpgGenerator {
     }
 
     /// Generate filtered XMLTV content based on channel IDs from the M3U proxy
-    pub async fn generate_xmltv_for_proxy(
+    /// Generate XMLTV using already-resolved EPG sources (preferred method)
+    pub async fn generate_xmltv_with_resolved_sources(
         &self,
         proxy: &StreamProxy,
         channel_ids: &[String],
+        resolved_epg_sources: &[ProxyEpgSourceConfig],
         config: Option<EpgGenerationConfig>,
     ) -> Result<(String, EpgGenerationStatistics)> {
         let config = config.unwrap_or_default();
         let start_time = std::time::Instant::now();
 
         info!(
-            "Starting EPG generation for proxy '{}' with {} channel IDs",
+            "Starting EPG generation for proxy '{}' with {} channel IDs and {} resolved EPG sources",
             proxy.name,
-            channel_ids.len()
+            channel_ids.len(),
+            resolved_epg_sources.len()
         );
 
-        // Step 1: Get EPG sources associated with this proxy
-        let epg_sources = self.database.get_proxy_epg_sources(proxy.id).await?;
-
-        if epg_sources.is_empty() {
-            warn!("No EPG sources found for proxy '{}'", proxy.name);
+        if resolved_epg_sources.is_empty() {
+            warn!(
+                "No resolved EPG sources provided for proxy '{}'",
+                proxy.name
+            );
             return Ok((
                 self.generate_empty_xmltv(),
                 EpgGenerationStatistics {
@@ -112,15 +119,36 @@ impl EpgGenerator {
             ));
         }
 
+        // Convert resolved sources to the format expected by the rest of the method
+        let epg_sources: Vec<EpgSource> = resolved_epg_sources
+            .iter()
+            .map(|resolved| resolved.epg_source.clone())
+            .collect();
+
+        // Continue with the rest of the existing logic...
+        self.generate_xmltv_with_sources(proxy, channel_ids, &epg_sources, config)
+            .await
+    }
+
+    /// Internal method that processes EPG sources and generates XMLTV
+    async fn generate_xmltv_with_sources(
+        &self,
+        proxy: &StreamProxy,
+        channel_ids: &[String],
+        epg_sources: &[EpgSource],
+        config: EpgGenerationConfig,
+    ) -> Result<(String, EpgGenerationStatistics)> {
+        let start_time = std::time::Instant::now();
+
         info!(
-            "Found {} EPG sources for proxy '{}'",
+            "Processing {} EPG sources for proxy '{}'",
             epg_sources.len(),
             proxy.name
         );
 
         // Step 2: Filter EPG channels to only those present in the M3U channel list
         let filtered_channels = self
-            .filter_epg_channels_by_ids(&epg_sources, channel_ids, &config)
+            .filter_epg_channels_by_ids(epg_sources, channel_ids, &config)
             .await?;
 
         info!(
@@ -142,11 +170,7 @@ impl EpgGenerator {
 
         let unmatched_channels = self.find_unmatched_channels(channel_ids, &filtered_channels);
 
-        let programs_normalized = if config.normalize_to_utc {
-            total_programs_before
-        } else {
-            0
-        };
+        let programs_normalized = 0; // Times are always UTC, no normalization needed
 
         // Step 5: Generate XMLTV content
         let xmltv_content = self
@@ -163,6 +187,143 @@ impl EpgGenerator {
             total_programs_after_filter: total_programs_before, // Will be updated if deduplication is implemented
             programs_normalized,
             duplicate_programs_removed: 0, // Will be updated if deduplication is implemented
+            generation_time_ms: generation_time,
+        };
+
+        info!(
+            "EPG generation completed for proxy '{}': {} channels, {} programs, {}ms",
+            proxy.name,
+            statistics.matched_epg_channels,
+            statistics.total_programs_after_filter,
+            generation_time
+        );
+
+        Ok((xmltv_content, statistics))
+    }
+
+    /// Generate XMLTV for proxy with processed channels from M3U generation pipeline
+    pub async fn generate_xmltv_for_proxy_with_processed_channels(
+        &self,
+        proxy: &StreamProxy,
+        processed_channels: &[NumberedChannel],
+        logo_service: &crate::logo_assets::service::LogoAssetService,
+        base_url: &str,
+        config: Option<EpgGenerationConfig>,
+    ) -> Result<(String, EpgGenerationStatistics)> {
+        let config = config.unwrap_or_default();
+        let start_time = std::time::Instant::now();
+
+        info!(
+            "Starting EPG generation for proxy '{}' with {} processed channels",
+            proxy.name,
+            processed_channels.len()
+        );
+
+        // Extract channel IDs from processed channels
+        let channel_ids: Vec<String> = processed_channels
+            .iter()
+            .filter_map(|nc| nc.channel.tvg_id.clone())
+            .collect();
+
+        // Create a map of channel logos from the processed channels
+        let mut channel_logo_map: HashMap<String, String> = HashMap::new();
+        for nc in processed_channels {
+            if let Some(tvg_id) = &nc.channel.tvg_id {
+                if let Some(logo) = &nc.channel.tvg_logo {
+                    channel_logo_map.insert(tvg_id.clone(), logo.clone());
+                }
+            }
+        }
+
+        // Step 1: Get EPG sources associated with this proxy
+        let epg_sources = self.database.get_proxy_epg_sources(proxy.id).await?;
+
+        if epg_sources.is_empty() {
+            warn!("No EPG sources found for proxy '{}'", proxy.name);
+            return Ok((
+                self.generate_empty_xmltv(),
+                EpgGenerationStatistics {
+                    total_channels_in_m3u: channel_ids.len(),
+                    matched_epg_channels: 0,
+                    unmatched_channels: channel_ids.clone(),
+                    total_programs_before_filter: 0,
+                    total_programs_after_filter: 0,
+                    programs_normalized: 0,
+                    duplicate_programs_removed: 0,
+                    generation_time_ms: start_time.elapsed().as_millis() as u64,
+                },
+            ));
+        }
+
+        // Step 2: Filter EPG channels to only those present in the M3U channel list
+        let mut filtered_channels = self
+            .filter_epg_channels_by_ids(&epg_sources, &channel_ids, &config)
+            .await?;
+
+        // Step 2.5: Apply logo caching for channel logos
+        for channel in &mut filtered_channels {
+            // Use the logo from the processed M3U channels (already data-mapped)
+            if let Some(m3u_logo) = channel_logo_map.get(&channel.channel_id) {
+                // Apply logo caching if enabled
+                if proxy.cache_channel_logos {
+                    let cached_logo = self
+                        .cache_logo_if_needed(m3u_logo, logo_service, base_url)
+                        .await;
+                    channel.channel_logo = Some(cached_logo);
+                } else {
+                    channel.channel_logo = Some(m3u_logo.clone());
+                }
+                debug!(
+                    "Set logo for channel '{}': {:?}",
+                    channel.channel_name, channel.channel_logo
+                );
+            }
+        }
+
+        // Step 3: Get programs for the filtered channels
+        let mut channels_with_programs = self
+            .get_programs_for_filtered_channels(&filtered_channels, &config)
+            .await?;
+
+        // Step 3.5: Apply logo caching for program logos if enabled
+        if proxy.cache_program_logos {
+            for filtered_channel in &mut channels_with_programs {
+                for filtered_program in &mut filtered_channel.programs {
+                    if let Some(ref program_icon) = filtered_program.program.program_icon {
+                        let cached_logo = self
+                            .cache_logo_if_needed(program_icon, logo_service, base_url)
+                            .await;
+                        filtered_program.program.program_icon = Some(cached_logo);
+                    }
+                }
+            }
+        }
+
+        // Step 4: Calculate statistics
+        let total_programs_before = channels_with_programs
+            .iter()
+            .map(|c| c.programs.len())
+            .sum::<usize>();
+
+        let unmatched_channels = self.find_unmatched_channels(&channel_ids, &filtered_channels);
+
+        let programs_normalized = 0; // Times are always UTC, no normalization needed
+
+        // Step 5: Generate XMLTV content
+        let xmltv_content = self
+            .generate_xmltv_content(&channels_with_programs, &config)
+            .await?;
+
+        let generation_time = start_time.elapsed().as_millis() as u64;
+
+        let statistics = EpgGenerationStatistics {
+            total_channels_in_m3u: channel_ids.len(),
+            matched_epg_channels: filtered_channels.len(),
+            unmatched_channels,
+            total_programs_before_filter: total_programs_before,
+            total_programs_after_filter: total_programs_before,
+            programs_normalized,
+            duplicate_programs_removed: 0,
             generation_time_ms: generation_time,
         };
 
@@ -253,7 +414,7 @@ impl EpgGenerator {
 
             // Filter and normalize programs
             let mut filtered_programs = Vec::new();
-            let mut programs_normalized = 0;
+            let programs_normalized = 0;
             let mut programs_filtered_past = 0;
 
             for program in programs {
@@ -263,34 +424,8 @@ impl EpgGenerator {
                     continue;
                 }
 
-                // Normalize times to UTC if requested
-                let (normalized_start, normalized_end) = if config.normalize_to_utc {
-                    programs_normalized += 1;
-                    // Get the EPG source timezone for this program
-                    let source_timezone = self
-                        .get_epg_source_timezone(program.source_id)
-                        .await
-                        .unwrap_or_else(|_| "UTC".to_string());
-
-                    let start_utc =
-                        self.convert_epg_time_to_utc(&program.start_time, &source_timezone);
-                    let end_utc = self.convert_epg_time_to_utc(&program.end_time, &source_timezone);
-
-                    debug!(
-                        "Normalized program '{}' times: {} {} -> {} UTC, {} {} -> {} UTC",
-                        program.program_title,
-                        program.start_time.format("%Y-%m-%d %H:%M:%S"),
-                        source_timezone,
-                        start_utc.format("%Y-%m-%d %H:%M:%S"),
-                        program.end_time.format("%Y-%m-%d %H:%M:%S"),
-                        source_timezone,
-                        end_utc.format("%Y-%m-%d %H:%M:%S")
-                    );
-
-                    (start_utc, end_utc)
-                } else {
-                    (program.start_time, program.end_time)
-                };
+                // Times are always stored as UTC in database, use them directly
+                let (normalized_start, normalized_end) = (program.start_time, program.end_time);
 
                 filtered_programs.push(FilteredEpgProgram {
                     program,
@@ -334,63 +469,41 @@ impl EpgGenerator {
                 filtered_programs.len()
             );
 
-            channels_with_programs.push(FilteredEpgChannel {
-                channel: channel.clone(),
-                programs: filtered_programs,
-            });
+            // Only include the channel if it has programs for the requested timeframe
+            if !filtered_programs.is_empty() {
+                channels_with_programs.push(FilteredEpgChannel {
+                    channel: channel.clone(),
+                    programs: filtered_programs,
+                });
+            } else {
+                debug!(
+                    "Excluding channel '{}' because it has no programs for the requested timeframe",
+                    channel.channel_name
+                );
+            }
         }
 
         Ok(channels_with_programs)
     }
 
     /// Get the timezone for an EPG source from the database
-    async fn get_epg_source_timezone(&self, source_id: uuid::Uuid) -> Result<String> {
-        // Get the EPG source to determine its timezone
-        if let Some(epg_source) = self.database.get_epg_source(source_id).await? {
-            // Use detected timezone first, then configured timezone, then UTC as fallback
-            if epg_source.timezone_detected && !epg_source.timezone.is_empty() {
-                return Ok(epg_source.timezone);
-            }
-        }
-        Ok("UTC".to_string()) // Fallback to UTC
+    // This method is no longer needed since we always use UTC times
+    // Keeping for backward compatibility but it always returns UTC
+    async fn get_epg_source_timezone(&self, _source_id: uuid::Uuid) -> Result<String> {
+        Ok("UTC".to_string())
     }
 
     /// Convert EPG program time to UTC based on source timezone
     /// This is the core logic that shifts program times from their source timezone to UTC
+    // This method is no longer needed since times are always stored as UTC
+    // Keeping for backward compatibility but it just returns the input time
     fn convert_epg_time_to_utc(
         &self,
         epg_time: &DateTime<Utc>,
-        source_timezone: &str,
+        _source_timezone: &str,
     ) -> DateTime<Utc> {
-        // The EPG time is stored as UTC in the database, but it actually represents
-        // the local time in the source timezone. We need to interpret it correctly.
-
-        match self.parse_timezone_offset(source_timezone) {
-            Ok(offset) => {
-                // Create a datetime in the source timezone using the EPG time components
-                let naive_time = epg_time.naive_utc();
-                let source_time = offset
-                    .from_local_datetime(&naive_time)
-                    .single()
-                    .unwrap_or_else(|| {
-                        warn!(
-                            "Ambiguous or invalid time during timezone conversion: {}",
-                            epg_time
-                        );
-                        offset.from_utc_datetime(&naive_time)
-                    });
-
-                // Convert to UTC
-                source_time.with_timezone(&Utc)
-            }
-            Err(_) => {
-                warn!(
-                    "Invalid timezone '{}', treating EPG time as already UTC",
-                    source_timezone
-                );
-                *epg_time
-            }
-        }
+        // Times are already stored as UTC in the database, no conversion needed
+        *epg_time
     }
 
     /// Parse timezone offset string (e.g., "+02:00", "-05:00", "UTC")
@@ -420,31 +533,18 @@ impl EpgGenerator {
 
     /// Normalize a DateTime<Utc> to UTC (no-op but provided for API consistency)
     #[allow(dead_code)]
+    // These methods are no longer needed since times are always UTC
+    // Keeping for backward compatibility
     fn normalize_to_utc(&self, dt: &DateTime<Utc>) -> DateTime<Utc> {
         *dt
     }
 
-    /// Normalize a DateTime<Utc> to UTC considering a timezone offset
-    /// This applies the timezone offset to convert from local time to UTC
-    #[allow(dead_code)]
     fn normalize_timezone_to_utc(
         &self,
         dt: &DateTime<Utc>,
-        timezone_offset: Option<&str>,
+        _timezone: Option<&str>,
     ) -> DateTime<Utc> {
-        match timezone_offset {
-            Some(tz_str) => {
-                match self.parse_timezone_offset(tz_str) {
-                    Ok(offset) => {
-                        // Convert from the timezone to UTC
-                        let local_time = offset.from_utc_datetime(&dt.naive_utc());
-                        local_time.with_timezone(&Utc)
-                    }
-                    Err(_) => *dt, // Return original if parsing fails
-                }
-            }
-            None => *dt,
-        }
+        *dt
     }
 
     /// Deduplicate programs with sophisticated matching logic
@@ -588,7 +688,7 @@ impl EpgGenerator {
     async fn generate_xmltv_content(
         &self,
         channels_with_programs: &[FilteredEpgChannel],
-        config: &EpgGenerationConfig,
+        _config: &EpgGenerationConfig,
     ) -> Result<String> {
         let mut xmltv = String::new();
 
@@ -625,16 +725,9 @@ impl EpgGenerator {
 
             for filtered_program in &filtered_channel.programs {
                 let program = &filtered_program.program;
-                let start_time = if config.normalize_to_utc {
-                    filtered_program.normalized_start_time
-                } else {
-                    program.start_time
-                };
-                let end_time = if config.normalize_to_utc {
-                    filtered_program.normalized_end_time
-                } else {
-                    program.end_time
-                };
+                // Times are always stored as UTC, use them directly
+                let start_time = program.start_time;
+                let end_time = program.end_time;
 
                 xmltv.push_str(&format!(
                     "  <programme start=\"{}\" stop=\"{}\" channel=\"{}\">\n",
@@ -684,6 +777,14 @@ impl EpgGenerator {
                         "    <episode-num system=\"onscreen\">S{:02}E{:02}</episode-num>\n",
                         season, episode
                     ));
+                }
+
+                // Add program icon if available
+                if let Some(icon) = &program.program_icon {
+                    if !icon.is_empty() {
+                        xmltv
+                            .push_str(&format!("    <icon src=\"{}\" />\n", self.escape_xml(icon)));
+                    }
                 }
 
                 xmltv.push_str("  </programme>\n");
@@ -769,6 +870,42 @@ impl EpgGenerator {
 
         Ok(stats)
     }
+
+    /// Helper method to cache logos if needed
+    async fn cache_logo_if_needed(
+        &self,
+        logo_url: &str,
+        logo_service: &crate::logo_assets::service::LogoAssetService,
+        base_url: &str,
+    ) -> String {
+        // Check if this is already a cached logo reference
+        if logo_url.starts_with("@logo:") {
+            // It's already a logo reference, resolve it to a URL
+            if let Ok(uuid) = logo_url
+                .strip_prefix("@logo:")
+                .unwrap_or("")
+                .parse::<uuid::Uuid>()
+            {
+                return logo_service.get_cached_logo_url(&uuid.to_string(), base_url);
+            }
+        }
+
+        // Try to cache the logo
+        match logo_service.cache_logo_from_url(logo_url).await {
+            Ok(cache_id) => {
+                debug!(
+                    "Successfully cached logo '{}' with ID: {}",
+                    logo_url, cache_id
+                );
+                logo_service.get_cached_logo_url(&cache_id.to_string(), base_url)
+            }
+            Err(e) => {
+                debug!("Failed to cache logo '{}': {}", logo_url, e);
+                // Return original URL if caching fails
+                logo_url.to_string()
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -794,10 +931,6 @@ mod tests {
     fn test_timezone_parsing() {
         // Test timezone parsing directly without requiring Database
         // We'll create a minimal EpgGenerator just for testing these utility methods
-        use crate::config::{DatabaseConfig, IngestionConfig};
-        use crate::database::Database;
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
 
         // Skip this test if we can't create a database easily
         // The timezone parsing logic could be extracted to a separate module for easier testing
@@ -862,7 +995,6 @@ mod tests {
         assert_eq!(config.include_past_programs, false);
         assert_eq!(config.days_ahead, 7);
         assert_eq!(config.days_behind, 1);
-        assert_eq!(config.normalize_to_utc, true);
         assert_eq!(config.deduplicate_programs, true);
         assert_eq!(config.max_programs_per_channel, Some(1000));
     }

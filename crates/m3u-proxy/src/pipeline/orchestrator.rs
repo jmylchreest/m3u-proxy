@@ -107,10 +107,61 @@ pub struct EpgLoader;
 
 #[async_trait]
 impl DataLoader<EpgEntry, ProxyEpgSourceConfig> for EpgLoader {
-    async fn load_chunk(&self, _database: &Arc<Database>, _source: &ProxyEpgSourceConfig, _offset: usize, _limit: usize) -> Result<Vec<EpgEntry>> {
-        // TODO: Implement actual EPG data fetching from database
-        // For now, return empty to maintain structure
-        Ok(Vec::new())
+    async fn load_chunk(&self, database: &Arc<Database>, source: &ProxyEpgSourceConfig, offset: usize, limit: usize) -> Result<Vec<EpgEntry>> {
+        use sqlx::Row;
+        use crate::utils::sqlite::SqliteRowExt;
+        
+        // Fetch EPG programs for this source with pagination
+        let source_id_str = source.epg_source.id.to_string();
+        
+        let pool = database.pool();
+        let rows = sqlx::query(
+            r#"
+            SELECT 
+                p.id as program_id,
+                p.channel_id,
+                p.program_title,
+                p.program_description,
+                p.start_time,
+                p.end_time,
+                p.source_id
+            FROM epg_programs p
+            WHERE p.source_id = ?
+            ORDER BY p.start_time ASC, p.channel_id ASC
+            LIMIT ? OFFSET ?
+            "#
+        )
+        .bind(&source_id_str)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&pool)
+        .await?;
+        
+        let mut entries = Vec::new();
+        
+        for row in rows {
+            let entry = EpgEntry {
+                channel_id: row.get("channel_id"),
+                program_id: row.get_uuid("program_id")?.to_string(),
+                title: row.get("program_title"),
+                description: row.get("program_description"),
+                start_time: row.get_datetime("start_time"),
+                end_time: row.get_datetime("end_time"),
+                source_id: source.epg_source.id,
+                priority: source.priority_order,
+            };
+            entries.push(entry);
+        }
+        
+        tracing::debug!(
+            "Loaded {} EPG entries from source {} (offset: {}, limit: {})",
+            entries.len(),
+            source.epg_source.name,
+            offset,
+            limit
+        );
+        
+        Ok(entries)
     }
     
     fn get_source_id(&self, source: &ProxyEpgSourceConfig) -> String {
@@ -171,7 +222,7 @@ impl SingleSourceLoader<DataMappingRule> for DataMappingLoader {
 
         let rules: Vec<DataMappingRule> = rows
             .into_iter()
-            .map(|(id, name, description, expression, sort_order)| {
+            .map(|(id, name, _description, expression, sort_order)| {
                 // Map from database schema to pipeline struct
                 // Since the database schema doesn't have source_field/target_field,
                 // we'll use the name as both source and target, and expression as transformation

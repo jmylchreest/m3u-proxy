@@ -55,7 +55,7 @@
                                 <th>EPG Sources</th>
                                 <th>Filters</th>
                                 <th>Status</th>
-                                <th>Actions</th>
+                                <th style="min-width: 120px">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="proxiesTableBody">
@@ -189,6 +189,41 @@
                             </label>
                         </div>
 
+                        <div class="form-group">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    id="proxyCacheLogos"
+                                    name="cache_channel_logos"
+                                    checked
+                                />
+                                Cache logos (use cached logo URLs in M3U/EPG)
+                            </label>
+                            <small class="text-muted">
+                                When enabled, replaces original channel logo
+                                URLs with cached versions for faster loading and
+                                consistent image hashes.
+                            </small>
+                        </div>
+
+                        <div class="form-check">
+                            <label class="form-check-label">
+                                <input
+                                    class="form-check-input"
+                                    type="checkbox"
+                                    id="proxyCacheProgramLogos"
+                                    name="cache_program_logos"
+                                />
+                                Cache program logos (use cached logo URLs for
+                                EPG programs)
+                            </label>
+                            <small class="text-muted">
+                                When enabled, replaces original program logo
+                                URLs with cached versions for faster loading and
+                                consistent image hashes.
+                            </small>
+                        </div>
+
                         <!-- Streaming Configuration -->
                         <h6 class="mt-4 mb-3">Streaming Configuration</h6>
 
@@ -260,7 +295,7 @@
                                 id="maxConcurrentStreams"
                                 name="max_concurrent_streams"
                                 class="form-control"
-                                value="1000"
+                                value="1"
                                 min="1"
                                 max="10000"
                             />
@@ -365,22 +400,23 @@
                                 >
                                     <option value="">All Groups</option>
                                 </select>
-                            </div>
-                            <div class="view-controls">
-                                <button
-                                    class="btn btn-outline-secondary btn-sm"
-                                    onclick="toggleChannelView('list')"
-                                    id="listViewBtn"
-                                >
-                                    📋 List View
-                                </button>
-                                <button
-                                    class="btn btn-outline-secondary btn-sm active"
-                                    onclick="toggleChannelView('detailed')"
-                                    id="detailedViewBtn"
-                                >
-                                    📋 Detailed View
-                                </button>
+                                <div class="stats-inline">
+                                    <span
+                                        class="stat-badge"
+                                        id="totalChannelsBadge"
+                                        >0 channels</span
+                                    >
+                                    <span
+                                        class="stat-badge"
+                                        id="uniqueGroupsBadge"
+                                        >0 groups</span
+                                    >
+                                    <span
+                                        class="stat-badge"
+                                        id="appliedFiltersBadge"
+                                        >0 filters</span
+                                    >
+                                </div>
                             </div>
                         </div>
                         <div id="channelsPreview" class="channels-preview">

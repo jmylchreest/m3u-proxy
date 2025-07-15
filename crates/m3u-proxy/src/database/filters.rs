@@ -350,12 +350,12 @@ impl super::Database {
     #[allow(dead_code)]
     pub async fn get_proxy_filters(&self, proxy_id: Uuid) -> Result<Vec<ProxyFilterWithDetails>> {
         let filters = sqlx::query(
-            "SELECT pf.proxy_id, pf.filter_id, pf.sort_order, pf.is_active, pf.created_at,
+            "SELECT pf.proxy_id, pf.filter_id, pf.priority_order, pf.is_active, pf.created_at,
                     f.name, f.starting_channel_number, f.is_inverse, f.condition_tree, f.updated_at as filter_updated_at
              FROM proxy_filters pf
              JOIN filters f ON pf.filter_id = f.id
              WHERE pf.proxy_id = ?
-             ORDER BY pf.sort_order",
+             ORDER BY pf.priority_order",
         )
         .bind(proxy_id.to_string())
         .fetch_all(&self.pool)
@@ -366,7 +366,7 @@ impl super::Database {
             let proxy_filter = ProxyFilter {
                 proxy_id: Uuid::parse_str(&row.get::<String, _>("proxy_id"))?,
                 filter_id: Uuid::parse_str(&row.get::<String, _>("filter_id"))?,
-                priority_order: row.get("sort_order"),
+                priority_order: row.get("priority_order"),
                 is_active: row.get("is_active"),
                 created_at: row.get("created_at"),
             };
@@ -399,7 +399,7 @@ impl super::Database {
         sort_order: i32,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO proxy_filters (proxy_id, filter_id, sort_order, is_active)
+            "INSERT INTO proxy_filters (proxy_id, filter_id, priority_order, is_active)
              VALUES (?, ?, ?, 1)",
         )
         .bind(proxy_id.to_string())
@@ -432,7 +432,7 @@ impl super::Database {
 
         for (filter_id, sort_order) in filter_orders {
             sqlx::query(
-                "UPDATE proxy_filters SET sort_order = ? WHERE proxy_id = ? AND filter_id = ?",
+                "UPDATE proxy_filters SET priority_order = ? WHERE proxy_id = ? AND filter_id = ?",
             )
             .bind(sort_order)
             .bind(proxy_id.to_string())

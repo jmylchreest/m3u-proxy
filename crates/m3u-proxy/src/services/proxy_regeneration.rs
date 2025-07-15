@@ -10,18 +10,13 @@ use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    config::Config,
-    database::Database,
-    data_mapping::DataMappingService,
-    logo_assets::LogoAssetService,
-    proxy::ProxyService,
-    plugins::pipeline::wasm::WasmPluginManager,
-    utils::sqlite::SqliteRowExt,
+    config::Config, data_mapping::DataMappingService, database::Database,
+    logo_assets::LogoAssetService, proxy::ProxyService, utils::sqlite::SqliteRowExt,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +51,12 @@ pub struct RegenerationConfig {
     pub max_concurrent: usize,
     /// Cleanup completed entries older than this (in hours)
     pub cleanup_after_hours: u64,
+    /// Maximum retry attempts for database operations
+    pub max_retry_attempts: u32,
+    /// Base delay for exponential backoff (milliseconds)
+    pub retry_base_delay_ms: u64,
+    /// Database operation timeout (seconds)
+    pub db_timeout_seconds: u64,
 }
 
 impl Default for RegenerationConfig {
@@ -64,6 +65,9 @@ impl Default for RegenerationConfig {
             delay_seconds: 15,
             max_concurrent: 2,
             cleanup_after_hours: 24,
+            max_retry_attempts: 3,
+            retry_base_delay_ms: 100,
+            db_timeout_seconds: 30,
         }
     }
 }
@@ -75,23 +79,22 @@ pub struct ProxyRegenerationService {
     config: RegenerationConfig,
     running_tasks: Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
     is_processing: Arc<RwLock<bool>>,
-    shared_plugin_manager: Option<Arc<WasmPluginManager>>,
+    temp_file_manager: sandboxed_file_manager::SandboxedManager,
 }
 
 impl ProxyRegenerationService {
-    pub fn new(pool: SqlitePool, config: Option<RegenerationConfig>) -> Self {
+    pub fn new(
+        pool: SqlitePool,
+        config: Option<RegenerationConfig>,
+        temp_file_manager: sandboxed_file_manager::SandboxedManager,
+    ) -> Self {
         Self {
             pool,
             config: config.unwrap_or_default(),
             running_tasks: Arc::new(Mutex::new(HashMap::new())),
             is_processing: Arc::new(RwLock::new(false)),
-            shared_plugin_manager: None,
+            temp_file_manager,
         }
-    }
-
-    pub fn with_shared_plugin_manager(mut self, plugin_manager: Arc<WasmPluginManager>) -> Self {
-        self.shared_plugin_manager = Some(plugin_manager);
-        self
     }
 
     /// Queue a proxy for regeneration due to source update
@@ -103,30 +106,50 @@ impl ProxyRegenerationService {
     ) -> Result<(), sqlx::Error> {
         let queue_id = Uuid::new_v4();
         let scheduled_at = Utc::now() + chrono::Duration::seconds(self.config.delay_seconds as i64);
-        
+
         let proxy_id_str = proxy_id.to_string();
         let queue_id_str = queue_id.to_string();
         let trigger_source_id_str = trigger_source_id.to_string();
         let scheduled_at_str = scheduled_at.to_rfc3339();
         let created_at_str = Utc::now().to_rfc3339();
 
-        // Use INSERT OR REPLACE to handle deduplication
-        // If a queue entry already exists for this proxy, update it with the new schedule time
-        sqlx::query(
-            r#"
-            INSERT OR REPLACE INTO proxy_regeneration_queue 
-            (id, proxy_id, trigger_source_id, trigger_source_type, status, scheduled_at, created_at)
-            VALUES (?, ?, ?, ?, 'pending', ?, ?)
-            "#
-        )
-        .bind(queue_id_str)
-        .bind(proxy_id_str)
-        .bind(trigger_source_id_str)
-        .bind(trigger_source_type)
-        .bind(scheduled_at_str)
-        .bind(created_at_str)
-        .execute(&self.pool)
-        .await?;
+        // Use INSERT OR REPLACE with retry logic for database locks
+        let max_retries = 3;
+        let mut delay = 50u64; // Start with 50ms for queue operations
+        
+        for attempt in 0..max_retries {
+            match sqlx::query(
+                r#"
+                INSERT OR REPLACE INTO proxy_regeneration_queue
+                (id, proxy_id, trigger_source_id, trigger_source_type, status, scheduled_at, created_at)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                "#,
+            )
+            .bind(&queue_id_str)
+            .bind(&proxy_id_str)
+            .bind(&trigger_source_id_str)
+            .bind(trigger_source_type)
+            .bind(&scheduled_at_str)
+            .bind(&created_at_str)
+            .execute(&self.pool)
+            .await
+            {
+                Ok(_) => break,
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if (error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY")) 
+                        && attempt < max_retries - 1 {
+                        warn!("Database lock during queue insertion, retrying in {}ms (attempt {}/{})", 
+                              delay, attempt + 1, max_retries);
+                        
+                        sleep(Duration::from_millis(delay)).await;
+                        delay = std::cmp::min(delay * 2, 1000); // Cap at 1 second for queue ops
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
 
         info!(
             "Queued proxy {} for regeneration (trigger: {} {}, scheduled: {})",
@@ -143,15 +166,15 @@ impl ProxyRegenerationService {
         source_type: &str,
     ) -> Result<Vec<Uuid>, sqlx::Error> {
         let source_id_str = source_id.to_string();
-        
+
         let query = match source_type {
             "stream" => {
                 r#"
                 SELECT DISTINCT sp.id
                 FROM stream_proxies sp
                 JOIN proxy_sources ps ON sp.id = ps.proxy_id
-                WHERE ps.source_id = ? 
-                AND sp.is_active = TRUE 
+                WHERE ps.source_id = ?
+                AND sp.is_active = TRUE
                 AND sp.auto_regenerate = TRUE
                 "#
             }
@@ -160,8 +183,8 @@ impl ProxyRegenerationService {
                 SELECT DISTINCT sp.id
                 FROM stream_proxies sp
                 JOIN proxy_epg_sources pes ON sp.id = pes.proxy_id
-                WHERE pes.epg_source_id = ? 
-                AND sp.is_active = TRUE 
+                WHERE pes.epg_source_id = ?
+                AND sp.is_active = TRUE
                 AND sp.auto_regenerate = TRUE
                 "#
             }
@@ -193,14 +216,14 @@ impl ProxyRegenerationService {
         let regeneration_config = self.config.clone();
         let is_processing = self.is_processing.clone();
         let running_tasks = self.running_tasks.clone();
-        let shared_plugin_manager = self.shared_plugin_manager.clone();
+        let temp_file_manager = self.temp_file_manager.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
-            
+
             loop {
                 interval.tick().await;
-                
+
                 // Check if any processing is already happening
                 {
                     let processing = is_processing.read().await;
@@ -213,7 +236,7 @@ impl ProxyRegenerationService {
                 match Self::get_ready_queue_entries(&pool).await {
                     Ok(entries) if !entries.is_empty() => {
                         info!("Processing {} queued proxy regenerations", entries.len());
-                        
+
                         // Set processing flag
                         {
                             let mut processing = is_processing.write().await;
@@ -222,22 +245,26 @@ impl ProxyRegenerationService {
 
                         // Process entries
                         for entry in entries {
-                            if running_tasks.lock().await.len() >= regeneration_config.max_concurrent {
+                            if running_tasks.lock().await.len()
+                                >= regeneration_config.max_concurrent
+                            {
                                 // Wait for a slot
-                                while running_tasks.lock().await.len() >= regeneration_config.max_concurrent {
+                                while running_tasks.lock().await.len()
+                                    >= regeneration_config.max_concurrent
+                                {
                                     sleep(Duration::from_millis(100)).await;
                                 }
                             }
 
                             let proxy_id = entry.proxy_id;
                             let task = Self::spawn_regeneration_task(
-                                entry,
                                 pool.clone(),
+                                entry,
                                 database.clone(),
                                 data_mapping_service.clone(),
                                 logo_asset_service.clone(),
                                 config.clone(),
-                                shared_plugin_manager.clone(),
+                                temp_file_manager.clone(),
                             );
 
                             running_tasks.lock().await.insert(proxy_id, task);
@@ -259,9 +286,11 @@ impl ProxyRegenerationService {
 
                 // Cleanup completed tasks
                 Self::cleanup_completed_tasks(&running_tasks).await;
-                
+
                 // Cleanup old queue entries
-                if let Err(e) = Self::cleanup_old_entries(&pool, regeneration_config.cleanup_after_hours).await {
+                if let Err(e) =
+                    Self::cleanup_old_entries(&pool, regeneration_config.cleanup_after_hours).await
+                {
                     error!("Failed to cleanup old queue entries: {}", e);
                 }
             }
@@ -270,7 +299,7 @@ impl ProxyRegenerationService {
 
     async fn get_ready_queue_entries(pool: &SqlitePool) -> Result<Vec<QueueEntry>, sqlx::Error> {
         let now = Utc::now().to_rfc3339();
-        
+
         let rows = sqlx::query(
             r#"
             SELECT id, proxy_id, trigger_source_id, trigger_source_type, status,
@@ -278,7 +307,7 @@ impl ProxyRegenerationService {
             FROM proxy_regeneration_queue
             WHERE status = 'pending' AND scheduled_at <= ?
             ORDER BY scheduled_at ASC
-            "#
+            "#,
         )
         .bind(now)
         .fetch_all(pool)
@@ -290,7 +319,8 @@ impl ProxyRegenerationService {
                 Some(QueueEntry {
                     id: row.get_uuid("id").ok()?,
                     proxy_id: row.get_uuid("proxy_id").ok()?,
-                    trigger_source_id: row.get::<Option<String>, _>("trigger_source_id")
+                    trigger_source_id: row
+                        .get::<Option<String>, _>("trigger_source_id")
                         .and_then(|s| s.parse().ok()),
                     trigger_source_type: row.get("trigger_source_type"),
                     status: match row.get::<String, _>("status").as_str() {
@@ -313,19 +343,21 @@ impl ProxyRegenerationService {
     }
 
     fn spawn_regeneration_task(
-        entry: QueueEntry,
         pool: SqlitePool,
+        entry: QueueEntry,
         database: Database,
         data_mapping_service: DataMappingService,
         logo_asset_service: LogoAssetService,
         config: Config,
-        shared_plugin_manager: Option<Arc<WasmPluginManager>>,
+        temp_file_manager: sandboxed_file_manager::SandboxedManager,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let start_time = Instant::now();
-            
+
             // Mark as processing
-            if let Err(e) = Self::update_queue_status(&pool, entry.id, QueueStatus::Processing, None).await {
+            if let Err(e) =
+                Self::update_queue_status(&pool, entry.id, QueueStatus::Processing, None).await
+            {
                 error!("Failed to update queue status to processing: {}", e);
                 return;
             }
@@ -335,31 +367,40 @@ impl ProxyRegenerationService {
                 Ok(Some(proxy)) => proxy,
                 Ok(None) => {
                     warn!("Proxy {} not found, removing from queue", entry.proxy_id);
-                    let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
-                        Some("Proxy not found".to_string())).await;
+                    let _ = Self::update_queue_status(
+                        &pool,
+                        entry.id,
+                        QueueStatus::Failed,
+                        Some("Proxy not found".to_string()),
+                    )
+                    .await;
                     return;
                 }
                 Err(e) => {
                     error!("Failed to get proxy {}: {}", entry.proxy_id, e);
-                    let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
-                        Some(format!("Failed to get proxy: {}", e))).await;
+                    let _ = Self::update_queue_status(
+                        &pool,
+                        entry.id,
+                        QueueStatus::Failed,
+                        Some(format!("Failed to get proxy: {}", e)),
+                    )
+                    .await;
                     return;
                 }
             };
 
-            // Use the new dependency injection architecture with shared plugin manager
-            let proxy_service = if let Some(plugin_manager) = &shared_plugin_manager {
-                ProxyService::with_plugin_manager(config.storage.clone(), plugin_manager.clone())
-            } else {
-                ProxyService::new(config.storage.clone())
-            };
-            
+            // Create proxy service with native pipeline
+            let proxy_service =
+                ProxyService::new(config.storage.clone(), temp_file_manager.clone());
+
             // Create config resolver
-            use crate::repositories::{StreamProxyRepository, StreamSourceRepository, FilterRepository};
+            use crate::repositories::{
+                FilterRepository, StreamProxyRepository, StreamSourceRepository,
+            };
             let proxy_repo = StreamProxyRepository::new(database.pool());
             let stream_source_repo = StreamSourceRepository::new(database.pool());
             let filter_repo = FilterRepository::new(database.pool());
-            
+
             let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
                 proxy_repo,
                 stream_source_repo,
@@ -373,55 +414,100 @@ impl ProxyRegenerationService {
                     // Validate configuration
                     if let Err(e) = config_resolver.validate_config(&resolved_config) {
                         error!("Invalid proxy configuration for {}: {}", entry.proxy_id, e);
-                        let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
-                            Some(format!("Invalid configuration: {}", e))).await;
+                        let _ = Self::update_queue_status(
+                            &pool,
+                            entry.id,
+                            QueueStatus::Failed,
+                            Some(format!("Invalid configuration: {}", e)),
+                        )
+                        .await;
                         return;
                     }
 
                     // Create production output destination
                     // TODO: Get actual proxy_output_file_manager from config
                     let output = crate::models::GenerationOutput::InMemory; // Fallback for now
-                    
+
                     // Generate using dependency injection
-                    match proxy_service.generate_proxy_with_config(
-                        resolved_config,
-                        output,
-                        &database,
-                        &data_mapping_service,
-                        &logo_asset_service,
-                        &config.web.base_url,
-                        config.data_mapping_engine.clone(),
-                        &config,
-                    ).await {
+                    match proxy_service
+                        .generate_proxy_with_config(
+                            resolved_config,
+                            output,
+                            &database,
+                            &data_mapping_service,
+                            &logo_asset_service,
+                            &config.web.base_url,
+                            config.data_mapping_engine.clone(),
+                            &config,
+                        )
+                        .await
+                    {
                         Ok(generation) => {
                             // Save the M3U file using the proxy ULID for proper file management
-                            match proxy_service.save_m3u_file_with_manager(&proxy.ulid, &generation.m3u_content, None).await {
+                            match proxy_service
+                                .save_m3u_file_with_manager(
+                                    &proxy.id.to_string(),
+                                    &generation.m3u_content,
+                                    None,
+                                )
+                                .await
+                            {
                                 Ok(_) => {
                                     let duration = start_time.elapsed();
                                     info!(
                                         "Successfully auto-regenerated proxy '{}' with {} channels using dependency injection in {:?}",
                                         proxy.name, generation.channel_count, duration
                                     );
-                                    let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Completed, None).await;
+                                    let _ = Self::update_queue_status(
+                                        &pool,
+                                        entry.id,
+                                        QueueStatus::Completed,
+                                        None,
+                                    )
+                                    .await;
                                 }
                                 Err(e) => {
-                                    error!("Failed to save regenerated M3U for proxy {}: {}", entry.proxy_id, e);
-                                    let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
-                                        Some(format!("Failed to save M3U: {}", e))).await;
+                                    error!(
+                                        "Failed to save regenerated M3U for proxy {}: {}",
+                                        entry.proxy_id, e
+                                    );
+                                    let _ = Self::update_queue_status(
+                                        &pool,
+                                        entry.id,
+                                        QueueStatus::Failed,
+                                        Some(format!("Failed to save M3U: {}", e)),
+                                    )
+                                    .await;
                                 }
                             }
                         }
                         Err(e) => {
-                            error!("Failed to regenerate proxy {} using dependency injection: {}", entry.proxy_id, e);
-                            let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
-                                Some(format!("Generation failed: {}", e))).await;
+                            error!(
+                                "Failed to regenerate proxy {} using dependency injection: {}",
+                                entry.proxy_id, e
+                            );
+                            let _ = Self::update_queue_status(
+                                &pool,
+                                entry.id,
+                                QueueStatus::Failed,
+                                Some(format!("Generation failed: {}", e)),
+                            )
+                            .await;
                         }
                     }
                 }
                 Err(e) => {
-                    error!("Failed to resolve proxy configuration for {}: {}", entry.proxy_id, e);
-                    let _ = Self::update_queue_status(&pool, entry.id, QueueStatus::Failed, 
-                        Some(format!("Config resolution failed: {}", e))).await;
+                    error!(
+                        "Failed to resolve proxy configuration for {}: {}",
+                        entry.proxy_id, e
+                    );
+                    let _ = Self::update_queue_status(
+                        &pool,
+                        entry.id,
+                        QueueStatus::Failed,
+                        Some(format!("Config resolution failed: {}", e)),
+                    )
+                    .await;
                 }
             }
         })
@@ -446,7 +532,7 @@ impl ProxyRegenerationService {
         match status {
             QueueStatus::Processing => {
                 sqlx::query(
-                    "UPDATE proxy_regeneration_queue SET status = ?, started_at = ? WHERE id = ?"
+                    "UPDATE proxy_regeneration_queue SET status = ?, started_at = ? WHERE id = ?",
                 )
                 .bind(status_str)
                 .bind(now)
@@ -492,7 +578,10 @@ impl ProxyRegenerationService {
         for proxy_id in completed {
             if let Some(task) = tasks.remove(&proxy_id) {
                 let _ = task.await;
-                debug!("Cleaned up completed regeneration task for proxy {}", proxy_id);
+                debug!(
+                    "Cleaned up completed regeneration task for proxy {}",
+                    proxy_id
+                );
             }
         }
     }
@@ -504,24 +593,47 @@ impl ProxyRegenerationService {
         let cutoff = Utc::now() - chrono::Duration::hours(cleanup_after_hours as i64);
         let cutoff_str = cutoff.to_rfc3339();
 
-        let result = sqlx::query(
-            "DELETE FROM proxy_regeneration_queue WHERE status IN ('completed', 'failed') AND completed_at < ?"
-        )
-        .bind(cutoff_str)
-        .execute(pool)
-        .await?;
-
-        if result.rows_affected() > 0 {
-            debug!("Cleaned up {} old queue entries", result.rows_affected());
+        // Retry logic for database lock errors
+        let max_retries = 3;
+        let mut delay = 100u64; // Start with 100ms
+        
+        for attempt in 0..max_retries {
+            match sqlx::query(
+                "DELETE FROM proxy_regeneration_queue WHERE status IN ('completed', 'failed') AND completed_at < ?"
+            )
+            .bind(&cutoff_str)
+            .execute(pool)
+            .await
+            {
+                Ok(result) => {
+                    if result.rows_affected() > 0 {
+                        debug!("Cleaned up {} old queue entries", result.rows_affected());
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if (error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY")) 
+                        && attempt < max_retries - 1 {
+                        warn!("Database lock during cleanup, retrying in {}ms (attempt {}/{})", 
+                              delay, attempt + 1, max_retries);
+                        
+                        sleep(Duration::from_millis(delay)).await;
+                        delay = std::cmp::min(delay * 2, 5000); // Cap at 5 seconds
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
         }
-
-        Ok(())
+        
+        Err(sqlx::Error::RowNotFound)
     }
 
     /// Get current queue status for monitoring
     pub async fn get_queue_status(&self) -> Result<HashMap<String, usize>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT status, COUNT(*) as count FROM proxy_regeneration_queue GROUP BY status"
+            "SELECT status, COUNT(*) as count FROM proxy_regeneration_queue GROUP BY status",
         )
         .fetch_all(&self.pool)
         .await?;

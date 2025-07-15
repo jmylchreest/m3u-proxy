@@ -1,8 +1,8 @@
-//! Iterator type system for distinguishing between singleton and multi-instance iterators
+//! Iterator type system for distinguishing between consuming and cloning iterators
 //!
 //! This module defines the core types for managing different iterator behaviors:
-//! - Singleton iterators: Consume data from sources (database, upstream iterators)
-//! - Multi-instance iterators: Read from immutable sources without consuming
+//! - Consuming iterators: Consume data from sources (database, upstream iterators)
+//! - Cloning iterators: Read from immutable sources without consuming
 
 use std::sync::Arc;
 use std::any::Any;
@@ -10,14 +10,14 @@ use std::any::Any;
 /// Types of iterators in the pipeline system
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IteratorType {
-    // Singleton iterators (consuming from sources)
+    // Consuming iterators (consuming from sources)
     ChannelSource,       // From database
     EpgSource,          // From database
     MappedChannels,     // From data mapping plugin
     MappedEpg,          // From data mapping plugin
     FilteredChannels,   // From filter plugin
     
-    // Multi-instance iterators (reading from immutable sources)
+    // Cloning iterators (reading from immutable sources)
     ConfigSnapshot(ConfigType),  // Configuration data
     LogoChannels,               // From logo plugin (immutable output)
     LogoEpg,                   // From logo plugin (immutable output)
@@ -25,7 +25,6 @@ pub enum IteratorType {
     // Plugin output iterator types
     Channel,           // For PluginChannelOutputIterator
     EpgEntry,         // For PluginEpgOutputIterator
-    DataMappingRule,  // For PluginMappingRuleOutputIterator
 }
 
 /// Types of configuration that can be accessed via iterators
@@ -44,13 +43,13 @@ pub struct IteratorMetadata {
     /// Type of iterator (determines behavior)
     pub iterator_type: IteratorType,
     
-    /// Whether this is a singleton (only one instance allowed)
-    pub is_singleton: bool,
+    /// Whether this is a consuming iterator (only one instance allowed)
+    pub is_consuming: bool,
     
     /// Parent iterator ID if this was cloned
     pub parent_id: Option<u32>,
     
-    /// Current position (for multi-instance iterators)
+    /// Current position (for cloning iterators)
     pub position: usize,
     
     /// Chunk size for this iterator
@@ -58,23 +57,22 @@ pub struct IteratorMetadata {
 }
 
 impl IteratorType {
-    /// Check if this iterator type is a singleton
-    pub fn is_singleton(&self) -> bool {
+    /// Check if this iterator type is consuming
+    pub fn is_consuming(&self) -> bool {
         match self {
-            // Consuming iterators are singletons
+            // Consuming iterators
             IteratorType::ChannelSource |
             IteratorType::EpgSource |
             IteratorType::MappedChannels |
             IteratorType::MappedEpg |
             IteratorType::FilteredChannels => true,
             
-            // Config and output iterators can have multiple instances
+            // Cloning iterators can have multiple instances
             IteratorType::ConfigSnapshot(_) |
             IteratorType::LogoChannels |
             IteratorType::LogoEpg |
             IteratorType::Channel |
-            IteratorType::EpgEntry |
-            IteratorType::DataMappingRule => false,
+            IteratorType::EpgEntry => false,
         }
     }
     
@@ -92,7 +90,6 @@ impl IteratorType {
             IteratorType::LogoEpg => "logo_epg",
             IteratorType::Channel => "channel",
             IteratorType::EpgEntry => "epg_entry",
-            IteratorType::DataMappingRule => "data_mapping_rule",
         }
     }
 }

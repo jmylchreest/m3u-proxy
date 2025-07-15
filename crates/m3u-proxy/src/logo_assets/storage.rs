@@ -1,11 +1,12 @@
+use anyhow::Result;
 use std::path::PathBuf;
 use tokio::fs;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LogoAssetStorage {
-    uploaded_logo_dir: PathBuf,
-    cached_logo_dir: PathBuf,
+    pub uploaded_logo_dir: PathBuf,
+    pub cached_logo_dir: PathBuf,
 }
 
 impl LogoAssetStorage {
@@ -31,7 +32,7 @@ impl LogoAssetStorage {
         file_data: Vec<u8>,
         asset_id: Uuid,
         file_extension: &str,
-    ) -> Result<(String, String, i64, String, Option<(u32, u32)>), Box<dyn std::error::Error>> {
+    ) -> Result<(String, String, i64, String, Option<(u32, u32)>)> {
         self.ensure_storage_dirs().await?;
 
         let file_name = format!("{}.{}", asset_id, file_extension);
@@ -66,7 +67,7 @@ impl LogoAssetStorage {
         file_data: Vec<u8>,
         asset_id: Uuid,
         file_extension: &str,
-    ) -> Result<(String, String, i64, String, Option<(u32, u32)>), Box<dyn std::error::Error>> {
+    ) -> Result<(String, String, i64, String, Option<(u32, u32)>)> {
         self.ensure_storage_dirs().await?;
 
         let file_name = format!("{}.{}", asset_id, file_extension);
@@ -135,10 +136,15 @@ impl LogoAssetStorage {
         fs::read(full_path).await
     }
 
-    fn get_image_dimensions(data: &[u8]) -> Result<Option<(u32, u32)>, Box<dyn std::error::Error>> {
+    fn get_image_dimensions(data: &[u8]) -> Result<Option<(u32, u32)>> {
         match image::load_from_memory(data) {
             Ok(img) => Ok(Some((img.width(), img.height()))),
             Err(_) => Ok(None),
         }
+    }
+
+    /// Get the file path for a cached logo by cache ID
+    pub fn get_cached_logo_path(&self, cache_id: &str) -> PathBuf {
+        self.cached_logo_dir.join(format!("{}.png", cache_id))
     }
 }

@@ -40,6 +40,38 @@
                     </div>
                 </div>
 
+                <!-- Timezone Handling Info -->
+                <div class="alert alert-info">
+                    <div class="d-flex align-items-start">
+                        <i class="fas fa-info-circle me-2 mt-1"></i>
+                        <div>
+                            <strong>Timezone Handling:</strong>
+                            <p class="mb-1">
+                                All EPG times are automatically normalized to
+                                UTC for consistency. Timezone information is
+                                auto-detected from XMLTV sources and stored for
+                                reference.
+                            </p>
+                            <ul class="mb-0 small">
+                                <li>
+                                    <strong>Auto-detection:</strong> XMLTV
+                                    sources have their timezone detected
+                                    automatically
+                                </li>
+                                <li>
+                                    <strong>UTC Storage:</strong> All program
+                                    times are stored as UTC internally
+                                </li>
+                                <li>
+                                    <strong>Manual Offset:</strong> Use time
+                                    offset to correct source inaccuracies if
+                                    needed
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
                 <div
                     id="loadingIndicator"
                     class="text-center"
@@ -136,7 +168,7 @@
 
                         <div class="form-group">
                             <label for="timezone" class="form-label"
-                                >Timezone</label
+                                >Reference Timezone</label
                             >
                             <select id="timezone" class="form-select">
                                 <option value="UTC">UTC</option>
@@ -159,14 +191,32 @@
                                 <option value="Australia/Sydney">Sydney</option>
                             </select>
                             <small class="text-muted"
-                                >Timezone for interpreting EPG times (may be
-                                auto-detected)</small
+                                >Source timezone for reference (auto-detected
+                                from XMLTV sources).<br />
+                                <strong>Note:</strong> All times are stored as
+                                UTC internally.</small
                             >
+                        </div>
+
+                        <!-- Detected Timezone Display -->
+                        <div
+                            class="form-group"
+                            id="detectedTimezoneGroup"
+                            style="display: none"
+                        >
+                            <label class="form-label">Detected Timezone</label>
+                            <div class="alert alert-info mb-2">
+                                <i class="fas fa-info-circle"></i>
+                                <span id="detectedTimezoneText"
+                                    >Timezone will be auto-detected from EPG
+                                    source</span
+                                >
+                            </div>
                         </div>
 
                         <div class="form-group">
                             <label for="timeOffset" class="form-label"
-                                >Time Offset</label
+                                >Manual Time Offset</label
                             >
                             <input
                                 type="text"
@@ -175,9 +225,11 @@
                                 placeholder="0"
                             />
                             <small class="text-muted"
-                                >Time adjustment applied after timezone
-                                conversion<br />
-                                Examples: +1h30m, -45m, +5s (default: 0)</small
+                                >Optional time adjustment applied to program
+                                times.<br />
+                                Examples: +1h30m, -45m, +5s (default: 0)<br />
+                                <strong>Use case:</strong> Correct for source
+                                time inaccuracies</small
                             >
                         </div>
 

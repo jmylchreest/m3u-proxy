@@ -50,6 +50,7 @@ pub mod file_categories;
 pub mod sandboxed_file_trait;
 pub mod sandboxed_file;
 pub mod logo_cache_scanner;
+pub mod metrics_housekeeper;
 
 // Re-export main traits and services
 pub use traits::*;
@@ -59,3 +60,4 @@ pub use channel::ChannelService;
 pub use filter::FilterService;
 pub use data_mapping::DataMappingService;
 pub use proxy_regeneration::ProxyRegenerationService;
+pub use metrics_housekeeper::MetricsHousekeeper;

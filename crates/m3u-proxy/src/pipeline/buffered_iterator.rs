@@ -3,7 +3,7 @@
 //! This module provides buffered iterator implementations that can dynamically
 //! resize their buffers and serve variable chunk sizes efficiently.
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::sync::Arc;

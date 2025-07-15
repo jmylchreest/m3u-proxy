@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
+use sqlx::SqlitePool;
 use uuid::Uuid;
-use tracing::info;
+use tracing::{error, info};
+use anyhow::Result;
 
 /// Stream access metrics for logging and analytics
 #[derive(Debug, Clone)]
@@ -20,13 +22,12 @@ pub struct StreamAccessMetrics {
 /// Metrics logger service
 #[derive(Clone)]
 pub struct MetricsLogger {
-    // For now we'll use structured logging
-    // In the future this could write to database or external analytics service
+    db: SqlitePool,
 }
 
 impl MetricsLogger {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(db: SqlitePool) -> Self {
+        Self { db }
     }
     
     /// Log a stream access event
@@ -45,9 +46,45 @@ impl MetricsLogger {
             "Stream access logged"
         );
         
-        // TODO: Implement database storage
-        // INSERT INTO stream_access_logs (proxy_ulid, channel_id, client_ip, ...)
-        // VALUES (?, ?, ?, ...)
+        // Calculate duration if end_time is present
+        let duration_seconds = if let Some(end_time) = metrics.end_time {
+            (end_time - metrics.start_time).num_seconds() as i64
+        } else {
+            0
+        };
+        
+        // Determine proxy mode based on bytes served
+        let proxy_mode = if metrics.bytes_served > 0 { "proxy" } else { "redirect" };
+        
+        // Store in database
+        let result = sqlx::query(
+            r#"
+            INSERT INTO stream_access_logs (
+                id, proxy_id, channel_id, client_ip, user_agent, referer,
+                start_time, end_time, bytes_served, relay_used, relay_config_id,
+                duration_seconds, proxy_mode, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(metrics.proxy_ulid)
+        .bind(metrics.channel_id.to_string())
+        .bind(metrics.client_ip)
+        .bind(metrics.user_agent)
+        .bind(metrics.referer)
+        .bind(metrics.start_time.to_rfc3339())
+        .bind(metrics.end_time.map(|t| t.to_rfc3339()))
+        .bind(metrics.bytes_served as i64)
+        .bind(metrics.relay_used)
+        .bind(metrics.relay_config_id.map(|id| id.to_string()))
+        .bind(duration_seconds)
+        .bind(proxy_mode)
+        .execute(&self.db)
+        .await;
+        
+        if let Err(e) = result {
+            error!("Failed to log stream access to database: {}", e);
+        }
     }
     
     /// Log stream start
@@ -80,6 +117,94 @@ impl MetricsLogger {
         );
         
         session
+    }
+    
+    /// Create active session for real-time tracking
+    pub async fn create_active_session(
+        &self,
+        proxy_id: String,
+        channel_id: Uuid,
+        client_ip: String,
+        user_agent: Option<String>,
+        referer: Option<String>,
+        proxy_mode: &str,
+    ) -> Result<String> {
+        let session_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        
+        sqlx::query(
+            r#"
+            INSERT INTO active_stream_sessions (
+                session_id, proxy_id, channel_id, client_ip, user_agent, referer,
+                start_time, last_access_time, proxy_mode, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            "#,
+        )
+        .bind(&session_id)
+        .bind(proxy_id)
+        .bind(channel_id.to_string())
+        .bind(client_ip)
+        .bind(user_agent)
+        .bind(referer)
+        .bind(&now)
+        .bind(&now)
+        .bind(proxy_mode)
+        .execute(&self.db)
+        .await?;
+        
+        Ok(session_id)
+    }
+    
+    /// Update active session access time and bytes served
+    pub async fn update_active_session(&self, session_id: &str, bytes_served: u64) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        
+        sqlx::query(
+            r#"
+            UPDATE active_stream_sessions 
+            SET last_access_time = ?, bytes_served = bytes_served + ?
+            WHERE session_id = ?
+            "#,
+        )
+        .bind(now)
+        .bind(bytes_served as i64)
+        .bind(session_id)
+        .execute(&self.db)
+        .await?;
+        
+        Ok(())
+    }
+    
+    /// Complete active session and move to historical logs
+    pub async fn complete_active_session(&self, session_id: &str) -> Result<()> {
+        // Move session to historical logs with calculated duration
+        sqlx::query(
+            r#"
+            INSERT INTO stream_access_logs (
+                id, proxy_id, channel_id, client_ip, user_agent, referer,
+                start_time, end_time, bytes_served, relay_used, relay_config_id,
+                duration_seconds, proxy_mode, created_at
+            )
+            SELECT 
+                session_id, proxy_id, channel_id, client_ip, user_agent, referer,
+                start_time, last_access_time, bytes_served, relay_used, relay_config_id,
+                CAST((julianday(last_access_time) - julianday(start_time)) * 86400 AS INTEGER),
+                proxy_mode, created_at
+            FROM active_stream_sessions
+            WHERE session_id = ?
+            "#,
+        )
+        .bind(session_id)
+        .execute(&self.db)
+        .await?;
+        
+        // Remove from active sessions
+        sqlx::query("DELETE FROM active_stream_sessions WHERE session_id = ?")
+            .bind(session_id)
+        .execute(&self.db)
+        .await?;
+        
+        Ok(())
     }
 }
 
@@ -128,8 +253,4 @@ impl StreamAccessSession {
     }
 }
 
-impl Default for MetricsLogger {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Note: Default implementation removed as MetricsLogger requires a database pool

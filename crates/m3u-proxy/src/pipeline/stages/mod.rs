@@ -7,13 +7,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::models::*;
-use super::iterator_traits::PipelineIterator;
 
 /// Core pipeline stages
 pub const STAGES: &[&str] = &[
     super::stage_names::DATA_MAPPING,
     super::stage_names::FILTERING,
     super::stage_names::LOGO_PREFETCH,
+    super::stage_names::PROGRAM_LOGO_PREFETCH,
     super::stage_names::CHANNEL_NUMBERING,
     super::stage_names::M3U_GENERATION,
     super::stage_names::EPG_PROCESSING,
@@ -24,30 +24,32 @@ pub const STAGES: &[&str] = &[
 pub trait PipelineStage<I, O>: Send + Sync {
     /// Execute the stage with input data
     async fn execute(&mut self, input: I) -> Result<O>;
-    
+
     /// Get stage name
     fn stage_name(&self) -> &str;
-    
+
     /// Get estimated processing time
     fn estimated_duration(&self, input_size: usize) -> std::time::Duration {
         std::time::Duration::from_millis(input_size as u64 / 10) // Default estimation
     }
-    
+
     /// Check if stage supports streaming
     fn supports_streaming(&self) -> bool {
         false
     }
 }
 
-
 /// Data mapping stage
 pub struct DataMappingStage {
+    #[allow(dead_code)]
     data_mapping_service: crate::data_mapping::service::DataMappingService,
 }
 
 impl DataMappingStage {
     pub fn new(data_mapping_service: crate::data_mapping::service::DataMappingService) -> Self {
-        Self { data_mapping_service }
+        Self {
+            data_mapping_service,
+        }
     }
 }
 
@@ -58,11 +60,11 @@ impl PipelineStage<Vec<Channel>, Vec<Channel>> for DataMappingStage {
         // TODO: Implement actual data mapping
         Ok(channels)
     }
-    
+
     fn stage_name(&self) -> &str {
         super::stage_names::DATA_MAPPING
     }
-    
+
     fn supports_streaming(&self) -> bool {
         true
     }
@@ -82,15 +84,19 @@ impl FilteringStage {
 #[async_trait]
 impl PipelineStage<Vec<Channel>, Vec<Channel>> for FilteringStage {
     async fn execute(&mut self, channels: Vec<Channel>) -> Result<Vec<Channel>> {
-        tracing::info!("Filtering {} channels with {} filters", channels.len(), self.filters.len());
+        tracing::info!(
+            "Filtering {} channels with {} filters",
+            channels.len(),
+            self.filters.len()
+        );
         // TODO: Implement actual filtering
         Ok(channels)
     }
-    
+
     fn stage_name(&self) -> &str {
         super::stage_names::FILTERING
     }
-    
+
     fn supports_streaming(&self) -> bool {
         true
     }
@@ -110,8 +116,12 @@ impl ChannelNumberingStage {
 #[async_trait]
 impl PipelineStage<Vec<Channel>, Vec<NumberedChannel>> for ChannelNumberingStage {
     async fn execute(&mut self, channels: Vec<Channel>) -> Result<Vec<NumberedChannel>> {
-        tracing::info!("Numbering {} channels starting from {}", channels.len(), self.starting_number);
-        
+        tracing::info!(
+            "Numbering {} channels starting from {}",
+            channels.len(),
+            self.starting_number
+        );
+
         let numbered_channels = channels
             .into_iter()
             .enumerate()
@@ -121,10 +131,10 @@ impl PipelineStage<Vec<Channel>, Vec<NumberedChannel>> for ChannelNumberingStage
                 channel,
             })
             .collect();
-        
+
         Ok(numbered_channels)
     }
-    
+
     fn stage_name(&self) -> &str {
         super::stage_names::CHANNEL_NUMBERING
     }
@@ -132,6 +142,7 @@ impl PipelineStage<Vec<Channel>, Vec<NumberedChannel>> for ChannelNumberingStage
 
 /// M3U generation stage
 pub struct M3uGenerationStage {
+    #[allow(dead_code)]
     base_url: String,
 }
 
@@ -144,13 +155,16 @@ impl M3uGenerationStage {
 #[async_trait]
 impl PipelineStage<Vec<NumberedChannel>, String> for M3uGenerationStage {
     async fn execute(&mut self, numbered_channels: Vec<NumberedChannel>) -> Result<String> {
-        tracing::info!("Generating M3U content for {} channels", numbered_channels.len());
-        
+        tracing::info!(
+            "Generating M3U content for {} channels",
+            numbered_channels.len()
+        );
+
         let mut m3u_content = String::from("#EXTM3U\n");
-        
+
         for numbered_channel in numbered_channels {
             let channel = &numbered_channel.channel;
-            
+
             // Add channel info
             m3u_content.push_str(&format!(
                 "#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" group-title=\"{}\",{}\n",
@@ -160,14 +174,14 @@ impl PipelineStage<Vec<NumberedChannel>, String> for M3uGenerationStage {
                 channel.group_title.as_deref().unwrap_or(""),
                 channel.channel_name
             ));
-            
+
             // Add stream URL
             m3u_content.push_str(&format!("{}\n", channel.stream_url));
         }
-        
+
         Ok(m3u_content)
     }
-    
+
     fn stage_name(&self) -> &str {
         super::stage_names::M3U_GENERATION
     }
@@ -175,7 +189,9 @@ impl PipelineStage<Vec<NumberedChannel>, String> for M3uGenerationStage {
 
 /// Pipeline stage factory for creating stages
 pub struct StageFactory {
+    #[allow(dead_code)]
     database: std::sync::Arc<crate::database::Database>,
+    #[allow(dead_code)]
     data_mapping_service: crate::data_mapping::service::DataMappingService,
 }
 
@@ -189,23 +205,22 @@ impl StageFactory {
             data_mapping_service,
         }
     }
-    
-    
+
     /// Create a data mapping stage
     pub fn create_data_mapping_stage(&self) -> DataMappingStage {
         DataMappingStage::new(self.data_mapping_service.clone())
     }
-    
+
     /// Create a filtering stage
     pub fn create_filtering_stage(&self, filters: Vec<(Filter, ProxyFilter)>) -> FilteringStage {
         FilteringStage::new(filters)
     }
-    
+
     /// Create a channel numbering stage
     pub fn create_channel_numbering_stage(&self, starting_number: i32) -> ChannelNumberingStage {
         ChannelNumberingStage::new(starting_number)
     }
-    
+
     /// Create an M3U generation stage
     pub fn create_m3u_generation_stage(&self, base_url: String) -> M3uGenerationStage {
         M3uGenerationStage::new(base_url)

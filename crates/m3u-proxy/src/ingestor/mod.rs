@@ -6,11 +6,15 @@ pub mod ingest_epg;
 pub mod ingest_m3u;
 pub mod ingest_stream;
 pub mod ingest_xtream;
+pub mod ingestion_accumulator;
 pub mod scheduler;
 pub mod state_manager;
 
 pub use ingest_epg::EpgIngestor;
 pub use ingest_stream::StreamIngestor;
+pub use ingestion_accumulator::{
+    IngestionAccumulator, IngestionAccumulationStrategy, IngestionAccumulatorFactory, IngestionAccumulatorStats
+};
 pub use state_manager::{IngestionStateManager, ProcessingTrigger};
 
 #[async_trait]

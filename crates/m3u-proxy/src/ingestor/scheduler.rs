@@ -282,7 +282,41 @@ impl SchedulerService {
         for (_source_id, cached_source) in cache.iter_mut() {
             let source = &cached_source.source;
 
-            // Processing state and backoff checks are now handled by ingest_source_with_trigger()
+            // Check if source is actively being processed or in backoff period
+            if let Some(processing_info) = self
+                .ingestor
+                .get_state_manager()
+                .get_processing_info(source.id())
+                .await
+            {
+                // If next_retry_after is None, the source is actively being processed
+                if processing_info.next_retry_after.is_none() {
+                    trace!(
+                        "Source '{}' is actively being processed (started at {}) - skipping scheduler run",
+                        source.name(),
+                        processing_info.started_at.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
+                    continue; // Skip this source - actively processing
+                }
+
+                // Check if we're in backoff period
+                if let Some(retry_after) = processing_info.next_retry_after {
+                    if now < retry_after {
+                        trace!(
+                            "Source '{}' is still in backoff period until {}",
+                            source.name(),
+                            retry_after.format("%Y-%m-%d %H:%M:%S UTC")
+                        );
+                        continue; // Skip this source - still in backoff
+                    } else {
+                        debug!(
+                            "Source '{}' backoff period has expired (was until {}), checking schedule",
+                            source.name(),
+                            retry_after.format("%Y-%m-%d %H:%M:%S UTC")
+                        );
+                    }
+                }
+            }
 
             if let Some(schedule) = &cached_source.schedule {
                 match self.should_update_cached(

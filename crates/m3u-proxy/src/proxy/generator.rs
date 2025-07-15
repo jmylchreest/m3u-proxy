@@ -77,6 +77,7 @@ impl ProxyGenerator {
                 m3u_content: m3u_content.clone(),
                 created_at: Utc::now(),
                 stats: Some(stats.clone()),
+                processed_channels: None,
             };
 
             // Handle output based on destination
@@ -228,7 +229,7 @@ impl ProxyGenerator {
         // Step 5: Generate M3U content from numbered channels (with timing)
         let m3u_generation_start = Instant::now();
         let m3u_content = self
-            .generate_m3u_content_from_numbered(&numbered_channels, &config.proxy.ulid, base_url)
+            .generate_m3u_content_from_numbered(&numbered_channels, &config.proxy.id.to_string(), base_url, config.proxy.cache_channel_logos, logo_service)
             .await?;
 
         stats.m3u_generation_duration_ms = m3u_generation_start.elapsed().as_millis() as u64;
@@ -250,6 +251,7 @@ impl ProxyGenerator {
             m3u_content,
             created_at: Utc::now(),
             stats: Some(stats.clone()),
+            processed_channels: Some(numbered_channels),
         };
 
         // Step 7: Handle output based on destination
@@ -300,6 +302,7 @@ impl ProxyGenerator {
                 filtered_channels: 0,
                 applied_filters: Vec::new(),
                 stats: None, // Legacy method doesn't collect stats
+                processed_channels: None,
             });
         }
 
@@ -437,15 +440,16 @@ impl ProxyGenerator {
 
         // Step 7: Generate M3U content from numbered channels
         let m3u_content = self
-            .generate_m3u_content_from_numbered(&numbered_channels, &proxy.ulid, base_url)
+            .generate_m3u_content_from_numbered(&numbered_channels, &proxy.id.to_string(), base_url, proxy.cache_channel_logos, logo_service)
             .await?;
 
         // Step 8: Save to database and return generation record
+        let channel_count = numbered_channels.len() as i32;
         let generation = ProxyGeneration {
             id: Uuid::new_v4(),
             proxy_id: proxy.id,
             version: 1, // TODO: Get next version number from database
-            channel_count: numbered_channels.len() as i32,
+            channel_count,
             m3u_content,
             created_at: Utc::now(),
             // New fields for enhanced tracking
@@ -453,12 +457,13 @@ impl ProxyGenerator {
             filtered_channels: filtered_channels_len,
             applied_filters: applied_filters.iter().map(|f| f.name.clone()).collect(),
             stats: None, // Legacy method doesn't collect stats
+            processed_channels: Some(numbered_channels),
         };
 
         info!(
             "Proxy generation completed for '{}': {} channels in final M3U",
             proxy.name,
-            numbered_channels.len()
+            channel_count
         );
 
         Ok(generation)
@@ -469,7 +474,7 @@ impl ProxyGenerator {
     async fn generate_m3u_content(
         &self,
         channels: &[Channel],
-        proxy_ulid: &str,
+        proxy_id: &str,
         base_url: &str,
     ) -> Result<String> {
         let mut m3u = String::from("#EXTM3U\n");
@@ -514,7 +519,7 @@ impl ProxyGenerator {
             let proxy_stream_url = format!(
                 "{}/stream/{}/{}",
                 base_url.trim_end_matches('/'),
-                proxy_ulid,
+                proxy_id,
                 channel.id
             );
             m3u.push_str(&format!("{}\n", proxy_stream_url));
@@ -530,6 +535,21 @@ impl ProxyGenerator {
 
         // Generate filename: proxy_id.m3u8
         let filename = format!("{}.m3u8", proxy_id);
+        let file_path = self.storage_config.m3u_path.join(filename);
+
+        // Write content to file
+        std::fs::write(&file_path, content)?;
+
+        Ok(file_path)
+    }
+
+    /// Save XMLTV content to the configured storage path
+    pub async fn save_xmltv_file(&self, proxy_id: Uuid, content: &str) -> Result<PathBuf> {
+        // Ensure the storage directory exists
+        std::fs::create_dir_all(&self.storage_config.m3u_path)?;
+
+        // Generate filename: proxy_id.xmltv
+        let filename = format!("{}.xmltv", proxy_id);
         let file_path = self.storage_config.m3u_path.join(filename);
 
         // Write content to file
@@ -561,8 +581,8 @@ impl ProxyGenerator {
         let mut timing = GenerationTiming::new();
 
         info!(
-            "Starting proxy generation for '{}' (ULID: {})",
-            proxy.name, proxy.ulid
+            "Starting proxy generation for '{}' (ID: {})",
+            proxy.name, proxy.id
         );
         debug!(
             "Generation parameters: proxy_mode={:?}, base_url={}",
@@ -582,12 +602,12 @@ impl ProxyGenerator {
             )
             .await?;
 
-        // Save M3U file to disk using ULID as filename
+        // Save M3U file to disk using ID as filename
         let step_start = Instant::now();
-        debug!("Saving M3U file to disk for proxy '{}'", proxy.ulid);
+        debug!("Saving M3U file to disk for proxy '{}'", proxy.id);
 
         let file_path = self
-            .save_m3u_file_by_ulid(&proxy.ulid, &generation.m3u_content)
+            .save_m3u_file_by_id(&proxy.id.to_string(), &generation.m3u_content)
             .await?;
         timing.file_writing_ms = step_start.elapsed().as_millis();
 
@@ -608,8 +628,8 @@ impl ProxyGenerator {
         Ok(generation)
     }
 
-    /// Save M3U content using proxy ULID as filename
-    pub async fn save_m3u_file_by_ulid(&self, proxy_ulid: &str, content: &str) -> Result<PathBuf> {
+    /// Save M3U content using proxy ID as filename
+    pub async fn save_m3u_file_by_id(&self, proxy_id: &str, content: &str) -> Result<PathBuf> {
         if let Some(file_manager) = &self.proxy_output_file_manager {
             // Use sandboxed file manager for safer file handling
             let file_id = format!("m3u-{}.m3u", uuid::Uuid::new_v4());
@@ -620,24 +640,24 @@ impl ProxyGenerator {
 
             // Also write to the traditional location for serving
             // (this provides backwards compatibility while using sandboxed storage)
-            self.save_m3u_file_traditional(proxy_ulid, content).await?;
+            self.save_m3u_file_traditional(proxy_id, content).await?;
 
             // Return the traditional path for backwards compatibility
-            let filename = format!("{}.m3u8", proxy_ulid);
+            let filename = format!("{}.m3u8", proxy_id);
             Ok(self.storage_config.m3u_path.join(filename))
         } else {
             // Fallback to traditional method
-            self.save_m3u_file_traditional(proxy_ulid, content).await
+            self.save_m3u_file_traditional(proxy_id, content).await
         }
     }
 
     /// Traditional atomic write method (private helper)
-    async fn save_m3u_file_traditional(&self, proxy_ulid: &str, content: &str) -> Result<PathBuf> {
+    async fn save_m3u_file_traditional(&self, proxy_id: &str, content: &str) -> Result<PathBuf> {
         // Ensure the M3U storage directory exists
         tokio::fs::create_dir_all(&self.storage_config.m3u_path).await?;
 
-        // Generate filename: {ulid}.m3u8 (using ULID for serving)
-        let filename = format!("{}.m3u8", proxy_ulid);
+        // Generate filename: {ulid}.m3u8 (using ID for serving)
+        let filename = format!("{}.m3u8", proxy_id);
         let file_path = self.storage_config.m3u_path.join(filename);
 
         // Write content to file atomically using temp file
@@ -939,8 +959,10 @@ impl ProxyGenerator {
     pub async fn generate_m3u_content_from_numbered(
         &self,
         numbered_channels: &[crate::models::NumberedChannel],
-        proxy_ulid: &str,
+        proxy_id: &str,
         base_url: &str,
+        cache_channel_logos: bool,
+        logo_service: &LogoAssetService,
     ) -> Result<String> {
         debug!(
             "Generating M3U content for {} numbered channels",
@@ -951,11 +973,41 @@ impl ProxyGenerator {
         let mut bytes_written = 0;
 
         for (index, nc) in numbered_channels.iter().enumerate() {
+            // Handle logo URL - use cached version if cache_channel_logos is enabled
+            let logo_url = if cache_channel_logos {
+                if let Some(original_logo) = &nc.channel.tvg_logo {
+                    if !original_logo.is_empty() {
+                        // Check if this is already a data mapping reference like @logo:UUID
+                        if original_logo.starts_with("@logo:") {
+                            // It's already a logo reference, keep it as is
+                            original_logo.clone()
+                        } else {
+                            // Get or create cached logo URL
+                            match logo_service.cache_logo_from_url(original_logo).await {
+                                Ok(cache_id) => {
+                                    logo_service.get_cached_logo_url(&cache_id, base_url)
+                                },
+                                Err(e) => {
+                                    debug!("Failed to cache logo URL for '{}': {}", original_logo, e);
+                                    original_logo.clone()
+                                }
+                            }
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                nc.channel.tvg_logo.as_deref().unwrap_or("").to_string()
+            };
+
             let extinf = format!(
                 "#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" tvg-channo=\"{}\" group-title=\"{}\",{}",
                 nc.channel.tvg_id.as_deref().unwrap_or(""),
                 nc.channel.tvg_name.as_deref().unwrap_or(""),
-                nc.channel.tvg_logo.as_deref().unwrap_or(""),
+                logo_url,
                 nc.assigned_number,
                 nc.channel.group_title.as_deref().unwrap_or(""),
                 nc.channel.channel_name
@@ -964,7 +1016,7 @@ impl ProxyGenerator {
             let proxy_stream_url = format!(
                 "{}/stream/{}/{}",
                 base_url.trim_end_matches('/'),
-                proxy_ulid,
+                proxy_id,
                 nc.channel.id
             );
 
@@ -1064,14 +1116,14 @@ impl ProxyGenerator {
             GenerationOutput::Production { file_manager, update_database } => {
                 if let Some(config) = config {
                     // Write M3U to production file manager
-                    let m3u_file_id = format!("{}-{}.m3u", config.proxy.ulid, Uuid::new_v4());
+                    let m3u_file_id = format!("{}-{}.m3u", config.proxy.id, Uuid::new_v4());
                     file_manager
                         .write(&m3u_file_id, &generation.m3u_content)
                         .await
                         .map_err(|e| anyhow::anyhow!("Failed to write production M3U: {}", e))?;
 
                     // Also write to traditional location for serving
-                    self.save_m3u_file_traditional(&config.proxy.ulid, &generation.m3u_content).await?;
+                    self.save_m3u_file_traditional(&config.proxy.id.to_string(), &generation.m3u_content).await?;
 
                     if *update_database {
                         // TODO: Save generation record to database

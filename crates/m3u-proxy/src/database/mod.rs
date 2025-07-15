@@ -2,7 +2,7 @@ use crate::assets::MigrationAssets;
 use crate::config::{DatabaseBatchConfig, DatabaseConfig, IngestionConfig};
 use crate::models::*;
 use anyhow::Result;
-use sqlx::{migrate::MigrateDatabase, Pool, Row, Sqlite, SqlitePool};
+use sqlx::{Pool, Row, Sqlite, SqlitePool, migrate::MigrateDatabase};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing;
@@ -172,7 +172,7 @@ impl Database {
     // Proxy-related database methods
     pub async fn get_stream_proxy(&self, proxy_id: Uuid) -> Result<Option<StreamProxy>> {
         let row = sqlx::query(
-            "SELECT id, ulid, name, created_at, updated_at, last_generated_at, is_active,
+            "SELECT id, name, created_at, updated_at, last_generated_at, is_active,
              proxy_mode, upstream_timeout, buffer_size, max_concurrent_streams
              FROM stream_proxies WHERE id = ?",
         )
@@ -183,7 +183,6 @@ impl Database {
         match row {
             Some(row) => Ok(Some(StreamProxy {
                 id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                ulid: row.get("ulid"),
                 name: row.get("name"),
                 description: None, // Field was added later, not in current schema
                 created_at: row.get("created_at"),
@@ -199,24 +198,25 @@ impl Database {
                 buffer_size: row.get("buffer_size"),
                 max_concurrent_streams: row.get("max_concurrent_streams"),
                 starting_channel_number: 1, // Default value, field was added later
+                cache_channel_logos: true, // Default value, field was added later
+                cache_program_logos: false, // Default value, field was added later
             })),
             None => Ok(None),
         }
     }
 
-    pub async fn get_proxy_by_ulid(&self, ulid: &str) -> Result<StreamProxy> {
+    pub async fn get_proxy_by_id(&self, id: &str) -> Result<StreamProxy> {
         let row = sqlx::query(
-            "SELECT id, ulid, name, created_at, updated_at, last_generated_at, is_active,
+            "SELECT id, name, created_at, updated_at, last_generated_at, is_active,
              proxy_mode, upstream_timeout, buffer_size, max_concurrent_streams
-             FROM stream_proxies WHERE ulid = ?",
+             FROM stream_proxies WHERE id = ?",
         )
-        .bind(ulid)
+        .bind(id)
         .fetch_one(&self.pool)
         .await?;
 
         Ok(StreamProxy {
             id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-            ulid: row.get("ulid"),
             name: row.get("name"),
             description: None, // Field was added later, not in current schema
             created_at: row.get("created_at"),
@@ -232,6 +232,8 @@ impl Database {
             buffer_size: row.get("buffer_size"),
             max_concurrent_streams: row.get("max_concurrent_streams"),
             starting_channel_number: 1, // Default value, field was added later
+            cache_channel_logos: true, // Default value, field was added later
+            cache_program_logos: false, // Default value, field was added later
         })
     }
 
@@ -283,12 +285,12 @@ impl Database {
         proxy_id: Uuid,
     ) -> Result<Vec<ProxyFilterWithDetails>> {
         let rows = sqlx::query(
-            "SELECT pf.proxy_id, pf.filter_id, pf.sort_order, pf.is_active, pf.created_at,
+            "SELECT pf.proxy_id, pf.filter_id, pf.priority_order, pf.is_active, pf.created_at,
                     f.name, f.starting_channel_number, f.is_inverse, f.condition_tree, f.updated_at as filter_updated_at
              FROM proxy_filters pf
              JOIN filters f ON pf.filter_id = f.id
              WHERE pf.proxy_id = ? AND pf.is_active = 1
-             ORDER BY pf.sort_order"
+             ORDER BY pf.priority_order"
         )
         .bind(proxy_id.to_string())
         .fetch_all(&self.pool)
@@ -299,7 +301,7 @@ impl Database {
             let proxy_filter = ProxyFilter {
                 proxy_id: Uuid::parse_str(&row.get::<String, _>("proxy_id"))?,
                 filter_id: Uuid::parse_str(&row.get::<String, _>("filter_id"))?,
-                priority_order: row.get("sort_order"),
+                priority_order: row.get("priority_order"),
                 is_active: row.get("is_active"),
                 created_at: row.get("created_at"),
             };
@@ -328,7 +330,7 @@ impl Database {
     /// This validates that the channel belongs to one of the proxy's sources
     pub async fn get_channel_for_proxy(
         &self,
-        proxy_ulid: &str,
+        proxy_id: &str,
         channel_id: Uuid,
     ) -> Result<Option<Channel>> {
         let row = sqlx::query(
@@ -337,9 +339,9 @@ impl Database {
              FROM channels c
              JOIN proxy_sources ps ON c.source_id = ps.source_id
              JOIN stream_proxies sp ON ps.proxy_id = sp.id
-             WHERE sp.ulid = ? AND c.id = ? AND sp.is_active = 1",
+             WHERE sp.id = ? AND c.id = ? AND sp.is_active = 1",
         )
-        .bind(proxy_ulid)
+        .bind(proxy_id)
         .bind(channel_id.to_string())
         .fetch_optional(&self.pool)
         .await?;
@@ -366,7 +368,7 @@ impl Database {
     pub async fn get_proxy_epg_sources(&self, proxy_id: Uuid) -> Result<Vec<EpgSource>> {
         let rows = sqlx::query(
             "SELECT e.id, e.name, e.source_type, e.url, e.update_cron, e.username, e.password,
-             e.timezone, e.timezone_detected, e.time_offset, e.created_at, e.updated_at,
+             e.original_timezone, e.time_offset, e.created_at, e.updated_at,
              e.last_ingested_at, e.is_active
              FROM epg_sources e
              JOIN proxy_epg_sources pes ON e.id = pes.epg_source_id
@@ -394,8 +396,7 @@ impl Database {
                 update_cron: row.get("update_cron"),
                 username: row.get("username"),
                 password: row.get("password"),
-                timezone: row.get("timezone"),
-                timezone_detected: row.get("timezone_detected"),
+                original_timezone: row.get("original_timezone"),
                 time_offset: row.get("time_offset"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
@@ -416,12 +417,13 @@ impl Database {
         end_time: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<EpgProgram>> {
         let rows = sqlx::query(
-            "SELECT id, source_id, channel_id, channel_name, program_title, program_description,
-             program_category, start_time, end_time, episode_num, season_num, rating,
-             language, subtitles, aspect_ratio, created_at, updated_at
-             FROM epg_programs
-             WHERE channel_id = ? AND start_time >= ? AND end_time <= ?
-             ORDER BY start_time",
+            "SELECT ep.id, ep.source_id, ep.channel_id, ep.channel_name, ep.program_title, ep.program_description,
+             ep.program_category, ep.start_time, ep.end_time, ep.episode_num, ep.season_num, ep.rating,
+             ep.language, ep.subtitles, ep.aspect_ratio, ep.program_icon, ep.created_at, ep.updated_at
+             FROM epg_programs ep
+             JOIN epg_channels ec ON ep.channel_id = ec.channel_id AND ep.source_id = ec.source_id
+             WHERE ec.id = ? AND ep.start_time >= ? AND ep.end_time <= ?
+             ORDER BY ep.start_time",
         )
         .bind(channel_id.to_string())
         .bind(start_time)
@@ -447,6 +449,7 @@ impl Database {
                 language: row.get("language"),
                 subtitles: row.get("subtitles"),
                 aspect_ratio: row.get("aspect_ratio"),
+                program_icon: row.get("program_icon"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
             };
@@ -459,12 +462,13 @@ impl Database {
     /// Get all EPG programs for a specific channel
     pub async fn get_epg_programs_for_channel(&self, channel_id: Uuid) -> Result<Vec<EpgProgram>> {
         let rows = sqlx::query(
-            "SELECT id, source_id, channel_id, channel_name, program_title, program_description,
-             program_category, start_time, end_time, episode_num, season_num, rating,
-             language, subtitles, aspect_ratio, created_at, updated_at
-             FROM epg_programs
-             WHERE channel_id = ?
-             ORDER BY start_time",
+            "SELECT ep.id, ep.source_id, ep.channel_id, ep.channel_name, ep.program_title, ep.program_description,
+             ep.program_category, ep.start_time, ep.end_time, ep.episode_num, ep.season_num, ep.rating,
+             ep.language, ep.subtitles, ep.aspect_ratio, ep.program_icon, ep.created_at, ep.updated_at
+             FROM epg_programs ep
+             JOIN epg_channels ec ON ep.channel_id = ec.channel_id AND ep.source_id = ec.source_id
+             WHERE ec.id = ?
+             ORDER BY ep.start_time",
         )
         .bind(channel_id.to_string())
         .fetch_all(&self.pool)
@@ -488,6 +492,7 @@ impl Database {
                 language: row.get("language"),
                 subtitles: row.get("subtitles"),
                 aspect_ratio: row.get("aspect_ratio"),
+                program_icon: row.get("program_icon"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
             };

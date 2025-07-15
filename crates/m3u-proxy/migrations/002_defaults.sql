@@ -103,3 +103,11 @@ VALUES (
     datetime('now'),
     datetime('now')
 );
+
+-- =============================================================================
+-- MIGRATION NOTES (for documentation)
+-- =============================================================================
+
+-- Note about simplified timezone handling
+INSERT INTO migration_notes (migration_id, note) VALUES
+(1, 'Initial schema with simplified timezone handling: all times stored as UTC, original_timezone field for reference only, time_offset applied after UTC normalization');

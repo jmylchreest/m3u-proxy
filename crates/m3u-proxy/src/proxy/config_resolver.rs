@@ -108,13 +108,28 @@ impl ProxyConfigResolver {
 
         // Resolve EPG source configurations
         let mut epg_sources = Vec::new();
+        debug!("Resolving EPG sources for proxy {}: found {} proxy_epg_sources", proxy_id, proxy_epg_sources.len());
+        
         for proxy_epg_source in proxy_epg_sources {
+            debug!("Checking EPG source {}", proxy_epg_source.epg_source_id);
+            
             if let Some(epg_source) = self
                 .proxy_repo
                 .find_epg_source_by_id(proxy_epg_source.epg_source_id)
                 .await
                 .map_err(|e| AppError::Repository(e))?
             {
+                debug!(
+                    "Found EPG source: {} (active: {}, priority: {})",
+                    epg_source.name, epg_source.is_active, proxy_epg_source.priority_order
+                );
+                
+                // Filter out inactive EPG sources entirely
+                if !epg_source.is_active {
+                    debug!("Filtering out inactive EPG source '{}'", epg_source.name);
+                    continue;
+                }
+                
                 epg_sources.push(ProxyEpgSourceConfig {
                     epg_source,
                     priority_order: proxy_epg_source.priority_order,
@@ -125,6 +140,16 @@ impl ProxyConfigResolver {
                     proxy_epg_source.epg_source_id
                 );
             }
+        }
+        
+        info!("Resolved {} EPG sources for proxy {}", epg_sources.len(), proxy_id);
+        
+        // Temporary debug logging
+        for epg_source_config in &epg_sources {
+            debug!("DEBUG: Resolved EPG source: {} (ID: {}, active: {})", 
+                epg_source_config.epg_source.name, 
+                epg_source_config.epg_source.id, 
+                epg_source_config.epg_source.is_active);
         }
 
         // Sort by priority
@@ -159,7 +184,6 @@ impl ProxyConfigResolver {
         // Create temporary proxy from request
         let temp_proxy = StreamProxy {
             id: Uuid::new_v4(),
-            ulid: format!("preview-{}", Uuid::new_v4()),
             name: request.name.clone(),
             description: Some(format!("Preview proxy for {}", request.name)),
             starting_channel_number: request.starting_channel_number,
@@ -172,6 +196,8 @@ impl ProxyConfigResolver {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             last_generated_at: None,
+            cache_channel_logos: true, // Default value, field was added later
+            cache_program_logos: false, // Default value, field was added later
         };
 
         // Resolve source configurations
@@ -226,17 +252,53 @@ impl ProxyConfigResolver {
         sources.sort_by_key(|s| s.priority_order);
         filters.sort_by_key(|f| f.priority_order);
 
+        // Resolve EPG source configurations (same logic as normal resolution)
+        let mut epg_sources = Vec::new();
+        for epg_source_req in &request.epg_sources {
+            if let Some(epg_source) = self
+                .proxy_repo
+                .find_epg_source_by_id(epg_source_req.epg_source_id)
+                .await
+                .map_err(|e| AppError::Repository(e))?
+            {
+                debug!(
+                    "Found preview EPG source: {} (active: {}, priority: {})",
+                    epg_source.name, epg_source.is_active, epg_source_req.priority_order
+                );
+                
+                // Filter out inactive EPG sources entirely
+                if !epg_source.is_active {
+                    debug!("Filtering out inactive EPG source '{}' from preview", epg_source.name);
+                    continue;
+                }
+                
+                epg_sources.push(ProxyEpgSourceConfig {
+                    epg_source,
+                    priority_order: epg_source_req.priority_order,
+                });
+            } else {
+                return Err(AppError::NotFound {
+                    resource: "epg_source".to_string(),
+                    id: epg_source_req.epg_source_id.to_string(),
+                });
+            }
+        }
+
+        // Sort by priority
+        epg_sources.sort_by_key(|e| e.priority_order);
+
         let config = ResolvedProxyConfig {
             proxy: temp_proxy,
             sources,
             filters,
-            epg_sources: Vec::new(), // Preview doesn't need EPG sources for now
+            epg_sources,
         };
 
         debug!(
-            "Resolved preview configuration: {} sources, {} filters",
+            "Resolved preview configuration: {} sources, {} filters, {} EPG sources",
             config.sources.len(),
-            config.filters.len()
+            config.filters.len(),
+            config.epg_sources.len()
         );
 
         Ok(config)

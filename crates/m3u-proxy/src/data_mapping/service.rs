@@ -2,7 +2,7 @@ use crate::data_mapping::engine::DataMappingEngine;
 use crate::filter_parser::FilterParser;
 use crate::logo_assets::LogoAssetService;
 use crate::models::data_mapping::*;
-use crate::models::{logo_asset::LogoAsset, Channel};
+use crate::models::{Channel, logo_asset::LogoAsset};
 use chrono::Utc;
 use sqlx::{Pool, Row, Sqlite};
 use std::collections::HashMap;
@@ -525,21 +525,18 @@ impl DataMappingService {
     async fn load_logo_assets(
         &self,
         logo_service: &crate::logo_assets::LogoAssetService,
-        base_url: &str,
+        _base_url: &str,
     ) -> Result<HashMap<Uuid, LogoAsset>, anyhow::Error> {
         use std::collections::HashMap;
 
         let logo_list = logo_service
-            .list_assets(
-                crate::models::logo_asset::LogoAssetListRequest {
-                    search: None,
-                    asset_type: None,
-                    page: Some(1),
-                    limit: Some(1000), // Get a reasonable number of logos
-                    include_cached: Some(true),
-                },
-                base_url,
-            )
+            .list_assets(crate::models::logo_asset::LogoAssetListRequest {
+                search: None,
+                asset_type: None,
+                page: Some(1),
+                limit: Some(1000), // Get a reasonable number of logos
+                include_cached: Some(true),
+            })
             .await?;
 
         let mut logo_map = HashMap::new();

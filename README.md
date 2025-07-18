@@ -315,58 +315,58 @@ The application uses a relational database with the following main tables:
 
 ### Sources (Unified API)
 
-- `GET /api/sources` - List all sources (both stream and EPG)
-- `GET /api/sources/stream` - List all stream sources
-- `POST /api/sources/stream` - Create new stream source
-- `GET /api/sources/stream/{id}` - Get stream source details
-- `PUT /api/sources/stream/{id}` - Update stream source
-- `DELETE /api/sources/stream/{id}` - Delete stream source
-- `POST /api/sources/stream/{id}/refresh` - Trigger manual stream source refresh
-- `POST /api/sources/stream/{id}/cancel` - Cancel stream source ingestion
-- `GET /api/sources/stream/{id}/progress` - Get stream source progress
-- `GET /api/sources/stream/{id}/processing` - Get stream source processing info
-- `GET /api/sources/stream/{id}/channels` - Get stream source channels
+- `GET /api/v1/sources` - List all sources (both stream and EPG)
+- `GET /api/v1/sources/stream` - List all stream sources
+- `POST /api/v1/sources/stream` - Create new stream source
+- `GET /api/v1/sources/stream/{id}` - Get stream source details
+- `PUT /api/v1/sources/stream/{id}` - Update stream source
+- `DELETE /api/v1/sources/stream/{id}` - Delete stream source
+- `POST /api/v1/sources/stream/{id}/refresh` - Trigger manual stream source refresh
+- `POST /api/v1/sources/stream/{id}/cancel` - Cancel stream source ingestion
+- `GET /api/v1/sources/stream/{id}/progress` - Get stream source progress
+- `GET /api/v1/sources/stream/{id}/processing` - Get stream source processing info
+- `GET /api/v1/sources/stream/{id}/channels` - Get stream source channels
 
 ### EPG Sources
 
-- `GET /api/sources/epg` - List all EPG sources
-- `POST /api/sources/epg` - Create new EPG source
-- `GET /api/sources/epg/{id}` - Get EPG source details
-- `PUT /api/sources/epg/{id}` - Update EPG source
-- `DELETE /api/sources/epg/{id}` - Delete EPG source
-- `POST /api/sources/epg/{id}/refresh` - Trigger manual EPG refresh
-- `GET /api/sources/epg/{id}/channels` - Get EPG source channels
+- `GET /api/v1/sources/epg` - List all EPG sources
+- `POST /api/v1/sources/epg` - Create new EPG source
+- `GET /api/v1/sources/epg/{id}` - Get EPG source details
+- `PUT /api/v1/sources/epg/{id}` - Update EPG source
+- `DELETE /api/v1/sources/epg/{id}` - Delete EPG source
+- `POST /api/v1/sources/epg/{id}/refresh` - Trigger manual EPG refresh
+- `GET /api/v1/sources/epg/{id}/channels` - Get EPG source channels
 
 ### Stream Proxies
-- `GET /api/proxies` - List all proxies
-- `POST /api/proxies` - Create new proxy
-- `GET /api/proxies/{id}` - Get proxy details
-- `PUT /api/proxies/{id}` - Update proxy
-- `DELETE /api/proxies/{id}` - Delete proxy
+- `GET /api/v1/proxies` - List all proxies
+- `POST /api/v1/proxies` - Create new proxy
+- `GET /api/v1/proxies/{id}` - Get proxy details
+- `PUT /api/v1/proxies/{id}` - Update proxy
+- `DELETE /api/v1/proxies/{id}` - Delete proxy
 
 ### Data Mapping
-- `GET /api/data-mapping/rules` - List all data mapping rules
-- `POST /api/data-mapping/rules` - Create new data mapping rule
-- `GET /api/data-mapping/rules/{id}` - Get rule details
-- `PUT /api/data-mapping/rules/{id}` - Update data mapping rule
-- `DELETE /api/data-mapping/rules/{id}` - Delete data mapping rule
-- `POST /api/data-mapping/test` - Test data mapping rule against source data
-- `GET /api/data-mapping/preview/{source_type}` - Preview all rules for source type
-- `GET /api/data-mapping/fields/{source_type}` - Get available fields for source type
+- `GET /api/v1/data-mapping/rules` - List all data mapping rules
+- `POST /api/v1/data-mapping/rules` - Create new data mapping rule
+- `GET /api/v1/data-mapping/rules/{id}` - Get rule details
+- `PUT /api/v1/data-mapping/rules/{id}` - Update data mapping rule
+- `DELETE /api/v1/data-mapping/rules/{id}` - Delete data mapping rule
+- `POST /api/v1/data-mapping/test` - Test data mapping rule against source data
+- `GET /api/v1/data-mapping/preview/{source_type}` - Preview all rules for source type
+- `GET /api/v1/data-mapping/fields/{source_type}` - Get available fields for source type
 
 ### Filters
-- `GET /api/filters` - List all filters
-- `POST /api/filters` - Create new filter
-- `GET /api/filters/{id}` - Get filter details
-- `PUT /api/filters/{id}` - Update filter
-- `DELETE /api/filters/{id}` - Delete filter
-- `POST /api/filters/test` - Test filter against source data
-- `GET /api/filters/fields/{source_type}` - Get available filter fields for source type
+- `GET /api/v1/filters` - List all filters
+- `POST /api/v1/filters` - Create new filter
+- `GET /api/v1/filters/{id}` - Get filter details
+- `PUT /api/v1/filters/{id}` - Update filter
+- `DELETE /api/v1/filters/{id}` - Delete filter
+- `POST /api/v1/filters/test` - Test filter against source data
+- `GET /api/v1/filters/fields/{source_type}` - Get available filter fields for source type
 
 ### EPG Data
-- `GET /api/epg/channels` - List EPG channels with filtering
-- `GET /api/epg/programs` - Get EPG program data
-- `GET /api/epg/viewer` - Get formatted EPG data for viewer interface
+- `GET /api/v1/epg/channels` - List EPG channels with filtering
+- `GET /api/v1/epg/programs` - Get EPG program data
+- `GET /api/v1/epg/viewer` - Get formatted EPG data for viewer interface
 
 ### Proxy Output
 - `GET /proxy/{ulid}.m3u8` - Get generated M3U playlist

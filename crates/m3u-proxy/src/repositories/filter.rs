@@ -82,7 +82,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         let id_str = id.to_string();
         let row = sqlx::query(
             r#"
-            SELECT id, name, source_type, starting_channel_number, is_inverse, condition_tree, created_at, updated_at
+            SELECT id, name, source_type, starting_channel_number, is_inverse, is_system_default, condition_tree, created_at, updated_at
             FROM filters
             WHERE id = ?
             "#
@@ -112,6 +112,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
                     },
                     starting_channel_number: row.get("starting_channel_number"),
                     is_inverse: row.get("is_inverse"),
+                    is_system_default: row.get("is_system_default"),
                     condition_tree: row.get("condition_tree"),
                     created_at: row.get_datetime("created_at"),
                     updated_at: row.get_datetime("updated_at"),
@@ -123,7 +124,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
     }
 
     async fn find_all(&self, query: Self::Query) -> RepositoryResult<Vec<Filter>> {
-        let mut sql = "SELECT id, name, source_type, starting_channel_number, is_inverse, condition_tree, created_at, updated_at FROM filters WHERE 1=1".to_string();
+        let mut sql = "SELECT id, name, source_type, starting_channel_number, is_inverse, is_system_default, condition_tree, created_at, updated_at FROM filters WHERE 1=1".to_string();
         let mut params: Vec<String> = Vec::new();
 
         if let Some(source_type) = &query.source_type {
@@ -172,6 +173,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
                 },
                 starting_channel_number: row.get("starting_channel_number"),
                 is_inverse: row.get("is_inverse"),
+                is_system_default: row.get("is_system_default"),
                 condition_tree: row.get("condition_tree"),
                 created_at: row.get_datetime("created_at"),
                 updated_at: row.get_datetime("updated_at"),
@@ -223,7 +225,8 @@ impl Repository<Filter, Uuid> for FilterRepository {
             source_type: request.source_type,
             starting_channel_number: request.starting_channel_number,
             is_inverse: request.is_inverse,
-            condition_tree,
+            is_system_default: request.is_system_default,
+            condition_tree: request.filter_expression,
             created_at: now,
             updated_at: now,
         })

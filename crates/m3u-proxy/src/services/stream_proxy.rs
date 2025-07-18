@@ -38,6 +38,7 @@ pub struct StreamProxyService {
     storage_config: StorageConfig,
     app_config: crate::config::Config,
     temp_file_manager: SandboxedManager,
+    system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
 impl StreamProxyService {
@@ -54,6 +55,7 @@ impl StreamProxyService {
         storage_config: StorageConfig,
         app_config: crate::config::Config,
         temp_file_manager: SandboxedManager,
+        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
             proxy_repo,
@@ -68,6 +70,7 @@ impl StreamProxyService {
             storage_config,
             app_config,
             temp_file_manager,
+            system,
         }
     }
 
@@ -138,7 +141,10 @@ impl StreamProxyService {
     }
 
     /// Get a stream proxy by ID string with all relationships
-    pub async fn get_by_id_string(&self, id: &str) -> Result<Option<StreamProxyResponse>, AppError> {
+    pub async fn get_by_id_string(
+        &self,
+        id: &str,
+    ) -> Result<Option<StreamProxyResponse>, AppError> {
         let proxy = self
             .proxy_repo
             .get_by_id(id)
@@ -227,6 +233,7 @@ impl StreamProxyService {
         let proxy_service = crate::proxy::ProxyService::new(
             self.storage_config.clone(),
             self.temp_file_manager.clone(),
+            self.system.clone(),
         );
         let proxy_generation = proxy_service
             .generate_proxy_with_config(
@@ -689,5 +696,4 @@ impl StreamProxyService {
 
         Ok(())
     }
-
 }

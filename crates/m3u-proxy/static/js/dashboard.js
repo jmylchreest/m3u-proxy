@@ -78,7 +78,6 @@ class Dashboard {
             "Proxy \"Entertainment Mix\" regenerated ({channels} channels)",
             "Source \"Provider {provider}\" ingestion completed",
             "Data mapping rule \"Auto Clean\" applied",
-            "Filter \"Sports Only\" updated",
             "Client disconnected from 10.0.0.{ip}",
             "Proxy \"News Channels\" accessed",
             "Logo cache updated ({count} logos)"

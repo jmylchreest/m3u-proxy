@@ -109,13 +109,7 @@ pub async fn rate_limiting_middleware(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("unknown");
 
-    // TODO: Implement actual rate limiting logic
-    // For now, this is a placeholder that always allows requests
-    
-    // In a real implementation, you would:
-    // 1. Check rate limit for the client IP
-    // 2. Update request count
-    // 3. Return 429 Too Many Requests if limit exceeded
+    // Rate limiting not implemented - placeholder that always allows requests
     
     info!(client_ip = client_ip, "Rate limit check passed");
 
@@ -239,7 +233,7 @@ pub async fn metrics_middleware(
     let duration = start.elapsed();
     let status = response.status().as_u16();
 
-    // TODO: Send metrics to monitoring system
+    // Metrics sent to logs only
     // This could be Prometheus, StatsD, or another metrics system
     info!(
         method = %method,

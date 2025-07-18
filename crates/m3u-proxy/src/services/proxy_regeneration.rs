@@ -80,6 +80,8 @@ pub struct ProxyRegenerationService {
     running_tasks: Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
     is_processing: Arc<RwLock<bool>>,
     temp_file_manager: sandboxed_file_manager::SandboxedManager,
+    last_epg_check: Arc<Mutex<Option<DateTime<Utc>>>>,
+    system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
 impl ProxyRegenerationService {
@@ -87,6 +89,7 @@ impl ProxyRegenerationService {
         pool: SqlitePool,
         config: Option<RegenerationConfig>,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
+        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
             pool,
@@ -94,6 +97,8 @@ impl ProxyRegenerationService {
             running_tasks: Arc::new(Mutex::new(HashMap::new())),
             is_processing: Arc::new(RwLock::new(false)),
             temp_file_manager,
+            last_epg_check: Arc::new(Mutex::new(None)),
+            system,
         }
     }
 
@@ -116,7 +121,7 @@ impl ProxyRegenerationService {
         // Use INSERT OR REPLACE with retry logic for database locks
         let max_retries = 3;
         let mut delay = 50u64; // Start with 50ms for queue operations
-        
+
         for attempt in 0..max_retries {
             match sqlx::query(
                 r#"
@@ -137,11 +142,11 @@ impl ProxyRegenerationService {
                 Ok(_) => break,
                 Err(e) => {
                     let error_msg = e.to_string();
-                    if (error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY")) 
+                    if (error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY"))
                         && attempt < max_retries - 1 {
-                        warn!("Database lock during queue insertion, retrying in {}ms (attempt {}/{})", 
+                        warn!("Database lock during queue insertion, retrying in {}ms (attempt {}/{})",
                               delay, attempt + 1, max_retries);
-                        
+
                         sleep(Duration::from_millis(delay)).await;
                         delay = std::cmp::min(delay * 2, 1000); // Cap at 1 second for queue ops
                     } else {
@@ -217,6 +222,17 @@ impl ProxyRegenerationService {
         let is_processing = self.is_processing.clone();
         let running_tasks = self.running_tasks.clone();
         let temp_file_manager = self.temp_file_manager.clone();
+        let last_epg_check = self.last_epg_check.clone();
+        let system = self.system.clone();
+        let service_for_cleanup = Self {
+            pool: pool.clone(),
+            config: regeneration_config.clone(),
+            running_tasks: running_tasks.clone(),
+            is_processing: is_processing.clone(),
+            temp_file_manager: temp_file_manager.clone(),
+            last_epg_check: last_epg_check.clone(),
+            system: system.clone(),
+        };
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -231,6 +247,9 @@ impl ProxyRegenerationService {
                         continue;
                     }
                 }
+
+                // Check for recently completed EPG ingestions that need regeneration
+                Self::check_for_epg_completions(&pool, &last_epg_check).await;
 
                 // Get ready queue entries
                 match Self::get_ready_queue_entries(&pool).await {
@@ -265,6 +284,7 @@ impl ProxyRegenerationService {
                                 logo_asset_service.clone(),
                                 config.clone(),
                                 temp_file_manager.clone(),
+                                system.clone(),
                             );
 
                             running_tasks.lock().await.insert(proxy_id, task);
@@ -288,8 +308,9 @@ impl ProxyRegenerationService {
                 Self::cleanup_completed_tasks(&running_tasks).await;
 
                 // Cleanup old queue entries
-                if let Err(e) =
-                    Self::cleanup_old_entries(&pool, regeneration_config.cleanup_after_hours).await
+                if let Err(e) = service_for_cleanup
+                    .cleanup_old_entries(regeneration_config.cleanup_after_hours)
+                    .await
                 {
                     error!("Failed to cleanup old queue entries: {}", e);
                 }
@@ -350,6 +371,7 @@ impl ProxyRegenerationService {
         logo_asset_service: LogoAssetService,
         config: Config,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
+        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let start_time = Instant::now();
@@ -390,8 +412,11 @@ impl ProxyRegenerationService {
             };
 
             // Create proxy service with native pipeline
-            let proxy_service =
-                ProxyService::new(config.storage.clone(), temp_file_manager.clone());
+            let proxy_service = ProxyService::new(
+                config.storage.clone(),
+                temp_file_manager.clone(),
+                system.clone(),
+            );
 
             // Create config resolver
             use crate::repositories::{
@@ -453,6 +478,11 @@ impl ProxyRegenerationService {
                                 .await
                             {
                                 Ok(_) => {
+                                    // Update the last_generated_at timestamp for the proxy
+                                    if let Err(e) = database.update_proxy_last_generated(entry.proxy_id).await {
+                                        error!("Failed to update last_generated_at for proxy {}: {}", entry.proxy_id, e);
+                                    }
+                                    
                                     let duration = start_time.elapsed();
                                     info!(
                                         "Successfully auto-regenerated proxy '{}' with {} channels using dependency injection in {:?}",
@@ -586,48 +616,122 @@ impl ProxyRegenerationService {
         }
     }
 
-    async fn cleanup_old_entries(
+    /// Check for EPG ingestions that completed since our last check and queue regenerations
+    async fn check_for_epg_completions(
         pool: &SqlitePool,
-        cleanup_after_hours: u64,
-    ) -> Result<(), sqlx::Error> {
+        last_epg_check: &Arc<Mutex<Option<DateTime<Utc>>>>,
+    ) {
+        let mut last_check = last_epg_check.lock().await;
+        let now = Utc::now();
+        let check_since = last_check.unwrap_or_else(|| now - chrono::Duration::minutes(5));
+
+        // Check if any EPG sources completed since our last check
+        let completed_sources = sqlx::query(
+            "SELECT DISTINCT es.id as source_id, es.name as source_name
+             FROM epg_sources es
+             WHERE es.last_ingested_at > ? AND es.is_active = 1",
+        )
+        .bind(check_since.to_rfc3339())
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        if !completed_sources.is_empty() {
+            info!(
+                "Found {} EPG sources completed since last check, triggering proxy regenerations",
+                completed_sources.len()
+            );
+
+            for row in completed_sources {
+                let source_id: String = row.get("source_id");
+                let source_name: String = row.get("source_name");
+
+                // Find all proxies that use this EPG source and queue them for regeneration
+                if let Ok(proxies) = sqlx::query(
+                    "SELECT DISTINCT p.id as proxy_id, p.name as proxy_name
+                     FROM stream_proxies p
+                     JOIN proxy_sources ps ON p.id = ps.proxy_id
+                     WHERE ps.epg_source_id = ? AND p.is_active = 1",
+                )
+                .bind(&source_id)
+                .fetch_all(pool)
+                .await
+                {
+                    for proxy_row in proxies {
+                        let proxy_id: String = proxy_row.get("proxy_id");
+                        let proxy_name: String = proxy_row.get("proxy_name");
+
+                        // Queue the proxy for regeneration
+                        let queue_id = Uuid::new_v4();
+                        let _ = sqlx::query(
+                            "INSERT OR IGNORE INTO proxy_regeneration_queue
+                             (id, proxy_id, trigger_source_id, trigger_source_type, reason, status, scheduled_at)
+                             VALUES (?, ?, ?, 'epg', ?, 'pending', datetime('now'))"
+                        )
+                        .bind(queue_id.to_string())
+                        .bind(&proxy_id)
+                        .bind(&source_id)
+                        .bind(format!("EPG source '{}' completed ingestion", source_name))
+                        .execute(pool)
+                        .await;
+
+                        debug!(
+                            "Queued proxy '{}' for regeneration due to EPG source '{}' completion",
+                            proxy_name, source_name
+                        );
+                    }
+                }
+            }
+        }
+
+        // Update our last check time
+        *last_check = Some(now);
+    }
+
+    async fn cleanup_old_entries(&self, cleanup_after_hours: u64) -> Result<(), sqlx::Error> {
+        // Check if EPG ingestion is currently active by looking at the state manager
+        // We can proceed with cleanup as long as no EPG is actively running
+
         let cutoff = Utc::now() - chrono::Duration::hours(cleanup_after_hours as i64);
         let cutoff_str = cutoff.to_rfc3339();
 
-        // Retry logic for database lock errors
-        let max_retries = 3;
-        let mut delay = 100u64; // Start with 100ms
-        
+        // Use shorter retry logic for cleanup to avoid blocking EPG operations
+        let max_retries = 2;
+        let mut delay = 200u64; // Start with 200ms
+
         for attempt in 0..max_retries {
             match sqlx::query(
                 "DELETE FROM proxy_regeneration_queue WHERE status IN ('completed', 'failed') AND completed_at < ?"
             )
-            .bind(&cutoff_str)
-            .execute(pool)
+            .bind(cutoff_str.clone())
+            .execute(&self.pool)
             .await
             {
                 Ok(result) => {
                     if result.rows_affected() > 0 {
-                        debug!("Cleaned up {} old queue entries", result.rows_affected());
+                        debug!("Cleaned up {} old regeneration queue entries", result.rows_affected());
                     }
                     return Ok(());
                 }
                 Err(e) => {
                     let error_msg = e.to_string();
-                    if (error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY")) 
+                    if (error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY"))
                         && attempt < max_retries - 1 {
-                        warn!("Database lock during cleanup, retrying in {}ms (attempt {}/{})", 
+                        warn!("Database lock during cleanup, retrying in {}ms (attempt {}/{})",
                               delay, attempt + 1, max_retries);
-                        
+
                         sleep(Duration::from_millis(delay)).await;
-                        delay = std::cmp::min(delay * 2, 5000); // Cap at 5 seconds
+                        delay = std::cmp::min(delay * 2, 2000); // Cap at 2 seconds
                     } else {
-                        return Err(e);
+                        // If we can't clean up due to locks, just skip it this time
+                        warn!("Skipping cleanup due to database lock - will retry later");
+                        return Ok(());
                     }
                 }
             }
         }
-        
-        Err(sqlx::Error::RowNotFound)
+
+        Ok(())
     }
 
     /// Get current queue status for monitoring

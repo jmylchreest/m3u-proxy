@@ -4,11 +4,10 @@
 //! pagination parameters, and other common request processing needs.
 
 use axum::{
-    async_trait,
+    Json, async_trait,
     extract::{FromRequestParts, Query},
-    http::{request::Parts, StatusCode},
+    http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -81,16 +80,20 @@ where
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let Query(params): Query<PaginationParams> = Query::from_request_parts(parts, state)
-            .await
-            .map_err(|_| {
+        let Query(params): Query<PaginationParams> =
+            Query::from_request_parts(parts, state).await.map_err(|_| {
                 (
                     StatusCode::BAD_REQUEST,
-                    Json(ApiResponse::<()>::error("Invalid pagination parameters".to_string())),
-                ).into_response()
+                    Json(ApiResponse::<()>::error(
+                        "Invalid pagination parameters".to_string(),
+                    )),
+                )
+                    .into_response()
             })?;
 
-        params.validate().map_err(|errors| validation_error(errors).into_response())?;
+        params
+            .validate()
+            .map_err(|errors| validation_error(errors).into_response())?;
 
         Ok(params)
     }
@@ -129,13 +132,15 @@ where
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let Query(params): Query<SearchParams> = Query::from_request_parts(parts, state)
-            .await
-            .map_err(|_| {
+        let Query(params): Query<SearchParams> =
+            Query::from_request_parts(parts, state).await.map_err(|_| {
                 (
                     StatusCode::BAD_REQUEST,
-                    Json(ApiResponse::<()>::error("Invalid search parameters".to_string())),
-                ).into_response()
+                    Json(ApiResponse::<()>::error(
+                        "Invalid search parameters".to_string(),
+                    )),
+                )
+                    .into_response()
             })?;
 
         Ok(params)
@@ -181,8 +186,11 @@ where
         // For now, this is a placeholder that demonstrates the pattern.
         Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<()>::error("ValidatedJson not implemented for FromRequestParts".to_string())),
-        ).into_response())
+            Json(ApiResponse::<()>::error(
+                "ValidatedJson not implemented for FromRequestParts".to_string(),
+            )),
+        )
+            .into_response())
     }
 }
 
@@ -244,16 +252,81 @@ where
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let Query(params): Query<StreamSourceFilterParams> = Query::from_request_parts(parts, state)
-            .await
-            .map_err(|_| {
+        let Query(params): Query<StreamSourceFilterParams> =
+            Query::from_request_parts(parts, state).await.map_err(|_| {
                 (
                     StatusCode::BAD_REQUEST,
-                    Json(ApiResponse::<()>::error("Invalid filter parameters".to_string())),
-                ).into_response()
+                    Json(ApiResponse::<()>::error(
+                        "Invalid filter parameters".to_string(),
+                    )),
+                )
+                    .into_response()
             })?;
 
-        params.validate().map_err(|errors| validation_error(errors).into_response())?;
+        params
+            .validate()
+            .map_err(|errors| validation_error(errors).into_response())?;
+
+        Ok(params)
+    }
+}
+
+/// Filter parameters for EPG sources from query string
+#[derive(Debug, Clone, Deserialize)]
+pub struct EpgSourceFilterParams {
+    #[serde(default)]
+    pub source_type: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub healthy: Option<bool>,
+}
+
+impl ValidateQuery for EpgSourceFilterParams {
+    type Error = Vec<ValidationErrorResponse>;
+
+    fn validate(&self) -> Result<(), Self::Error> {
+        let mut errors = Vec::new();
+
+        if let Some(ref source_type) = self.source_type {
+            if !["xmltv", "xtream"].contains(&source_type.to_lowercase().as_str()) {
+                errors.push(ValidationErrorResponse {
+                    field: "source_type".to_string(),
+                    message: "Source type must be 'xmltv' or 'xtream'".to_string(),
+                });
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[async_trait]
+impl<S> FromRequestParts<S> for EpgSourceFilterParams
+where
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let Query(params): Query<EpgSourceFilterParams> =
+            Query::from_request_parts(parts, state).await.map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<()>::error(
+                        "Invalid filter parameters".to_string(),
+                    )),
+                )
+                    .into_response()
+            })?;
+
+        params
+            .validate()
+            .map_err(|errors| validation_error(errors).into_response())?;
 
         Ok(params)
     }

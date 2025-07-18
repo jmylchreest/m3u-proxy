@@ -40,36 +40,47 @@
                     </div>
                 </div>
 
-                <!-- Timezone Handling Info -->
-                <div class="alert alert-info">
-                    <div class="d-flex align-items-start">
-                        <i class="fas fa-info-circle me-2 mt-1"></i>
-                        <div>
-                            <strong>Timezone Handling:</strong>
-                            <p class="mb-1">
-                                All EPG times are automatically normalized to
-                                UTC for consistency. Timezone information is
-                                auto-detected from XMLTV sources and stored for
-                                reference.
-                            </p>
-                            <ul class="mb-0 small">
-                                <li>
-                                    <strong>Auto-detection:</strong> XMLTV
-                                    sources have their timezone detected
-                                    automatically
-                                </li>
-                                <li>
-                                    <strong>UTC Storage:</strong> All program
-                                    times are stored as UTC internally
-                                </li>
-                                <li>
-                                    <strong>Manual Offset:</strong> Use time
-                                    offset to correct source inaccuracies if
-                                    needed
-                                </li>
-                            </ul>
+                <!-- Information Section -->
+                <div class="card-body">
+                    <details class="info-collapse">
+                        <summary class="info-collapse-header">
+                            <i class="fas fa-info-circle"></i>
+                            <span>Information</span>
+                            <i class="fas fa-chevron-down collapse-icon"></i>
+                        </summary>
+                        <div class="info-collapse-content">
+                            <div class="alert alert-info mb-0">
+                                <div class="d-flex align-items-start">
+                                    <i class="fas fa-info-circle me-2 mt-1"></i>
+                                    <div>
+                                        <strong>Timezone Handling:</strong>
+                                        <p class="mb-1">
+                                            All EPG times are automatically normalized to
+                                            UTC for consistency. Timezone information is
+                                            auto-detected from XMLTV sources and stored for
+                                            reference.
+                                        </p>
+                                        <ul class="mb-0 small">
+                                            <li>
+                                                <strong>Auto-detection:</strong> XMLTV
+                                                sources have their timezone detected
+                                                automatically
+                                            </li>
+                                            <li>
+                                                <strong>UTC Storage:</strong> All program
+                                                times are stored as UTC internally
+                                            </li>
+                                            <li>
+                                                <strong>Manual Offset:</strong> Use time
+                                                offset to correct source inaccuracies if
+                                                needed
+                                            </li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                    </div>
+                    </details>
                 </div>
 
                 <div
@@ -390,6 +401,44 @@
         </div>
 
         <style>
+            /* Information Collapse Styles */
+            .info-collapse {
+                border: 1px solid #dee2e6;
+                border-radius: 0.375rem;
+                margin-bottom: 1rem;
+            }
+
+            .info-collapse-header {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                padding: 0.75rem 1rem;
+                cursor: pointer;
+                background-color: #f8f9fa;
+                border-radius: 0.375rem;
+                user-select: none;
+                font-weight: 500;
+                transition: background-color 0.2s;
+            }
+
+            .info-collapse-header:hover {
+                background-color: #e9ecef;
+            }
+
+            .info-collapse .collapse-icon {
+                margin-left: auto;
+                transition: transform 0.2s;
+            }
+
+            details[open] .collapse-icon {
+                transform: rotate(180deg);
+            }
+
+            .info-collapse-content {
+                padding: 1rem;
+                border-top: 1px solid #dee2e6;
+            }
+
             /* Modal Base Styles */
             .modal {
                 display: none;

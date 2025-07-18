@@ -1,7 +1,7 @@
 use anyhow::Result;
 use regex::Regex;
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use crate::models::*;
 
@@ -53,8 +53,55 @@ impl FilterEngine {
             if filter.is_inverse {
                 // For EXCLUDE filters, operate on current result set
                 let channels_before_filter = result_channels.len();
+                debug!(
+                    "Filter #{} '{}' (EXCLUDE): Evaluating {} channels against filter condition",
+                    filter_index + 1,
+                    filter.name,
+                    channels_before_filter
+                );
+
                 let matched_channels = self.apply_single_filter(&result_channels, filter).await?;
                 let matched_count = matched_channels.len();
+
+                // Log some sample matches for debugging
+                if matched_count > 0 && matched_count != channels_before_filter {
+                    debug!(
+                        "Filter #{} '{}' sample matches: {}",
+                        filter_index + 1,
+                        filter.name,
+                        matched_channels
+                            .iter()
+                            .take(5)
+                            .map(|ch| format!(
+                                "'{}' (group: '{}')",
+                                ch.channel_name,
+                                ch.group_title.as_deref().unwrap_or("N/A")
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                } else if matched_count == channels_before_filter {
+                    warn!(
+                        "Filter #{} '{}' (EXCLUDE): ALL {} channels matched - this may indicate a filter logic error!",
+                        filter_index + 1,
+                        filter.name,
+                        matched_count
+                    );
+                    // Log first few channels to help debug
+                    debug!(
+                        "First few channels being matched: {}",
+                        result_channels
+                            .iter()
+                            .take(3)
+                            .map(|ch| format!(
+                                "'{}' (group: '{}')",
+                                ch.channel_name,
+                                ch.group_title.as_deref().unwrap_or("N/A")
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
 
                 // Remove matches from the current result
                 result_channels.retain(|channel: &Channel| {
@@ -108,9 +155,7 @@ impl FilterEngine {
 
         info!(
             "Filter application complete: {} initial channels → {} final channels ({} channels in final result)",
-            initial_channel_count,
-            final_channel_count,
-            total_added
+            initial_channel_count, final_channel_count, total_added
         );
 
         Ok(result_channels)
@@ -123,12 +168,59 @@ impl FilterEngine {
         filter: &Filter,
     ) -> Result<Vec<Channel>> {
         let mut matches = Vec::new();
+        let mut sample_non_matches = Vec::new();
+        let mut debug_counter = 0;
 
         for channel in channels {
             let channel_matches = self.evaluate_filter_tree(channel, filter)?;
 
             if channel_matches {
                 matches.push(channel.clone());
+            } else if sample_non_matches.len() < 3 {
+                sample_non_matches.push(channel);
+            }
+
+            debug_counter += 1;
+        }
+
+        // Log debug info for problematic filters
+        if filter.name.contains("Adult") {
+            debug!(
+                "Filter '{}' evaluation: {}/{} channels matched",
+                filter.name,
+                matches.len(),
+                channels.len()
+            );
+
+            if !matches.is_empty() {
+                debug!(
+                    "Sample matches: {}",
+                    matches
+                        .iter()
+                        .take(3)
+                        .map(|ch| format!(
+                            "'{}' (group: '{}')",
+                            ch.channel_name,
+                            ch.group_title.as_deref().unwrap_or("N/A")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+
+            if !sample_non_matches.is_empty() {
+                debug!(
+                    "Sample non-matches: {}",
+                    sample_non_matches
+                        .iter()
+                        .map(|ch| format!(
+                            "'{}' (group: '{}')",
+                            ch.channel_name,
+                            ch.group_title.as_deref().unwrap_or("N/A")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
         }
 
@@ -156,8 +248,35 @@ impl FilterEngine {
 
     fn evaluate_filter_tree(&mut self, channel: &Channel, filter: &Filter) -> Result<bool> {
         match filter.get_condition_tree() {
-            Some(tree) => self.evaluate_condition_node(channel, &tree.root),
-            None => Ok(true), // If no tree, default to true (shouldn't happen)
+            Some(tree) => {
+                let result = self.evaluate_condition_node(channel, &tree.root)?;
+
+                // Debug log for adult filter
+                if filter.name.contains("Adult") && result {
+                    debug!(
+                        "Adult filter matched channel '{}' (group: '{}')",
+                        channel.channel_name,
+                        channel.group_title.as_deref().unwrap_or("N/A")
+                    );
+                }
+
+                Ok(result)
+            }
+            None => {
+                warn!(
+                    "Filter '{}' has no condition tree - parsing failed! Raw condition_tree: '{}'",
+                    filter.name, filter.condition_tree
+                );
+                // For safety, exclude filters should default to false (no matches)
+                // and include filters should default to true (match all)
+                // This prevents catastrophic failures like excluding all channels
+                let default_result = !filter.is_inverse;
+                warn!(
+                    "Filter '{}' defaulting to {} (is_inverse: {})",
+                    filter.name, default_result, filter.is_inverse
+                );
+                Ok(default_result)
+            }
         }
     }
 
@@ -224,6 +343,28 @@ impl FilterEngine {
     ) -> Result<bool> {
         let field_value = Self::get_channel_field_value(channel, field);
 
+        // Debug logging for adult filter
+        if value.contains("adult")
+            || value.contains("xxx")
+            || value.contains("porn")
+            || value.contains("18")
+        {
+            debug!(
+                "Evaluating condition: field='{}' ({}) {} '{}' (case_sensitive={}, negate={})",
+                field,
+                field_value,
+                match operator {
+                    FilterOperator::Contains => "contains",
+                    FilterOperator::Matches => "matches",
+                    FilterOperator::Equals => "equals",
+                    _ => "other",
+                },
+                value,
+                case_sensitive,
+                negate
+            );
+        }
+
         let result = match operator {
             FilterOperator::Contains => {
                 if case_sensitive {
@@ -255,10 +396,16 @@ impl FilterEngine {
                     field_value.to_lowercase().ends_with(&value.to_lowercase())
                 }
             }
-            FilterOperator::Matches => {
-                let regex = self.get_or_compile_regex(value, case_sensitive)?;
-                regex.is_match(&field_value)
-            }
+            FilterOperator::Matches => match self.get_or_compile_regex(value, case_sensitive) {
+                Ok(regex) => regex.is_match(&field_value),
+                Err(e) => {
+                    warn!(
+                        "Regex compilation failed for pattern '{}': {}. Defaulting to false.",
+                        value, e
+                    );
+                    false
+                }
+            },
             FilterOperator::NotContains => {
                 if case_sensitive {
                     !field_value.contains(value)
@@ -273,10 +420,16 @@ impl FilterEngine {
                     field_value.to_lowercase() != value.to_lowercase()
                 }
             }
-            FilterOperator::NotMatches => {
-                let regex = self.get_or_compile_regex(value, case_sensitive)?;
-                !regex.is_match(&field_value)
-            }
+            FilterOperator::NotMatches => match self.get_or_compile_regex(value, case_sensitive) {
+                Ok(regex) => !regex.is_match(&field_value),
+                Err(e) => {
+                    warn!(
+                        "Regex compilation failed for pattern '{}': {}. Defaulting to true (not matching).",
+                        value, e
+                    );
+                    true
+                }
+            },
             FilterOperator::NotStartsWith => {
                 if case_sensitive {
                     !field_value.starts_with(value)
@@ -295,7 +448,21 @@ impl FilterEngine {
             }
         };
 
-        // Apply negation if specified
-        Ok(if negate { !result } else { result })
+        let final_result = if negate { !result } else { result };
+
+        // Debug logging for adult filter results
+        if (value.contains("adult")
+            || value.contains("xxx")
+            || value.contains("porn")
+            || value.contains("18"))
+            && final_result
+        {
+            debug!(
+                "  → MATCH: '{}' matched pattern '{}' (result={}, negate={}, final={})",
+                field_value, value, result, negate, final_result
+            );
+        }
+
+        Ok(final_result)
     }
 }

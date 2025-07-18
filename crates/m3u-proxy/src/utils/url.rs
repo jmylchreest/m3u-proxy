@@ -34,14 +34,14 @@ impl UrlUtils {
     /// ```
     pub fn normalize_scheme(url: &str) -> String {
         let trimmed = url.trim();
-        
+
         if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
             trimmed.to_string()
         } else {
             format!("http://{}", trimmed)
         }
     }
-    
+
     /// Parse and validate a URL
     ///
     /// This function validates that a URL is properly formatted and parseable.
@@ -57,7 +57,7 @@ impl UrlUtils {
     pub fn parse_and_validate(url: &str) -> Result<Url, url::ParseError> {
         Url::parse(url)
     }
-    
+
     /// Join a base URL with a path segment
     ///
     /// This function safely joins URLs, handling trailing slashes and proper encoding.
@@ -76,7 +76,7 @@ impl UrlUtils {
         let joined = base_url.join(path)?;
         Ok(joined.to_string())
     }
-    
+
     /// Extract the domain from a URL
     ///
     /// # Arguments
@@ -92,7 +92,7 @@ impl UrlUtils {
             .ok()
             .and_then(|u| u.host_str().map(|h| h.to_string()))
     }
-    
+
     /// Sanitize URL by removing trailing slashes and normalizing
     ///
     /// # Arguments
@@ -104,15 +104,15 @@ impl UrlUtils {
     /// Sanitized URL string
     pub fn sanitize(url: &str) -> String {
         let mut sanitized = Self::normalize_scheme(url);
-        
+
         // Remove trailing slashes (but keep the one after the scheme)
         while sanitized.len() > 8 && sanitized.ends_with('/') {
             sanitized.pop();
         }
-        
+
         sanitized
     }
-    
+
     /// Check if a URL is valid
     ///
     /// # Arguments
@@ -125,6 +125,58 @@ impl UrlUtils {
     pub fn is_valid(url: &str) -> bool {
         Self::parse_and_validate(url).is_ok()
     }
+
+    /// Obfuscate sensitive information in URLs for safe logging
+    ///
+    /// This function masks usernames and passwords in URLs to prevent
+    /// sensitive credentials from appearing in logs.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to obfuscate
+    ///
+    /// # Returns
+    ///
+    /// URL string with usernames and passwords replaced with asterisks
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use crate::utils::url::UrlUtils;
+    ///
+    /// let url = "http://user:pass@example.com/path?username=user&password=secret";
+    /// let obfuscated = UrlUtils::obfuscate_credentials(url);
+    /// // Result: "http://****:****@example.com/path?username=****&password=****"
+    /// ```
+    pub fn obfuscate_credentials(url: &str) -> String {
+        use regex::Regex;
+
+        let mut obfuscated = url.to_string();
+
+        // Handle URL auth (user:pass@host)
+        if let Ok(parsed) = Url::parse(url) {
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                let mut new_url = parsed.clone();
+                // Clear existing credentials and set obfuscated ones
+                let _ = new_url.set_username("****");
+                let _ = new_url.set_password(Some("****"));
+                obfuscated = new_url.to_string();
+            }
+        }
+
+        // Handle query parameters with case-insensitive matching
+        let sensitive_params = ["username", "password", "user", "pass", "pwd", "passwd"];
+
+        for param in &sensitive_params {
+            // Create case-insensitive regex pattern for each parameter
+            let pattern = format!(r"(?i)([?&]{}=)[^&]*", regex::escape(param));
+            if let Ok(re) = Regex::new(&pattern) {
+                obfuscated = re.replace_all(&obfuscated, "${1}****").to_string();
+            }
+        }
+
+        obfuscated
+    }
 }
 
 #[cfg(test)]
@@ -133,26 +185,50 @@ mod tests {
 
     #[test]
     fn test_normalize_scheme() {
-        assert_eq!(UrlUtils::normalize_scheme("example.com"), "http://example.com");
-        assert_eq!(UrlUtils::normalize_scheme("https://example.com"), "https://example.com");
-        assert_eq!(UrlUtils::normalize_scheme("http://example.com"), "http://example.com");
-        assert_eq!(UrlUtils::normalize_scheme("  example.com  "), "http://example.com");
+        assert_eq!(
+            UrlUtils::normalize_scheme("example.com"),
+            "http://example.com"
+        );
+        assert_eq!(
+            UrlUtils::normalize_scheme("https://example.com"),
+            "https://example.com"
+        );
+        assert_eq!(
+            UrlUtils::normalize_scheme("http://example.com"),
+            "http://example.com"
+        );
+        assert_eq!(
+            UrlUtils::normalize_scheme("  example.com  "),
+            "http://example.com"
+        );
     }
-    
+
     #[test]
     fn test_sanitize() {
-        assert_eq!(UrlUtils::sanitize("https://example.com/"), "https://example.com");
-        assert_eq!(UrlUtils::sanitize("https://example.com///"), "https://example.com");
+        assert_eq!(
+            UrlUtils::sanitize("https://example.com/"),
+            "https://example.com"
+        );
+        assert_eq!(
+            UrlUtils::sanitize("https://example.com///"),
+            "https://example.com"
+        );
         assert_eq!(UrlUtils::sanitize("example.com/"), "http://example.com");
     }
-    
+
     #[test]
     fn test_extract_domain() {
-        assert_eq!(UrlUtils::extract_domain("https://example.com/path"), Some("example.com".to_string()));
-        assert_eq!(UrlUtils::extract_domain("http://sub.example.com"), Some("sub.example.com".to_string()));
+        assert_eq!(
+            UrlUtils::extract_domain("https://example.com/path"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            UrlUtils::extract_domain("http://sub.example.com"),
+            Some("sub.example.com".to_string())
+        );
         assert_eq!(UrlUtils::extract_domain("invalid-url"), None);
     }
-    
+
     #[test]
     fn test_is_valid() {
         assert!(UrlUtils::is_valid("https://example.com"));
@@ -160,7 +236,7 @@ mod tests {
         assert!(!UrlUtils::is_valid("not-a-url"));
         assert!(!UrlUtils::is_valid(""));
     }
-    
+
     #[test]
     fn test_join() {
         assert_eq!(
@@ -170,6 +246,41 @@ mod tests {
         assert_eq!(
             UrlUtils::join("https://example.com/", "api/v1").unwrap(),
             "https://example.com/api/v1"
+        );
+    }
+
+    #[test]
+    fn test_obfuscate_credentials() {
+        // Test URL with auth
+        assert_eq!(
+            UrlUtils::obfuscate_credentials("http://user:pass@example.com/path"),
+            "http://****:****@example.com/path"
+        );
+
+        // Test URL with query parameters
+        assert_eq!(
+            UrlUtils::obfuscate_credentials("http://example.com/api?username=user&password=secret"),
+            "http://example.com/api?username=****&password=****"
+        );
+
+        // Test URL with mixed case parameters
+        assert_eq!(
+            UrlUtils::obfuscate_credentials("http://example.com/api?USERNAME=user&PASSWORD=secret"),
+            "http://example.com/api?USERNAME=****&PASSWORD=****"
+        );
+
+        // Test URL without credentials
+        assert_eq!(
+            UrlUtils::obfuscate_credentials("http://example.com/path"),
+            "http://example.com/path"
+        );
+
+        // Test complex URL with both auth and query params
+        assert_eq!(
+            UrlUtils::obfuscate_credentials(
+                "http://admin:secret@example.com/xmltv.php?username=user&password=pass123&other=value"
+            ),
+            "http://****:****@example.com/xmltv.php?username=****&password=****&other=value"
         );
     }
 }

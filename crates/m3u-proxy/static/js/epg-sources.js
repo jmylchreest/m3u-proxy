@@ -66,7 +66,15 @@ class EpgSourcesManager {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      this.sources = await response.json();
+      const data = await response.json();
+      // Handle paginated API response format
+      if (data.success && data.data && Array.isArray(data.data.items)) {
+        this.sources = data.data.items;
+      } else if (Array.isArray(data)) {
+        this.sources = data;
+      } else {
+        this.sources = [];
+      }
       this.renderSources();
     } catch (error) {
       console.error("Error loading EPG sources:", error);
@@ -346,7 +354,7 @@ class EpgSourcesManager {
                 ⏳ Retry in ${timeString}
             </button>`;
     } else {
-      refreshButtonContent = `<button class="btn btn-sm btn-outline-primary" onclick="epgSourcesManager.refreshSource('${source.id}')">
+      refreshButtonContent = `<button class="btn btn-sm btn-secondary" onclick="epgSourcesManager.refreshSource('${source.id}')">
                 🔄 Refresh
             </button>`;
     }
@@ -376,14 +384,12 @@ class EpgSourcesManager {
 
   renderActionsCell(source) {
     return `
-            <div class="btn-group" role="group">
-                <button class="btn btn-sm btn-outline-secondary" onclick="epgSourcesManager.editSource('${source.id}')">
-                    ✏️ Edit
-                </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="epgSourcesManager.deleteSource('${source.id}', '${this.escapeHtml(source.name)}')">
-                    🗑️ Delete
-                </button>
-            </div>
+            <button class="btn btn-sm btn-primary" onclick="epgSourcesManager.editSource('${source.id}')">
+                ✏️ Edit
+            </button>
+            <button class="btn btn-sm btn-danger" onclick="epgSourcesManager.deleteSource('${source.id}', '${this.escapeHtml(source.name)}')">
+                🗑️ Delete
+            </button>
         `;
   }
 

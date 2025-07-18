@@ -5,16 +5,22 @@
 //! validation, and cross-cutting concerns.
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use std::collections::HashMap;
 
+use super::traits::{
+    BulkOperationError, BulkService, Service, ServiceBulkResponse, ServiceListResponse,
+    ValidationService,
+};
 use crate::errors::{AppError, AppResult};
-use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceUpdateRequest, StreamSourceType};
-use crate::repositories::{Repository, BulkRepository};
+use crate::models::{
+    StreamSource, StreamSourceCreateRequest, StreamSourceType, StreamSourceUpdateRequest,
+};
 use crate::repositories::stream_source::StreamSourceQuery;
-use crate::utils::validation::{Validator, ValidationRule};
-use super::traits::{Service, ValidationService, BulkService, ServiceListResponse, ServiceBulkResponse, BulkOperationError};
+use crate::repositories::{BulkRepository, Repository};
+use crate::utils::url::UrlUtils;
+use crate::utils::validation::{ValidationRule, Validator};
 
 /// Query parameters for stream source service operations
 #[derive(Debug, Clone, Default)]
@@ -135,32 +141,46 @@ impl StreamSourceValidationResult {
 /// async fn example() -> AppResult<()> {
 ///     let repository = StreamSourceRepository::new(pool);
 ///     let service = StreamSourceService::new(repository);
-///     
+///
 ///     let request = StreamSourceCreateRequest {
 ///         name: "My Stream".to_string(),
 ///         source_type: StreamSourceType::M3u,
 ///         url: "http://example.com/playlist.m3u".to_string(),
 ///         // ... other fields
 ///     };
-///     
+///
 ///     let source = service.create(request).await?;
 ///     info!("Created stream source: {}", source.id);
-///     
+///
 ///     Ok(())
 /// }
 /// ```
-pub struct StreamSourceService<R> 
-where 
-    R: Repository<StreamSource, Uuid, CreateRequest = StreamSourceCreateRequest, UpdateRequest = StreamSourceUpdateRequest, Query = StreamSourceQuery> 
-        + BulkRepository<StreamSource, Uuid> + Send + Sync,
+pub struct StreamSourceService<R>
+where
+    R: Repository<
+            StreamSource,
+            Uuid,
+            CreateRequest = StreamSourceCreateRequest,
+            UpdateRequest = StreamSourceUpdateRequest,
+            Query = StreamSourceQuery,
+        > + BulkRepository<StreamSource, Uuid>
+        + Send
+        + Sync,
 {
     repository: R,
 }
 
 impl<R> StreamSourceService<R>
 where
-    R: Repository<StreamSource, Uuid, CreateRequest = StreamSourceCreateRequest, UpdateRequest = StreamSourceUpdateRequest, Query = StreamSourceQuery> 
-        + BulkRepository<StreamSource, Uuid> + Send + Sync,
+    R: Repository<
+            StreamSource,
+            Uuid,
+            CreateRequest = StreamSourceCreateRequest,
+            UpdateRequest = StreamSourceUpdateRequest,
+            Query = StreamSourceQuery,
+        > + BulkRepository<StreamSource, Uuid>
+        + Send
+        + Sync,
 {
     /// Create a new stream source service
     pub fn new(repository: R) -> Self {
@@ -168,8 +188,16 @@ where
     }
 
     /// Validate a stream source URL based on its type
-    async fn validate_source_url(&self, url: &str, source_type: &StreamSourceType) -> AppResult<()> {
-        debug!("Validating source URL: {} for type: {:?}", url, source_type);
+    async fn validate_source_url(
+        &self,
+        url: &str,
+        source_type: &StreamSourceType,
+    ) -> AppResult<()> {
+        debug!(
+            "Validating source URL: {} for type: {:?}",
+            UrlUtils::obfuscate_credentials(url),
+            source_type
+        );
 
         // Basic URL validation
         if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -180,13 +208,22 @@ where
         match source_type {
             StreamSourceType::M3u => {
                 if !url.ends_with(".m3u") && !url.ends_with(".m3u8") && !url.contains("playlist") {
-                    warn!("M3U URL '{}' doesn't have typical M3U extension or pattern", url);
+                    warn!(
+                        "M3U URL '{}' doesn't have typical M3U extension or pattern",
+                        UrlUtils::obfuscate_credentials(url)
+                    );
                 }
             }
             StreamSourceType::Xtream => {
                 // Xtream URLs typically have specific patterns
-                if !url.contains("/get.php") && !url.contains("/xmltv.php") && !url.contains("player_api") {
-                    warn!("Xtream URL '{}' doesn't match typical Xtream patterns", url);
+                if !url.contains("/get.php")
+                    && !url.contains("/xmltv.php")
+                    && !url.contains("player_api")
+                {
+                    warn!(
+                        "Xtream URL '{}' doesn't match typical Xtream patterns",
+                        UrlUtils::obfuscate_credentials(url)
+                    );
                 }
             }
         }
@@ -195,7 +232,10 @@ where
     }
 
     /// Validate stream source creation request
-    async fn validate_create_request(&self, request: &StreamSourceCreateRequest) -> AppResult<StreamSourceValidationResult> {
+    async fn validate_create_request(
+        &self,
+        request: &StreamSourceCreateRequest,
+    ) -> AppResult<StreamSourceValidationResult> {
         debug!("Validating stream source create request: {}", request.name);
 
         let mut errors = Vec::new();
@@ -220,7 +260,10 @@ where
         }
 
         // URL validation
-        if let Err(e) = self.validate_source_url(&request.url, &request.source_type).await {
+        if let Err(e) = self
+            .validate_source_url(&request.url, &request.source_type)
+            .await
+        {
             errors.push(e.to_string());
         }
 
@@ -230,12 +273,18 @@ where
         }
 
         if request.max_concurrent_streams > 1000 {
-            warnings.push("Max concurrent streams is very high (>1000), this may impact performance".to_string());
+            warnings.push(
+                "Max concurrent streams is very high (>1000), this may impact performance"
+                    .to_string(),
+            );
         }
 
         // Cron validation (basic check)
         if request.update_cron.split_whitespace().count() != 5 {
-            errors.push("Update cron must be in standard 5-field format (minute hour day month weekday)".to_string());
+            errors.push(
+                "Update cron must be in standard 5-field format (minute hour day month weekday)"
+                    .to_string(),
+            );
         }
 
         // Xtream-specific validation
@@ -260,7 +309,10 @@ where
 
         let mut base_params = QueryParams::new()
             .search(query.search.unwrap_or_default())
-            .limit(query.limit.unwrap_or(50), query.page.unwrap_or(1).saturating_sub(1) * query.limit.unwrap_or(50));
+            .limit(
+                query.limit.unwrap_or(50),
+                query.page.unwrap_or(1).saturating_sub(1) * query.limit.unwrap_or(50),
+            );
 
         if let Some(sort_by) = query.sort_by {
             base_params = base_params.sort_by(sort_by, query.sort_ascending);
@@ -285,11 +337,13 @@ where
     async fn check_duplicate_name(&self, name: &str, exclude_id: Option<Uuid>) -> AppResult<bool> {
         let query = StreamSourceServiceQuery::new().search(name.to_string());
         let response = self.list(query).await?;
-        
-        let duplicates: Vec<_> = response.items.into_iter()
+
+        let duplicates: Vec<_> = response
+            .items
+            .into_iter()
             .filter(|source| {
-                source.name.eq_ignore_ascii_case(name) && 
-                exclude_id.map_or(true, |id| source.id != id)
+                source.name.eq_ignore_ascii_case(name)
+                    && exclude_id.map_or(true, |id| source.id != id)
             })
             .collect();
 
@@ -300,8 +354,15 @@ where
 #[async_trait]
 impl<R> Service<StreamSource, Uuid> for StreamSourceService<R>
 where
-    R: Repository<StreamSource, Uuid, CreateRequest = StreamSourceCreateRequest, UpdateRequest = StreamSourceUpdateRequest, Query = StreamSourceQuery> 
-        + BulkRepository<StreamSource, Uuid> + Send + Sync,
+    R: Repository<
+            StreamSource,
+            Uuid,
+            CreateRequest = StreamSourceCreateRequest,
+            UpdateRequest = StreamSourceUpdateRequest,
+            Query = StreamSourceQuery,
+        > + BulkRepository<StreamSource, Uuid>
+        + Send
+        + Sync,
 {
     type CreateRequest = StreamSourceCreateRequest;
     type UpdateRequest = StreamSourceUpdateRequest;
@@ -310,7 +371,7 @@ where
 
     async fn get_by_id(&self, id: Uuid) -> AppResult<Option<StreamSource>> {
         debug!("Getting stream source by ID: {}", id);
-        
+
         match self.repository.find_by_id(id).await {
             Ok(source) => {
                 if let Some(ref s) = source {
@@ -329,22 +390,29 @@ where
 
     async fn list(&self, query: Self::Query) -> AppResult<Self::ListResponse> {
         debug!("Listing stream sources with query: {:?}", query);
-        
+
         let repo_query = self.convert_query(query.clone());
-        
+
         match self.repository.find_all(repo_query.clone()).await {
             Ok(sources) => {
-                let total_count = self.repository.count(repo_query).await
+                let total_count = self
+                    .repository
+                    .count(repo_query)
+                    .await
                     .map_err(AppError::from)?;
-                
-                debug!("Found {} stream sources (total: {})", sources.len(), total_count);
-                
+
+                debug!(
+                    "Found {} stream sources (total: {})",
+                    sources.len(),
+                    total_count
+                );
+
                 let response = if let (Some(page), Some(limit)) = (query.page, query.limit) {
                     ServiceListResponse::paginated(sources, total_count, page, limit)
                 } else {
                     ServiceListResponse::new(sources, total_count)
                 };
-                
+
                 Ok(response)
             }
             Err(e) => {
@@ -356,28 +424,40 @@ where
 
     async fn create(&self, request: Self::CreateRequest) -> AppResult<StreamSource> {
         info!("Creating stream source: {}", request.name);
-        
+
         // Validate the request
         let validation = self.validate_create_request(&request).await?;
         if !validation.is_valid {
-            error!("Validation failed for stream source '{}': {:?}", request.name, validation.errors);
+            error!(
+                "Validation failed for stream source '{}': {:?}",
+                request.name, validation.errors
+            );
             return Err(AppError::validation(validation.errors.join("; ")));
         }
 
         // Log warnings if any
         if !validation.warnings.is_empty() {
-            warn!("Warnings for stream source '{}': {}", request.name, validation.warnings.join("; "));
+            warn!(
+                "Warnings for stream source '{}': {}",
+                request.name,
+                validation.warnings.join("; ")
+            );
         }
 
         // Check for duplicate names
         if self.check_duplicate_name(&request.name, None).await? {
-            return Err(AppError::validation("A stream source with this name already exists"));
+            return Err(AppError::validation(
+                "A stream source with this name already exists",
+            ));
         }
 
         // Create the source
         match self.repository.create(request.clone()).await {
             Ok(source) => {
-                info!("Successfully created stream source: {} ({})", source.name, source.id);
+                info!(
+                    "Successfully created stream source: {} ({})",
+                    source.name, source.id
+                );
                 Ok(source)
             }
             Err(e) => {
@@ -409,19 +489,27 @@ where
 
         let validation = self.validate_create_request(&create_request).await?;
         if !validation.is_valid {
-            error!("Validation failed for stream source update '{}': {:?}", request.name, validation.errors);
+            error!(
+                "Validation failed for stream source update '{}': {:?}",
+                request.name, validation.errors
+            );
             return Err(AppError::validation(validation.errors.join("; ")));
         }
 
         // Check for duplicate names (excluding current source)
         if self.check_duplicate_name(&request.name, Some(id)).await? {
-            return Err(AppError::validation("A stream source with this name already exists"));
+            return Err(AppError::validation(
+                "A stream source with this name already exists",
+            ));
         }
 
         // Update the source
         match self.repository.update(id, request.clone()).await {
             Ok(source) => {
-                info!("Successfully updated stream source: {} ({})", source.name, source.id);
+                info!(
+                    "Successfully updated stream source: {} ({})",
+                    source.name, source.id
+                );
                 Ok(source)
             }
             Err(e) => {
@@ -435,7 +523,9 @@ where
         info!("Deleting stream source: {}", id);
 
         // Check if the source exists and get its info for logging
-        let source = self.get_by_id(id).await?
+        let source = self
+            .get_by_id(id)
+            .await?
             .ok_or_else(|| AppError::not_found("stream_source", id.to_string()))?;
 
         // TODO: Check for dependencies (channels, proxies, etc.)
@@ -444,7 +534,10 @@ where
         // Delete the source
         match self.repository.delete(id).await {
             Ok(_) => {
-                info!("Successfully deleted stream source: {} ({})", source.name, id);
+                info!(
+                    "Successfully deleted stream source: {} ({})",
+                    source.name, id
+                );
                 Ok(())
             }
             Err(e) => {
@@ -458,16 +551,30 @@ where
 #[async_trait]
 impl<R> ValidationService<StreamSource, Uuid> for StreamSourceService<R>
 where
-    R: Repository<StreamSource, Uuid, CreateRequest = StreamSourceCreateRequest, UpdateRequest = StreamSourceUpdateRequest, Query = StreamSourceQuery> 
-        + BulkRepository<StreamSource, Uuid> + Send + Sync,
+    R: Repository<
+            StreamSource,
+            Uuid,
+            CreateRequest = StreamSourceCreateRequest,
+            UpdateRequest = StreamSourceUpdateRequest,
+            Query = StreamSourceQuery,
+        > + BulkRepository<StreamSource, Uuid>
+        + Send
+        + Sync,
 {
     type ValidationResult = StreamSourceValidationResult;
 
-    async fn validate_create(&self, request: &Self::CreateRequest) -> AppResult<Self::ValidationResult> {
+    async fn validate_create(
+        &self,
+        request: &Self::CreateRequest,
+    ) -> AppResult<Self::ValidationResult> {
         self.validate_create_request(request).await
     }
 
-    async fn validate_update(&self, id: Uuid, request: &Self::UpdateRequest) -> AppResult<Self::ValidationResult> {
+    async fn validate_update(
+        &self,
+        id: Uuid,
+        request: &Self::UpdateRequest,
+    ) -> AppResult<Self::ValidationResult> {
         // Convert update request to create request for validation
         let create_request = StreamSourceCreateRequest {
             name: request.name.clone(),
@@ -484,7 +591,9 @@ where
 
         // Additional validation for updates
         if !self.repository.exists(id).await.map_err(AppError::from)? {
-            result.errors.push("Stream source does not exist".to_string());
+            result
+                .errors
+                .push("Stream source does not exist".to_string());
             result.is_valid = false;
         }
 
@@ -496,7 +605,9 @@ where
 
         // Check if source exists
         if !self.repository.exists(id).await.map_err(AppError::from)? {
-            result.errors.push("Stream source does not exist".to_string());
+            result
+                .errors
+                .push("Stream source does not exist".to_string());
             result.is_valid = false;
         }
 
@@ -510,8 +621,15 @@ where
 #[async_trait]
 impl<R> BulkService<StreamSource, Uuid> for StreamSourceService<R>
 where
-    R: Repository<StreamSource, Uuid, CreateRequest = StreamSourceCreateRequest, UpdateRequest = StreamSourceUpdateRequest, Query = StreamSourceQuery> 
-        + BulkRepository<StreamSource, Uuid> + Send + Sync,
+    R: Repository<
+            StreamSource,
+            Uuid,
+            CreateRequest = StreamSourceCreateRequest,
+            UpdateRequest = StreamSourceUpdateRequest,
+            Query = StreamSourceQuery,
+        > + BulkRepository<StreamSource, Uuid>
+        + Send
+        + Sync,
 {
     type BulkResult = ServiceBulkResponse<StreamSource>;
 
@@ -546,7 +664,10 @@ where
         // Create all sources using repository bulk operation
         match self.repository.create_bulk(requests).await {
             Ok(sources) => {
-                info!("Successfully created {} stream sources in bulk", sources.len());
+                info!(
+                    "Successfully created {} stream sources in bulk",
+                    sources.len()
+                );
                 successful = sources;
             }
             Err(e) => {
@@ -561,7 +682,10 @@ where
         Ok(ServiceBulkResponse::new(successful, failed))
     }
 
-    async fn update_bulk(&self, updates: HashMap<Uuid, Self::UpdateRequest>) -> AppResult<Self::BulkResult> {
+    async fn update_bulk(
+        &self,
+        updates: HashMap<Uuid, Self::UpdateRequest>,
+    ) -> AppResult<Self::BulkResult> {
         info!("Updating {} stream sources in bulk", updates.len());
 
         let mut successful = Vec::new();
@@ -576,7 +700,11 @@ where
             }
         }
 
-        info!("Bulk update completed: {} successful, {} failed", successful.len(), failed.len());
+        info!(
+            "Bulk update completed: {} successful, {} failed",
+            successful.len(),
+            failed.len()
+        );
         Ok(ServiceBulkResponse::new(successful, failed))
     }
 
@@ -598,7 +726,11 @@ where
             }
         }
 
-        info!("Bulk delete completed: {} successful, {} failed", successful.len(), failed.len());
+        info!(
+            "Bulk delete completed: {} successful, {} failed",
+            successful.len(),
+            failed.len()
+        );
         Ok(ServiceBulkResponse::new(successful, failed))
     }
 }

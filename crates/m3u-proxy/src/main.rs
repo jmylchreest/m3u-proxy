@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -15,8 +16,9 @@ use m3u_proxy::{
     logo_assets::{LogoAssetService, LogoAssetStorage},
     services::ProxyRegenerationService,
     utils::{
+        SystemManager,
         memory_config::{MemoryMonitoringConfig, MemoryVerbosity, init_global_memory_config},
-        memory_monitor::SimpleMemoryMonitor,
+        pressure_monitor::SimpleMemoryMonitor,
     },
     web::WebServer,
 };
@@ -159,27 +161,35 @@ async fn main() -> Result<()> {
 
     // Validate no duplicate base directories before creating any managers
     let mut all_paths = std::collections::HashMap::new();
-    
+
     // Check file manager config categories
     for category in file_manager_config.category_names() {
         if let Some(path) = file_manager_config.category_path(category) {
             let canonical_path = path.canonicalize().unwrap_or(path.clone());
-            if let Some(existing_category) = all_paths.insert(canonical_path.clone(), category.clone()) {
+            if let Some(existing_category) =
+                all_paths.insert(canonical_path.clone(), category.clone())
+            {
                 return Err(anyhow::anyhow!(
                     "Duplicate base directory detected! Categories '{}' and '{}' both use path: {:?}. This would cause cleanup conflicts.",
-                    existing_category, category, canonical_path
+                    existing_category,
+                    category,
+                    canonical_path
                 ));
             }
         }
     }
-    
+
     // Check logo paths
-    let cached_logo_canonical = config.storage.cached_logo_path.canonicalize()
+    let cached_logo_canonical = config
+        .storage
+        .cached_logo_path
+        .canonicalize()
         .unwrap_or(config.storage.cached_logo_path.clone());
     if let Some(existing_category) = all_paths.get(&cached_logo_canonical) {
         return Err(anyhow::anyhow!(
             "Duplicate base directory detected! Category '{}' and logos_cached both use path: {:?}. This would cause cleanup conflicts.",
-            existing_category, cached_logo_canonical
+            existing_category,
+            cached_logo_canonical
         ));
     }
 
@@ -215,13 +225,13 @@ async fn main() -> Result<()> {
         }
     };
 
-
     // Create specialized logo file manager for cached logos (duplicate check already done above)
     // Note: uploaded logos use LogoAssetStorage direct file operations (could be enhanced with sandboxing)
     let logos_cached_file_manager = m3u_proxy::config::FileManagerConfig::create_logo_manager(
         &config.storage.cached_logo_path,
         false, // Regular retention with cleanup
-    ).await?;
+    )
+    .await?;
 
     // Update logo asset service with the cached logo file manager
     logo_asset_service = logo_asset_service.with_file_manager(logos_cached_file_manager.clone());
@@ -255,16 +265,28 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Create shared memory monitor for global memory management
-    let _shared_memory_monitor = SimpleMemoryMonitor::new(memory_limit);
+    // Create shared system manager for centralized system monitoring
+    let system_manager = SystemManager::new(Duration::from_secs(10));
+    info!("Shared system manager initialized with 10-second refresh interval");
+
+    // Create shared memory monitor using the shared system
+    let _shared_memory_monitor = SimpleMemoryMonitor::new(
+        memory_limit,
+        memory_config.clone(),
+        system_manager.get_system(),
+    );
     info!(
         "Shared memory monitor initialized with limit: {:?}MB",
         memory_limit
     );
 
     // Initialize proxy regeneration service with managed temp file manager
-    let proxy_regeneration_service =
-        ProxyRegenerationService::new(database.pool(), None, temp_file_manager.clone());
+    let proxy_regeneration_service = ProxyRegenerationService::new(
+        database.pool(),
+        None,
+        temp_file_manager.clone(),
+        system_manager.get_system(),
+    );
     info!("Proxy regeneration service initialized");
 
     // Create scheduler service now that proxy regeneration service exists
@@ -285,10 +307,23 @@ async fn main() -> Result<()> {
     let bg_data_mapping_service = data_mapping_service.clone();
     let bg_logo_asset_service = logo_asset_service.clone();
     let bg_config = config.clone();
-    
+
     // Clone again for metrics housekeeper
     let metrics_database = database.clone();
     let metrics_config = config.clone();
+
+    // Initialize relay manager with shared system
+    let relay_manager = std::sync::Arc::new(
+        m3u_proxy::services::RelayManager::new(
+            database.clone(),
+            temp_file_manager.clone(),
+            std::sync::Arc::new(m3u_proxy::metrics::MetricsLogger::new(database.pool())),
+            system_manager.get_system(),
+            config.clone(),
+        )
+        .await,
+    );
+    info!("Relay manager initialized with shared system monitoring");
 
     let web_server = WebServer::new(
         config,
@@ -302,6 +337,8 @@ async fn main() -> Result<()> {
         temp_file_manager.clone(), // Use temp for both temp and preview operations
         logos_cached_file_manager,
         proxy_output_file_manager,
+        relay_manager,
+        system_manager.get_system(),
     )
     .await?;
 
@@ -366,7 +403,10 @@ async fn main() -> Result<()> {
         let housekeeper_db = metrics_database.pool();
         let housekeeper_config = metrics_config_section.clone();
         tokio::spawn(async move {
-            match m3u_proxy::services::MetricsHousekeeper::from_config(housekeeper_db, &housekeeper_config) {
+            match m3u_proxy::services::MetricsHousekeeper::from_config(
+                housekeeper_db,
+                &housekeeper_config,
+            ) {
                 Ok(housekeeper) => {
                     housekeeper.start().await;
                 }

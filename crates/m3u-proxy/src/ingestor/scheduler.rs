@@ -575,6 +575,18 @@ impl SchedulerService {
         *last_checked = Some(now);
 
         if let Some(last_ingested) = source.last_ingested_at() {
+            // Grace period: don't re-trigger immediately after recent ingestion
+            // This prevents immediate re-runs when an ingestion just completed
+            let time_since_last_ingestion = now.signed_duration_since(last_ingested);
+            if time_since_last_ingestion.num_minutes() < 5 {
+                trace!(
+                    "Source '{}' was ingested recently ({} minutes ago) - skipping to prevent immediate re-trigger",
+                    source.name(),
+                    time_since_last_ingestion.num_minutes()
+                );
+                return Ok(false);
+            }
+
             // Find the next scheduled time after the last ingestion
             if let Some(next_time) = schedule.after(&last_ingested).next() {
                 let should_run = now >= next_time;

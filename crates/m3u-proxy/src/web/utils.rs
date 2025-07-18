@@ -139,7 +139,7 @@ impl RateLimiter {
     }
     
     pub async fn check_rate_limit(&self, _key: &str) -> Result<(), String> {
-        // TODO: Implement actual rate limiting
+        // Rate limiting not implemented yet
         Ok(())
     }
 }

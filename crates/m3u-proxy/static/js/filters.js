@@ -138,7 +138,15 @@ class FiltersManager {
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      this.sources = await response.json();
+      const data = await response.json();
+      // Handle paginated API response format
+      if (data.success && data.data && Array.isArray(data.data.items)) {
+        this.sources = data.data.items;
+      } else if (Array.isArray(data)) {
+        this.sources = data;
+      } else {
+        this.sources = [];
+      }
       this.populateSourceSelect();
     } catch (error) {
       console.error("Failed to load stream sources:", error);
@@ -205,20 +213,24 @@ class FiltersManager {
   }
 
   async loadFilters() {
-    this.showLoading();
     try {
       const response = await fetch("/api/v1/filters?" + new Date().getTime());
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
-      this.filters = Array.isArray(data) ? data : [];
+      // Handle paginated API response format
+      if (data.success && data.data && Array.isArray(data.data.items)) {
+        this.filters = data.data.items;
+      } else if (Array.isArray(data)) {
+        this.filters = data;
+      } else {
+        this.filters = [];
+      }
       this.renderFilters();
     } catch (error) {
       console.error("Failed to load filters:", error);
       this.showAlert("Failed to load filters", "danger");
-    } finally {
-      this.hideLoading();
     }
   }
 
@@ -282,6 +294,7 @@ class FiltersManager {
                                 <span class="badge ${filter.is_inverse ? "badge-danger" : "badge-success"}">
                                     ${filter.is_inverse ? "Exclude" : "Include"}
                                 </span>
+                                ${filter.is_system_default ? '<span class="badge badge-info">System Default</span>' : ""}
                                 <span class="filter-starting-number">Start: ${filter.starting_channel_number}</span>
                                 <span class="badge ${usageCount > 0 ? "badge-primary" : "badge-secondary"}">
                                     ${usageCount} ${usageCount === 1 ? "proxy" : "proxies"}
@@ -304,6 +317,13 @@ class FiltersManager {
   }
 
   renderActionsCell(filter, usageCount) {
+    const canDelete = usageCount === 0 && !filter.is_system_default;
+    const deleteTooltip = filter.is_system_default
+      ? "Cannot delete: system default filter"
+      : usageCount > 0
+        ? `Cannot delete: filter is in use by ${usageCount} proxy/proxies`
+        : "";
+
     return `
             <div class="filter-action-buttons">
                 <button class="btn btn-primary btn-sm btn-edit" onclick="filtersManager.editFilter('${filter.id}')">
@@ -312,9 +332,15 @@ class FiltersManager {
                 <button class="btn btn-success btn-sm btn-duplicate" onclick="filtersManager.duplicateFilter('${filter.id}')">
                     Duplicate
                 </button>
-                <button class="btn btn-danger btn-sm btn-delete" onclick="filtersManager.deleteFilter('${filter.id}')" ${usageCount > 0 ? 'title="Cannot delete: filter is in use by ' + usageCount + ' proxy/proxies"' : ""} ${usageCount > 0 ? "disabled" : ""}>
+                ${
+                  !filter.is_system_default
+                    ? `
+                <button class="btn btn-danger btn-sm btn-delete" onclick="filtersManager.deleteFilter('${filter.id}')" ${deleteTooltip ? `title="${deleteTooltip}"` : ""} ${!canDelete ? "disabled" : ""}>
                     Delete
                 </button>
+                `
+                    : ""
+                }
             </div>
         `;
   }
@@ -632,7 +658,9 @@ class FiltersManager {
 
     // Add expression tree if available
     if (result.expression_tree) {
-      resultsHtml += this.generateFilterExpressionTreeHtml(result.expression_tree);
+      resultsHtml += this.generateFilterExpressionTreeHtml(
+        result.expression_tree,
+      );
     }
 
     if (result.matching_channels && result.matching_channels.length > 0) {
@@ -1702,7 +1730,12 @@ class FiltersManager {
     }
     // Fall back to conditions array (legacy format)
     else if (filter.conditions && filter.conditions.length > 0) {
-      const operator = filter.logical_operator === "any" ? " OR " : " AND ";
+      const operator =
+        filter.logical_operator === "any" ||
+        (filter.logical_operator &&
+          filter.logical_operator.toLowerCase() === "or")
+          ? " OR "
+          : " AND ";
       textPattern = filter.conditions
         .map((condition) => {
           const field = this.availableFields.find(
@@ -1784,7 +1817,10 @@ class FiltersManager {
       tree.children &&
       Array.isArray(tree.children)
     ) {
-      const logicalOp = tree.operator === "any" ? " OR " : " AND ";
+      const logicalOp =
+        tree.operator && tree.operator.toLowerCase() === "or"
+          ? " OR "
+          : " AND ";
       const childPatterns = tree.children
         .map((child) => this.convertTreeToPattern(child))
         .filter((pattern) => pattern.length > 0);
@@ -1803,7 +1839,7 @@ class FiltersManager {
 
   generateFilterExpressionTreeHtml(expression_tree) {
     if (!expression_tree) return "";
-    
+
     try {
       return `
         <div class="expression-tree-container mt-3">
@@ -1827,33 +1863,37 @@ class FiltersManager {
     const indent = "  ".repeat(depth);
 
     if (node.type === "group") {
-      let html = `<div class="tree-node tree-operator">${indent}${node.operator}</div>`;
+      let html = `<div class="tree-node tree-operator">${indent}${node.operator.toUpperCase()}</div>`;
 
       if (node.children && node.children.length > 0) {
         node.children.forEach((child, index) => {
           const isLast = index === node.children.length - 1;
           const connector = isLast ? "└── " : "├── ";
-          
+
           if (child.type === "group") {
-            html += `<div class="tree-node tree-operator">${indent}${connector}${child.operator}</div>`;
+            html += `<div class="tree-node tree-operator">${indent}${connector}${child.operator.toUpperCase()}</div>`;
             if (child.children && child.children.length > 0) {
               child.children.forEach((grandchild, grandIndex) => {
                 const isLastGrand = grandIndex === child.children.length - 1;
                 const grandConnector = isLastGrand ? "└── " : "├── ";
                 const grandIndent = "  ".repeat(depth + 1);
-                
+
                 if (grandchild.type === "group") {
                   html += this.renderFilterTreeNode(grandchild, depth + 2);
                 } else {
                   const negatePrefix = grandchild.negate ? "NOT " : "";
-                  const caseDisplay = grandchild.case_sensitive ? " (case-sensitive)" : " (case-insensitive)";
+                  const caseDisplay = grandchild.case_sensitive
+                    ? " (case-sensitive)"
+                    : " (case-insensitive)";
                   html += `<div class="tree-node tree-condition">${grandIndent}${grandConnector}(${this.escapeHtml(grandchild.field)} ${negatePrefix}${grandchild.operator} "${this.escapeHtml(grandchild.value)}"${caseDisplay})</div>`;
                 }
               });
             }
           } else {
             const negatePrefix = child.negate ? "NOT " : "";
-            const caseDisplay = child.case_sensitive ? " (case-sensitive)" : " (case-insensitive)";
+            const caseDisplay = child.case_sensitive
+              ? " (case-sensitive)"
+              : " (case-insensitive)";
             html += `<div class="tree-node tree-condition">${indent}${connector}(${this.escapeHtml(child.field)} ${negatePrefix}${child.operator} "${this.escapeHtml(child.value)}"${caseDisplay})</div>`;
           }
         });
@@ -1862,13 +1902,14 @@ class FiltersManager {
       return html;
     } else if (node.type === "condition") {
       const negatePrefix = node.negate ? "NOT " : "";
-      const caseDisplay = node.case_sensitive ? " (case-sensitive)" : " (case-insensitive)";
+      const caseDisplay = node.case_sensitive
+        ? " (case-sensitive)"
+        : " (case-insensitive)";
       return `<div class="tree-node tree-condition">${indent}(${this.escapeHtml(node.field)} ${negatePrefix}${node.operator} "${this.escapeHtml(node.value)}"${caseDisplay})</div>`;
     }
 
     return "";
   }
-
 
   // Generate expression tree for a filter on the main page
   generateFilterExpressionTree(filterData) {
@@ -1907,7 +1948,12 @@ class FiltersManager {
         </div>
       `;
     } catch (error) {
-      console.warn("Failed to render filter expression tree for filter", filter.id, ":", error);
+      console.warn(
+        "Failed to render filter expression tree for filter",
+        filter.id,
+        ":",
+        error,
+      );
       return "";
     }
   }
@@ -1962,7 +2008,9 @@ class FiltersManager {
 
           // Add expression tree if available
           if (result.expression_tree) {
-            validationHtml += this.generateFilterExpressionTreeHtml(result.expression_tree);
+            validationHtml += this.generateFilterExpressionTreeHtml(
+              result.expression_tree,
+            );
           }
 
           validationDiv.innerHTML = validationHtml;

@@ -6,12 +6,15 @@ use axum::{
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
-use serde_json::json;
-use tracing::{debug, error, info};
-use uuid::Uuid;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use super::AppState;
+
+pub mod relay;
+pub mod active_relays;
 
 use crate::data_mapping::DataMappingService;
 use crate::models::*;
@@ -224,46 +227,7 @@ pub async fn get_epg_source_progress(
     Ok(Json(result))
 }
 
-// Stream Proxies API
-pub async fn list_proxies(
-    State(_state): State<AppState>,
-) -> Result<Json<Vec<StreamProxy>>, StatusCode> {
-    // TODO: Implement list proxies
-    Ok(Json(vec![]))
-}
-
-pub async fn create_proxy(
-    State(_state): State<AppState>,
-    Json(_payload): Json<StreamProxy>,
-) -> Result<Json<StreamProxy>, StatusCode> {
-    // TODO: Implement create proxy
-    Err(StatusCode::NOT_IMPLEMENTED)
-}
-
-pub async fn get_proxy(
-    Path(_id): Path<Uuid>,
-    State(_state): State<AppState>,
-) -> Result<Json<StreamProxy>, StatusCode> {
-    // TODO: Implement get proxy
-    Err(StatusCode::NOT_FOUND)
-}
-
-pub async fn update_proxy(
-    Path(_id): Path<Uuid>,
-    State(_state): State<AppState>,
-    Json(_payload): Json<StreamProxy>,
-) -> Result<Json<StreamProxy>, StatusCode> {
-    // TODO: Implement update proxy
-    Err(StatusCode::NOT_IMPLEMENTED)
-}
-
-pub async fn delete_proxy(
-    Path(_id): Path<Uuid>,
-    State(_state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    // TODO: Implement delete proxy
-    Err(StatusCode::NOT_IMPLEMENTED)
-}
+// Stream Proxies API - implementations are in handlers/proxies.rs
 
 pub async fn regenerate_proxy(
     Path(proxy_id): Path<Uuid>,
@@ -336,6 +300,11 @@ pub async fn regenerate_proxy(
                                 .await
                             {
                                 Ok(_) => {
+                                    // Update the last_generated_at timestamp
+                                    if let Err(e) = state.database.update_proxy_last_generated(proxy_id).await {
+                                        error!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
+                                    }
+                                    
                                     info!(
                                         "Successfully regenerated proxy '{}' with {} channels and EPG",
                                         proxy.name, generation.channel_count
@@ -352,6 +321,11 @@ pub async fn regenerate_proxy(
                                         "Failed to save regenerated XMLTV for proxy {}: {}",
                                         proxy_id, e
                                     );
+                                    // Update the last_generated_at timestamp even if XMLTV failed
+                                    if let Err(e) = state.database.update_proxy_last_generated(proxy_id).await {
+                                        error!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
+                                    }
+                                    
                                     // M3U was saved successfully, so we'll return partial success
                                     Ok(Json(serde_json::json!({
                                         "success": true,
@@ -364,6 +338,11 @@ pub async fn regenerate_proxy(
                         }
                         Err(e) => {
                             error!("Failed to generate XMLTV for proxy {}: {}", proxy_id, e);
+                            // Update the last_generated_at timestamp even if XMLTV generation failed
+                            if let Err(e) = state.database.update_proxy_last_generated(proxy_id).await {
+                                error!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
+                            }
+                            
                             // M3U was saved successfully, so we'll return partial success
                             Ok(Json(serde_json::json!({
                                 "success": true,
@@ -2277,187 +2256,6 @@ pub async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
     })))
 }
 
-/// List stream sources only
-pub async fn list_stream_sources(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<UnifiedSourceWithStats>>, StatusCode> {
-    match state.database.list_stream_sources_with_stats().await {
-        Ok(sources) => {
-            let unified_sources: Vec<UnifiedSourceWithStats> = sources
-                .into_iter()
-                .map(UnifiedSourceWithStats::from_stream)
-                .collect();
-            Ok(Json(unified_sources))
-        }
-        Err(e) => {
-            error!("Failed to list stream sources: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Create stream source
-pub async fn create_stream_source(
-    State(state): State<AppState>,
-    Json(payload): Json<StreamSourceCreateRequest>,
-) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
-    match state.database.create_stream_source(&payload).await {
-        Ok(source) => {
-            // Try to auto-link with existing EPG sources if this is an Xtream source
-            if let Err(e) = state.database.auto_link_stream_source(&source).await {
-                error!("Failed to auto-link stream source '{}': {}", source.name, e);
-            }
-
-            // Invalidate scheduler cache since we added a new source
-            let _ = state.cache_invalidation_tx.send(());
-
-            // Trigger immediate refresh
-            info!(
-                "Triggering immediate refresh for new stream source: {} ({})",
-                source.name, source.id
-            );
-
-            tokio::spawn({
-                let database = state.database.clone();
-                let state_manager = state.state_manager.clone();
-                let source_id = source.id;
-                let source_name = source.name.clone();
-                async move {
-                    use crate::ingestor::IngestorService;
-
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    let ingestor = IngestorService::new(state_manager.clone());
-
-                    if let Ok(Some(stream_source)) = database.get_stream_source(source_id).await {
-                        match ingestor.ingest_source(&stream_source).await {
-                            Ok(channels) => {
-                                info!(
-                                    "Initial stream ingestion completed for '{}': {} channels",
-                                    source_name,
-                                    channels.len()
-                                );
-
-                                if let Err(e) = database
-                                    .update_source_channels(
-                                        source_id,
-                                        &channels,
-                                        Some(&state_manager),
-                                    )
-                                    .await
-                                {
-                                    error!(
-                                        "Failed to save initial stream data for source '{}': {}",
-                                        source_name, e
-                                    );
-                                } else if let Err(e) =
-                                    database.update_source_last_ingested(source_id).await
-                                {
-                                    error!(
-                                        "Failed to update last_ingested_at for stream source '{}': {}",
-                                        source_name, e
-                                    );
-                                } else {
-                                    // Mark ingestion as completed with final channel count
-                                    state_manager
-                                        .complete_ingestion(source_id, channels.len())
-                                        .await;
-                                }
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Initial stream ingestion failed for '{}': {}",
-                                    source_name, e
-                                );
-                            }
-                        }
-                    }
-                }
-            });
-
-            // Return unified response
-            let source_with_stats = StreamSourceWithStats {
-                source,
-                channel_count: 0,
-                next_scheduled_update: None,
-            };
-            Ok(Json(UnifiedSourceWithStats::from_stream(source_with_stats)))
-        }
-        Err(e) => {
-            error!("Failed to create stream source: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Get stream source by ID
-pub async fn get_stream_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
-    match state.database.get_stream_source(id).await {
-        Ok(Some(source)) => {
-            // Get stats separately
-            let channel_count = state
-                .database
-                .get_source_channel_count(id)
-                .await
-                .unwrap_or(0);
-            let source_with_stats = StreamSourceWithStats {
-                source,
-                channel_count,
-                next_scheduled_update: None,
-            };
-            Ok(Json(UnifiedSourceWithStats::from_stream(source_with_stats)))
-        }
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to get stream source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Update stream source
-pub async fn update_stream_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-    Json(payload): Json<StreamSourceUpdateRequest>,
-) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
-    match state.database.update_stream_source(id, &payload).await {
-        Ok(Some(source)) => {
-            let _ = state.cache_invalidation_tx.send(());
-            let source_with_stats = StreamSourceWithStats {
-                source,
-                channel_count: 0,
-                next_scheduled_update: None,
-            };
-            Ok(Json(UnifiedSourceWithStats::from_stream(source_with_stats)))
-        }
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to update stream source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Delete stream source
-pub async fn delete_stream_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    match state.database.delete_stream_source(id).await {
-        Ok(_) => {
-            let _ = state.cache_invalidation_tx.send(());
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Err(e) => {
-            error!("Failed to delete stream source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
 /// Refresh stream source
 pub async fn refresh_stream_source(
     Path(id): Path<Uuid>,
@@ -2560,210 +2358,6 @@ pub async fn get_stream_source_channels(
 }
 
 /// List EPG sources only
-pub async fn list_epg_sources_unified(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<UnifiedSourceWithStats>>, StatusCode> {
-    match state.database.list_epg_sources_with_stats().await {
-        Ok(sources) => {
-            let unified_sources: Vec<UnifiedSourceWithStats> = sources
-                .into_iter()
-                .map(UnifiedSourceWithStats::from_epg)
-                .collect();
-            Ok(Json(unified_sources))
-        }
-        Err(e) => {
-            error!("Failed to list EPG sources: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Create EPG source
-pub async fn create_epg_source_unified(
-    State(state): State<AppState>,
-    Json(payload): Json<EpgSourceCreateRequest>,
-) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
-    match state.database.create_epg_source(&payload).await {
-        Ok(source) => {
-            // Try to auto-link with existing stream sources if this is an Xtream source
-            if let Err(e) = state.database.auto_link_epg_source(&source).await {
-                error!("Failed to auto-link EPG source '{}': {}", source.name, e);
-            }
-
-            let _ = state.cache_invalidation_tx.send(());
-
-            // Trigger immediate refresh
-            info!(
-                "Triggering immediate refresh for new EPG source: {} ({})",
-                source.name, source.id
-            );
-
-            tokio::spawn({
-                let database = state.database.clone();
-                let state_manager = state.state_manager.clone();
-                let source_id = source.id;
-                let source_name = source.name.clone();
-                async move {
-                    use crate::ingestor::ingest_epg::EpgIngestor;
-                    use crate::ingestor::state_manager::ProcessingTrigger;
-
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                    let ingestor = EpgIngestor::new_with_state_manager(
-                        database.clone(),
-                        state_manager.clone(),
-                    );
-
-                    if let Ok(Some(epg_source)) = database.get_epg_source(source_id).await {
-                        match ingestor
-                            .ingest_epg_source_with_trigger(&epg_source, ProcessingTrigger::Manual)
-                            .await
-                        {
-                            Ok((channels, mut programs, _detected_timezone)) => {
-                                // Update channel names in programs
-                                ingestor.update_channel_names(&channels, &mut programs);
-
-                                // Note: Timezone detection was simplified in migration 004
-                                // All times are now normalized to UTC during processing
-
-                                // Save to database using cancellation-aware method
-                                match ingestor
-                                    .save_epg_data_with_cancellation(source_id, channels, programs)
-                                    .await
-                                {
-                                    Ok((channel_count, program_count)) => {
-                                        // Update last ingested timestamp
-                                        if let Err(e) = database
-                                            .update_epg_source_last_ingested(source_id)
-                                            .await
-                                        {
-                                            error!(
-                                                "Failed to update last_ingested_at for EPG source '{}': {}",
-                                                source_name, e
-                                            );
-                                        }
-
-                                        info!(
-                                            "Initial EPG ingestion completed for '{}': {} channels, {} programs",
-                                            source_name, channel_count, program_count
-                                        );
-                                    }
-                                    Err(e) => {
-                                        error!(
-                                            "Failed to save initial EPG data for source '{}': {}",
-                                            source_name, e
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!("Initial EPG ingestion failed for '{}': {}", source_name, e);
-                            }
-                        }
-                    }
-                }
-            });
-
-            let source_with_stats = EpgSourceWithStats {
-                source,
-                channel_count: 0,
-                program_count: 0,
-                next_scheduled_update: None,
-            };
-            Ok(Json(UnifiedSourceWithStats::from_epg(source_with_stats)))
-        }
-        Err(e) => {
-            error!("Failed to create EPG source: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Get EPG source by ID
-pub async fn get_epg_source_unified(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
-    match state.database.get_epg_source(id).await {
-        Ok(Some(source)) => {
-            // Get stats separately
-            let channel_count = state
-                .database
-                .get_epg_source_channel_count(id)
-                .await
-                .unwrap_or(0);
-            let source_with_stats = EpgSourceWithStats {
-                source,
-                channel_count,
-                program_count: 0, // TODO: Add program count method
-                next_scheduled_update: None,
-            };
-            Ok(Json(UnifiedSourceWithStats::from_epg(source_with_stats)))
-        }
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to get EPG source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Update EPG source
-pub async fn update_epg_source_unified(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-    Json(payload): Json<EpgSourceUpdateRequest>,
-) -> Result<Json<UnifiedSourceWithStats>, StatusCode> {
-    match state.database.update_epg_source(id, &payload).await {
-        Ok(true) => {
-            let _ = state.cache_invalidation_tx.send(());
-            // Get the updated source
-            match state.database.get_epg_source(id).await {
-                Ok(Some(source)) => {
-                    let channel_count = state
-                        .database
-                        .get_epg_source_channel_count(id)
-                        .await
-                        .unwrap_or(0);
-                    let source_with_stats = EpgSourceWithStats {
-                        source,
-                        channel_count,
-                        program_count: 0,
-                        next_scheduled_update: None,
-                    };
-                    Ok(Json(UnifiedSourceWithStats::from_epg(source_with_stats)))
-                }
-                Ok(None) => Err(StatusCode::NOT_FOUND),
-                Err(e) => {
-                    error!("Failed to get updated EPG source {}: {}", id, e);
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-        }
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to update EPG source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Delete EPG source
-pub async fn delete_epg_source_unified(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    match state.database.delete_epg_source(id).await {
-        Ok(_) => {
-            let _ = state.cache_invalidation_tx.send(());
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Err(e) => {
-            error!("Failed to delete EPG source {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
 
 /// Refresh EPG source
 pub async fn refresh_epg_source_unified(
@@ -3435,141 +3029,177 @@ pub async fn preview_proxies(
     })))
 }
 
-/// Regenerate all proxies (placeholder implementation)
+/// Regenerate all active proxies
 pub async fn regenerate_all_proxies(
-    _state: State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    Ok(Json(json!({
-        "success": true,
-        "message": "Proxy regeneration not yet implemented"
-    })))
-}
+    info!("Starting regeneration of all active proxies");
 
-// Relay Configuration API Endpoints
-
-/// List relay configurations for a specific proxy
-pub async fn list_relay_configs(
-    Path(_proxy_id): Path<Uuid>,
-    State(_state): State<AppState>,
-) -> Result<Json<Vec<RelayConfig>>, StatusCode> {
-    // TODO: Implement database lookup for relay configs
-    let configs = vec![]; // Placeholder
-    Ok(Json(configs))
-}
-
-/// Create a new relay configuration for a proxy
-pub async fn create_relay_config(
-    Path(proxy_id): Path<Uuid>,
-    State(_state): State<AppState>,
-    Json(payload): Json<RelayConfigCreateRequest>,
-) -> Result<Json<RelayConfig>, StatusCode> {
-    // TODO: Implement relay config creation
-    // Validate FFmpeg arguments
-    // Store in database with proxy_id
-    let config = RelayConfig {
-        id: Uuid::new_v4(),
-        proxy_id,
-        name: payload.name,
-        description: payload.description,
-        ffmpeg_args: serde_json::to_string(&payload.ffmpeg_args).unwrap_or_default(),
-        input_timeout: payload.input_timeout,
-        output_format: payload.output_format,
-        is_active: payload.is_active,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
+    // Get all active proxies
+    let active_proxies = match state.database.get_all_active_proxies().await {
+        Ok(proxies) => proxies,
+        Err(e) => {
+            error!("Failed to get active proxies: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     };
 
-    Ok(Json(config))
-}
+    if active_proxies.is_empty() {
+        return Ok(Json(json!({
+            "success": true,
+            "message": "No active proxies found to regenerate",
+            "count": 0
+        })));
+    }
 
-/// Get a specific relay configuration
-pub async fn get_relay_config(
-    Path((proxy_id, relay_id)): Path<(Uuid, Uuid)>,
-    State(_state): State<AppState>,
-) -> Result<Json<RelayConfig>, StatusCode> {
-    // TODO: Implement database lookup
-    let _ = (proxy_id, relay_id);
-    Err(StatusCode::NOT_FOUND)
-}
+    info!(
+        "Found {} active proxies to regenerate",
+        active_proxies.len()
+    );
 
-/// Update a relay configuration
-pub async fn update_relay_config(
-    Path((proxy_id, relay_id)): Path<(Uuid, Uuid)>,
-    State(_state): State<AppState>,
-    Json(_payload): Json<RelayConfigUpdateRequest>,
-) -> Result<Json<RelayConfig>, StatusCode> {
-    // TODO: Implement relay config update
-    let _ = (proxy_id, relay_id);
-    Err(StatusCode::NOT_FOUND)
-}
+    let proxy_generator = ProxyGenerator::new(state.config.storage.clone());
+    let mut successful_count = 0;
+    let mut failed_count = 0;
+    let mut errors = Vec::new();
 
-/// Delete a relay configuration
-pub async fn delete_relay_config(
-    Path((proxy_id, relay_id)): Path<(Uuid, Uuid)>,
-    State(_state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    // TODO: Implement relay config deletion
-    // Also stop any running relays using this config
-    let _ = (proxy_id, relay_id);
-    Err(StatusCode::NOT_FOUND)
-}
+    // Regenerate each proxy
+    for proxy in active_proxies.iter() {
+        info!("Regenerating proxy '{}'", proxy.name);
 
-/// List status of all running relays
-pub async fn list_relay_status(
-    State(_state): State<AppState>,
-) -> Result<Json<Vec<RelayStatus>>, StatusCode> {
-    // TODO: Implement relay status listing
-    let statuses = vec![]; // Placeholder
-    Ok(Json(statuses))
-}
+        // Use the same logic as the individual regenerate_proxy function
+        #[allow(deprecated)]
+        match proxy_generator
+            .generate(
+                proxy,
+                &state.database,
+                &state.data_mapping_service,
+                &state.logo_asset_service,
+                &state.config.web.base_url,
+                state.config.data_mapping_engine.clone(),
+            )
+            .await
+        {
+            Ok(generation) => {
+                // Save the new M3U file
+                match proxy_generator
+                    .save_m3u_file(proxy.id, &generation.m3u_content)
+                    .await
+                {
+                    Ok(_) => {
+                        // Generate and save XMLTV content using processed channels
+                        let epg_generator =
+                            crate::proxy::epg_generator::EpgGenerator::new(state.database.clone());
+                        let epg_config =
+                            Some(crate::proxy::epg_generator::EpgGenerationConfig::default());
 
-/// Get status of a specific relay
-pub async fn get_relay_status(
-    Path(config_id): Path<Uuid>,
-    State(_state): State<AppState>,
-) -> Result<Json<RelayStatus>, StatusCode> {
-    // TODO: Implement relay status lookup
-    let _ = config_id;
-    Err(StatusCode::NOT_FOUND)
-}
+                        // Use processed channels from the generation
+                        let processed_channels = generation
+                            .processed_channels
+                            .as_ref()
+                            .expect("Processed channels should be available after generation");
 
-/// Start a relay based on its configuration
-pub async fn start_relay(
-    Path(config_id): Path<Uuid>,
-    State(_state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    // TODO: Implement relay startup
-    // 1. Get relay configuration from database
-    // 2. Start FFmpeg process with configured arguments
-    // 3. Store process info in relay manager
-    // 4. Return status
-    let _ = config_id;
+                        match epg_generator
+                            .generate_xmltv_for_proxy_with_processed_channels(
+                                proxy,
+                                processed_channels,
+                                &state.logo_asset_service,
+                                &state.config.web.base_url,
+                                epg_config,
+                            )
+                            .await
+                        {
+                            Ok((xmltv_content, _stats)) => {
+                                // Save the XMLTV file
+                                match proxy_generator
+                                    .save_xmltv_file(proxy.id, &xmltv_content)
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        // Update the last_generated_at timestamp
+                                        if let Err(e) = state.database.update_proxy_last_generated(proxy.id).await {
+                                            error!("Failed to update last_generated_at for proxy {}: {}", proxy.id, e);
+                                        }
+                                        
+                                        info!(
+                                            "Successfully regenerated proxy '{}' with {} channels and EPG",
+                                            proxy.name, generation.channel_count
+                                        );
+                                        successful_count += 1;
+                                    }
+                                    Err(e) => {
+                                        // Update the last_generated_at timestamp even if XMLTV failed
+                                        if let Err(e) = state.database.update_proxy_last_generated(proxy.id).await {
+                                            error!("Failed to update last_generated_at for proxy {}: {}", proxy.id, e);
+                                        }
+                                        
+                                        warn!(
+                                            "Proxy '{}' M3U regenerated but XMLTV save failed: {}",
+                                            proxy.name, e
+                                        );
+                                        successful_count += 1; // M3U was saved successfully
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                // Update the last_generated_at timestamp even if EPG generation failed
+                                if let Err(e) = state.database.update_proxy_last_generated(proxy.id).await {
+                                    error!("Failed to update last_generated_at for proxy {}: {}", proxy.id, e);
+                                }
+                                
+                                warn!(
+                                    "Proxy '{}' M3U regenerated but EPG generation failed: {}",
+                                    proxy.name, e
+                                );
+                                successful_count += 1; // M3U was saved successfully
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to save regenerated M3U for proxy '{}': {}",
+                            proxy.name, e
+                        );
+                        failed_count += 1;
+                        errors.push(format!("Proxy '{}': {}", proxy.name, e));
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to regenerate proxy '{}': {}", proxy.name, e);
+                failed_count += 1;
+                errors.push(format!("Proxy '{}': {}", proxy.name, e));
+            }
+        }
+    }
+
+    let total_count = active_proxies.len();
+    let message = if failed_count == 0 {
+        format!(
+            "Successfully regenerated all {} active proxies",
+            successful_count
+        )
+    } else if successful_count == 0 {
+        format!("Failed to regenerate all {} proxies", failed_count)
+    } else {
+        format!(
+            "Regenerated {}/{} proxies ({} succeeded, {} failed)",
+            successful_count, total_count, successful_count, failed_count
+        )
+    };
+
+    info!("{}", message);
 
     Ok(Json(json!({
-        "success": false,
-        "message": "Relay startup not yet implemented",
-        "config_id": config_id
+        "success": failed_count == 0,
+        "message": message,
+        "count": successful_count,
+        "total": total_count,
+        "failed": failed_count,
+        "errors": if errors.is_empty() { serde_json::Value::Null } else { json!(errors) }
     })))
 }
 
-/// Stop a running relay
-pub async fn stop_relay(
-    Path(config_id): Path<Uuid>,
-    State(_state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    // TODO: Implement relay shutdown
-    // 1. Find running relay by config_id
-    // 2. Gracefully stop FFmpeg process
-    // 3. Clean up resources
-    // 4. Update status
-    let _ = config_id;
-
-    Ok(Json(json!({
-        "success": false,
-        "message": "Relay shutdown not yet implemented",
-        "config_id": config_id
-    })))
-}
+// Relay Configuration API Endpoints - implemented in web/api/relay.rs
 
 // Metrics API structures
 #[derive(Debug, Serialize)]
@@ -3637,43 +3267,44 @@ pub struct UsageQuery {
     pub hours: Option<u32>,
 }
 
-
 /// Get dashboard metrics overview
 pub async fn get_dashboard_metrics(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardMetrics>, StatusCode> {
     let db = &state.database.pool();
-    
+
     // Get total channels across all proxies
     let total_channels = match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM channels")
         .fetch_one(db)
-        .await {
+        .await
+    {
         Ok(count) => count as u64,
         Err(e) => {
             error!("Failed to get total channels: {}", e);
             0
         }
     };
-    
+
     // Get total proxies
     let total_proxies = match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM stream_proxies")
         .fetch_one(db)
-        .await {
+        .await
+    {
         Ok(count) => count as u64,
         Err(e) => {
             error!("Failed to get total proxies: {}", e);
             0
         }
     };
-    
+
     Ok(Json(DashboardMetrics {
         total_channels,
-        active_streams: 0, // TODO: Query active_stream_sessions
-        active_clients: 0, // TODO: Query active_stream_sessions
+        active_streams: 0,
+        active_clients: 0,
         total_proxies,
         system_uptime: "99.8%".to_string(),
-        bytes_served_today: 0, // TODO: Query stream_stats_daily
-        popular_channels: Vec::new(), // TODO: Query popular channels
+        bytes_served_today: 0,
+        popular_channels: Vec::new(),
     }))
 }
 

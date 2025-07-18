@@ -5,26 +5,24 @@
 //! focusing only on HTTP concerns like request/response mapping.
 
 use axum::{
+    Json,
     extract::{Path, State},
     response::IntoResponse,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     models::{StreamSource, StreamSourceType},
-    services::{
-        stream_source::StreamSourceServiceQuery,
-    },
+    services::stream_source::StreamSourceServiceQuery,
     sources::SourceHandlerFactory,
 };
 
 use crate::web::{
+    AppState,
     extractors::{ListParams, RequestContext, StreamSourceFilterParams},
     responses::ok,
-    utils::{log_request, extract_uuid_param},
-    AppState,
+    utils::{extract_uuid_param, log_request},
 };
 
 /// Request DTO for creating a stream source
@@ -99,7 +97,7 @@ impl UpdateStreamSourceRequest {
 }
 
 /// Response DTO for stream source
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamSourceResponse {
     pub id: Uuid,
     pub name: String,
@@ -114,6 +112,8 @@ pub struct StreamSourceResponse {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub last_ingested_at: Option<chrono::DateTime<chrono::Utc>>,
     pub is_active: bool,
+    pub channel_count: u64,
+    pub next_scheduled_update: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<StreamSource> for StreamSourceResponse {
@@ -134,237 +134,260 @@ impl From<StreamSource> for StreamSourceResponse {
             updated_at: source.updated_at,
             last_ingested_at: source.last_ingested_at,
             is_active: source.is_active,
+            channel_count: 0, // Default value, should be set when creating from stats
+            next_scheduled_update: None, // Default value, should be set when creating from stats
         }
     }
 }
 
 /// List all stream sources
 pub async fn list_stream_sources(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     context: RequestContext,
     list_params: ListParams,
     filter_params: StreamSourceFilterParams,
 ) -> impl IntoResponse {
-    log_request(&axum::http::Method::GET, &"/api/sources/stream".parse().unwrap(), &context);
+    log_request(
+        &axum::http::Method::GET,
+        &"/api/v1/sources/stream".parse().unwrap(),
+        &context,
+    );
 
-    // TODO: Get service instance from state
-    // For now, this is a placeholder implementation
-    
-    // Build service query from request parameters
-    let mut service_query = StreamSourceServiceQuery::new();
-    
-    if let Some(search) = list_params.search.search {
-        service_query = service_query.search(search);
-    }
-    
-    if let Some(source_type_str) = filter_params.source_type {
-        if let Ok(source_type) = crate::web::utils::parse_source_type(&source_type_str) {
-            service_query = service_query.source_type(source_type);
+    match state.stream_source_service.list_with_stats().await {
+        Ok(sources_with_stats) => {
+            // Convert to response format
+            let mut response_items = Vec::new();
+            for source_with_stats in sources_with_stats {
+                let mut response = StreamSourceResponse::from(source_with_stats.source);
+                response.channel_count = source_with_stats.channel_count;
+                response.next_scheduled_update = source_with_stats.next_scheduled_update;
+                response_items.push(response);
+            }
+
+            // Apply filtering if needed
+            if let Some(search) = list_params.search.search {
+                let search_lower = search.to_lowercase();
+                response_items.retain(|item| {
+                    item.name.to_lowercase().contains(&search_lower)
+                        || item.url.to_lowercase().contains(&search_lower)
+                });
+            }
+
+            if let Some(source_type_str) = filter_params.source_type {
+                response_items.retain(|item| {
+                    item.source_type.to_lowercase() == source_type_str.to_lowercase()
+                });
+            }
+
+            let total = response_items.len();
+
+            // Apply pagination
+            let page = list_params.pagination.page;
+            let limit = list_params.pagination.limit as usize;
+            let offset = ((page - 1) * limit as u32) as usize;
+
+            let paginated_items = if offset < response_items.len() {
+                response_items
+                    .into_iter()
+                    .skip(offset)
+                    .take(limit)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            let paginated_response = crate::web::responses::PaginatedResponse::new(
+                paginated_items,
+                total as u64,
+                page,
+                limit as u32,
+            );
+            ok(paginated_response).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to list stream sources: {}", e);
+            crate::web::responses::internal_error(&format!("Failed to list stream sources: {}", e))
+                .into_response()
         }
     }
-    
-    if let Some(enabled) = filter_params.enabled {
-        service_query = service_query.enabled(enabled);
-    }
-    
-    if let Some(sort_by) = list_params.search.sort_by {
-        service_query = service_query.sort_by(sort_by, list_params.search.sort_ascending);
-    }
-    
-    let _service_query = service_query.paginate(list_params.pagination.page, list_params.pagination.limit);
-
-    // TODO: Replace with actual service call
-    // let result = stream_source_service.list(service_query).await;
-    // let response = result.map(|service_response| {
-    //     map_service_list_response(
-    //         service_response,
-    //         list_params.pagination.page,
-    //         list_params.pagination.limit,
-    //         StreamSourceResponse::from,
-    //     )
-    // });
-    // handle_result(response)
-
-    // Placeholder response
-    let empty_response = crate::web::responses::PaginatedResponse::new(
-        Vec::<StreamSourceResponse>::new(),
-        0,
-        list_params.pagination.page,
-        list_params.pagination.limit,
-    );
-    ok(empty_response)
 }
 
 /// Get a specific stream source by ID
 pub async fn get_stream_source(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     context: RequestContext,
 ) -> impl IntoResponse {
-    log_request(&axum::http::Method::GET, &format!("/api/sources/stream/{}", id).parse().unwrap(), &context);
+    log_request(
+        &axum::http::Method::GET,
+        &format!("/api/v1/sources/stream/{}", id).parse().unwrap(),
+        &context,
+    );
 
-    let _uuid = match extract_uuid_param(&id) {
+    let uuid = match extract_uuid_param(&id) {
         Ok(uuid) => uuid,
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    // TODO: Get service instance from state and make service call
-    // let result = stream_source_service.get_by_id(uuid).await;
-    // let response = result.and_then(|opt| {
-    //     opt.map(StreamSourceResponse::from)
-    //        .ok_or_else(|| AppError::not_found("stream_source", uuid.to_string()))
-    // });
-    // handle_result(response)
-
-    // Placeholder response
-    crate::web::responses::not_found("stream_source", &id).into_response()
+    match state.stream_source_service.get_with_details(uuid).await {
+        Ok(source_with_details) => {
+            let response = StreamSourceResponse::from(source_with_details.source);
+            ok(response).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to get stream source {}: {}", uuid, e);
+            crate::web::responses::not_found("stream_source", &id).into_response()
+        }
+    }
 }
 
 /// Create a new stream source
 pub async fn create_stream_source(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     context: RequestContext,
     Json(request): Json<CreateStreamSourceRequest>,
 ) -> impl IntoResponse {
-    log_request(&axum::http::Method::POST, &"/api/sources/stream".parse().unwrap(), &context);
+    log_request(
+        &axum::http::Method::POST,
+        &"/api/v1/sources/stream".parse().unwrap(),
+        &context,
+    );
 
-    let _service_request = match request.into_service_request() {
+    let service_request = match request.into_service_request() {
         Ok(req) => req,
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    // TODO: Get service instance from state and make service call
-    // let result = stream_source_service.create(service_request).await;
-    // let response = result.map(StreamSourceResponse::from);
-    // handle_result(response)
-
-    // Placeholder response
-    crate::web::responses::bad_request("Service layer not yet integrated").into_response()
+    // Use the service layer to create the stream source with auto-EPG linking
+    match state
+        .stream_source_service
+        .create_with_auto_epg(service_request)
+        .await
+    {
+        Ok(source) => {
+            let response = StreamSourceResponse::from(source);
+            crate::web::responses::created(response).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to create stream source: {}", e);
+            crate::web::responses::internal_error(&format!("Failed to create stream source: {}", e))
+                .into_response()
+        }
+    }
 }
 
 /// Update an existing stream source
 pub async fn update_stream_source(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     context: RequestContext,
     Json(request): Json<UpdateStreamSourceRequest>,
 ) -> impl IntoResponse {
-    log_request(&axum::http::Method::PUT, &format!("/api/sources/stream/{}", id).parse().unwrap(), &context);
+    log_request(
+        &axum::http::Method::PUT,
+        &format!("/api/v1/sources/stream/{}", id).parse().unwrap(),
+        &context,
+    );
 
-    let _uuid = match extract_uuid_param(&id) {
+    let uuid = match extract_uuid_param(&id) {
         Ok(uuid) => uuid,
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    let _service_request = match request.into_service_request() {
+    let service_request = match request.into_service_request() {
         Ok(req) => req,
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    // TODO: Get service instance from state and make service call
-    // let result = stream_source_service.update(uuid, service_request).await;
-    // let response = result.map(StreamSourceResponse::from);
-    // handle_result(response)
-
-    // Placeholder response
-    crate::web::responses::bad_request("Service layer not yet integrated").into_response()
+    match state
+        .stream_source_service
+        .update_with_validation(uuid, service_request)
+        .await
+    {
+        Ok(source) => {
+            let response = StreamSourceResponse::from(source);
+            ok(response).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to update stream source {}: {}", uuid, e);
+            crate::web::responses::internal_error(&format!("Failed to update stream source: {}", e))
+                .into_response()
+        }
+    }
 }
 
 /// Delete a stream source
 pub async fn delete_stream_source(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     context: RequestContext,
 ) -> impl IntoResponse {
-    log_request(&axum::http::Method::DELETE, &format!("/api/sources/stream/{}", id).parse().unwrap(), &context);
+    log_request(
+        &axum::http::Method::DELETE,
+        &format!("/api/v1/sources/stream/{}", id).parse().unwrap(),
+        &context,
+    );
 
-    let _uuid = match extract_uuid_param(&id) {
+    let uuid = match extract_uuid_param(&id) {
         Ok(uuid) => uuid,
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    // TODO: Get service instance from state and make service call
-    // let result = stream_source_service.delete(uuid).await;
-    // handle_result(result.map(|_| ()))
-
-    // Placeholder response
-    crate::web::responses::bad_request("Service layer not yet integrated").into_response()
+    match state.stream_source_service.delete_with_cleanup(uuid).await {
+        Ok(()) => crate::web::responses::ok(
+            serde_json::json!({"message": "Stream source deleted successfully"}),
+        )
+        .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to delete stream source {}: {}", uuid, e);
+            crate::web::responses::internal_error(&format!("Failed to delete stream source: {}", e))
+                .into_response()
+        }
+    }
 }
 
 /// Refresh a stream source (trigger ingestion)
-pub async fn refresh_stream_source(
-    State(_state): State<AppState>,
-    Path(id): Path<String>,
-    context: RequestContext,
-) -> impl IntoResponse {
-    log_request(&axum::http::Method::POST, &format!("/api/sources/stream/{}/refresh", id).parse().unwrap(), &context);
-
-    let _uuid = match extract_uuid_param(&id) {
-        Ok(uuid) => uuid,
-        Err(error) => return crate::web::responses::bad_request(&error).into_response(),
-    };
-
-    // TODO: Implement source refresh using source handlers
-    // 1. Get stream source from service
-    // 2. Create appropriate source handler using factory
-    // 3. Trigger ingestion with progress reporting
-    // 4. Return operation status
-
-    // Placeholder response
-    crate::web::responses::bad_request("Refresh not yet implemented").into_response()
-}
 
 /// Validate a stream source configuration
 pub async fn validate_stream_source(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     context: RequestContext,
     Json(request): Json<CreateStreamSourceRequest>,
 ) -> impl IntoResponse {
-    log_request(&axum::http::Method::POST, &"/api/sources/stream/validate".parse().unwrap(), &context);
+    log_request(
+        &axum::http::Method::POST,
+        &"/api/v1/sources/stream/validate".parse().unwrap(),
+        &context,
+    );
 
-    let _service_request = match request.into_service_request() {
+    let service_request = match request.into_service_request() {
         Ok(req) => req,
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    // TODO: Implement validation using source handlers
-    // 1. Create appropriate source handler based on source type
-    // 2. Use handler to validate source configuration
-    // 3. Return validation results with details
-
-    // For demonstration, create a source handler and validate
-    match SourceHandlerFactory::create_handler(&_service_request.source_type) {
-        Ok(_handler) => {
-            // Convert service request to StreamSource for validation
-            let _temp_source = crate::models::StreamSource {
-                id: Uuid::new_v4(),
-                name: _service_request.name,
-                source_type: _service_request.source_type,
-                url: _service_request.url,
-                max_concurrent_streams: _service_request.max_concurrent_streams,
-                update_cron: _service_request.update_cron,
-                username: _service_request.username,
-                password: _service_request.password,
-                field_map: _service_request.field_map,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                last_ingested_at: None,
-                is_active: true,
-            };
-
-            // TODO: Make actual validation call
-            // match handler.validate_source(&temp_source).await {
-            //     Ok(validation_result) => ok(validation_result),
-            //     Err(error) => handle_result(Err(error)),
-            // }
-
-            // Placeholder response
+    // Use the service layer to test the connection
+    match state
+        .stream_source_service
+        .test_connection(&service_request)
+        .await
+    {
+        Ok(test_result) => ok(serde_json::json!({
+            "valid": test_result.success,
+            "message": test_result.message,
+            "has_streams": test_result.has_streams,
+            "has_epg": test_result.has_epg
+        }))
+        .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to validate stream source: {}", e);
             ok(serde_json::json!({
-                "valid": true,
-                "message": "Source validation not yet fully implemented"
-            })).into_response()
+                "valid": false,
+                "message": format!("Validation failed: {}", e),
+                "has_streams": false,
+                "has_epg": false
+            }))
+            .into_response()
         }
-        Err(error) => crate::web::responses::handle_error(error).into_response(),
     }
 }
 
@@ -374,7 +397,13 @@ pub async fn get_stream_source_capabilities(
     Path(source_type): Path<String>,
     context: RequestContext,
 ) -> impl IntoResponse {
-    log_request(&axum::http::Method::GET, &format!("/api/sources/stream/capabilities/{}", source_type).parse().unwrap(), &context);
+    log_request(
+        &axum::http::Method::GET,
+        &format!("/api/v1/sources/stream/capabilities/{}", source_type)
+            .parse()
+            .unwrap(),
+        &context,
+    );
 
     let parsed_source_type = match crate::web::utils::parse_source_type(&source_type) {
         Ok(st) => st,

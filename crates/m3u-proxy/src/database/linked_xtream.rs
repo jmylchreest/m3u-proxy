@@ -19,7 +19,7 @@ impl crate::database::Database {
         // Create stream source if requested
         if request.create_stream_source {
             let stream_request = StreamSourceCreateRequest {
-                name: format!("{} (Stream)", request.name),
+                name: request.name.clone(),
                 source_type: StreamSourceType::Xtream,
                 url: request.url.clone(),
                 max_concurrent_streams: request.max_concurrent_streams,
@@ -244,7 +244,7 @@ impl crate::database::Database {
         if let Some(id_str) = stream_source_id_str {
             if let Ok(id) = Uuid::parse_str(&id_str) {
                 let stream_update = StreamSourceUpdateRequest {
-                    name: format!("{} (Stream)", request.name),
+                    name: request.name.clone(),
                     source_type: StreamSourceType::Xtream,
                     url: request.url.clone(),
                     max_concurrent_streams: request.max_concurrent_streams,
@@ -675,7 +675,7 @@ impl crate::database::Database {
         };
 
         // Check if there's already a linked Xtream source with these credentials
-        if let Some(mut linked) = self.find_existing_linked_xtream(&stream_source.url, username, password).await? {
+        if let Some(linked) = self.find_existing_linked_xtream(&stream_source.url, username, password).await? {
             // If there's already a stream source linked, don't create another
             if linked.stream_source.is_some() {
                 return Ok(false);
@@ -724,7 +724,7 @@ impl crate::database::Database {
             )
             .bind(linked_id.to_string())
             .bind(link_id.to_string())
-            .bind(&stream_source.name.replace(" (Stream)", "")) // Remove suffix if present
+            .bind(&stream_source.name) // Use original name directly
             .bind(&stream_source.url)
             .bind(username)
             .bind(password)
@@ -766,7 +766,7 @@ impl crate::database::Database {
         };
 
         // Check if there's already a linked Xtream source with these credentials
-        if let Some(mut linked) = self.find_existing_linked_xtream(&epg_source.url, username, password).await? {
+        if let Some(linked) = self.find_existing_linked_xtream(&epg_source.url, username, password).await? {
             // If there's already an EPG source linked, don't create another
             if linked.epg_source.is_some() {
                 return Ok(false);

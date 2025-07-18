@@ -51,7 +51,7 @@ impl SourceLoadingStage for SimpleSourceLoader {
 
             // Track memory usage after loading each source
             let (memory_snapshot, _pressure) =
-                memory_context.observe(&format!("source_{}", source_id))?;
+                memory_context.observe(&format!("source_{}", source_id)).await?;
 
             debug!(
                 "Loaded {} channels from source {} in {}ms (Memory: {:.1}MB)",
@@ -167,7 +167,7 @@ impl DataMappingStage for SimpleDataMapper {
             all_mapped_channels.extend(mapped_channels);
 
             // Track memory usage after processing each source
-            memory_context.observe(&format!("mapping_source_{}", source_id))?;
+            memory_context.observe(&format!("mapping_source_{}", source_id)).await?;
         }
 
         let total_duration = start_time.elapsed().as_millis() as u64;
@@ -245,7 +245,7 @@ impl FilteringStage for SimpleFilter {
             let result = filter_engine
                 .apply_filters(input.channels, filter_tuples)
                 .await?;
-            memory_context.observe("filter_application")?;
+            memory_context.observe("filter_application").await?;
             result
         } else {
             input.channels
@@ -322,7 +322,7 @@ impl ChannelNumberingStage for SimpleChannelNumbering {
             })
             .collect();
 
-        memory_context.observe("channel_numbering")?;
+        memory_context.observe("channel_numbering").await?;
 
         let total_duration = start_time.elapsed().as_millis() as u64;
         let final_memory_stats = memory_context.get_memory_statistics();

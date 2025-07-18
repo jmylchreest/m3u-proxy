@@ -50,6 +50,9 @@ impl Database {
         sqlx::query("PRAGMA mmap_size = 268435456")
             .execute(&pool)
             .await?; // 256MB mmap
+        sqlx::query("PRAGMA busy_timeout = 5000")
+            .execute(&pool)
+            .await?; // 5 second global timeout to reduce deadlock duration
 
         let batch_config = config.batch_sizes.clone().unwrap_or_default();
 
@@ -71,6 +74,7 @@ impl Database {
 
     pub async fn migrate(&self) -> Result<()> {
         self.run_embedded_migrations().await?;
+        self.ensure_default_filters().await?;
         Ok(())
     }
 
@@ -93,6 +97,9 @@ impl Database {
 
         // Get embedded migrations
         let migrations = MigrationAssets::get_migrations();
+        
+        // Debug: Log what migrations are available
+        tracing::info!("Available migrations: {:?}", migrations.iter().map(|(name, _)| name).collect::<Vec<_>>());
 
         for (name, content) in migrations {
             // Extract version from filename (e.g., "001_initial_schema.sql" -> 1)
@@ -148,6 +155,7 @@ impl Database {
                     tracing::info!("Applied migration: {} ({}ms)", name, execution_time);
                 }
                 Err(e) => {
+                    tracing::error!("Migration {} failed: {}", name, e);
                     transaction.rollback().await?;
                     return Err(anyhow::anyhow!("Migration {} failed: {}", name, e));
                 }
@@ -190,16 +198,14 @@ impl Database {
                 last_generated_at: row.get("last_generated_at"),
                 is_active: row.get("is_active"),
                 auto_regenerate: false, // Default value, field was added later
-                proxy_mode: match row.get::<String, _>("proxy_mode").as_str() {
-                    "proxy" => crate::models::StreamProxyMode::Proxy,
-                    _ => crate::models::StreamProxyMode::Redirect,
-                },
+                proxy_mode: crate::models::StreamProxyMode::from_str(&row.get::<String, _>("proxy_mode")),
                 upstream_timeout: row.get("upstream_timeout"),
                 buffer_size: row.get("buffer_size"),
                 max_concurrent_streams: row.get("max_concurrent_streams"),
                 starting_channel_number: 1, // Default value, field was added later
-                cache_channel_logos: true, // Default value, field was added later
+                cache_channel_logos: true,  // Default value, field was added later
                 cache_program_logos: false, // Default value, field was added later
+                relay_profile_id: None,     // Field was added later, not in current schema
             })),
             None => Ok(None),
         }
@@ -208,7 +214,7 @@ impl Database {
     pub async fn get_proxy_by_id(&self, id: &str) -> Result<StreamProxy> {
         let row = sqlx::query(
             "SELECT id, name, created_at, updated_at, last_generated_at, is_active,
-             proxy_mode, upstream_timeout, buffer_size, max_concurrent_streams
+             proxy_mode, upstream_timeout, buffer_size, max_concurrent_streams, relay_profile_id
              FROM stream_proxies WHERE id = ?",
         )
         .bind(id)
@@ -224,16 +230,15 @@ impl Database {
             last_generated_at: row.get("last_generated_at"),
             is_active: row.get("is_active"),
             auto_regenerate: false, // Default value, field was added later
-            proxy_mode: match row.get::<String, _>("proxy_mode").as_str() {
-                "proxy" => StreamProxyMode::Proxy,
-                _ => StreamProxyMode::Redirect,
-            },
+            proxy_mode: StreamProxyMode::from_str(&row.get::<String, _>("proxy_mode")),
             upstream_timeout: row.get("upstream_timeout"),
             buffer_size: row.get("buffer_size"),
             max_concurrent_streams: row.get("max_concurrent_streams"),
             starting_channel_number: 1, // Default value, field was added later
-            cache_channel_logos: true, // Default value, field was added later
+            cache_channel_logos: true,  // Default value, field was added later
             cache_program_logos: false, // Default value, field was added later
+            relay_profile_id: row.get::<Option<String>, _>("relay_profile_id")
+                .and_then(|s| s.parse::<Uuid>().ok()),
         })
     }
 
@@ -280,13 +285,25 @@ impl Database {
         Ok(sources)
     }
 
+    /// Update the last_generated_at timestamp for a proxy
+    pub async fn update_proxy_last_generated(&self, proxy_id: Uuid) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("UPDATE stream_proxies SET last_generated_at = ?, updated_at = ? WHERE id = ?")
+            .bind(&now)
+            .bind(&now)
+            .bind(proxy_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn get_proxy_filters_with_details(
         &self,
         proxy_id: Uuid,
     ) -> Result<Vec<ProxyFilterWithDetails>> {
         let rows = sqlx::query(
             "SELECT pf.proxy_id, pf.filter_id, pf.priority_order, pf.is_active, pf.created_at,
-                    f.name, f.starting_channel_number, f.is_inverse, f.condition_tree, f.updated_at as filter_updated_at
+                    f.name, f.starting_channel_number, f.is_inverse, f.is_system_default, f.condition_tree, f.updated_at as filter_updated_at
              FROM proxy_filters pf
              JOIN filters f ON pf.filter_id = f.id
              WHERE pf.proxy_id = ? AND pf.is_active = 1
@@ -312,6 +329,7 @@ impl Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.get("starting_channel_number"),
                 is_inverse: row.get("is_inverse"),
+                is_system_default: row.get("is_system_default"),
                 condition_tree: row.get("condition_tree"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("filter_updated_at"),
@@ -341,7 +359,7 @@ impl Database {
              JOIN stream_proxies sp ON ps.proxy_id = sp.id
              WHERE sp.id = ? AND c.id = ? AND sp.is_active = 1",
         )
-        .bind(proxy_id)
+        .bind(proxy_id.to_string())
         .bind(channel_id.to_string())
         .fetch_optional(&self.pool)
         .await?;
@@ -357,11 +375,78 @@ impl Database {
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
+                created_at: chrono::DateTime::parse_from_rfc3339(
+                    &row.get::<String, _>("created_at"),
+                )?
+                .with_timezone(&chrono::Utc),
+                updated_at: chrono::DateTime::parse_from_rfc3339(
+                    &row.get::<String, _>("updated_at"),
+                )?
+                .with_timezone(&chrono::Utc),
             })),
             None => Ok(None),
         }
+    }
+
+    /// Get all active stream proxies
+    pub async fn get_all_active_proxies(&self) -> Result<Vec<StreamProxy>> {
+        let rows = sqlx::query(
+            "SELECT id, name, created_at, updated_at, last_generated_at, is_active,
+             auto_regenerate, cache_channel_logos, proxy_mode, upstream_timeout,
+             buffer_size, max_concurrent_streams, starting_channel_number,
+             description, cache_program_logos, relay_profile_id
+             FROM stream_proxies
+             WHERE is_active = 1",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut proxies = Vec::new();
+        for row in rows {
+            let proxy = StreamProxy {
+                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                name: row.get("name"),
+                description: row.get("description"),
+                proxy_mode: match row.get::<String, _>("proxy_mode").as_str() {
+                    "redirect" => StreamProxyMode::Redirect,
+                    "proxy" => StreamProxyMode::Proxy,
+                    "relay" => StreamProxyMode::Relay,
+                    _ => StreamProxyMode::Redirect,
+                },
+                upstream_timeout: row
+                    .get::<Option<i64>, _>("upstream_timeout")
+                    .map(|v| v as i32),
+                buffer_size: row.get::<Option<i64>, _>("buffer_size").map(|v| v as i32),
+                max_concurrent_streams: row
+                    .get::<Option<i64>, _>("max_concurrent_streams")
+                    .map(|v| v as i32),
+                starting_channel_number: row.get::<i64, _>("starting_channel_number") as i32,
+                created_at: chrono::DateTime::parse_from_rfc3339(
+                    &row.get::<String, _>("created_at"),
+                )?
+                .with_timezone(&chrono::Utc),
+                updated_at: chrono::DateTime::parse_from_rfc3339(
+                    &row.get::<String, _>("updated_at"),
+                )?
+                .with_timezone(&chrono::Utc),
+                last_generated_at: row
+                    .get::<Option<String>, _>("last_generated_at")
+                    .map(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    .flatten()
+                    .map(|dt| dt.with_timezone(&chrono::Utc)),
+                is_active: row.get("is_active"),
+                auto_regenerate: row.get("auto_regenerate"),
+                cache_channel_logos: row.get("cache_channel_logos"),
+                cache_program_logos: row.get("cache_program_logos"),
+                relay_profile_id: row
+                    .get::<Option<String>, _>("relay_profile_id")
+                    .map(|s| Uuid::parse_str(&s).ok())
+                    .flatten(),
+            };
+            proxies.push(proxy);
+        }
+
+        Ok(proxies)
     }
 
     /// Get EPG sources associated with a proxy

@@ -1,4 +1,5 @@
 use anyhow::Result;
+
 use tracing::info;
 
 use crate::config::StorageConfig;
@@ -24,17 +25,20 @@ pub struct ProxyService {
     storage_config: StorageConfig,
     shared_memory_monitor: Option<crate::utils::SimpleMemoryMonitor>,
     temp_file_manager: sandboxed_file_manager::SandboxedManager,
+    system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
 impl ProxyService {
     pub fn new(
         storage_config: StorageConfig,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
+        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
             storage_config,
             shared_memory_monitor: None,
             temp_file_manager,
+            system,
         }
     }
 
@@ -42,11 +46,13 @@ impl ProxyService {
         storage_config: StorageConfig,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
         memory_monitor: crate::utils::SimpleMemoryMonitor,
+        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
             storage_config,
             shared_memory_monitor: Some(memory_monitor),
             temp_file_manager,
+            system,
         }
     }
 
@@ -77,7 +83,8 @@ impl ProxyService {
             .with_data_mapping_service(data_mapping_service.clone())
             .with_logo_service(logo_service.clone())
             .with_memory_limit(512) // 512MB limit
-            .with_temp_file_manager(self.temp_file_manager.clone());
+            .with_temp_file_manager(self.temp_file_manager.clone())
+            .with_system(self.system.clone());
 
         // Add shared memory monitor if available
         if let Some(memory_monitor) = &self.shared_memory_monitor {

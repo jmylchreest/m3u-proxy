@@ -40,6 +40,7 @@ pub struct NativePipeline {
     memory_limit_mb: Option<usize>,
     #[allow(dead_code)]
     iterator_registry: Arc<IteratorRegistry>,
+    system: Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
 #[allow(dead_code)]
@@ -51,9 +52,9 @@ impl NativePipeline {
         memory_limit_mb: Option<usize>,
         temp_file_manager: SandboxedManager,
         shared_memory_monitor: Option<SimpleMemoryMonitor>,
+        system: Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
-        let memory_monitor = shared_memory_monitor
-            .or_else(|| memory_limit_mb.map(|limit| SimpleMemoryMonitor::new(Some(limit))));
+        let memory_monitor = shared_memory_monitor;
 
         // Initialize chunk manager with stage dependencies
         let chunk_manager = Arc::new(ChunkSizeManager::new(
@@ -73,6 +74,7 @@ impl NativePipeline {
             chunk_manager,
             memory_limit_mb,
             iterator_registry,
+            system,
         }
     }
 
@@ -101,8 +103,8 @@ impl NativePipeline {
         let overall_start = Instant::now();
 
         // Initialize memory context for tracking
-        let mut memory_context = MemoryContext::new(self.memory_limit_mb, None);
-        memory_context.initialize()?;
+        let mut memory_context = MemoryContext::new(self.memory_limit_mb, None, self.system.clone());
+        memory_context.initialize().await?;
 
         // Initialize cleanup coordinator
         let mut cleanup_coordinator =
@@ -155,7 +157,7 @@ impl NativePipeline {
             config.sources.len()
         );
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Request optimal chunk size from chunk manager first
         let requested_chunk_size = self
@@ -354,14 +356,14 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         _cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<Vec<Channel>> {
-        memory_context.start_stage("data_mapping")?;
+        memory_context.start_stage("data_mapping").await?;
 
         info!(
             "Starting data mapping stage with OrderedDataMappingIterator for {} channels",
             channels.len()
         );
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Create OrderedDataMappingIterator for mapping rules
         let mapping_iterator = SingleSourceIterator::new(
@@ -435,7 +437,7 @@ impl NativePipeline {
                 .await?
         };
 
-        let stage_info = memory_context.complete_stage("data_mapping")?;
+        let stage_info = memory_context.complete_stage("data_mapping").await?;
 
         info!(
             "Native data mapping completed:\n\
@@ -466,14 +468,14 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         _cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<Vec<Channel>> {
-        memory_context.start_stage("filtering")?;
+        memory_context.start_stage("filtering").await?;
 
         info!(
             "Starting filtering stage with OrderedFilterIterator for {} channels",
             channels.len()
         );
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Create OrderedFilterIterator for filter rules
         let mut filter_iterator = MultiSourceIterator::new(
@@ -567,7 +569,7 @@ impl NativePipeline {
             result
         };
 
-        let stage_info = memory_context.complete_stage("filtering")?;
+        let stage_info = memory_context.complete_stage("filtering").await?;
 
         info!(
             "Native filtering completed:\n\
@@ -603,14 +605,14 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         _cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<Vec<Channel>> {
-        memory_context.start_stage("logo_prefetch")?;
+        memory_context.start_stage("logo_prefetch").await?;
 
         info!(
             "Starting logo prefetch stage for {} channels (with EPG access)",
             channels.len()
         );
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Request optimal chunk size from chunk manager
         let default_chunk_size = self.chunk_manager.get_chunk_size("logo_prefetch").await;
@@ -680,7 +682,7 @@ impl NativePipeline {
             info!("Processed logo prefetch chunk: {} channels", chunk.len());
         }
 
-        let stage_info = memory_context.complete_stage("logo_prefetch")?;
+        let stage_info = memory_context.complete_stage("logo_prefetch").await?;
 
         info!(
             "Native logo prefetch completed:\n\
@@ -718,14 +720,14 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         _cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<Vec<NumberedChannel>> {
-        memory_context.start_stage("channel_numbering")?;
+        memory_context.start_stage("channel_numbering").await?;
 
         info!(
             "Starting channel numbering stage for {} channels",
             channels.len()
         );
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Request optimal chunk size from chunk manager
         let requested_chunk_size = self
@@ -769,7 +771,7 @@ impl NativePipeline {
             );
         }
 
-        let stage_info = memory_context.complete_stage("channel_numbering")?;
+        let stage_info = memory_context.complete_stage("channel_numbering").await?;
 
         info!(
             "Native channel numbering completed:\n\
@@ -802,14 +804,14 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         _cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<String> {
-        memory_context.start_stage("m3u_generation")?;
+        memory_context.start_stage("m3u_generation").await?;
 
         info!(
             "Starting M3U generation stage for {} numbered channels",
             numbered_channels.len()
         );
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Request optimal chunk size from chunk manager
         let default_chunk_size = self.chunk_manager.get_chunk_size("m3u_generation").await;
@@ -905,7 +907,7 @@ impl NativePipeline {
             );
         }
 
-        let stage_info = memory_context.complete_stage("m3u_generation")?;
+        let stage_info = memory_context.complete_stage("m3u_generation").await?;
 
         info!(
             "Native M3U generation completed:\n\
@@ -943,7 +945,7 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         _cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<String> {
-        memory_context.start_stage("epg_processing")?;
+        memory_context.start_stage("epg_processing").await?;
 
         info!(
             "Starting EPG processing stage for {} channels with {} EPG sources",
@@ -963,7 +965,7 @@ impl NativePipeline {
             );
         }
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Create OrderedEpgAggregateIterator for EPG data
         let epg_iterator = MultiSourceIterator::new(
@@ -1088,7 +1090,7 @@ impl NativePipeline {
             }
         };
 
-        let stage_info = memory_context.complete_stage("epg_processing")?;
+        let stage_info = memory_context.complete_stage("epg_processing").await?;
 
         info!(
             "Native EPG processing completed:\n\
@@ -1269,6 +1271,7 @@ impl NativePipeline {
                     starting_channel_number: 1,
                     cache_channel_logos: true, // Default value, field was added later
                     cache_program_logos: false, // Default value, field was added later
+                    relay_profile_id: None, // Not used for temp contexts
                 },
                 sources: vec![],
                 epg_sources: vec![],
@@ -1297,9 +1300,9 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<Vec<Channel>> {
-        memory_context.start_stage("source_loading")?;
+        memory_context.start_stage("source_loading").await?;
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Using native source loading implementation
 
@@ -1324,6 +1327,7 @@ impl NativePipeline {
                     starting_channel_number: 1,
                     cache_channel_logos: true, // Default value, field was added later
                     cache_program_logos: false, // Default value, field was added later
+                    relay_profile_id: None, // Not used for temporary proxies
                 },
                 sources: Vec::new(),
                 filters: Vec::new(),
@@ -1332,7 +1336,7 @@ impl NativePipeline {
         };
 
         let mut output = strategy.execute(input, memory_context).await?;
-        let stage_info = memory_context.complete_stage("source_loading")?;
+        let stage_info = memory_context.complete_stage("source_loading").await?;
 
         info!(
             "Source loading completed: {} channels, {:.1}MB memory used, {:?} pressure",
@@ -1342,7 +1346,7 @@ impl NativePipeline {
         );
 
         // Cleanup if needed
-        if memory_context.should_cleanup()? {
+        if memory_context.should_cleanup().await? {
             cleanup_coordinator.cleanup_between_stages(
                 "source_loading",
                 &mut output,
@@ -1363,9 +1367,9 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<Vec<Channel>> {
-        memory_context.start_stage("data_mapping")?;
+        memory_context.start_stage("data_mapping").await?;
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Using native data mapping implementation
 
@@ -1380,7 +1384,7 @@ impl NativePipeline {
         };
 
         let mut output = strategy.execute(input, memory_context).await?;
-        let stage_info = memory_context.complete_stage("data_mapping")?;
+        let stage_info = memory_context.complete_stage("data_mapping").await?;
 
         info!(
             "Data mapping completed: {} channels, {:.1}MB memory used",
@@ -1389,7 +1393,7 @@ impl NativePipeline {
         );
 
         // Cleanup if needed
-        if memory_context.should_cleanup()? {
+        if memory_context.should_cleanup().await? {
             cleanup_coordinator.cleanup_between_stages(
                 "data_mapping",
                 &mut output,
@@ -1408,9 +1412,9 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<Vec<Channel>> {
-        memory_context.start_stage("filtering")?;
+        memory_context.start_stage("filtering").await?;
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Using native filtering implementation
 
@@ -1422,7 +1426,7 @@ impl NativePipeline {
         };
 
         let mut output = strategy.execute(input, memory_context).await?;
-        let stage_info = memory_context.complete_stage("filtering")?;
+        let stage_info = memory_context.complete_stage("filtering").await?;
 
         info!(
             "Filtering completed: {} channels, {:.1}MB memory used",
@@ -1431,7 +1435,7 @@ impl NativePipeline {
         );
 
         // Cleanup if needed
-        if memory_context.should_cleanup()? {
+        if memory_context.should_cleanup().await? {
             cleanup_coordinator.cleanup_between_stages(
                 "filtering",
                 &mut output,
@@ -1450,9 +1454,9 @@ impl NativePipeline {
         memory_context: &mut MemoryContext,
         cleanup_coordinator: &mut MemoryCleanupCoordinator,
     ) -> Result<Vec<NumberedChannel>> {
-        memory_context.start_stage("channel_numbering")?;
+        memory_context.start_stage("channel_numbering").await?;
 
-        let _memory_pressure = self.get_current_memory_pressure(memory_context);
+        let _memory_pressure = self.get_current_memory_pressure(memory_context).await;
 
         // Using native channel numbering implementation
 
@@ -1465,7 +1469,7 @@ impl NativePipeline {
         };
 
         let mut output = strategy.execute(input, memory_context).await?;
-        let stage_info = memory_context.complete_stage("channel_numbering")?;
+        let stage_info = memory_context.complete_stage("channel_numbering").await?;
 
         info!(
             "Channel numbering completed: {} channels, {:.1}MB memory used",
@@ -1474,7 +1478,7 @@ impl NativePipeline {
         );
 
         // Cleanup if needed
-        if memory_context.should_cleanup()? {
+        if memory_context.should_cleanup().await? {
             cleanup_coordinator.cleanup_between_stages(
                 "channel_numbering",
                 &mut output,
@@ -1487,9 +1491,9 @@ impl NativePipeline {
 
 
     /// Get current memory pressure level
-    fn get_current_memory_pressure(&self, memory_context: &MemoryContext) -> MemoryPressureLevel {
+    async fn get_current_memory_pressure(&self, memory_context: &MemoryContext) -> MemoryPressureLevel {
         if let Some(ref monitor) = self.memory_monitor {
-            match monitor.check_memory_limit() {
+            match monitor.check_memory_limit().await {
                 Ok(crate::utils::MemoryLimitStatus::Ok) => MemoryPressureLevel::Optimal,
                 Ok(crate::utils::MemoryLimitStatus::Warning) => MemoryPressureLevel::High,
                 Ok(crate::utils::MemoryLimitStatus::Exceeded) => MemoryPressureLevel::Critical,
@@ -1521,6 +1525,7 @@ pub struct NativePipelineBuilder {
     memory_limit_mb: Option<usize>,
     temp_file_manager: Option<SandboxedManager>,
     shared_memory_monitor: Option<SimpleMemoryMonitor>,
+    system: Option<Arc<tokio::sync::RwLock<sysinfo::System>>>,
 }
 
 impl NativePipelineBuilder {
@@ -1532,6 +1537,7 @@ impl NativePipelineBuilder {
             memory_limit_mb: None,
             temp_file_manager: None,
             shared_memory_monitor: None,
+            system: None,
         }
     }
 
@@ -1565,6 +1571,11 @@ impl NativePipelineBuilder {
         self
     }
 
+    pub fn with_system(mut self, system: Arc<tokio::sync::RwLock<sysinfo::System>>) -> Self {
+        self.system = Some(system);
+        self
+    }
+
     pub fn build(self) -> Result<NativePipeline> {
         Ok(NativePipeline::new(
             self.database.unwrap(),
@@ -1573,6 +1584,7 @@ impl NativePipelineBuilder {
             self.memory_limit_mb,
             self.temp_file_manager.unwrap(),
             self.shared_memory_monitor,
+            self.system.unwrap(),
         ))
     }
 }

@@ -1,0 +1,111 @@
+[database]
+url = "sqlite://./m3u-proxy.db"
+max_connections = 10
+
+[database.batch_sizes]
+epg_channels = 3600
+epg_programs = 1800
+stream_channels = 500
+
+[web]
+host = "0.0.0.0"
+port = 8080
+base_url = "http://localhost:8080"
+
+[storage]
+m3u_path = "./data/m3u"
+uploaded_logo_path = "./data/logos/uploaded"
+cached_logo_path = "./data/logos/cached"
+proxy_versions_to_keep = 3
+temp_path = "./data/temp"
+clean_orphan_logos = true
+
+[ingestion]
+progress_update_interval = 1000
+run_missed_immediately = true
+
+[display]
+local_timezone = "UTC"
+
+[data_mapping_engine]
+precheck_special_chars = "+-@#$%&*=<>!~`€£{}[]."
+minimum_literal_length = 2
+
+[proxy_generation]
+enable_memory_tracking = true
+enable_profiling = false
+
+[proxy_generation.memory]
+max_memory_mb = 512
+batch_size = 3000
+enable_parallel_processing = true
+memory_check_interval = 100
+warning_threshold = 0.8
+
+[proxy_generation.epg]
+include_past_programs = false
+days_ahead = 7
+days_behind = 1
+deduplicate_programs = true
+max_programs_per_channel = 1000
+normalize_to_utc = true
+
+# New pipeline configuration system (6 stages, no source_loading)
+[pipeline]
+strategy = "default"
+
+# Pipeline strategies define which plugins to use for each stage
+[pipeline_strategies.default]
+data_mapping = "passthrough-plugin"
+filtering = "passthrough-plugin"
+logo_prefetch = "passthrough-plugin"
+channel_numbering = "passthrough-plugin"
+m3u_generation = "passthrough-plugin"
+epg_processing = "passthrough-plugin"
+
+# Performance-optimized strategy (could use different plugins)
+[pipeline_strategies.performance]
+data_mapping = "passthrough-plugin"
+filtering = "passthrough-plugin"
+logo_prefetch = "passthrough-plugin"
+channel_numbering = "passthrough-plugin"
+m3u_generation = "passthrough-plugin"
+epg_processing = "passthrough-plugin"
+
+# Memory-optimized strategy (native implementations for efficiency)
+[pipeline_strategies.memory_optimized]
+# No plugins specified - will fall back to native implementations
+
+# File manager configuration for temporary and cached files
+[file_manager]
+# Base directory for all file storage (default: system temp directory)
+base_directory = "./data/temp"
+
+# Configuration for different file categories
+# Each category can have its own retention policy and cleanup settings
+
+# Note: preview category removed - temp category is used for both temp and preview operations
+# Note: logo categories removed - logo storage is managed directly via storage.cached_logo_path and storage.uploaded_logo_path
+
+[file_manager.categories.proxy_output]
+subdirectory = "proxy-output"
+# Keep generated proxy files for 30 days
+retention_duration = "30days"
+time_match = "LastAccess"
+enabled = true
+
+[file_manager.categories.temp]
+subdirectory = "temp"
+# Temporary files for memory spilling and preview operations
+retention_duration = "5m"
+time_match = "LastAccess"
+enabled = true
+
+# Note: cache category removed - no longer needed
+
+# Relay system configuration for FFmpeg-based stream processing
+[relay]
+# FFmpeg command to use for relay operations
+# Can be a full path (/usr/bin/ffmpeg) or command name (ffmpeg)
+# The system will search $PATH if not a full path
+ffmpeg_command = "ffmpeg"

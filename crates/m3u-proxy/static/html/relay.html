@@ -24,192 +24,50 @@
 
             <!-- Main Content -->
             <main>
-                <!-- Concept Explanation -->
+
+                <!-- System Usage -->
                 <div class="card">
                     <div class="card-header">
-                        <h2 class="card-title">What is Stream Relay?</h2>
+                        <h2 class="card-title">System Usage</h2>
                     </div>
                     <div class="card-content">
-                        <p>
-                            Stream Relay is an advanced feature that uses FFmpeg
-                            processes to create optimized relay streams from
-                            original source transport stream (TS) URLs. Each
-                            relay creates a direct connection to the source and
-                            maintains an in-memory buffer to efficiently serve
-                            multiple internal m3u-proxy clients.
-                        </p>
-
-                        <h3>Key Benefits:</h3>
-                        <ul>
-                            <li>
-                                <strong>Reduced Bandwidth:</strong> One
-                                connection to source serves multiple clients
-                            </li>
-                            <li>
-                                <strong>Hardware Acceleration:</strong> Optional
-                                GPU-accelerated transcoding
-                            </li>
-                            <li>
-                                <strong>Buffer Management:</strong> In-memory
-                                buffering for smooth playback
-                            </li>
-                            <li>
-                                <strong>Format Optimization:</strong> Transcode
-                                streams for better compatibility
-                            </li>
-                            <li>
-                                <strong>Connection Pooling:</strong> Efficient
-                                resource utilization
-                            </li>
-                        </ul>
-
-                        <h3>How it Works:</h3>
-                        <ol>
-                            <li>
-                                A relay profile defines FFmpeg parameters and
-                                transcoding settings
-                            </li>
-                            <li>
-                                Stream proxies can be linked to relay profiles
-                                for enhanced delivery
-                            </li>
-                            <li>
-                                FFmpeg process connects to the original TS URL
-                                and maintains the stream
-                            </li>
-                            <li>
-                                Multiple clients connect to the relay instead of
-                                the original source
-                            </li>
-                            <li>
-                                Real-time statistics track performance and
-                                connection health
-                            </li>
-                        </ol>
-
-                        <div class="alert alert-info">
-                            <h4>
-                                <strong
-                                    >Technical Implementation Details</strong
-                                >
-                            </h4>
-
-                            <h5>HLS Relay & Circular TS Hosting</h5>
-                            <p>
-                                The Stream Relay implements
-                                <strong
-                                    >HLS (HTTP Live Streaming)
-                                    relay/redistribution</strong
-                                >. It takes a Transport Stream (TS) input from
-                                remote sources and creates an optimized HLS
-                                output for multiple internal clients through a
-                                circular buffer system.
-                            </p>
-
-                            <h6>Circular Buffer Approach:</h6>
-                            <ul>
-                                <li>
-                                    <strong>Minimal Disk Usage:</strong> Uses a
-                                    small rotating TS file buffer (typically
-                                    60-120 seconds)
-                                </li>
-                                <li>
-                                    <strong>Fixed Storage:</strong> Buffer size
-                                    remains constant, preventing disk space
-                                    issues
-                                </li>
-                                <li>
-                                    <strong>Client Proxy Access:</strong> The
-                                    m3u-proxy service serves the circular TS
-                                    file to clients
-                                </li>
-                                <li>
-                                    <strong>Connection Tracking:</strong>
-                                    Built-in Rust web server tracks all client
-                                    connections and statistics
-                                </li>
-                            </ul>
-
-                            <h6>On-Demand Process Management:</h6>
-                            <p class="important-note">
-                                <strong>⚡ Important:</strong> FFmpeg relay
-                                processes are
-                                <strong
-                                    >only spawned when there is an active client
-                                    connection</strong
-                                >
-                                to the streaming endpoint in the M3U playlist.
-                                This ensures efficient resource utilization and
-                                prevents unnecessary processing of unused
-                                streams.
-                            </p>
-
-                            <h6>Example FFmpeg Commands:</h6>
-                            <div class="code-examples">
-                                <p>
-                                    <strong
-                                        >Basic HW-Accelerated
-                                        Passthrough:</strong
-                                    >
-                                </p>
-                                <code
-                                    >ffmpeg -i http://remote.server/input.ts -c
-                                    copy -f mpegts
-                                    http://localhost:8080/stream.ts</code
-                                >
-
-                                <p>
-                                    <strong
-                                        >NVIDIA Hardware Acceleration:</strong
-                                    >
-                                </p>
-                                <code
-                                    >ffmpeg -hwaccel cuda -i
-                                    http://remote.server/input.ts -c:v
-                                    h264_nvenc -c:a copy -f mpegts
-                                    output.ts</code
-                                >
-
-                                <p>
-                                    <strong
-                                        >Circular Buffer with Size
-                                        Limit:</strong
-                                    >
-                                </p>
-                                <code
-                                    >ffmpeg -i http://remote.server/input.ts -c
-                                    copy -f segment -segment_time 30
-                                    -segment_wrap 2 -segment_format mpegts
-                                    output%d.ts</code
-                                >
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="stat-card">
+                                    <h4>CPU Load</h4>
+                                    <div class="stat-value" id="cpu-usage">
+                                        --
+                                    </div>
+                                    <div class="stat-label">
+                                        System average load
+                                    </div>
+                                </div>
                             </div>
-
-                            <h6>Client Access Flow:</h6>
-                            <ol>
-                                <li>
-                                    Client requests stream from M3U playlist
-                                    endpoint
-                                </li>
-                                <li>
-                                    M3U-proxy detects connection and logs client
-                                    statistics
-                                </li>
-                                <li>
-                                    FFmpeg process spawns (if not already
-                                    running) and begins relay
-                                </li>
-                                <li>
-                                    Stream is buffered to circular TS file(s)
-                                </li>
-                                <li>
-                                    Rust web server serves buffered content to
-                                    client(s)
-                                </li>
-                                <li>
-                                    Process automatically terminates when no
-                                    active connections remain
-                                </li>
-                            </ol>
+                            <div class="col-md-4">
+                                <div class="stat-card">
+                                    <h4>Memory Usage</h4>
+                                    <div class="stat-value" id="memory-usage">
+                                        --
+                                    </div>
+                                    <div class="stat-label">
+                                        Total system memory
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="stat-card">
+                                    <h4>Active Processes</h4>
+                                    <div
+                                        class="stat-value"
+                                        id="total-bandwidth"
+                                    >
+                                        --
+                                    </div>
+                                    <div class="stat-label">
+                                        Running relay processes
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -227,13 +85,8 @@
                     </div>
                     <div class="card-content">
                         <div id="active-relays">
-                            <div class="empty-state">
-                                <h3>No Active Relays</h3>
-                                <p>
-                                    No relay processes are currently running.
-                                    Relays will appear here when stream proxies
-                                    with relay profiles are accessed by clients.
-                                </p>
+                            <div class="loading-state">
+                                <p>Loading active relays...</p>
                             </div>
                         </div>
                     </div>
@@ -250,134 +103,319 @@
                             Create Profile
                         </button>
                     </div>
+                    
+                    <!-- Information Section -->
+                    <div class="card-body">
+                        <details class="info-collapse">
+                            <summary class="info-collapse-header">
+                                <i class="fas fa-info-circle"></i>
+                                <span>Hardware Acceleration & Relay Information</span>
+                                <i class="fas fa-chevron-down collapse-icon"></i>
+                            </summary>
+                            <div class="info-collapse-content">
+                                <div class="alert alert-info mb-0">
+                                    <div class="d-flex align-items-start">
+                                        <i class="fas fa-microchip me-2 mt-1"></i>
+                                        <div>
+                                            <strong>FFmpeg Hardware Acceleration:</strong>
+                                            <div id="hwaccel-status" class="mb-2">
+                                                <span class="loading">Loading hardware acceleration status...</span>
+                                            </div>
+                                            
+                                            <div id="hwaccel-details" style="display: none;">
+                                                <div class="mb-3">
+                                                    <strong>Supported Accelerators & Codecs:</strong>
+                                                    <div id="hwaccel-table" class="mt-2">
+                                                        <!-- Hardware acceleration table will be populated here -->
+                                                    </div>
+                                                </div>
+                                                
+                                                <div class="mb-3">
+                                                    <strong>Codec Recommendations:</strong>
+                                                    <ul class="mb-2 small">
+                                                        <li><strong>H.264:</strong> Most widely supported codec with good compression</li>
+                                                        <li><strong>H.265/HEVC:</strong> Better compression than H.264, newer hardware support</li>
+                                                        <li><strong>AV1:</strong> Newest codec with excellent compression, limited hardware support</li>
+                                                    </ul>
+                                                </div>
+                                                
+                                                <div class="mb-3">
+                                                    <strong>How Relay Works:</strong>
+                                                    <ul class="mb-2 small">
+                                                        <li><strong>Input:</strong> Transport stream from the original source URL</li>
+                                                        <li><strong>Processing:</strong> FFmpeg transcodes using hardware acceleration</li>
+                                                        <li><strong>Output:</strong> HLS segments in sandboxed temporary storage</li>
+                                                        <li><strong>Serving:</strong> Stream API serves the transcoded content to clients</li>
+                                                    </ul>
+                                                </div>
+                                                
+                                                <div class="mb-0">
+                                                    <strong>Example Relay Profile Commands:</strong>
+                                                    <small class="d-block mb-2 text-muted">
+                                                        These are template commands used in relay profiles. 
+                                                        {input_url} and {output_path} are replaced at runtime.
+                                                    </small>
+                                                    <div id="hwaccel-examples" class="mt-2">
+                                                        <!-- Example commands will be populated here -->
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
                     <div class="card-content">
                         <div id="relay-profiles">
-                            <div class="empty-state">
-                                <h3>No Relay Profiles</h3>
-                                <p>
-                                    Create relay profiles to configure FFmpeg
-                                    settings for stream transcoding and
-                                    optimization.
-                                </p>
-                                <button
-                                    class="btn btn-primary"
-                                    onclick="showCreateProfileModal()"
-                                >
-                                    Create Your First Profile
-                                </button>
+                            <div class="loading-state">
+                                <p>Loading relay profiles...</p>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- System Resources -->
-                <div class="card">
-                    <div class="card-header">
-                        <h2 class="card-title">System Resources</h2>
-                    </div>
-                    <div class="card-content">
-                        <div class="row">
-                            <div class="col-md-4">
-                                <div class="stat-card">
-                                    <h4>CPU Usage</h4>
-                                    <div class="stat-value" id="cpu-usage">
-                                        --
-                                    </div>
-                                    <div class="stat-label">
-                                        Average across all relays
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <div class="stat-card">
-                                    <h4>Memory Usage</h4>
-                                    <div class="stat-value" id="memory-usage">
-                                        --
-                                    </div>
-                                    <div class="stat-label">
-                                        Buffer + Process memory
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <div class="stat-card">
-                                    <h4>Total Bandwidth</h4>
-                                    <div
-                                        class="stat-value"
-                                        id="total-bandwidth"
-                                    >
-                                        --
-                                    </div>
-                                    <div class="stat-label">
-                                        Combined output streams
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </main>
 
             <!-- Footer -->
             <div id="footer-placeholder"></div>
         </div>
 
-        <!-- Create Profile Modal (Placeholder) -->
-        <div id="createProfileModal" class="modal">
+        <!-- Profile Modal -->
+        <div id="profileModal" class="modal">
             <div class="modal-content standard-modal">
                 <div class="modal-header">
-                    <h3>Create Relay Profile</h3>
+                    <h3 id="modalTitle">Create Relay Profile</h3>
                 </div>
                 <div class="modal-body">
-                    <div class="form-group">
-                        <label for="profileName">Profile Name</label>
-                        <input
-                            type="text"
-                            id="profileName"
-                            class="form-control"
-                            placeholder="e.g., HD Transcode"
-                        />
+                    <!-- System Default Notice -->
+                    <div id="systemDefaultNotice" class="alert alert-info" style="display: none;">
+                        <i class="fas fa-info-circle"></i>
+                        <strong>System Default Profile</strong> - This profile cannot be modified or deleted.
                     </div>
 
-                    <div class="form-group">
-                        <label for="ffmpegParams">FFmpeg Parameters</label>
-                        <textarea
-                            id="ffmpegParams"
-                            class="form-control"
-                            rows="4"
-                            placeholder="-c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k"
-                        ></textarea>
-                    </div>
-
-                    <div class="form-group">
-                        <div class="form-check">
+                    <!-- Basic Information -->
+                    <div class="form-section">
+                        <h4>Basic Information</h4>
+                        <div class="form-group">
+                            <label for="profileName" class="form-label">Profile Name *</label>
                             <input
-                                type="checkbox"
-                                id="hwAccel"
-                                class="form-check-input"
+                                type="text"
+                                id="profileName"
+                                class="form-control"
+                                placeholder="e.g., HD H.264 Transcode"
+                                required
                             />
-                            <label for="hwAccel" class="form-check-label"
-                                >Enable Hardware Acceleration</label
-                            >
+                        </div>
+
+                        <div class="form-group">
+                            <label for="profileDescription" class="form-label">Description</label>
+                            <input
+                                type="text"
+                                id="profileDescription"
+                                class="form-control"
+                                placeholder="Profile description"
+                            />
                         </div>
                     </div>
 
-                    <div class="form-group">
-                        <label for="bufferSize">Buffer Size (seconds)</label>
-                        <input
-                            type="number"
-                            id="bufferSize"
-                            class="form-control"
-                            value="10"
-                            min="1"
-                            max="60"
-                        />
+                    <!-- Video Settings -->
+                    <div class="form-section">
+                        <h4>Video Settings</h4>
+                        <div class="form-row">
+                            <div class="form-group col-md-6">
+                                <label for="videoCodec" class="form-label">Video Codec *</label>
+                                <select id="videoCodec" class="form-control" required>
+                                    <option value="h264">H.264</option>
+                                    <option value="h265">H.265/HEVC</option>
+                                    <option value="av1">AV1</option>
+                                    <option value="mpeg2">MPEG-2</option>
+                                    <option value="mpeg4">MPEG-4</option>
+                                    <option value="copy">Copy (no re-encode)</option>
+                                </select>
+                            </div>
+                            <div class="form-group col-md-6">
+                                <label for="videoProfile" class="form-label">Video Profile</label>
+                                <select id="videoProfile" class="form-control">
+                                    <option value="">Auto</option>
+                                    <option value="main">Main</option>
+                                    <option value="main10">Main10</option>
+                                    <option value="high">High</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group col-md-4">
+                                <label for="videoPreset" class="form-label">Video Preset</label>
+                                <select id="videoPreset" class="form-control">
+                                    <option value="">Auto</option>
+                                    <option value="slow">Slow (better quality)</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="fast">Fast (lower CPU)</option>
+                                    <option value="ultrafast">Ultra Fast</option>
+                                </select>
+                            </div>
+                            <div class="form-group col-md-4">
+                                <label for="videoBitrate" class="form-label">Video Bitrate (kbps)</label>
+                                <input
+                                    type="number"
+                                    id="videoBitrate"
+                                    class="form-control"
+                                    placeholder="e.g., 2000"
+                                    min="100"
+                                    max="50000"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Audio Settings -->
+                    <div class="form-section">
+                        <h4>Audio Settings</h4>
+                        <div class="form-row">
+                            <div class="form-group col-md-6">
+                                <label for="audioCodec" class="form-label">Audio Codec *</label>
+                                <select id="audioCodec" class="form-control" required>
+                                    <option value="aac">AAC</option>
+                                    <option value="mp3">MP3</option>
+                                    <option value="ac3">AC3 (Dolby Digital)</option>
+                                    <option value="eac3">E-AC3 (Enhanced AC3)</option>
+                                    <option value="mpeg2audio">MPEG-2 Audio</option>
+                                    <option value="dts">DTS</option>
+                                    <option value="copy">Copy (no re-encode)</option>
+                                </select>
+                            </div>
+                            <div class="form-group col-md-6">
+                                <label for="audioBitrate" class="form-label">Audio Bitrate (kbps)</label>
+                                <input
+                                    type="number"
+                                    id="audioBitrate"
+                                    class="form-control"
+                                    placeholder="e.g., 128"
+                                    min="32"
+                                    max="512"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Hardware Acceleration -->
+                    <div class="form-section">
+                        <h4>Hardware Acceleration</h4>
+                        <div class="form-group">
+                            <div class="form-check">
+                                <input
+                                    type="checkbox"
+                                    id="enableHardwareAcceleration"
+                                    class="form-check-input"
+                                />
+                                <label for="enableHardwareAcceleration" class="form-check-label">
+                                    Enable Hardware Acceleration
+                                </label>
+                            </div>
+                            <small class="text-muted">
+                                Automatically use hardware encoders when available (VAAPI, NVENC, QSV, AMF)
+                            </small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="preferredHwaccel" class="form-label">Preferred Hardware Accelerator</label>
+                            <select id="preferredHwaccel" class="form-control">
+                                <option value="auto">Auto (detect best)</option>
+                                <option value="vaapi">VAAPI (Intel/AMD)</option>
+                                <option value="nvenc">NVENC (NVIDIA)</option>
+                                <option value="qsv">QSV (Intel Quick Sync)</option>
+                                <option value="amf">AMF (AMD)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Manual Arguments Override -->
+                    <div class="form-section">
+                        <h4>Manual Arguments Override</h4>
+                        <div class="form-group">
+                            <label for="manualArgs" class="form-label">Manual FFmpeg Arguments</label>
+                            <textarea
+                                id="manualArgs"
+                                class="form-control"
+                                rows="3"
+                                placeholder="Optional: Override all automatic settings with custom FFmpeg command"
+                            ></textarea>
+                            <small class="text-muted">
+                                If provided, this will override all automatic codec and hardware acceleration settings above.
+                                Use {input_url} and {output_path} placeholders.
+                            </small>
+                        </div>
+                    </div>
+
+                    <!-- Output Settings -->
+                    <div class="form-section">
+                        <h4>Output Settings</h4>
+                        <div class="form-row">
+                            <div class="form-group col-md-4">
+                                <label for="outputFormat" class="form-label">Output Format *</label>
+                                <select id="outputFormat" class="form-control" required>
+                                    <option value="transport_stream">Transport Stream</option>
+                                    <option value="hls">HLS</option>
+                                    <option value="dash">DASH</option>
+                                </select>
+                            </div>
+                            <div class="form-group col-md-4">
+                                <label for="segmentDuration" class="form-label">Segment Duration (seconds)</label>
+                                <input
+                                    type="number"
+                                    id="segmentDuration"
+                                    class="form-control"
+                                    value="30"
+                                    min="1"
+                                    max="60"
+                                />
+                            </div>
+                            <div class="form-group col-md-4">
+                                <label for="maxSegments" class="form-label">Max Segments</label>
+                                <input
+                                    type="number"
+                                    id="maxSegments"
+                                    class="form-control"
+                                    value="10"
+                                    min="1"
+                                    max="100"
+                                />
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="inputTimeout" class="form-label">Input Timeout (seconds)</label>
+                            <input
+                                type="number"
+                                id="inputTimeout"
+                                class="form-control"
+                                value="30"
+                                min="5"
+                                max="300"
+                            />
+                        </div>
+                    </div>
+
+                    <!-- FFmpeg Command Preview -->
+                    <div class="form-section">
+                        <h4>FFmpeg Command Preview</h4>
+                        <div class="command-preview-container">
+                            <div class="command-preview-header">
+                                <strong>Generated FFmpeg Command:</strong>
+                            </div>
+                            <div class="command-preview" id="ffmpegPreview">
+                                <pre><code>Loading command preview...</code></pre>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button
                         type="button"
                         class="btn btn-primary"
+                        id="saveProfileButton"
                         onclick="createProfile()"
                     >
                         Create Profile
@@ -385,7 +423,7 @@
                     <button
                         type="button"
                         class="btn btn-secondary"
-                        onclick="hideCreateProfileModal()"
+                        onclick="hideProfileModal()"
                     >
                         Cancel
                     </button>
@@ -393,82 +431,7 @@
             </div>
         </div>
 
-        <script>
-            // Load shared components
-            async function loadSharedComponents() {
-                try {
-                    const navResponse = await fetch(
-                        "/static/html/shared/nav.html",
-                    );
-                    if (navResponse.ok) {
-                        document.getElementById("nav-placeholder").innerHTML =
-                            await navResponse.text();
-                    }
 
-                    const footerResponse = await fetch(
-                        "/static/html/shared/footer-basic.html",
-                    );
-                    if (footerResponse.ok) {
-                        document.getElementById(
-                            "footer-placeholder",
-                        ).innerHTML = await footerResponse.text();
-                    }
-                } catch (error) {
-                    console.error("Error loading shared components:", error);
-                }
-            }
-
-            // Placeholder functions for future implementation
-            function refreshRelayStats() {
-                // TODO: Implement relay statistics refresh
-                console.log("Refreshing relay statistics...");
-            }
-
-            function showCreateProfileModal() {
-                document
-                    .getElementById("createProfileModal")
-                    .classList.add("show");
-            }
-
-            function hideCreateProfileModal() {
-                document
-                    .getElementById("createProfileModal")
-                    .classList.remove("show");
-            }
-
-            function createProfile() {
-                // TODO: Implement profile creation
-                const profileName =
-                    document.getElementById("profileName").value;
-                const ffmpegParams =
-                    document.getElementById("ffmpegParams").value;
-                const hwAccel = document.getElementById("hwAccel").checked;
-                const bufferSize = document.getElementById("bufferSize").value;
-
-                console.log("Creating profile:", {
-                    name: profileName,
-                    ffmpegParams,
-                    hwAccel,
-                    bufferSize,
-                });
-
-                hideCreateProfileModal();
-            }
-
-            // Load components when page loads
-            document.addEventListener("DOMContentLoaded", loadSharedComponents);
-
-            // Simulate some stats updates (placeholder)
-            function updatePlaceholderStats() {
-                // These would be real stats in the actual implementation
-                document.getElementById("cpu-usage").textContent = "--";
-                document.getElementById("memory-usage").textContent = "--";
-                document.getElementById("total-bandwidth").textContent = "--";
-            }
-
-            // Update stats periodically (when implemented)
-            setInterval(updatePlaceholderStats, 5000);
-        </script>
 
         <style>
             .row {
@@ -629,6 +592,13 @@
                 word-break: break-all;
             }
 
+            .loading-state {
+                text-align: center;
+                padding: 2rem;
+                color: #6c757d;
+                font-style: italic;
+            }
+
             @media (max-width: 768px) {
                 .row {
                     flex-direction: column;
@@ -647,9 +617,499 @@
                     padding: 1rem;
                 }
             }
+
+            /* Information Collapse Styles */
+            .info-collapse {
+                border: 1px solid #dee2e6;
+                border-radius: 0.375rem;
+                margin-bottom: 1rem;
+            }
+
+            .info-collapse-header {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                padding: 0.75rem 1rem;
+                cursor: pointer;
+                background-color: #f8f9fa;
+                border-radius: 0.375rem;
+                user-select: none;
+                font-weight: 500;
+                transition: background-color 0.2s;
+            }
+
+            .info-collapse-header:hover {
+                background-color: #e9ecef;
+            }
+
+            .info-collapse .collapse-icon {
+                margin-left: auto;
+                transition: transform 0.2s;
+            }
+
+            details[open] .collapse-icon {
+                transform: rotate(180deg);
+            }
+
+            .info-collapse-content {
+                padding: 1rem;
+                border-top: 1px solid #dee2e6;
+            }
+
+            /* Hardware acceleration table styles */
+            .hwaccel-table {
+                display: table;
+                width: 100%;
+                border-collapse: separate;
+                border-spacing: 0;
+                border: 1px solid #dee2e6;
+                border-radius: 0.375rem;
+                font-size: 0.875rem;
+                margin-bottom: 1rem;
+            }
+
+            .hwaccel-table .table-header {
+                display: table-header-group;
+                background-color: #f8f9fa;
+                font-weight: 600;
+            }
+
+            .hwaccel-table .table-row {
+                display: table-row;
+            }
+
+            .hwaccel-table .table-cell {
+                display: table-cell;
+                padding: 0.5rem;
+                border-bottom: 1px solid #dee2e6;
+                vertical-align: middle;
+            }
+
+            .hwaccel-table .table-header .table-cell {
+                border-bottom: 2px solid #dee2e6;
+            }
+
+            .hwaccel-table .table-row:last-child .table-cell {
+                border-bottom: none;
+            }
+
+            .hwaccel-available {
+                color: #28a745;
+                font-weight: 500;
+            }
+
+            .hwaccel-unavailable {
+                color: #6c757d;
+                font-style: italic;
+            }
+
+            .hwaccel-example {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 0.375rem;
+                padding: 0.75rem;
+                margin-bottom: 0.5rem;
+                font-family: 'Courier New', monospace;
+                font-size: 0.875rem;
+                overflow-x: auto;
+            }
+
+            .hwaccel-example .example-title {
+                font-weight: 600;
+                margin-bottom: 0.5rem;
+                font-family: system-ui, -apple-system, sans-serif;
+            }
+
+            .hwaccel-example code {
+                background: none;
+                padding: 0;
+                font-size: inherit;
+                word-break: break-all;
+            }
+
+            /* Profile Modal Styles */
+            .form-section {
+                margin-bottom: 2rem;
+                padding-bottom: 1.5rem;
+                border-bottom: 1px solid #dee2e6;
+            }
+
+            .form-section:last-child {
+                border-bottom: none;
+            }
+
+            .form-section h4 {
+                margin-bottom: 1rem;
+                color: #495057;
+                font-size: 1.1rem;
+                font-weight: 600;
+            }
+
+            .form-row {
+                display: flex;
+                gap: 1rem;
+                margin-bottom: 1rem;
+            }
+
+            .form-row .form-group {
+                flex: 1;
+                margin-bottom: 0;
+            }
+
+            .form-group.col-md-4 {
+                flex: 0 0 calc(33.333% - 0.75rem);
+            }
+
+            .form-group.col-md-6 {
+                flex: 0 0 calc(50% - 0.5rem);
+            }
+
+            .form-label {
+                font-weight: 500;
+                margin-bottom: 0.5rem;
+                color: #495057;
+            }
+
+            .text-muted {
+                color: #6c757d !important;
+                font-size: 0.875rem;
+            }
+
+            /* Command Preview Styles */
+            .command-preview-container {
+                margin-top: 1rem;
+                padding-top: 1rem;
+                border-top: 1px solid #dee2e6;
+            }
+
+            .command-preview-header {
+                margin-bottom: 0.5rem;
+                font-weight: 600;
+                color: #495057;
+            }
+
+            .command-preview {
+                background: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 0.375rem;
+                padding: 1rem;
+                font-family: 'Courier New', Courier, monospace;
+                font-size: 0.875rem;
+                line-height: 1.5;
+                max-height: 300px;
+                overflow-y: auto;
+            }
+
+            .command-preview pre {
+                margin: 0;
+                white-space: pre-wrap;
+                word-break: break-all;
+            }
+
+            .command-preview code {
+                background: none;
+                padding: 0;
+                font-size: inherit;
+                color: #495057;
+            }
+
+            /* Responsive adjustments */
+            @media (max-width: 768px) {
+                .form-row {
+                    flex-direction: column;
+                    gap: 0;
+                }
+
+                .form-group.col-md-4,
+                .form-group.col-md-6 {
+                    flex: 1;
+                }
+            }
+
+            /* Profile card enhancements */
+            .profile-card {
+                border: 1px solid #dee2e6;
+                border-radius: 0.375rem;
+                background: white;
+                margin-bottom: 1rem;
+                transition: box-shadow 0.15s ease-in-out;
+            }
+
+            .profile-card:hover {
+                box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+            }
+
+            .profile-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+                padding: 1rem 1rem 0.5rem;
+                border-bottom: 1px solid #f1f3f4;
+            }
+
+            .profile-header h4 {
+                margin: 0;
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: #495057;
+            }
+
+            .profile-badges {
+                display: flex;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+            }
+
+            .badge {
+                padding: 0.25rem 0.5rem;
+                font-size: 0.75rem;
+                font-weight: 500;
+                border-radius: 0.25rem;
+                white-space: nowrap;
+            }
+
+            .badge-info {
+                background-color: #d1ecf1;
+                color: #0c5460;
+            }
+
+            .badge-success {
+                background-color: #d4edda;
+                color: #155724;
+            }
+
+            .badge-primary {
+                background-color: #d1ecf1;
+                color: #0c5460;
+            }
+
+            .badge-warning {
+                background-color: #fff3cd;
+                color: #856404;
+            }
+
+            .profile-body {
+                padding: 1rem;
+            }
+
+            .profile-description {
+                margin-bottom: 1rem;
+                color: #6c757d;
+                font-size: 0.9rem;
+            }
+
+            .profile-details {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 0.75rem;
+                margin-bottom: 1rem;
+            }
+
+            .detail-item {
+                display: flex;
+                flex-direction: column;
+                gap: 0.25rem;
+            }
+
+            .detail-item label {
+                font-weight: 500;
+                font-size: 0.8rem;
+                color: #6c757d;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
+            .detail-item span {
+                font-size: 0.9rem;
+                color: #495057;
+            }
+
+            .profile-actions {
+                display: flex;
+                gap: 0.5rem;
+                padding-top: 0.75rem;
+                border-top: 1px solid #f1f3f4;
+            }
+
+            /* Relay chart styles */
+            .relay-graphs {
+                margin-top: 1.5rem;
+                padding-top: 1rem;
+                border-top: 1px solid #dee2e6;
+                display: flex;
+                gap: 1rem;
+                flex-wrap: wrap;
+            }
+
+            .graph-section {
+                flex: 1;
+                min-width: 250px;
+                margin-bottom: 0;
+            }
+
+            .graph-section h5 {
+                margin-bottom: 0.5rem;
+                color: #495057;
+                font-size: 0.8rem;
+                font-weight: 600;
+                text-align: center;
+            }
+
+            .chart-container {
+                position: relative;
+                height: 120px;
+                background: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 0.375rem;
+                padding: 0.25rem;
+            }
+
+            @media (max-width: 768px) {
+                .relay-graphs {
+                    flex-direction: column;
+                }
+                
+                .graph-section {
+                    min-width: unset;
+                }
+            }
+
+            .relay-card {
+                margin-bottom: 2rem;
+                border: 1px solid #dee2e6;
+                border-radius: 0.5rem;
+                background: white;
+                box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+            }
+
+            .relay-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 1rem;
+                border-bottom: 1px solid #dee2e6;
+                background: #f8f9fa;
+                border-radius: 0.5rem 0.5rem 0 0;
+            }
+
+            .relay-header h4 {
+                margin: 0;
+                color: #495057;
+                font-size: 1.1rem;
+            }
+
+            .relay-status {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+
+            .status-indicator {
+                width: 12px;
+                height: 12px;
+                border-radius: 50%;
+                background: #dc3545;
+            }
+
+            .status-indicator.running {
+                background: #28a745;
+                animation: pulse 2s infinite;
+            }
+
+            @keyframes pulse {
+                0% { opacity: 1; }
+                50% { opacity: 0.5; }
+                100% { opacity: 1; }
+            }
+
+            .status-text {
+                font-weight: 500;
+                color: #495057;
+            }
+
+            .relay-body {
+                padding: 1rem;
+            }
+
+            .relay-stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 1rem;
+                margin-bottom: 1rem;
+            }
+
+            .stat-item {
+                display: flex;
+                flex-direction: column;
+                gap: 0.25rem;
+            }
+
+            .stat-item label {
+                font-size: 0.8rem;
+                color: #6c757d;
+                font-weight: 500;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
+            .stat-item span {
+                font-size: 0.95rem;
+                color: #495057;
+                font-weight: 500;
+            }
+
+            .stat-item .highlight {
+                color: #007bff;
+                font-weight: 600;
+            }
+
+            .stat-item .monospace {
+                font-family: 'Courier New', Courier, monospace;
+                font-size: 0.85rem;
+                background: #f8f9fa;
+                padding: 0.25rem 0.5rem;
+                border-radius: 0.25rem;
+                border: 1px solid #e9ecef;
+            }
         </style>
 
+        <script>
+            // Load shared components
+            async function loadSharedComponents() {
+                try {
+                    console.log("Loading shared components...");
+                    const headerResponse = await fetch("/static/html/shared/header.html");
+                    if (headerResponse.ok) {
+                        document.getElementById("headerContainer").innerHTML = await headerResponse.text();
+                        console.log("Header loaded successfully");
+                    }
+
+                    const navResponse = await fetch("/static/html/shared/nav.html");
+                    if (navResponse.ok) {
+                        document.getElementById("navContainer").innerHTML = await navResponse.text();
+                        console.log("Nav loaded successfully");
+                    }
+
+                    const footerResponse = await fetch("/static/html/shared/footer-basic.html");
+                    if (footerResponse.ok) {
+                        document.getElementById("footer-placeholder").innerHTML = await footerResponse.text();
+                        console.log("Footer loaded successfully");
+                    }
+                } catch (error) {
+                    console.error("Error loading shared components:", error);
+                }
+            }
+
+            // Load components when page loads
+            document.addEventListener("DOMContentLoaded", function() {
+                console.log("DOM content loaded, starting component loading...");
+                loadSharedComponents();
+            });
+        </script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <script src="/static/js/shared-utils.js"></script>
         <script src="/static/js/shared-loader.js"></script>
+        <script src="/static/js/relay.js"></script>
+        <link rel="stylesheet" href="/static/css/relay.css" />
     </body>
 </html>

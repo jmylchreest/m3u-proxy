@@ -13,9 +13,7 @@
 
 use crate::database::Database;
 use crate::models::*;
-use crate::utils::time::{
-    detect_timezone_from_xmltv, log_timezone_detection, parse_time_offset,
-};
+use crate::utils::time::{detect_timezone_from_xmltv, log_timezone_detection, parse_time_offset};
 use crate::utils::url::UrlUtils;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, TimeZone, Utc};
@@ -25,7 +23,9 @@ use quick_xml::de::from_str;
 use regex::Regex;
 use reqwest::Client;
 use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use std::time::Duration;
+use tokio::time::timeout;
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use xmltv::{Channel, Programme, Tv};
 
@@ -108,6 +108,15 @@ impl EpgIngestor {
                             );
                         }
 
+                        // Ensure state manager is updated to completed status
+                        state_manager
+                            .complete_ingestion_with_programs(
+                                source_id,
+                                channel_count,
+                                Some(program_count),
+                            )
+                            .await;
+
                         info!(
                             "EPG refresh completed for '{}': {} channels, {} programs - trigger: {:?}",
                             source_name, channel_count, program_count, trigger
@@ -116,6 +125,9 @@ impl EpgIngestor {
                         Ok((channel_count, program_count))
                     }
                     Err(e) => {
+                        // Ensure state manager is updated to error status
+                        state_manager.set_error(source_id, e.to_string()).await;
+
                         error!(
                             "Failed to save EPG data for source '{}': {}",
                             source_name, e
@@ -125,6 +137,9 @@ impl EpgIngestor {
                 }
             }
             Err(e) => {
+                // Ensure state manager is updated to error status for ingestion failure
+                state_manager.set_error(source_id, e.to_string()).await;
+
                 error!("Failed to refresh EPG source '{}': {}", source_name, e);
                 Err(e.into())
             }
@@ -227,7 +242,10 @@ impl EpgIngestor {
         &self,
         source: &EpgSource,
     ) -> Result<(Vec<EpgChannel>, Vec<EpgProgram>, Option<String>)> {
-        info!("Fetching XMLTV data from: {}", source.url);
+        info!(
+            "Fetching XMLTV data from: {}",
+            crate::utils::url::UrlUtils::obfuscate_credentials(&source.url)
+        );
 
         // Update progress
         if let Some(state_manager) = &self.state_manager {
@@ -299,7 +317,10 @@ impl EpgIngestor {
             .as_ref()
             .ok_or_else(|| anyhow!("Password required for Xtream Codes EPG"))?;
 
-        info!("Fetching EPG data from Xtream Codes: {}", source.url);
+        info!(
+            "Fetching EPG data from Xtream Codes: {}",
+            crate::utils::url::UrlUtils::obfuscate_credentials(&source.url)
+        );
 
         // Update progress
         if let Some(state_manager) = &self.state_manager {
@@ -328,7 +349,10 @@ impl EpgIngestor {
             normalized_base_url, username, password
         );
 
-        info!("Fetching Xtream EPG from: {}", epg_url);
+        info!(
+            "Fetching Xtream EPG from: {}",
+            UrlUtils::obfuscate_credentials(&epg_url)
+        );
 
         let response = self.client.get(&epg_url).send().await?;
 
@@ -682,10 +706,7 @@ impl EpgIngestor {
             .map(|lang| lang.value.clone());
 
         // Extract program icon if available
-        let program_icon = xmltv_program
-            .icons
-            .first()
-            .map(|icon| icon.src.clone());
+        let program_icon = xmltv_program.icons.first().map(|icon| icon.src.clone());
 
         Some(EpgProgram {
             id: Uuid::new_v4(),
@@ -889,26 +910,44 @@ impl EpgIngestor {
             };
 
             // Use the cancellation-aware database method with progress updates
-            let result = database
+            // Add timeout to prevent hanging (30 minutes max for EPG operations)
+            let database_operation = database
                 .update_epg_source_data_with_cancellation_and_progress(
                     source_id,
                     channels,
                     programs,
                     cancellation_rx,
                     Some(progress_callback),
-                )
-                .await;
+                );
 
-            // After successful database save, mark ingestion as completed
-            if let Ok((channels_saved, programs_saved)) = &result {
-                if let Some(state_manager) = &self.state_manager {
-                    state_manager
-                        .complete_ingestion_with_programs(
-                            source_id,
-                            *channels_saved,
-                            Some(*programs_saved),
-                        )
-                        .await;
+            let result = match timeout(Duration::from_secs(1800), database_operation).await {
+                Ok(db_result) => db_result,
+                Err(_) => {
+                    error!(
+                        "EPG database operation timed out after 30 minutes for source {}",
+                        source_id
+                    );
+                    Err(anyhow!("Database operation timed out"))
+                }
+            };
+
+            // Always update state manager, whether successful or not
+            if let Some(state_manager) = &self.state_manager {
+                match &result {
+                    Ok((channels_saved, programs_saved)) => {
+                        // Mark ingestion as completed on success
+                        state_manager
+                            .complete_ingestion_with_programs(
+                                source_id,
+                                *channels_saved,
+                                Some(*programs_saved),
+                            )
+                            .await;
+                    }
+                    Err(e) => {
+                        // Mark ingestion as failed on error
+                        state_manager.set_error(source_id, e.to_string()).await;
+                    }
                 }
             }
 

@@ -9,6 +9,7 @@ pub mod epg_source;
 pub mod filter;
 pub mod linked_xtream;
 pub mod logo_asset;
+pub mod relay;
 pub mod stream_proxy;
 pub mod stream_source;
 
@@ -43,6 +44,19 @@ pub enum StreamSourceType {
 pub enum StreamProxyMode {
     Redirect,
     Proxy,
+    Relay,
+}
+
+impl StreamProxyMode {
+    /// Parse a string into a StreamProxyMode, defaulting to Redirect for unknown values
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "redirect" => StreamProxyMode::Redirect,
+            "proxy" => StreamProxyMode::Proxy,
+            "relay" => StreamProxyMode::Relay,
+            _ => StreamProxyMode::Redirect,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -64,6 +78,7 @@ pub struct StreamProxy {
     pub cache_channel_logos: bool,
     #[serde(default = "default_cache_program_logos")]
     pub cache_program_logos: bool,
+    pub relay_profile_id: Option<Uuid>,
 }
 
 fn default_cache_channel_logos() -> bool {
@@ -97,6 +112,7 @@ pub struct Filter {
     pub source_type: FilterSourceType,
     pub starting_channel_number: i32,
     pub is_inverse: bool,
+    pub is_system_default: bool,
     pub condition_tree: String, // JSON tree structure for complex nested conditions
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -133,9 +149,10 @@ pub struct StreamProxyCreateRequest {
     pub epg_sources: Vec<ProxyEpgSourceCreateRequest>,
     pub filters: Vec<ProxyFilterCreateRequest>,
     pub is_active: bool,
-    pub auto_regenerate: bool, // TODO: Implement auto-regeneration functionality
+    pub auto_regenerate: bool,
     pub cache_channel_logos: bool,
     pub cache_program_logos: bool,
+    pub relay_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,9 +168,10 @@ pub struct StreamProxyUpdateRequest {
     pub epg_sources: Vec<ProxyEpgSourceCreateRequest>,
     pub filters: Vec<ProxyFilterCreateRequest>,
     pub is_active: bool,
-    pub auto_regenerate: bool, // TODO: Implement auto-regeneration functionality
+    pub auto_regenerate: bool,
     pub cache_channel_logos: bool,
     pub cache_program_logos: bool,
+    pub relay_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -327,6 +345,7 @@ pub struct FilterCreateRequest {
     pub source_type: FilterSourceType,
     pub starting_channel_number: i32,
     pub is_inverse: bool,
+    pub is_system_default: bool,
     pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
 }
 
@@ -674,7 +693,26 @@ impl Filter {
 
     /// Parse the condition tree from JSON
     pub fn get_condition_tree(&self) -> Option<ConditionTree> {
-        serde_json::from_str(&self.condition_tree).ok()
+        match serde_json::from_str(&self.condition_tree) {
+            Ok(tree) => {
+                if self.name.contains("Adult") {
+                    tracing::debug!(
+                        "Successfully parsed condition tree for filter '{}'",
+                        self.name
+                    );
+                }
+                Some(tree)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse condition tree for filter '{}': {}",
+                    self.name,
+                    e
+                );
+                tracing::error!("Raw condition_tree JSON: {}", self.condition_tree);
+                None
+            }
+        }
     }
 }
 

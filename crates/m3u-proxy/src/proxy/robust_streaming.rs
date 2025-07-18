@@ -12,7 +12,6 @@ use anyhow::Result;
 use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
-use bytes::Bytes;
 use futures::StreamExt;
 use reqwest::Client;
 use std::collections::HashMap;
@@ -20,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, Semaphore};
 use tokio::time::sleep;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Configuration for robust streaming
 #[derive(Debug, Clone)]
@@ -125,7 +124,10 @@ impl CircuitBreaker {
 
         if self.failure_count >= self.threshold {
             self.state = CircuitBreakerState::Open;
-            warn!("Circuit breaker opened after {} failures", self.failure_count);
+            warn!(
+                "Circuit breaker opened after {} failures",
+                self.failure_count
+            );
         }
     }
 }
@@ -159,7 +161,8 @@ impl ConnectionPool {
             .build()?;
 
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent_per_upstream));
-        self.clients.insert(host.to_string(), (client.clone(), semaphore.clone()));
+        self.clients
+            .insert(host.to_string(), (client.clone(), semaphore.clone()));
 
         Ok((client, semaphore))
     }
@@ -174,7 +177,8 @@ impl ConnectionPool {
             self.config.circuit_breaker_reset_timeout,
         )));
 
-        self.circuit_breakers.insert(host.to_string(), breaker.clone());
+        self.circuit_breakers
+            .insert(host.to_string(), breaker.clone());
         breaker
     }
 }
@@ -201,7 +205,7 @@ impl RobustStreamingProxy {
         metrics_callback: Option<Box<dyn Fn(u64) + Send + Sync>>,
     ) -> Result<Response> {
         let host = self.extract_host(upstream_url)?;
-        
+
         // Get connection pool resources
         let (client, semaphore, circuit_breaker) = {
             let mut pool = self.pool.write().await;
@@ -214,7 +218,10 @@ impl RobustStreamingProxy {
         {
             let mut breaker = circuit_breaker.write().await;
             if !breaker.can_request() {
-                return Err(anyhow::anyhow!("Circuit breaker is open for host: {}", host));
+                return Err(anyhow::anyhow!(
+                    "Circuit breaker is open for host: {}",
+                    host
+                ));
             }
         }
 
@@ -224,23 +231,31 @@ impl RobustStreamingProxy {
         // Attempt request with retry logic
         let mut last_error = None;
         for attempt in 0..=self.config.max_retries {
-            match self.attempt_stream_request(&client, upstream_url, &headers).await {
+            match self
+                .attempt_stream_request(&client, upstream_url, &headers)
+                .await
+            {
                 Ok(response) => {
                     // Record success in circuit breaker
                     circuit_breaker.write().await.record_success();
-                    
+
                     // Create tracked stream for metrics
-                    let tracked_stream = self.create_tracked_stream(response, metrics_callback).await?;
+                    let tracked_stream = self
+                        .create_tracked_stream(response, metrics_callback)
+                        .await?;
                     return Ok(tracked_stream);
                 }
                 Err(e) => {
                     last_error = Some(e);
-                    
+
                     if attempt < self.config.max_retries {
                         let delay = self.calculate_retry_delay(attempt);
                         warn!(
                             "Attempt {} failed for {}, retrying in {:?}: {}",
-                            attempt + 1, upstream_url, delay, last_error.as_ref().unwrap()
+                            attempt + 1,
+                            upstream_url,
+                            delay,
+                            last_error.as_ref().unwrap()
                         );
                         sleep(delay).await;
                     }
@@ -262,15 +277,22 @@ impl RobustStreamingProxy {
     ) -> Result<reqwest::Response> {
         // Convert axum headers to reqwest headers
         let mut upstream_headers = reqwest::header::HeaderMap::new();
-        
+
         let safe_headers = [
-            "accept", "accept-encoding", "accept-language", "range",
-            "if-modified-since", "if-none-match", "cache-control", "user-agent",
+            "accept",
+            "accept-encoding",
+            "accept-language",
+            "range",
+            "if-modified-since",
+            "if-none-match",
+            "cache-control",
+            "user-agent",
         ];
 
         for header_name in safe_headers {
             if let Some(value) = headers.get(header_name) {
-                if let Ok(header_value) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
+                if let Ok(header_value) = reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+                {
                     upstream_headers.insert(
                         reqwest::header::HeaderName::from_static(header_name),
                         header_value,
@@ -296,21 +318,21 @@ impl RobustStreamingProxy {
     ) -> Result<Response> {
         let status = response.status();
         let headers = response.headers().clone();
-        
+
         // Create streaming body with metrics tracking
         let stream = response.bytes_stream();
         let mut bytes_served = 0u64;
-        
+
         let tracked_stream = stream.map(move |chunk_result| match chunk_result {
             Ok(chunk) => {
                 bytes_served += chunk.len() as u64;
                 tracing::trace!("Served {} bytes, total: {}", chunk.len(), bytes_served);
-                
+
                 // Call metrics callback if provided
                 if let Some(ref callback) = metrics_callback {
                     callback(chunk.len() as u64);
                 }
-                
+
                 Ok(chunk)
             }
             Err(e) => {
@@ -321,8 +343,8 @@ impl RobustStreamingProxy {
 
         // Convert to axum Response
         let body = Body::from_stream(tracked_stream);
-        let axum_status = StatusCode::from_u16(status.as_u16())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let axum_status =
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
         let mut response_builder = Response::builder().status(axum_status);
 
@@ -364,7 +386,12 @@ impl UpstreamHealthMonitor {
     }
 
     pub async fn is_healthy(&self, host: &str) -> bool {
-        self.health_status.read().await.get(host).copied().unwrap_or(true)
+        self.health_status
+            .read()
+            .await
+            .get(host)
+            .copied()
+            .unwrap_or(true)
     }
 
     pub async fn start_health_checks(&self, hosts: Vec<String>) {
@@ -372,21 +399,24 @@ impl UpstreamHealthMonitor {
             let health_status = self.health_status.clone();
             let config = self.config.clone();
             let host_clone = host.clone();
-            
+
             tokio::spawn(async move {
                 let client = Client::builder()
                     .timeout(Duration::from_secs(5))
                     .build()
                     .unwrap();
-                
+
                 loop {
                     let is_healthy = Self::check_host_health(&client, &host_clone).await;
-                    health_status.write().await.insert(host_clone.clone(), is_healthy);
-                    
+                    health_status
+                        .write()
+                        .await
+                        .insert(host_clone.clone(), is_healthy);
+
                     if !is_healthy {
                         warn!("Host {} is unhealthy", host_clone);
                     }
-                    
+
                     sleep(Duration::from_secs(30)).await;
                 }
             });
@@ -409,21 +439,21 @@ mod tests {
     #[tokio::test]
     async fn test_circuit_breaker_behavior() {
         let mut breaker = CircuitBreaker::new(2, Duration::from_millis(100));
-        
+
         // Should allow requests initially
         assert!(breaker.can_request());
-        
+
         // Record failures
         breaker.record_failure();
         assert!(breaker.can_request());
-        
+
         breaker.record_failure();
         assert!(!breaker.can_request()); // Circuit should be open
-        
+
         // Wait for reset timeout
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(breaker.can_request()); // Should be half-open
-        
+
         // Record success should close circuit
         breaker.record_success();
         assert_eq!(breaker.state, CircuitBreakerState::Closed);
@@ -433,7 +463,7 @@ mod tests {
     fn test_retry_delay_calculation() {
         let config = RobustStreamingConfig::default();
         let proxy = RobustStreamingProxy::new(config);
-        
+
         assert_eq!(proxy.calculate_retry_delay(0), Duration::from_millis(100));
         assert_eq!(proxy.calculate_retry_delay(1), Duration::from_millis(200));
         assert_eq!(proxy.calculate_retry_delay(2), Duration::from_millis(400));

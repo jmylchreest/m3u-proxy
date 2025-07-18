@@ -198,6 +198,7 @@ impl ProxyConfigResolver {
             last_generated_at: None,
             cache_channel_logos: true, // Default value, field was added later
             cache_program_logos: false, // Default value, field was added later
+            relay_profile_id: None, // Not used for preview proxies
         };
 
         // Resolve source configurations

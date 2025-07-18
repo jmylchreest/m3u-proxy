@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::info;
 
+pub mod defaults;
 pub mod duration_serde;
 pub mod file_categories;
 
 pub use file_categories::FileManagerConfig;
+use defaults::*;
 
 /// Simplified pipeline configuration for native-only implementation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +79,7 @@ pub struct Config {
     pub file_manager: Option<FileManagerConfig>,
     pub pipeline: Option<PipelineConfig>,
     pub metrics: Option<MetricsConfig>,
+    pub relay: Option<RelayConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,21 +103,28 @@ pub struct DatabaseBatchConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebConfig {
+    #[serde(default = "default_host")]
     pub host: String,
+    #[serde(default = "default_port")]
     pub port: u16,
-    pub base_url: String,
+    pub base_url: String, // This is the ONLY mandatory field
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
+    #[serde(default = "default_m3u_path")]
     pub m3u_path: PathBuf,
+    #[serde(default = "default_uploaded_logo_path")]
     pub uploaded_logo_path: PathBuf,
+    #[serde(default = "default_cached_logo_path")]
     pub cached_logo_path: PathBuf,
+    #[serde(default = "default_proxy_versions_to_keep")]
     pub proxy_versions_to_keep: u32,
+    #[serde(default = "default_temp_path")]
     pub temp_path: Option<String>,
 
     /// Automatically clean up orphaned logo database entries when uploaded_logo_path changes
-    #[serde(default = "default_true")]
+    #[serde(default = "default_clean_orphan_logos")]
     pub clean_orphan_logos: bool,
 }
 
@@ -122,9 +132,54 @@ fn default_true() -> bool {
     true
 }
 
+// Web defaults
+fn default_host() -> String {
+    DEFAULT_HOST.to_string()
+}
+
+fn default_port() -> u16 {
+    DEFAULT_PORT
+}
+
+// Storage defaults
+fn default_m3u_path() -> PathBuf {
+    PathBuf::from(DEFAULT_M3U_PATH)
+}
+
+fn default_uploaded_logo_path() -> PathBuf {
+    PathBuf::from(DEFAULT_UPLOADED_LOGO_PATH)
+}
+
+fn default_cached_logo_path() -> PathBuf {
+    PathBuf::from(DEFAULT_CACHED_LOGO_PATH)
+}
+
+fn default_proxy_versions_to_keep() -> u32 {
+    DEFAULT_PROXY_VERSIONS_TO_KEEP
+}
+
+fn default_temp_path() -> Option<String> {
+    Some(DEFAULT_TEMP_PATH.to_string())
+}
+
+fn default_clean_orphan_logos() -> bool {
+    DEFAULT_CLEAN_ORPHAN_LOGOS
+}
+
+// Ingestion defaults
+fn default_progress_update_interval() -> usize {
+    DEFAULT_PROGRESS_UPDATE_INTERVAL
+}
+
+fn default_run_missed_immediately() -> bool {
+    DEFAULT_RUN_MISSED_IMMEDIATELY
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestionConfig {
+    #[serde(default = "default_progress_update_interval")]
     pub progress_update_interval: usize,
+    #[serde(default = "default_run_missed_immediately")]
     pub run_missed_immediately: bool,
 }
 
@@ -300,6 +355,87 @@ impl Default for EpgGenerationConfig {
     }
 }
 
+/// Relay system configuration for FFmpeg-based stream processing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayConfig {
+    /// FFmpeg command to use for relay operations
+    /// Can be a full path (/usr/bin/ffmpeg) or command name (ffmpeg)
+    /// The system will search $PATH if not a full path
+    #[serde(default = "default_ffmpeg_command")]
+    pub ffmpeg_command: String,
+    
+    /// Cyclic buffer configuration for in-memory stream buffering
+    #[serde(default)]
+    pub buffer: BufferConfig,
+}
+
+fn default_ffmpeg_command() -> String {
+    "ffmpeg".to_string()
+}
+
+impl Default for RelayConfig {
+    fn default() -> Self {
+        Self {
+            ffmpeg_command: default_ffmpeg_command(),
+            buffer: BufferConfig::default(),
+        }
+    }
+}
+
+/// Configuration for relay cyclic buffer system
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BufferConfig {
+    /// Maximum buffer size in bytes (default: 50MB)
+    #[serde(default = "default_max_buffer_size")]
+    pub max_buffer_size: usize,
+    
+    /// Maximum number of chunks to keep in memory (default: 1000)
+    #[serde(default = "default_max_chunks")]
+    pub max_chunks: usize,
+    
+    /// How long to keep chunks in memory in seconds (default: 60)
+    #[serde(default = "default_chunk_timeout_seconds")]
+    pub chunk_timeout_seconds: u64,
+    
+    /// How long to wait for slow clients in seconds (default: 30)
+    #[serde(default = "default_client_timeout_seconds")]
+    pub client_timeout_seconds: u64,
+    
+    /// How often to cleanup old chunks in seconds (default: 5)
+    #[serde(default = "default_cleanup_interval_seconds")]
+    pub cleanup_interval_seconds: u64,
+    
+    /// Enable file spill to disk when buffer is full (default: false)
+    #[serde(default = "default_enable_file_spill")]
+    pub enable_file_spill: bool,
+    
+    /// Maximum file spill size in bytes (default: 500MB)
+    #[serde(default = "default_max_file_spill_size")]
+    pub max_file_spill_size: usize,
+}
+
+fn default_max_buffer_size() -> usize { 50 * 1024 * 1024 }  // 50MB
+fn default_max_chunks() -> usize { 1000 }
+fn default_chunk_timeout_seconds() -> u64 { 60 }
+fn default_client_timeout_seconds() -> u64 { 30 }
+fn default_cleanup_interval_seconds() -> u64 { 5 }
+fn default_enable_file_spill() -> bool { false }
+fn default_max_file_spill_size() -> usize { 500 * 1024 * 1024 }  // 500MB
+
+impl Default for BufferConfig {
+    fn default() -> Self {
+        Self {
+            max_buffer_size: default_max_buffer_size(),
+            max_chunks: default_max_chunks(),
+            chunk_timeout_seconds: default_chunk_timeout_seconds(),
+            client_timeout_seconds: default_client_timeout_seconds(),
+            cleanup_interval_seconds: default_cleanup_interval_seconds(),
+            enable_file_spill: default_enable_file_spill(),
+            max_file_spill_size: default_max_file_spill_size(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -333,6 +469,7 @@ impl Default for Config {
             file_manager: None,
             pipeline: Some(PipelineConfig::default()),
             metrics: Some(MetricsConfig::default()),
+            relay: Some(RelayConfig::default()),
         }
     }
 }

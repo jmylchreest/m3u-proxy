@@ -322,15 +322,7 @@ impl StreamingPipelineBuilder {
 
     /// Build with chunked source loading strategy
     pub fn build_chunked(self) -> Result<StreamingPipeline> {
-        // TODO: Implement native streaming stages to replace WASM implementations
-        Err(anyhow::anyhow!("Streaming pipeline not available without WASM plugins"))
-    }
-
-    /// Build with WASM-based strategies (when available)
-    pub fn build_wasm(self) -> Result<StreamingPipeline> {
-        // TODO: Implement when WASM runtime is available
-        warn!("WASM strategies not yet implemented, falling back to chunked");
-        self.build_chunked()
+        Err(anyhow::anyhow!("Streaming pipeline not available - use native pipeline instead"))
     }
 }
 

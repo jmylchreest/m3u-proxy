@@ -41,7 +41,11 @@ impl LogoAssetService {
 
     /// Construct the full URL for a cached logo
     pub fn get_cached_logo_url(&self, cache_id: &str, base_url: &str) -> String {
-        format!("{}/api/v1/logos/cached/{}", base_url.trim_end_matches('/'), cache_id)
+        format!(
+            "{}/api/v1/logos/cached/{}",
+            base_url.trim_end_matches('/'),
+            cache_id
+        )
     }
 
     pub async fn create_asset_with_id(
@@ -596,8 +600,13 @@ impl LogoAssetService {
     /// 3. Alphabetically sorts query parameters
     /// 4. Creates a SHA256 hash of the normalized URL
     fn generate_cache_id_from_url(url: &str) -> Result<String, anyhow::Error> {
-        let parsed_url =
-            Url::parse(url).map_err(|e| anyhow::anyhow!("Invalid URL '{}': {}", url, e))?;
+        let parsed_url = Url::parse(url).map_err(|e| {
+            anyhow::anyhow!(
+                "Invalid URL '{}': {}",
+                crate::utils::url::UrlUtils::obfuscate_credentials(url),
+                e
+            )
+        })?;
 
         // Start building normalized URL without scheme
         let mut normalized = String::new();
@@ -935,8 +944,13 @@ impl LogoAssetService {
         source_url: &str,
     ) -> Result<Vec<u8>, anyhow::Error> {
         // Try to load the image
-        let img = image::load_from_memory(image_bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to decode image from '{}': {}", source_url, e))?;
+        let img = image::load_from_memory(image_bytes).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to decode image from '{}': {}",
+                crate::utils::url::UrlUtils::obfuscate_credentials(source_url),
+                e
+            )
+        })?;
 
         // Convert to PNG
         let mut png_bytes = Vec::new();

@@ -38,6 +38,56 @@
                         </button>
                     </div>
                 </div>
+                
+                <!-- Information Section -->
+                <div class="card-body">
+                    <details class="info-collapse">
+                        <summary class="info-collapse-header">
+                            <i class="fas fa-info-circle"></i>
+                            <span>Information</span>
+                            <i class="fas fa-chevron-down collapse-icon"></i>
+                        </summary>
+                        <div class="info-collapse-content">
+                            <div class="alert alert-info mb-0">
+                                <div class="d-flex align-items-start">
+                                    <i class="fas fa-info-circle me-2 mt-1"></i>
+                                    <div>
+                                        <strong>How Stream Proxies Work:</strong>
+                                        <p class="mb-2">
+                                            Stream proxies generate customized M3U playlists and XMLTV EPG feeds by combining and filtering your sources.
+                                        </p>
+                                        <ul class="mb-0 small">
+                                            <li>
+                                                <strong>Priority Order:</strong> Streams are processed in priority order (drag to reorder). Higher priority sources take precedence during channel deduplication.
+                                            </li>
+                                            <li>
+                                                <strong>Deduplication:</strong> When multiple sources contain the same channel (matched by TVG-ID or name), only the highest priority version is kept to avoid conflicts.
+                                            </li>
+                                            <li>
+                                                <strong>Regeneration:</strong> Proxies can regenerate automatically when sources or filters change (if auto-regenerate is enabled), or manually when you choose.
+                                            </li>
+                                            <li>
+                                                <strong>Stream Modes:</strong> 
+                                                <ul>
+                                                    <li><em>Redirect:</em> Sends clients directly to original stream URLs (faster, limited metrics)</li>
+                                                    <li><em>Proxy:</em> Streams content through this service (enables full metrics collection)</li>
+                                                    <li><em>Relay:</em> Processes streams through FFmpeg for transcoding and optimization (requires FFmpeg installation)</li>
+                                                </ul>
+                                            </li>
+                                            <li>
+                                                <strong>Filter Processing:</strong> Proxies start with an empty channel list. Filters are applied in order to add or remove channels based on your criteria.
+                                            </li>
+                                            <li>
+                                                <strong>Channel Numbers:</strong> Channels are automatically numbered starting from your configured starting number.
+                                            </li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+                
                 <div
                     id="loadingIndicator"
                     class="text-center"
@@ -233,6 +283,7 @@
                                 id="proxyMode"
                                 name="proxy_mode"
                                 class="form-control"
+                                onchange="handleProxyModeChange()"
                             >
                                 <option value="redirect">
                                     Redirect - Send clients directly to original
@@ -242,11 +293,32 @@
                                     Proxy - Stream content through this service
                                     for better metrics
                                 </option>
+                                <option value="relay" id="relayModeOption" style="display: none;">
+                                    Relay - Process streams through FFmpeg for
+                                    transcoding and optimization
+                                </option>
                             </select>
                             <small class="text-muted">
                                 Redirect mode is faster but provides limited
                                 metrics. Proxy mode allows full metrics
-                                collection.
+                                collection. Relay mode enables transcoding and optimization.
+                            </small>
+                        </div>
+
+                        <!-- Relay Profile Selection (hidden by default) -->
+                        <div class="form-group" id="relayProfileGroup" style="display: none;">
+                            <label for="relayProfile">Relay Profile</label>
+                            <select
+                                id="relayProfile"
+                                name="relay_profile_id"
+                                class="form-control"
+                            >
+                                <option value="">Select a relay profile...</option>
+                                <!-- Relay profiles will be loaded here -->
+                            </select>
+                            <small class="text-muted">
+                                Choose the FFmpeg relay profile for stream processing.
+                                <span id="relayHealthStatus" class="relay-health-status"></span>
                             </small>
                         </div>
 
@@ -681,6 +753,81 @@
             </div>
         </div>
 
+        <style>
+            /* Information Collapse Styles */
+            .info-collapse {
+                border: 1px solid #dee2e6;
+                border-radius: 0.375rem;
+                margin-bottom: 1rem;
+            }
+
+            .info-collapse-header {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                padding: 0.75rem 1rem;
+                cursor: pointer;
+                background-color: #f8f9fa;
+                border-radius: 0.375rem;
+                user-select: none;
+                font-weight: 500;
+                transition: background-color 0.2s;
+            }
+
+            .info-collapse-header:hover {
+                background-color: #e9ecef;
+            }
+
+            .info-collapse .collapse-icon {
+                margin-left: auto;
+                transition: transform 0.2s;
+            }
+
+            details[open] .collapse-icon {
+                transform: rotate(180deg);
+            }
+
+            .info-collapse-content {
+                padding: 1rem;
+                border-top: 1px solid #dee2e6;
+            }
+
+            /* Relay-specific styles */
+            .relay-health-status {
+                font-weight: 500;
+            }
+
+            .relay-health-status.healthy {
+                color: #28a745;
+            }
+
+            .relay-health-status.checking {
+                color: #ffc107;
+            }
+
+            .relay-health-status.warning {
+                color: #fd7e14;
+            }
+
+            .relay-health-status.error {
+                color: #dc3545;
+            }
+
+            .relay-health-status.unhealthy {
+                color: #dc3545;
+            }
+
+            .relay-profile-option.unavailable {
+                color: #6c757d;
+                background-color: #f8f9fa;
+                font-style: italic;
+            }
+
+            .relay-profile-option.unavailable:disabled {
+                opacity: 0.6;
+            }
+        </style>
+        
         <script src="/static/js/shared-utils.js"></script>
         <script src="/static/js/shared-loader.js"></script>
         <script src="/static/js/proxies.js"></script>

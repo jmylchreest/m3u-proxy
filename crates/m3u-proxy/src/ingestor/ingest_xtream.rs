@@ -300,7 +300,7 @@ impl XtreamIngestor {
             client: reqwest::Client::new(),
         }
     }
-    
+
     /// Extract clean channel name from Xtream API name field
     /// The name field often contains EXTINF lines like: "#EXTINF:-1 tvg-name=\"...\" ## CHANNEL NAME ##"
     /// We need to extract just the clean channel name
@@ -321,15 +321,15 @@ impl XtreamIngestor {
                     }
                 }
             }
-            
+
             // Fallback: Look for content after the last attribute (space-separated)
             // Format: #EXTINF:-1 tvg-name="..." tvg-chno="..." CHANNEL NAME
             let mut parts = raw_name.split_whitespace();
             parts.next(); // Skip "#EXTINF:-1"
-            
+
             // Skip all attribute=value pairs
             let remaining_parts: Vec<&str> = parts.skip_while(|part| part.contains('=')).collect();
-            
+
             if !remaining_parts.is_empty() {
                 let channel_name = remaining_parts.join(" ");
                 if !channel_name.is_empty() {
@@ -340,11 +340,11 @@ impl XtreamIngestor {
                     return channel_name;
                 }
             }
-            
+
             // Last fallback: try to find comma-separated content
             if let Some(comma_pos) = raw_name.rfind(',') {
                 let after_comma = raw_name[comma_pos + 1..].trim();
-                
+
                 // If there's content after the comma, use that as the channel name
                 if !after_comma.is_empty() {
                     debug!(
@@ -354,13 +354,13 @@ impl XtreamIngestor {
                     return after_comma.to_string();
                 }
             }
-            
+
             warn!(
                 "Could not extract clean channel name from EXTINF line: '{}'",
                 raw_name
             );
         }
-        
+
         // If not an EXTINF line or extraction failed, return as-is
         raw_name.to_string()
     }
@@ -413,7 +413,7 @@ impl SourceIngestor for XtreamIngestor {
 
         info!(
             "Connecting to Xtream API: {}",
-            channels_url.replace(password, "***")
+            crate::utils::url::UrlUtils::obfuscate_credentials(&channels_url)
         );
 
         // Update state to downloading
@@ -556,7 +556,7 @@ impl SourceIngestor for XtreamIngestor {
 
             // Extract clean channel name from potentially EXTINF-formatted name
             let clean_channel_name = Self::extract_clean_channel_name(&xtream_channel.name);
-            
+
             let channel = Channel {
                 id: Uuid::new_v4(),
                 source_id: source.id,
@@ -641,7 +641,10 @@ impl XtreamIngestor {
             format!("http://{}", url)
         };
 
-        debug!("Parsing base URL from: {}", url_to_parse);
+        debug!(
+            "Parsing base URL from: {}",
+            crate::utils::url::UrlUtils::obfuscate_credentials(&url_to_parse)
+        );
 
         // Remove any trailing paths and parameters to get base URL
         let parsed = url::Url::parse(&url_to_parse)?;
@@ -660,7 +663,10 @@ impl XtreamIngestor {
             )
         };
 
-        debug!("Parsed base URL: {}", base_url);
+        debug!(
+            "Parsed base URL: {}",
+            crate::utils::url::UrlUtils::obfuscate_credentials(&base_url)
+        );
         Ok(base_url)
     }
 }

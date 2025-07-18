@@ -36,62 +36,13 @@ async fn check_xtream_epg_availability(base_url: &str, username: &str, password:
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
 
-            // If HEAD request is successful, try a small GET request to verify XMLTV content
+            // For Xtream sources, a successful HEAD request is sufficient to confirm EPG availability
             if status.is_success() {
                 info!(
-                    "EPG probe HEAD request successful for '{}' - Status: {}, Content-Type: '{}'",
+                    "EPG probe HEAD request successful for '{}' - Status: {}, Content-Type: '{}' - EPG available",
                     base_url, status, content_type
                 );
-
-                // Some servers don't return proper content-type in HEAD requests
-                // Try a GET request with a small range to check for XMLTV content
-                match client
-                    .get(&epg_url)
-                    .header("Range", "bytes=0-512") // Only get first 512 bytes
-                    .send()
-                    .await
-                {
-                    Ok(get_response) => {
-                        let get_status = get_response.status();
-                        let get_content_type = get_response
-                            .headers()
-                            .get("content-type")
-                            .and_then(|v| v.to_str().ok())
-                            .unwrap_or("")
-                            .to_string(); // Convert to owned String
-
-                        if let Ok(content) = get_response.text().await {
-                            let content_preview = if content.len() > 200 {
-                                format!("{}...", &content[..200])
-                            } else {
-                                content.clone()
-                            };
-
-                            let has_xml_declaration = content.contains("<?xml");
-                            let has_tv_elements = content.contains("<tv")
-                                || content.contains("<programme")
-                                || content.contains("<channel");
-                            let is_xmltv = has_xml_declaration && has_tv_elements;
-
-                            info!("EPG probe GET request for '{}' - Status: {}, Content-Type: '{}', Length: {} bytes",
-                                  base_url, get_status, get_content_type, content.len());
-                            info!("EPG content preview: {}", content_preview);
-                            info!("EPG content analysis - XML declaration: {}, TV elements: {}, Valid XMLTV: {}",
-                                  has_xml_declaration, has_tv_elements, is_xmltv);
-
-                            is_xmltv
-                        } else {
-                            info!("EPG probe GET request for '{}' succeeded but failed to read content - falling back to content-type check", base_url);
-                            // Fallback to content-type check
-                            content_type.contains("xml") || content_type.contains("text")
-                        }
-                    }
-                    Err(e) => {
-                        info!("EPG probe GET request failed for '{}': {} - falling back to HEAD content-type check", base_url, e);
-                        // If GET fails, fallback to content-type check from HEAD
-                        content_type.contains("xml") || content_type.contains("text")
-                    }
-                }
+                true
             } else {
                 info!(
                     "EPG probe HEAD request failed for '{}' - Status: {}, Content-Type: '{}'",
@@ -101,7 +52,11 @@ async fn check_xtream_epg_availability(base_url: &str, username: &str, password:
             }
         }
         Err(e) => {
-            info!("Failed to check EPG availability for {}: {}", epg_url, e);
+            info!(
+                "Failed to check EPG availability for {}: {}",
+                UrlUtils::obfuscate_credentials(&epg_url),
+                e
+            );
             false
         }
     }
@@ -373,8 +328,10 @@ impl Database {
 
                     match self.create_epg_source_internal(&epg_source_request).await {
                         Ok(epg_source) => {
-                            info!("Successfully created linked EPG source '{}' ({}) for stream source '{}'",
-                                  epg_source.name, epg_source.id, source.name);
+                            info!(
+                                "Successfully created linked EPG source '{}' ({}) for stream source '{}'",
+                                epg_source.name, epg_source.id, source.name
+                            );
 
                             // Create a linked entry to track the relationship
                             let link_id = Uuid::new_v4();
@@ -397,8 +354,14 @@ impl Database {
                             .await;
 
                             match link_result {
-                                Ok(_) => info!("Successfully linked stream source '{}' with EPG source '{}'", source.name, epg_source.name),
-                                Err(e) => warn!("Failed to create link between stream source '{}' and EPG source '{}': {}", source.name, epg_source.name, e),
+                                Ok(_) => info!(
+                                    "Successfully linked stream source '{}' with EPG source '{}'",
+                                    source.name, epg_source.name
+                                ),
+                                Err(e) => warn!(
+                                    "Failed to create link between stream source '{}' and EPG source '{}': {}",
+                                    source.name, epg_source.name, e
+                                ),
                             }
                         }
                         Err(e) => {
@@ -409,7 +372,10 @@ impl Database {
                         }
                     }
                 } else {
-                    info!("Xtream source '{}' does not provide EPG data - skipping EPG source creation", source.name);
+                    info!(
+                        "Xtream source '{}' does not provide EPG data - skipping EPG source creation",
+                        source.name
+                    );
                 }
             } else {
                 info!(
@@ -571,7 +537,7 @@ impl Database {
 
                 // Prepare bulk insert statement
                 let mut query_builder = sqlx::QueryBuilder::new(
-                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at) "
+                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at) ",
                 );
 
                 query_builder.push_values(chunk, |mut b, channel| {
@@ -670,7 +636,7 @@ impl Database {
             if !channels.is_empty() {
                 // Prepare bulk insert statement for all channels
                 let mut query_builder = sqlx::QueryBuilder::new(
-                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at) "
+                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at) ",
                 );
 
                 query_builder.push_values(channels, |mut b, channel| {
@@ -1007,7 +973,12 @@ impl Database {
     }
 
     /// Get channels for a source with pagination support for streaming
-    pub async fn get_channels_for_source_paginated(&self, source_id: Uuid, offset: usize, limit: usize) -> Result<Vec<Channel>> {
+    pub async fn get_channels_for_source_paginated(
+        &self,
+        source_id: Uuid,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Channel>> {
         let rows = sqlx::query(
             "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
              FROM channels WHERE source_id = ? ORDER BY channel_name LIMIT ? OFFSET ?"
@@ -1043,13 +1014,18 @@ impl Database {
 
     /// Get channels for an active source with pagination support for orchestrator streaming
     /// This method filters to only return channels from active sources
-    pub async fn get_channels_for_active_source_paginated(&self, source_id: Uuid, offset: usize, limit: usize) -> Result<Vec<Channel>> {
+    pub async fn get_channels_for_active_source_paginated(
+        &self,
+        source_id: Uuid,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Channel>> {
         let rows = sqlx::query(
             "SELECT c.id, c.source_id, c.tvg_id, c.tvg_name, c.tvg_logo, c.tvg_shift, c.group_title, c.channel_name, c.stream_url, c.created_at, c.updated_at
-             FROM channels c 
-             INNER JOIN stream_sources s ON c.source_id = s.id 
-             WHERE c.source_id = ? AND s.is_active = true 
-             ORDER BY c.channel_name 
+             FROM channels c
+             INNER JOIN stream_sources s ON c.source_id = s.id
+             WHERE c.source_id = ? AND s.is_active = true
+             ORDER BY c.channel_name
              LIMIT ? OFFSET ?"
         )
         .bind(source_id.to_string())

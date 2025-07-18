@@ -57,7 +57,7 @@ impl super::Database {
     #[allow(dead_code)]
     pub async fn list_filters(&self) -> Result<Vec<Filter>> {
         let rows = sqlx::query(
-            "SELECT id, name, starting_channel_number, is_inverse, condition_tree, created_at, updated_at
+            "SELECT id, name, starting_channel_number, is_inverse, is_system_default, condition_tree, created_at, updated_at
              FROM filters
              ORDER BY name",
         )
@@ -72,6 +72,7 @@ impl super::Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
+                is_system_default: row.try_get("is_system_default")?,
                 condition_tree: row.try_get("condition_tree")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
@@ -97,13 +98,14 @@ impl super::Database {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "INSERT INTO filters (id, name, starting_channel_number, is_inverse, condition_tree)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO filters (id, name, starting_channel_number, is_inverse, is_system_default, condition_tree)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&request.name)
         .bind(request.starting_channel_number)
         .bind(request.is_inverse)
+        .bind(request.is_system_default)
         .bind(serde_json::to_string(&condition_tree)?)
         .execute(&mut *tx)
         .await?;
@@ -117,7 +119,7 @@ impl super::Database {
 
     pub async fn get_filter(&self, id: Uuid) -> Result<Option<Filter>> {
         let row = sqlx::query(
-            "SELECT id, name, starting_channel_number, is_inverse, condition_tree, created_at, updated_at
+            "SELECT id, name, starting_channel_number, is_inverse, is_system_default, condition_tree, created_at, updated_at
              FROM filters
              WHERE id = ?",
         )
@@ -132,6 +134,7 @@ impl super::Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
+                is_system_default: row.try_get("is_system_default")?,
                 condition_tree: row.try_get("condition_tree")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
@@ -180,6 +183,17 @@ impl super::Database {
     }
 
     pub async fn delete_filter(&self, id: Uuid) -> Result<bool> {
+        // Check if this is a system default filter
+        let is_system_default =
+            sqlx::query_scalar::<_, bool>("SELECT is_system_default FROM filters WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await?;
+
+        if let Some(true) = is_system_default {
+            return Err(anyhow::anyhow!("Cannot delete system default filter"));
+        }
+
         let result = sqlx::query("DELETE FROM filters WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
@@ -190,13 +204,13 @@ impl super::Database {
 
     pub async fn get_filters_with_usage(&self) -> Result<Vec<FilterWithUsage>> {
         let filters = sqlx::query(
-            "SELECT f.id, f.name, f.starting_channel_number, f.is_inverse, f.condition_tree,
+            "SELECT f.id, f.name, f.starting_channel_number, f.is_inverse, f.is_system_default, f.condition_tree,
              f.created_at, f.updated_at, COUNT(pf.filter_id) as usage_count
              FROM filters f
              LEFT JOIN proxy_filters pf ON f.id = pf.filter_id AND pf.is_active = 1
-             GROUP BY f.id, f.name, f.starting_channel_number, f.is_inverse, f.condition_tree,
+             GROUP BY f.id, f.name, f.starting_channel_number, f.is_inverse, f.is_system_default, f.condition_tree,
              f.created_at, f.updated_at
-             ORDER BY f.name",
+             ORDER BY f.is_system_default DESC, f.name",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -210,6 +224,7 @@ impl super::Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
                 is_inverse: row.try_get("is_inverse")?,
+                is_system_default: row.try_get("is_system_default")?,
                 condition_tree: row.try_get("condition_tree")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
@@ -258,6 +273,7 @@ impl super::Database {
             source_type: request.source_type.clone(),
             starting_channel_number: 1,
             is_inverse: request.is_inverse,
+            is_system_default: false,
             condition_tree: serde_json::to_string(&condition_tree)?,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
@@ -351,10 +367,10 @@ impl super::Database {
     pub async fn get_proxy_filters(&self, proxy_id: Uuid) -> Result<Vec<ProxyFilterWithDetails>> {
         let filters = sqlx::query(
             "SELECT pf.proxy_id, pf.filter_id, pf.priority_order, pf.is_active, pf.created_at,
-                    f.name, f.starting_channel_number, f.is_inverse, f.condition_tree, f.updated_at as filter_updated_at
+                    f.name, f.starting_channel_number, f.is_inverse, f.is_system_default, f.condition_tree, f.updated_at as filter_updated_at
              FROM proxy_filters pf
              JOIN filters f ON pf.filter_id = f.id
-             WHERE pf.proxy_id = ?
+             WHERE pf.proxy_id = ? AND pf.is_active = 1
              ORDER BY pf.priority_order",
         )
         .bind(proxy_id.to_string())
@@ -377,6 +393,7 @@ impl super::Database {
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.get("starting_channel_number"),
                 is_inverse: row.get("is_inverse"),
+                is_system_default: row.get("is_system_default"),
                 condition_tree: row.get("condition_tree"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("filter_updated_at"),
@@ -462,5 +479,63 @@ impl super::Database {
         .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Ensure default filters exist in the database
+    pub async fn ensure_default_filters(&self) -> Result<()> {
+        // Check if default filters already exist
+        let existing_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM filters WHERE id IN (
+                '00000000-0000-0000-0000-000000000001',
+                '00000000-0000-0000-0000-000000000002'
+            )",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        if existing_count >= 2 {
+            return Ok(()); // Default filters already exist
+        }
+
+        // Create "Include All Valid Stream URLs" filter
+        let valid_urls_filter = FilterCreateRequest {
+            name: "Include All Valid Stream URLs".to_string(),
+            source_type: FilterSourceType::Stream,
+            starting_channel_number: 1,
+            is_inverse: false,
+            is_system_default: true,
+            filter_expression: "stream_url starts_with \"http\"".to_string(),
+        };
+
+        // Create "Exclude Adult Content" filter
+        let exclude_adult_filter = FilterCreateRequest {
+            name: "Exclude Adult Content".to_string(),
+            source_type: FilterSourceType::Stream,
+            starting_channel_number: 1,
+            is_inverse: true, // This makes it an exclude filter
+            is_system_default: true,
+            filter_expression: "(group_title contains \"adult\" OR group_title contains \"xxx\" OR group_title contains \"porn\" OR channel_name contains \"adult\" OR channel_name contains \"xxx\" OR channel_name contains \"porn\")".to_string(),
+        };
+
+        // Try to create the filters, but don't fail if they already exist
+        if let Err(e) = self.create_filter(&valid_urls_filter).await {
+            tracing::warn!(
+                "Could not create default 'Include All Valid Stream URLs' filter: {}",
+                e
+            );
+        } else {
+            tracing::info!("Created default filter: Include All Valid Stream URLs");
+        }
+
+        if let Err(e) = self.create_filter(&exclude_adult_filter).await {
+            tracing::warn!(
+                "Could not create default 'Exclude Adult Content' filter: {}",
+                e
+            );
+        } else {
+            tracing::info!("Created default filter: Exclude Adult Content");
+        }
+
+        Ok(())
     }
 }

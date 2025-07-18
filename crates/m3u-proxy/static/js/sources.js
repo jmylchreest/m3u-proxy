@@ -68,7 +68,14 @@ class SourcesManager {
       }
 
       const data = await response.json();
-      this.sources = Array.isArray(data) ? data : [];
+      // Handle paginated API response format
+      if (data.success && data.data && Array.isArray(data.data.items)) {
+        this.sources = data.data.items;
+      } else if (Array.isArray(data)) {
+        this.sources = data;
+      } else {
+        this.sources = [];
+      }
       await this.loadProcessingInfo();
       this.renderSources();
     } catch (error) {
@@ -244,9 +251,6 @@ class SourcesManager {
                 ✏️ Edit
             </button>
             ${refreshButtonContent}
-            <button class="btn btn-sm btn-info" onclick="sourcesManager.previewDataMapping('${source.id}', '${source.source_type}')" ${isIngesting ? "disabled" : ""} title="Preview data mapping rules for this source">
-                👁️ Preview Rules
-            </button>
             <button class="btn btn-sm btn-danger" onclick="sourcesManager.deleteSource('${source.id}')" ${isIngesting ? "disabled" : ""}>
                 🗑️ Delete
             </button>
@@ -317,13 +321,16 @@ class SourcesManager {
 
       let response;
       if (this.editingSource) {
-        response = await fetch(`/api/v1/sources/stream/${this.editingSource.id}`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
+        response = await fetch(
+          `/api/v1/sources/stream/${this.editingSource.id}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(formData),
           },
-          body: JSON.stringify(formData),
-        });
+        );
       } else {
         response = await fetch("/api/v1/sources/stream", {
           method: "POST",

@@ -27,6 +27,42 @@ impl StreamProxyRepository {
         Self { pool }
     }
 
+    /// Helper function to construct a StreamProxy from a database row
+    fn stream_proxy_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<StreamProxy> {
+        let proxy_mode_str = row.get::<String, _>("proxy_mode");
+        tracing::info!("DEBUG: Raw proxy_mode from database: '{}'", proxy_mode_str);
+        let proxy_mode = StreamProxyMode::from_str(&proxy_mode_str);
+
+        Ok(StreamProxy {
+            id: row
+                .get_uuid("id")
+                .map_err(|e| RepositoryError::QueryFailed {
+                    query: "stream_proxy_from_row".to_string(),
+                    message: format!("Failed to parse id: {}", e),
+                })?,
+            name: row.get("name"),
+            description: row.get("description"),
+            proxy_mode,
+            upstream_timeout: row
+                .get::<Option<i64>, _>("upstream_timeout")
+                .map(|v| v as i32),
+            buffer_size: row.get::<Option<i64>, _>("buffer_size").map(|v| v as i32),
+            max_concurrent_streams: row
+                .get::<Option<i64>, _>("max_concurrent_streams")
+                .map(|v| v as i32),
+            starting_channel_number: row.get::<i64, _>("starting_channel_number") as i32,
+            created_at: row.get_datetime("created_at"),
+            updated_at: row.get_datetime("updated_at"),
+            last_generated_at: row.get_datetime_opt("last_generated_at"),
+            is_active: row.get("is_active"),
+            auto_regenerate: row.get("auto_regenerate"),
+            cache_channel_logos: row.get("cache_channel_logos"),
+            cache_program_logos: row.get("cache_program_logos"),
+            relay_profile_id: row.get::<Option<String>, _>("relay_profile_id")
+                .and_then(|s| s.parse::<Uuid>().ok()),
+        })
+    }
+
     /// Create a new stream proxy with all its relationships
     pub async fn create_with_relationships(
         &self,
@@ -51,6 +87,7 @@ impl StreamProxyRepository {
         let proxy_mode_str = match request.proxy_mode {
             StreamProxyMode::Redirect => "redirect",
             StreamProxyMode::Proxy => "proxy",
+            StreamProxyMode::Relay => "relay",
         };
 
         // Convert values to prevent temporary value drops
@@ -65,9 +102,9 @@ impl StreamProxyRepository {
                 id, name, description, proxy_mode, upstream_timeout,
                 buffer_size, max_concurrent_streams, starting_channel_number,
                 created_at, updated_at, is_active, auto_regenerate,
-                cache_channel_logos, cache_program_logos
+                cache_channel_logos, cache_program_logos, relay_profile_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&proxy_id_str)
@@ -84,6 +121,7 @@ impl StreamProxyRepository {
         .bind(request.auto_regenerate)
         .bind(request.cache_channel_logos)
         .bind(request.cache_program_logos)
+        .bind(request.relay_profile_id.map(|id| id.to_string()))
         .execute(&mut *tx)
         .await
         .map_err(|e| RepositoryError::QueryFailed {
@@ -197,6 +235,7 @@ impl StreamProxyRepository {
         let proxy_mode_str = match request.proxy_mode {
             StreamProxyMode::Redirect => "redirect",
             StreamProxyMode::Proxy => "proxy",
+            StreamProxyMode::Relay => "relay",
         };
 
         // Convert values to prevent temporary value drops
@@ -212,7 +251,7 @@ impl StreamProxyRepository {
             SET name = ?, description = ?, proxy_mode = ?, upstream_timeout = ?,
                 buffer_size = ?, max_concurrent_streams = ?, starting_channel_number = ?,
                 is_active = ?, auto_regenerate = ?, cache_channel_logos = ?,
-                cache_program_logos = ?, updated_at = ?
+                cache_program_logos = ?, relay_profile_id = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
@@ -227,6 +266,7 @@ impl StreamProxyRepository {
         .bind(request.auto_regenerate)
         .bind(request.cache_channel_logos)
         .bind(request.cache_program_logos)
+        .bind(request.relay_profile_id.map(|id| id.to_string()))
         .bind(&now_str)
         .bind(&proxy_id_str)
         .execute(&mut *tx)
@@ -547,7 +587,7 @@ impl StreamProxyRepository {
             SELECT id, name, description, proxy_mode,
                    upstream_timeout, buffer_size, max_concurrent_streams,
                    starting_channel_number, created_at, updated_at, last_generated_at, is_active, auto_regenerate,
-                   cache_channel_logos, cache_program_logos
+                   cache_channel_logos, cache_program_logos, relay_profile_id
             FROM stream_proxies
             WHERE id = ?
             "#
@@ -561,42 +601,7 @@ impl StreamProxyRepository {
         })?;
 
         match row {
-            Some(row) => {
-                let proxy_mode = match row.get::<String, _>("proxy_mode").as_str() {
-                    "redirect" => StreamProxyMode::Redirect,
-                    "proxy" => StreamProxyMode::Proxy,
-                    _ => StreamProxyMode::Redirect,
-                };
-
-                let proxy = StreamProxy {
-                    id: row
-                        .get_uuid("id")
-                        .map_err(|e| RepositoryError::QueryFailed {
-                            query: "get_by_id".to_string(),
-                            message: format!("Failed to parse id: {}", e),
-                        })?,
-                    name: row.get("name"),
-                    description: row.get("description"),
-                    proxy_mode,
-                    upstream_timeout: row
-                        .get::<Option<i64>, _>("upstream_timeout")
-                        .map(|v| v as i32),
-                    buffer_size: row.get::<Option<i64>, _>("buffer_size").map(|v| v as i32),
-                    max_concurrent_streams: row
-                        .get::<Option<i64>, _>("max_concurrent_streams")
-                        .map(|v| v as i32),
-                    starting_channel_number: row.get::<i64, _>("starting_channel_number") as i32,
-                    created_at: row.get_datetime("created_at"),
-                    updated_at: row.get_datetime("updated_at"),
-                    last_generated_at: row.get_datetime_opt("last_generated_at"),
-                    is_active: row.get("is_active"),
-                    auto_regenerate: row.get("auto_regenerate"),
-                    cache_channel_logos: row.get("cache_channel_logos"),
-                    cache_program_logos: row.get("cache_program_logos"),
-                };
-
-                Ok(Some(proxy))
-            }
+            Some(row) => Ok(Some(Self::stream_proxy_from_row(&row)?)),
             None => Ok(None),
         }
     }
@@ -615,7 +620,7 @@ impl Repository<StreamProxy, Uuid> for StreamProxyRepository {
             SELECT id, name, description, proxy_mode,
                    upstream_timeout, buffer_size, max_concurrent_streams,
                    starting_channel_number, created_at, updated_at, last_generated_at, is_active, auto_regenerate,
-                   cache_channel_logos, cache_program_logos
+                   cache_channel_logos, cache_program_logos, relay_profile_id
             FROM stream_proxies
             WHERE id = ?
             "#
@@ -629,42 +634,7 @@ impl Repository<StreamProxy, Uuid> for StreamProxyRepository {
         })?;
 
         match row {
-            Some(row) => {
-                let proxy_mode = match row.get::<String, _>("proxy_mode").as_str() {
-                    "redirect" => StreamProxyMode::Redirect,
-                    "proxy" => StreamProxyMode::Proxy,
-                    _ => StreamProxyMode::Redirect,
-                };
-
-                let proxy = StreamProxy {
-                    id: row
-                        .get_uuid("id")
-                        .map_err(|e| RepositoryError::QueryFailed {
-                            query: "find_by_id".to_string(),
-                            message: format!("Failed to parse id: {}", e),
-                        })?,
-                    name: row.get("name"),
-                    description: row.get("description"),
-                    proxy_mode,
-                    upstream_timeout: row
-                        .get::<Option<i64>, _>("upstream_timeout")
-                        .map(|v| v as i32),
-                    buffer_size: row.get::<Option<i64>, _>("buffer_size").map(|v| v as i32),
-                    max_concurrent_streams: row
-                        .get::<Option<i64>, _>("max_concurrent_streams")
-                        .map(|v| v as i32),
-                    starting_channel_number: row.get::<i64, _>("starting_channel_number") as i32,
-                    created_at: row.get_datetime("created_at"),
-                    updated_at: row.get_datetime("updated_at"),
-                    last_generated_at: row.get_datetime_opt("last_generated_at"),
-                    is_active: row.get("is_active"),
-                    auto_regenerate: row.get("auto_regenerate"),
-                    cache_channel_logos: row.get("cache_channel_logos"),
-                    cache_program_logos: row.get("cache_program_logos"),
-                };
-
-                Ok(Some(proxy))
-            }
+            Some(row) => Ok(Some(Self::stream_proxy_from_row(&row)?)),
             None => Ok(None),
         }
     }
@@ -675,7 +645,7 @@ impl Repository<StreamProxy, Uuid> for StreamProxyRepository {
             SELECT id, name, description, proxy_mode,
                    upstream_timeout, buffer_size, max_concurrent_streams,
                    starting_channel_number, created_at, updated_at, last_generated_at, is_active, auto_regenerate,
-                   cache_channel_logos, cache_program_logos
+                   cache_channel_logos, cache_program_logos, relay_profile_id
             FROM stream_proxies
             ORDER BY created_at DESC
             "#
@@ -689,40 +659,7 @@ impl Repository<StreamProxy, Uuid> for StreamProxyRepository {
 
         let mut proxies = Vec::new();
         for row in rows {
-            let proxy_mode = match row.get::<String, _>("proxy_mode").as_str() {
-                "redirect" => StreamProxyMode::Redirect,
-                "proxy" => StreamProxyMode::Proxy,
-                _ => StreamProxyMode::Redirect,
-            };
-
-            let proxy = StreamProxy {
-                id: row
-                    .get_uuid("id")
-                    .map_err(|e| RepositoryError::QueryFailed {
-                        query: "find_all".to_string(),
-                        message: format!("Failed to parse id: {}", e),
-                    })?,
-                name: row.get("name"),
-                description: row.get("description"),
-                proxy_mode,
-                upstream_timeout: row
-                    .get::<Option<i64>, _>("upstream_timeout")
-                    .map(|v| v as i32),
-                buffer_size: row.get::<Option<i64>, _>("buffer_size").map(|v| v as i32),
-                max_concurrent_streams: row
-                    .get::<Option<i64>, _>("max_concurrent_streams")
-                    .map(|v| v as i32),
-                starting_channel_number: row.get::<i64, _>("starting_channel_number") as i32,
-                created_at: row.get_datetime("created_at"),
-                updated_at: row.get_datetime("updated_at"),
-                last_generated_at: row.get_datetime_opt("last_generated_at"),
-                is_active: row.get("is_active"),
-                auto_regenerate: row.get("auto_regenerate"),
-                cache_channel_logos: row.get("cache_channel_logos"),
-                cache_program_logos: row.get("cache_program_logos"),
-            };
-
-            proxies.push(proxy);
+            proxies.push(Self::stream_proxy_from_row(&row)?);
         }
 
         Ok(proxies)

@@ -1,217 +1,236 @@
 # M3U Proxy Configuration Example
 # Copy this file to config.toml and modify as needed
+# All values shown are defaults - uncomment and modify as needed
+
+# ┌─────────────────────────────────────────────────────────────┐
+# │                     DATABASE CONFIGURATION                 │
+# └─────────────────────────────────────────────────────────────┘
 
 [database]
-# Database connection URL
-# Supported: sqlite://, postgres://, mysql://
+# Database connection URL - supports SQLite, PostgreSQL, MySQL
 url = "sqlite://./m3u-proxy.db"
 
-# Maximum number of database connections
+# Maximum number of concurrent database connections
 max_connections = 10
 
+# Database batch size configuration for performance optimization
+[database.batch_sizes]
+# Maximum EPG channels per batch (must respect SQLite 32,766 variable limit)
+# EPG channels have 9 fields, so 3600 * 9 = 32,400 variables (safe margin)
+epg_channels = 3600
+
+# Maximum EPG programs per batch (must respect SQLite 32,766 variable limit)  
+# EPG programs have 18 fields, so 1800 * 18 = 32,400 variables (safe margin)
+epg_programs = 1800
+
+# Maximum stream channels to process in a single chunk
+stream_channels = 500
+
+# ┌─────────────────────────────────────────────────────────────┐
+# │                      WEB SERVER CONFIGURATION              │
+# └─────────────────────────────────────────────────────────────┘
+
 [web]
-# Web server bind address
+# Web server bind address (0.0.0.0 = all interfaces, 127.0.0.1 = localhost only)
 host = "0.0.0.0"
 
 # Web server port
 port = 8080
 
 # Base URL for generating full URLs (logos, streams, etc.)
-# This should be the public URL that clients will use to access the service
-# Examples:
-#   http://localhost:8080 (for local development)
-#   https://m3u-proxy.example.com (for production with domain)
-#   http://192.168.1.100:8080 (for local network access)
+# This should match the public URL clients use to access the service
+# Examples: http://localhost:8080, https://m3u-proxy.example.com, http://192.168.1.100:8080
 base_url = "http://localhost:8080"
 
+# ┌─────────────────────────────────────────────────────────────┐
+# │                     STORAGE CONFIGURATION                  │
+# └─────────────────────────────────────────────────────────────┘
+
 [storage]
-# Directory for M3U file storage
+# Directory for generated M3U playlist files
 m3u_path = "./data/m3u"
 
-# Directory for uploaded logos
+# Directory for user-uploaded channel logos
 uploaded_logo_path = "./data/logos/uploaded"
 
-# Directory for cached logos
+# Directory for automatically cached/downloaded logos
 cached_logo_path = "./data/logos/cached"
 
-# Number of proxy versions to keep (0 = only current)
+# Number of previous proxy versions to retain (0 = only current)
 proxy_versions_to_keep = 3
 
-# Automatically clean up orphaned logo database entries when uploaded_logo_path changes
+# Optional: Custom temporary file directory (None = system default)
+# temp_path = "./data/temp"
+
+# Automatically clean orphaned logo entries when paths change
 clean_orphan_logos = true
 
+# ┌─────────────────────────────────────────────────────────────┐
+# │                   INGESTION CONFIGURATION                  │
+# └─────────────────────────────────────────────────────────────┘
+
 [ingestion]
-# How often to update progress during channel processing (in number of channels)
-# Lower values = more frequent updates but higher overhead
-# Higher values = less frequent updates but better performance
+# Progress update frequency during channel processing (lower = more frequent updates)
 progress_update_interval = 1000
 
-# Whether to run missed scheduled refreshes immediately on startup
-# If true, sources that missed their scheduled refresh will run immediately
-# If false, sources will wait for their next scheduled time
+# Run missed scheduled refreshes immediately on startup
 run_missed_immediately = true
 
-# Optional: Display configuration for EPG viewer and channel listings
+# ┌─────────────────────────────────────────────────────────────┐
+# │                    DISPLAY CONFIGURATION                   │
+# └─────────────────────────────────────────────────────────────┘
+
 [display]
-# Local timezone for displaying times (default: UTC)
-# Use IANA timezone names like "America/New_York", "Europe/London", etc.
+# Local timezone for EPG viewer and channel listings
+# Use IANA timezone names: America/New_York, Europe/London, Asia/Tokyo, etc.
 local_timezone = "UTC"
 
-# Optional: Data mapping engine optimization configuration
+# ┌─────────────────────────────────────────────────────────────┐
+# │               DATA MAPPING ENGINE CONFIGURATION            │
+# └─────────────────────────────────────────────────────────────┘
+
 [data_mapping_engine]
-# Special characters used for regex precheck filtering
-# These characters are considered significant enough to use as first-pass filters
-# Set to empty string "" to disable special character precheck
-# Default: "+-@#$%&*=<>!~`€£{}[]."
+# Special characters for regex precheck filtering optimization
+# These characters trigger fast-path matching before full regex evaluation
 precheck_special_chars = "+-@#$%&*=<>!~`€£{}[]."
 
-# Minimum length required for literal strings in regex precheck
-# Strings shorter than this will not be used for precheck filtering
-# Set to 0 to disable literal string precheck entirely
-# Default: 2
+# Minimum literal string length for precheck optimization
+# Strings shorter than this won't be used for precheck (0 = disable)
 minimum_literal_length = 2
 
-# Proxy generation configuration
+# ┌─────────────────────────────────────────────────────────────┐
+# │               PROXY GENERATION CONFIGURATION               │
+# └─────────────────────────────────────────────────────────────┘
+
 [proxy_generation]
-# Enable detailed memory tracking and reporting during generation
+# Enable detailed memory usage tracking and reporting
 enable_memory_tracking = true
 
-# Enable performance profiling (adds overhead but provides detailed timing)
+# Enable performance profiling (adds overhead but provides timing details)
 enable_profiling = false
 
-# Enable file spilling for memory pressure relief (requires sandboxed file manager)
-enable_file_spilling = true
-
-# Memory management configuration
+# Memory management for proxy generation
 [proxy_generation.memory]
-# Maximum memory usage in MB for proxy generation (None = unlimited)
-# When this limit is approached, the system will process in smaller batches
-# Set to a value appropriate for your system (e.g., 512 for 512MB)
+# Maximum memory usage in MB (None = unlimited)
+# System switches to smaller batches when approaching this limit
 max_memory_mb = 512
 
-# Number of channels to process in each batch
-# Smaller batches use less memory but may be slower
-# Larger batches are faster but use more memory
+# Number of channels to process per batch
+# Smaller = less memory, larger = better performance
 batch_size = 1000
 
-# Enable parallel processing where possible
-# Uses more memory but can be significantly faster on multi-core systems
+# Enable parallel processing (faster but uses more memory)
 enable_parallel_processing = true
 
-# How often to check memory usage (in number of processed items)
-# Lower values = more frequent checks but higher overhead
+# Memory usage check frequency (items processed between checks)
 memory_check_interval = 100
 
-# Memory warning threshold (0.0-1.0)
-# System will log warnings when memory usage exceeds this percentage of max_memory_mb
+# Warning threshold as fraction of max memory (0.0-1.0)
 warning_threshold = 0.8
 
-# Memory strategy preset for handling pressure situations
-# Options: "default", "conservative", "aggressive", "temp_file_based", "custom"
-strategy_preset = "conservative"
-
-# EPG generation configuration
+# EPG generation settings
 [proxy_generation.epg]
 # Include programs that have already ended
 include_past_programs = false
 
-# Number of days of future EPG data to include
+# Days of future EPG data to include
 days_ahead = 7
 
-# Number of days of past EPG data to include
+# Days of past EPG data to include  
 days_behind = 1
-
-# Normalize all EPG times to UTC (recommended for consistency)
-normalize_to_utc = true
 
 # Remove duplicate programs with same title and time
 deduplicate_programs = true
 
-# Maximum number of programs per channel (None = unlimited)
-# Limiting this can significantly reduce memory usage and generation time
+# Maximum programs per channel (None = unlimited)
+# Limiting this significantly reduces memory usage
 max_programs_per_channel = 1000
 
-# Source timezone for EPG normalization (None = auto-detect from EPG source)
-# Only used when normalize_to_utc = true
-# Use IANA timezone names like "America/New_York", "Europe/London", etc.
+# Source timezone for EPG normalization (None = auto-detect)
+# Only used when converting times to UTC
 # source_timezone = "UTC"
 
-# File manager configuration for temporary and cached files
+# ┌─────────────────────────────────────────────────────────────┐
+# │                  FILE MANAGER CONFIGURATION                │
+# └─────────────────────────────────────────────────────────────┘
+
 [file_manager]
-# Base directory for all file storage (default: system temp directory)
-base_directory = "/tmp/m3u-proxy"
+# Base directory for temporary and cache files
+# base_directory = "/tmp/m3u-proxy"
 
-# Configuration for different file categories
-# Each category can have its own retention policy and cleanup settings
-
-# Note: preview category removed - temp category is used for both temp and preview operations
-# Note: logo category removed - logo storage is managed via storage.cached_logo_path and storage.uploaded_logo_path
-
+# File category configurations with retention policies
 [file_manager.categories.proxy_output]
 subdirectory = "proxy-output"
-# Keep generated proxy files for 30 days
-retention_duration = "30days"
+retention_duration = "30d"
 time_match = "LastAccess"
 enabled = true
-# cleanup_interval = "4h"
 
 [file_manager.categories.temp]
 subdirectory = "temp"
-# Temporary files for memory spilling and preview operations
 retention_duration = "5m"
 time_match = "LastAccess"
 enabled = true
-# cleanup_interval = "1m"
 
-# Note: cache category removed - no longer needed
+# ┌─────────────────────────────────────────────────────────────┐
+# │                    PIPELINE CONFIGURATION                  │
+# └─────────────────────────────────────────────────────────────┘
 
-# Sandboxed file manager configuration for secure operations
-[sandboxed_file_manager]
-# Enable sandboxed file operations (recommended for security)
-enabled = true
-
-# Security settings
-[sandboxed_file_manager.security]
-# Validate file paths to prevent directory traversal attacks
-validate_paths = true
-# Check for and prevent symlink-based sandbox escapes
-validate_symlinks = true
-# Restrict file operations to allowed file types
-restrict_file_types = true
-
-# File type validation configuration
-# If restrict_file_types is true, only these MIME types will be allowed
-# If empty or not specified, all file types are allowed
-allowed_mime_types = [
-    "application/vnd.apple.mpegurl", # M3U playlists
-    "application/x-mpegurl",         # M3U playlists (alternative)
-    "application/xml",               # XML files
-    "text/xml",                      # XML files (alternative)
-    "text/plain",                    # Plain text files
-    "application/json",              # JSON files
-    "image/png",                     # PNG images
-    "image/jpeg",                    # JPEG images
-    "image/gif",                     # GIF images
-    "image/webp",                    # WebP images
-    "image/svg+xml",                 # SVG images
-]
-
-# Maximum bytes to read from files for magic number detection
-max_detection_bytes = 8192
-
-# Whether to enable custom file type matchers (for special formats like M3U)
-enable_custom_matchers = true
-
-# Performance settings for file operations
-[sandboxed_file_manager.performance]
-# Maximum file size for spill operations (in MB)
-max_spill_file_size_mb = 100
-# Maximum number of concurrent file operations
-max_concurrent_operations = 10
-# Buffer size for file I/O operations (in KB)
-io_buffer_size_kb = 64
-
-# Native Pipeline Configuration
 [pipeline]
-# Maximum memory usage in MB before spilling to disk (default: 512MB)
+# Maximum memory usage in MB before spilling to disk
 max_memory_mb = 512
+
+# ┌─────────────────────────────────────────────────────────────┐
+# │                    METRICS CONFIGURATION                   │
+# └─────────────────────────────────────────────────────────────┘
+
+[metrics]
+# Data retention periods for access logs and statistics
+# Use format: 1d, 7d, 30d, 1h, 2h, etc.
+
+# Raw access log retention period
+raw_log_retention = "7d"
+
+# Hourly aggregated statistics retention
+hourly_stats_retention = "30d"
+
+# Daily aggregated statistics retention
+daily_stats_retention = "365d"
+
+# Client session timeout for tracking
+session_timeout = "15s"
+
+# Cleanup task run interval
+housekeeper_interval = "1m"
+
+# ┌─────────────────────────────────────────────────────────────┐
+# │                 RELAY SYSTEM CONFIGURATION                 │
+# └─────────────────────────────────────────────────────────────┘
+
+[relay]
+# FFmpeg command path for relay operations
+# Can be full path (/usr/bin/ffmpeg) or command name (ffmpeg)
+# System searches $PATH if not a full path
+ffmpeg_command = "ffmpeg"
+
+# Cyclic buffer configuration for multi-client streaming
+[relay.buffer]
+# Maximum buffer size in bytes (50MB default)
+max_buffer_size = 52428800
+
+# Maximum number of chunks to keep in memory
+max_chunks = 1000
+
+# How long to keep chunks in memory (seconds)
+chunk_timeout_seconds = 60
+
+# Timeout for slow clients (seconds)
+client_timeout_seconds = 30
+
+# Buffer cleanup interval (seconds)
+cleanup_interval_seconds = 5
+
+# Enable spilling to disk when buffer is full
+enable_file_spill = false
+
+# Maximum file spill size in bytes (500MB default)
+max_file_spill_size = 524288000

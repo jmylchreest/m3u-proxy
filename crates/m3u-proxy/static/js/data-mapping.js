@@ -150,7 +150,14 @@ async function loadTestSources() {
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const allSources = await response.json();
+    const data = await response.json();
+    // Handle paginated API response format
+    const allSources =
+      data.success && data.data && Array.isArray(data.data.items)
+        ? data.data.items
+        : Array.isArray(data)
+          ? data
+          : [];
     console.log("All sources loaded:", allSources.length);
     console.log(
       "First source structure:",
@@ -205,7 +212,7 @@ function updateTestSourceUI() {
   availableSources.forEach((source) => {
     const option = document.createElement("option");
     option.value = source.id;
-    option.textContent = source.source_name || source.name || 'Unknown';
+    option.textContent = source.source_name || source.name || "Unknown";
     testSourceSelect.appendChild(option);
   });
 
@@ -233,7 +240,7 @@ function updateTestSourceUI() {
       sourceLabel.className = "auto-selected-source text-muted small";
       testSourceContainer.insertBefore(sourceLabel, testSourceSelect);
     }
-    sourceLabel.textContent = `Testing against: ${availableSources[0].source_name || availableSources[0].name || 'Unknown'}`;
+    sourceLabel.textContent = `Testing against: ${availableSources[0].source_name || availableSources[0].name || "Unknown"}`;
   } else {
     // Show dropdown for multiple sources
     testSourceSelect.style.display = "block";
@@ -877,7 +884,13 @@ async function loadRules() {
     }
     const data = await response.json();
     // Handle paginated API response format
-    currentRules = data.data ? data.data.items : data;
+    if (data.success && data.data && Array.isArray(data.data.items)) {
+      currentRules = data.data.items;
+    } else if (Array.isArray(data)) {
+      currentRules = data;
+    } else {
+      currentRules = [];
+    }
     renderRules();
   } catch (error) {
     console.error("Failed to load rules:", error);
@@ -1345,22 +1358,21 @@ function displayPreviewResults(title, result) {
   const totalChannels = result.total_channels || 0;
   const affectedChannels = result.final_channels?.length || 0;
   const channels = result.final_channels || [];
-  
+
   // Separate channels with changes from no-op channels
   const channelsWithChanges = [];
   const noOpChannels = [];
-  
+
   channels.forEach((channel) => {
-    const hasChanges = (
+    const hasChanges =
       channel.original_channel_name !== channel.mapped_channel_name ||
       channel.original_tvg_id !== channel.mapped_tvg_id ||
       channel.original_tvg_shift !== channel.mapped_tvg_shift ||
       channel.original_group_title !== channel.mapped_group_title ||
       channel.original_tvg_logo !== channel.mapped_tvg_logo ||
       channel.original_tvg_name !== channel.mapped_tvg_name ||
-      channel.is_removed
-    );
-    
+      channel.is_removed;
+
     if (hasChanges) {
       channelsWithChanges.push(channel);
     } else {
@@ -1424,7 +1436,9 @@ function displayPreviewResults(title, result) {
             channelsWithChanges.length > 0 || noOpChannels.length > 0
               ? `
             <div class="preview-channels-container">
-              ${channelsWithChanges.length > 0 ? `
+              ${
+                channelsWithChanges.length > 0
+                  ? `
               <div class="channels-header">
                 <h6>Modified Channels:</h6>
                 <div class="channels-count-badge">${channelsWithChanges.length} channels</div>
@@ -1552,25 +1566,35 @@ ${mutations
                   })
                   .join("")}
               </div>
-              ` : ''}
-              
-              ${noOpChannels.length > 0 ? `
+              `
+                  : ""
+              }
+
+              ${
+                noOpChannels.length > 0
+                  ? `
               <div class="no-op-channels-section">
                 <div class="no-op-header" onclick="toggleNoOpChannels()" style="cursor: pointer; padding: 12px; background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; margin-top: 16px;">
                   <div style="display: flex; justify-content: between; align-items: center;">
                     <span style="font-weight: 500; color: #6c757d;">
-                      <span id="no-op-toggle-icon">▶</span> ${noOpChannels.length} no-op operation${noOpChannels.length !== 1 ? 's' : ''} (rules matched but no changes made)
+                      <span id="no-op-toggle-icon">▶</span> ${noOpChannels.length} no-op operation${noOpChannels.length !== 1 ? "s" : ""} (rules matched but no changes made)
                     </span>
                     <small style="color: #6c757d; margin-left: auto;">Click to view</small>
                   </div>
                 </div>
                 <div id="no-op-channels-list" style="display: none; margin-top: 8px;">
-                  ${noOpChannels.map((channel, channelIndex) => {
-                    const ruleCount = channel.applied_rules ? channel.applied_rules.length : 0;
-                    const truncatedName = truncateText(channel.channel_name, 40);
-                    const needsTooltip = channel.channel_name.length > 40;
-                    
-                    return `
+                  ${noOpChannels
+                    .map((channel, channelIndex) => {
+                      const ruleCount = channel.applied_rules
+                        ? channel.applied_rules.length
+                        : 0;
+                      const truncatedName = truncateText(
+                        channel.channel_name,
+                        40,
+                      );
+                      const needsTooltip = channel.channel_name.length > 40;
+
+                      return `
                     <div class="channel-preview-row no-op-channel" style="opacity: 0.7; border-left: 3px solid #ffc107;">
                       <div class="channel-header">
                         <span class="channel-name" ${needsTooltip ? `title="${escapeHtml(channel.channel_name)}"` : ""}>
@@ -1586,10 +1610,13 @@ ${mutations
                       </div>
                     </div>
                     `;
-                  }).join("")}
+                    })
+                    .join("")}
                 </div>
               </div>
-              ` : ''}
+              `
+                  : ""
+              }
             </div>
           `
               : `
@@ -2922,7 +2949,7 @@ async function reorderRules(draggedRuleId, targetRuleId, insertBefore = false) {
 function toggleNoOpChannels() {
   const list = document.getElementById("no-op-channels-list");
   const icon = document.getElementById("no-op-toggle-icon");
-  
+
   if (list.style.display === "none") {
     list.style.display = "block";
     icon.textContent = "▼";

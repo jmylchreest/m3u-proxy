@@ -29,6 +29,11 @@ let selectedStreamSources = [];
 let selectedEpgSources = [];
 let selectedFilters = [];
 
+// Relay-related variables
+let availableRelayProfiles = [];
+let relaySystemHealth = null;
+let ffmpegAvailable = false;
+
 // Initialize page
 function initializeProxiesPage() {
   console.log("Initializing stream proxies page...");
@@ -36,6 +41,10 @@ function initializeProxiesPage() {
   loadStreamSources();
   loadEpgSources();
   loadFilters();
+
+  // Load relay system data
+  checkRelaySystemHealth();
+  loadRelayProfiles();
 
   // Setup standard modal close handlers
   SharedUtils.setupStandardModalCloseHandlers("proxyModal");
@@ -55,14 +64,20 @@ if (document.readyState === "loading") {
 // Load all stream proxies
 async function loadProxies() {
   try {
-    const response = await fetch("/api/v1/proxies?" + new Date().getTime());
+    const response = await fetch("/api/v1/proxies");
     console.log("Proxies API response status:", response.status);
     if (!response.ok) throw new Error("Failed to load proxies");
 
     const data = await response.json();
     console.log("Proxies API response:", data);
     // Handle paginated API response format
-    currentProxies = data.data ? data.data.items : data;
+    if (data.success && data.data && Array.isArray(data.data.items)) {
+      currentProxies = data.data.items;
+    } else if (Array.isArray(data)) {
+      currentProxies = data;
+    } else {
+      currentProxies = [];
+    }
     console.log("Current proxies count:", currentProxies.length);
     renderProxies();
   } catch (error) {
@@ -82,11 +97,14 @@ async function loadStreamSources() {
 
     const data = await response.json();
     console.log("Stream sources API response:", data);
-    availableStreamSources = Array.isArray(data)
-      ? data
-      : Array.isArray(data.data)
-        ? data.data
-        : [];
+    // Handle paginated API response format
+    if (data.success && data.data && Array.isArray(data.data.items)) {
+      availableStreamSources = data.data.items;
+    } else if (Array.isArray(data)) {
+      availableStreamSources = data;
+    } else {
+      availableStreamSources = [];
+    }
     console.log(
       "Available stream sources loaded:",
       availableStreamSources.length,
@@ -104,11 +122,14 @@ async function loadEpgSources() {
     if (!response.ok) throw new Error("Failed to load EPG sources");
 
     const data = await response.json();
-    availableEpgSources = Array.isArray(data)
-      ? data
-      : Array.isArray(data.data)
-        ? data.data
-        : [];
+    // Handle paginated API response format
+    if (data.success && data.data && Array.isArray(data.data.items)) {
+      availableEpgSources = data.data.items;
+    } else if (Array.isArray(data)) {
+      availableEpgSources = data;
+    } else {
+      availableEpgSources = [];
+    }
   } catch (error) {
     console.error("Error loading EPG sources:", error);
     availableEpgSources = [];
@@ -122,11 +143,14 @@ async function loadFilters() {
     if (!response.ok) throw new Error("Failed to load filters");
 
     const data = await response.json();
-    availableFilters = Array.isArray(data)
-      ? data
-      : Array.isArray(data.data)
-        ? data.data
-        : [];
+    // Handle paginated API response format
+    if (data.success && data.data && Array.isArray(data.data.items)) {
+      availableFilters = data.data.items;
+    } else if (Array.isArray(data)) {
+      availableFilters = data;
+    } else {
+      availableFilters = [];
+    }
   } catch (error) {
     console.error("Error loading filters:", error);
     availableFilters = [];
@@ -423,6 +447,17 @@ function populateProxyForm(proxy) {
   document.getElementById("startingChannelNumber").value =
     proxy.starting_channel_number || 1;
 
+  // Set relay profile if available
+  if (proxy.relay_profile_id) {
+    const relayProfileSelect = document.getElementById("relayProfile");
+    if (relayProfileSelect) {
+      relayProfileSelect.value = proxy.relay_profile_id;
+    }
+  }
+
+  // Trigger proxy mode change to update UI state
+  handleProxyModeChange();
+
   // Reset and populate priority selections
   // Transform proxy response format to selection format
   selectedStreamSources = (proxy.stream_sources || []).map((source) => ({
@@ -500,6 +535,7 @@ async function saveProxy() {
     starting_channel_number: formData.get("starting_channel_number")
       ? parseInt(formData.get("starting_channel_number"))
       : 1,
+    relay_profile_id: formData.get("relay_profile_id") || null,
     stream_sources: streamSources,
     epg_sources: epgSources,
     filters: filters,
@@ -616,12 +652,8 @@ async function regenerateProxy(proxyId) {
 
 // Regenerate all proxies
 async function regenerateAllProxies() {
-  if (!confirm("Are you sure you want to regenerate all active proxies?")) {
-    return;
-  }
-
   try {
-    SharedUtils.showInfo("Regenerating all proxies...");
+    SharedUtils.showInfo("Regenerating all active proxies...");
 
     const response = await fetch("/api/v1/proxies/regenerate-all", {
       method: "POST",
@@ -630,9 +662,16 @@ async function regenerateAllProxies() {
     if (!response.ok) throw new Error("Failed to regenerate proxies");
 
     const result = await response.json();
-    SharedUtils.showSuccess(
-      `Regenerated ${result.count} proxies successfully.`,
-    );
+
+    if (result.success) {
+      if (result.failed && result.failed > 0) {
+        SharedUtils.showWarning(`${result.message}. Check logs for details.`);
+      } else {
+        SharedUtils.showSuccess(result.message);
+      }
+    } else {
+      SharedUtils.showError(result.message);
+    }
 
     // Reload proxies to get updated info
     loadProxies();
@@ -2323,6 +2362,189 @@ function formatFileSize(bytes) {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
 
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+// ============ RELAY SYSTEM FUNCTIONS ============
+
+// Check relay system health and FFmpeg availability
+async function checkRelaySystemHealth() {
+  try {
+    console.log("Checking relay system health...");
+    updateRelayHealthStatus("checking", "Checking system availability...");
+
+    // Check both health and profiles to determine system status
+    const [healthResponse, profilesResponse] = await Promise.all([
+      fetch("/api/v1/relay/health"),
+      fetch("/api/v1/relay/profiles"),
+    ]);
+
+    if (healthResponse.ok && profilesResponse.ok) {
+      relaySystemHealth = await healthResponse.json();
+      const profiles = await profilesResponse.json();
+
+      console.log("Relay system health:", relaySystemHealth);
+      console.log("Available relay profiles:", profiles.length);
+
+      // Check FFmpeg availability from health endpoint
+      ffmpegAvailable = relaySystemHealth.ffmpeg_available;
+
+      if (!ffmpegAvailable) {
+        updateRelayHealthStatus(
+          "error",
+          `FFmpeg not available (${relaySystemHealth.ffmpeg_command})`,
+        );
+        hideRelayModeOption();
+      } else if (profiles.length === 0) {
+        updateRelayHealthStatus(
+          "warning",
+          `FFmpeg available (${relaySystemHealth.ffmpeg_version}) but no relay profiles configured`,
+        );
+        hideRelayModeOption();
+      } else {
+        updateRelayHealthStatus(
+          "healthy",
+          `System ready (FFmpeg ${relaySystemHealth.ffmpeg_version}, ${profiles.length} profiles)`,
+        );
+        showRelayModeOption();
+      }
+
+      // Update relay profile options with current health status
+      populateRelayProfileOptions();
+    } else {
+      console.error(
+        "Failed to check relay system:",
+        healthResponse.status,
+        profilesResponse.status,
+      );
+      ffmpegAvailable = false;
+      updateRelayHealthStatus("unhealthy", "Relay system unavailable");
+      hideRelayModeOption();
+      populateRelayProfileOptions();
+    }
+  } catch (error) {
+    console.error("Error checking relay system health:", error);
+    ffmpegAvailable = false;
+    updateRelayHealthStatus("unhealthy", "System check failed");
+    hideRelayModeOption();
+    populateRelayProfileOptions();
+  }
+}
+
+// Load available relay profiles
+async function loadRelayProfiles() {
+  try {
+    console.log("Loading relay profiles...");
+    const response = await fetch("/api/v1/relay/profiles");
+    if (response.ok) {
+      availableRelayProfiles = await response.json();
+      console.log("Loaded relay profiles:", availableRelayProfiles);
+      populateRelayProfileOptions();
+    } else {
+      console.error("Failed to load relay profiles:", response.status);
+      availableRelayProfiles = [];
+    }
+  } catch (error) {
+    console.error("Error loading relay profiles:", error);
+    availableRelayProfiles = [];
+  }
+}
+
+// Populate relay profile dropdown
+function populateRelayProfileOptions() {
+  const select = document.getElementById("relayProfile");
+  if (!select) return;
+
+  // Clear existing options except the first
+  while (select.children.length > 1) {
+    select.removeChild(select.lastChild);
+  }
+
+  // Add relay profiles
+  availableRelayProfiles.forEach((profile) => {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = `${profile.name} - ${profile.description || "No description"}`;
+
+    // TODO: Check if profile requires GPU acceleration and grey out if unavailable
+    // For now, all profiles are available if FFmpeg is available
+    if (!ffmpegAvailable) {
+      option.disabled = true;
+      option.className = "relay-profile-option unavailable";
+      option.textContent += " (FFmpeg unavailable)";
+    } else {
+      option.className = "relay-profile-option";
+    }
+
+    select.appendChild(option);
+  });
+}
+
+// Handle proxy mode change
+function handleProxyModeChange() {
+  const modeSelect = document.getElementById("proxyMode");
+  const relayProfileGroup = document.getElementById("relayProfileGroup");
+
+  if (!modeSelect || !relayProfileGroup) return;
+
+  const selectedMode = modeSelect.value;
+  console.log("Proxy mode changed to:", selectedMode);
+
+  if (selectedMode === "relay") {
+    relayProfileGroup.style.display = "block";
+  } else {
+    relayProfileGroup.style.display = "none";
+    // Clear relay profile selection when switching away from relay mode
+    const relayProfileSelect = document.getElementById("relayProfile");
+    if (relayProfileSelect) {
+      relayProfileSelect.value = "";
+    }
+  }
+}
+
+// Show relay mode option (when system is healthy)
+function showRelayModeOption() {
+  const relayOption = document.getElementById("relayModeOption");
+  if (relayOption) {
+    relayOption.style.display = "block";
+  }
+}
+
+// Hide relay mode option (when system is unhealthy)
+function hideRelayModeOption() {
+  const relayOption = document.getElementById("relayModeOption");
+  const modeSelect = document.getElementById("proxyMode");
+  const relayProfileGroup = document.getElementById("relayProfileGroup");
+
+  if (relayOption) {
+    relayOption.style.display = "none";
+  }
+
+  // If relay mode was selected, switch back to redirect
+  if (modeSelect && modeSelect.value === "relay") {
+    modeSelect.value = "redirect";
+    if (relayProfileGroup) {
+      relayProfileGroup.style.display = "none";
+    }
+  }
+}
+
+// Update relay health status display
+function updateRelayHealthStatus(status, message) {
+  const statusElement = document.getElementById("relayHealthStatus");
+  if (!statusElement) return;
+
+  // Remove existing status classes
+  statusElement.classList.remove(
+    "healthy",
+    "checking",
+    "warning",
+    "error",
+    "unhealthy",
+  );
+
+  // Add new status class and message
+  statusElement.classList.add(status);
+  statusElement.textContent = message;
 }
 
 // Initialize enhanced features when page loads

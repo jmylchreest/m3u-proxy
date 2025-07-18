@@ -72,6 +72,8 @@ impl WebServer {
         temp_file_manager: SandboxedManager, // Use temp for both temp and preview operations
         logos_cached_file_manager: SandboxedManager,
         proxy_output_file_manager: SandboxedManager,
+        relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
+        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Result<Self> {
         tracing::info!("WebServer using native pipeline");
 
@@ -85,6 +87,22 @@ impl WebServer {
                 base_path,
             ))
         };
+
+        // Initialize new service layer components
+        let epg_source_service = std::sync::Arc::new(crate::services::EpgSourceService::new(
+            database.clone(),
+            cache_invalidation_tx.clone(),
+        ));
+
+        let stream_source_service =
+            std::sync::Arc::new(crate::services::StreamSourceBusinessService::new(
+                database.clone(),
+                epg_source_service.clone(),
+                cache_invalidation_tx.clone(),
+            ));
+
+        let source_linking_service =
+            std::sync::Arc::new(crate::services::SourceLinkingService::new(database.clone()));
 
         let app = Self::create_router(AppState {
             database: database.clone(),
@@ -101,7 +119,15 @@ impl WebServer {
             temp_file_manager,
             metrics_logger: MetricsLogger::new(database.pool()),
             logo_cache_scanner,
-            session_tracker: std::sync::Arc::new(crate::proxy::session_tracker::SessionTracker::default()),
+            session_tracker: std::sync::Arc::new(
+                crate::proxy::session_tracker::SessionTracker::default(),
+            ),
+            relay_manager,
+            system,
+            // New service layer components
+            stream_source_service,
+            epg_source_service,
+            source_linking_service,
         })
         .await;
 
@@ -133,7 +159,10 @@ impl WebServer {
                 "/stream/:proxy_ulid/:channel_id",
                 get(handlers::proxies::proxy_stream),
             )
-            // TODO: Add logo serving endpoint when needed
+            .route(
+                "/stream/:proxy_ulid/:channel_id/hls/*path",
+                get(handlers::proxies::proxy_hls_stream),
+            )
             // .route("/logos/:logo_id", get(handlers::static_assets::serve_logo))
             // Root route for basic index page
             .route("/", get(handlers::index::index))
@@ -165,13 +194,14 @@ impl WebServer {
             // Stream sources
             .route(
                 "/sources/stream",
-                get(api::list_stream_sources).post(api::create_stream_source),
+                get(handlers::stream_sources::list_stream_sources)
+                    .post(handlers::stream_sources::create_stream_source),
             )
             .route(
                 "/sources/stream/:id",
-                get(api::get_stream_source)
-                    .put(api::update_stream_source)
-                    .delete(api::delete_stream_source),
+                get(handlers::stream_sources::get_stream_source)
+                    .put(handlers::stream_sources::update_stream_source)
+                    .delete(handlers::stream_sources::delete_stream_source),
             )
             .route(
                 "/sources/stream/:id/refresh",
@@ -181,16 +211,25 @@ impl WebServer {
                 "/sources/stream/:id/channels",
                 get(api::get_stream_source_channels),
             )
+            .route(
+                "/sources/stream/validate",
+                post(handlers::stream_sources::validate_stream_source),
+            )
+            .route(
+                "/sources/stream/capabilities/:source_type",
+                get(handlers::stream_sources::get_stream_source_capabilities),
+            )
             // EPG sources
             .route(
                 "/sources/epg",
-                get(api::list_epg_sources_unified).post(api::create_epg_source_unified),
+                get(handlers::epg_sources::list_epg_sources)
+                    .post(handlers::epg_sources::create_epg_source),
             )
             .route(
                 "/sources/epg/:id",
-                get(api::get_epg_source_unified)
-                    .put(api::update_epg_source_unified)
-                    .delete(api::delete_epg_source_unified),
+                get(handlers::epg_sources::get_epg_source)
+                    .put(handlers::epg_sources::update_epg_source)
+                    .delete(handlers::epg_sources::delete_epg_source),
             )
             .route(
                 "/sources/epg/:id/refresh",
@@ -199,6 +238,10 @@ impl WebServer {
             .route(
                 "/sources/epg/:id/channels",
                 get(api::get_epg_source_channels_unified),
+            )
+            .route(
+                "/sources/epg/validate",
+                post(handlers::epg_sources::validate_epg_source),
             )
             // Unified sources
             .route("/sources", get(api::list_all_sources))
@@ -288,35 +331,17 @@ impl WebServer {
             )
             .route("/proxies/:id/regenerate", post(api::regenerate_proxy))
             .route("/proxies/regenerate-all", post(api::regenerate_all_proxies))
-            // Relay configuration endpoints
-            .route(
-                "/proxies/:id/relays",
-                get(api::list_relay_configs).post(api::create_relay_config),
-            )
-            .route(
-                "/proxies/:proxy_id/relays/:relay_id",
-                get(api::get_relay_config)
-                    .put(api::update_relay_config)
-                    .delete(api::delete_relay_config),
-            )
-            .route("/relays/status", get(api::list_relay_status))
-            .route("/relays/:config_id/status", get(api::get_relay_status))
-            .route("/relays/:config_id/start", post(api::start_relay))
-            .route("/relays/:config_id/stop", post(api::stop_relay))
+            // Relay system endpoints
+            .merge(api::relay::relay_routes())
+            // Active relay monitoring
+            .route("/active-relays", get(api::active_relays::get_active_relays))
+            .route("/active-relays/:config_id", get(api::active_relays::get_active_relay_by_id))
+            .route("/active-relays/health", get(api::active_relays::get_relay_health))
             // Metrics and analytics
             .route("/metrics/dashboard", get(api::get_dashboard_metrics))
             .route("/metrics/realtime", get(api::get_realtime_metrics))
             .route("/metrics/usage", get(api::get_usage_metrics))
             .route("/metrics/channels/popular", get(api::get_popular_channels))
-    }
-
-    /// Web interface routes
-    fn _web_interface_routes() -> Router<AppState> {
-        Router::new()
-        // TODO: Implement web interface routes
-        // .route("/", get(crate::web::handlers::index))
-        // .route("/sources", get(crate::web::handlers::sources_page))
-        // Add other web interface routes as needed...
     }
 
     /// Start the web server
@@ -378,36 +403,12 @@ pub struct AppState {
     pub metrics_logger: MetricsLogger,
     pub logo_cache_scanner: Option<crate::services::logo_cache_scanner::LogoCacheScanner>,
     pub session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
+    pub relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
+    pub system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+    // New service layer components
+    pub stream_source_service: std::sync::Arc<crate::services::StreamSourceBusinessService>,
+    pub epg_source_service: std::sync::Arc<crate::services::EpgSourceService>,
+    pub source_linking_service: std::sync::Arc<crate::services::SourceLinkingService>,
 }
 
-impl AppState {
-    /// Get a stream source service instance
-    ///
-    /// In a full implementation, this would create service instances
-    /// with proper dependency injection
-    pub fn stream_source_service(
-        &self,
-    ) -> Result<
-        Box<
-            dyn crate::services::Service<
-                    crate::models::StreamSource,
-                    uuid::Uuid,
-                    CreateRequest = crate::models::StreamSourceCreateRequest,
-                    UpdateRequest = crate::models::StreamSourceUpdateRequest,
-                    Query = crate::services::stream_source::StreamSourceServiceQuery,
-                    ListResponse = crate::services::ServiceListResponse<
-                        crate::models::StreamSource,
-                    >,
-                >,
-        >,
-        Box<dyn std::error::Error>,
-    > {
-        // TODO: Implement proper service instantiation
-        // This would involve:
-        // 1. Creating repository instance with database connection
-        // 2. Creating service instance with repository
-        // 3. Returning the service for use in handlers
-
-        Err(anyhow::anyhow!("Service instantiation not yet implemented").into())
-    }
-}
+impl AppState {}

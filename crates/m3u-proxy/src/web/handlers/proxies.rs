@@ -8,12 +8,14 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
     models::{StreamProxy, StreamProxyMode},
+    models::relay::{VideoCodec, AudioCodec},
     proxy::session_tracker::{ClientInfo, SessionStats},
-    utils::resolve_proxy_id,
+    utils::{resolve_proxy_id, url::UrlUtils},
     web::{
         AppState,
         extractors::{ListParams, RequestContext},
@@ -37,11 +39,12 @@ pub struct CreateStreamProxyRequest {
     pub filters: Vec<ProxyFilterRequest>,
     pub is_active: bool,
     #[serde(default)]
-    pub auto_regenerate: bool, // TODO: Implement auto-regeneration functionality
+    pub auto_regenerate: bool,
     #[serde(default = "default_cache_channel_logos")]
     pub cache_channel_logos: bool,
     #[serde(default)]
     pub cache_program_logos: bool,
+    pub relay_profile_id: Option<Uuid>,
 }
 
 fn default_cache_channel_logos() -> bool {
@@ -85,11 +88,12 @@ pub struct UpdateStreamProxyRequest {
     pub filters: Vec<ProxyFilterRequest>,
     pub is_active: bool,
     #[serde(default)]
-    pub auto_regenerate: bool, // TODO: Implement auto-regeneration functionality
+    pub auto_regenerate: bool,
     #[serde(default = "default_cache_channel_logos")]
     pub cache_channel_logos: bool,
     #[serde(default)]
     pub cache_program_logos: bool,
+    pub relay_profile_id: Option<Uuid>,
 }
 
 /// Response DTO for stream proxy
@@ -110,6 +114,7 @@ pub struct StreamProxyResponse {
     pub auto_regenerate: bool,
     pub cache_channel_logos: bool,
     pub cache_program_logos: bool,
+    pub relay_profile_id: Option<Uuid>,
     pub stream_sources: Vec<ProxySourceResponse>,
     pub epg_sources: Vec<ProxyEpgSourceResponse>,
     pub filters: Vec<ProxyFilterResponse>,
@@ -149,6 +154,7 @@ impl CreateStreamProxyRequest {
         let proxy_mode = match self.proxy_mode.to_lowercase().as_str() {
             "redirect" => StreamProxyMode::Redirect,
             "proxy" => StreamProxyMode::Proxy,
+            "relay" => StreamProxyMode::Relay,
             _ => return Err(format!("Invalid proxy mode: {}", self.proxy_mode)),
         };
 
@@ -189,6 +195,7 @@ impl CreateStreamProxyRequest {
             auto_regenerate: self.auto_regenerate,
             cache_channel_logos: self.cache_channel_logos,
             cache_program_logos: self.cache_program_logos,
+            relay_profile_id: self.relay_profile_id,
         })
     }
 }
@@ -202,6 +209,7 @@ impl From<StreamProxy> for StreamProxyResponse {
             proxy_mode: match proxy.proxy_mode {
                 StreamProxyMode::Redirect => "redirect".to_string(),
                 StreamProxyMode::Proxy => "proxy".to_string(),
+                StreamProxyMode::Relay => "relay".to_string(),
             },
             upstream_timeout: proxy.upstream_timeout,
             buffer_size: proxy.buffer_size,
@@ -214,6 +222,7 @@ impl From<StreamProxy> for StreamProxyResponse {
             auto_regenerate: proxy.auto_regenerate,
             cache_channel_logos: proxy.cache_channel_logos,
             cache_program_logos: proxy.cache_program_logos,
+            relay_profile_id: proxy.relay_profile_id,
             stream_sources: vec![], // Will be populated by service layer
             epg_sources: vec![],    // Will be populated by service layer
             filters: vec![],        // Will be populated by service layer
@@ -350,6 +359,7 @@ pub async fn list_proxies(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.system.clone(),
     );
 
     // Get proxies with pagination
@@ -411,6 +421,7 @@ pub async fn get_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.system.clone(),
     );
 
     match service.get_by_id(uuid).await {
@@ -458,6 +469,7 @@ pub async fn create_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.system.clone(),
     );
 
     match service.create(service_request).await {
@@ -492,6 +504,7 @@ pub async fn update_proxy(
         proxy_mode: match request.proxy_mode.to_lowercase().as_str() {
             "redirect" => crate::models::StreamProxyMode::Redirect,
             "proxy" => crate::models::StreamProxyMode::Proxy,
+            "relay" => crate::models::StreamProxyMode::Relay,
             _ => {
                 return crate::web::responses::bad_request(&format!(
                     "Invalid proxy mode: {}",
@@ -533,6 +546,7 @@ pub async fn update_proxy(
         auto_regenerate: request.auto_regenerate,
         cache_channel_logos: request.cache_channel_logos,
         cache_program_logos: request.cache_program_logos,
+        relay_profile_id: request.relay_profile_id,
     };
 
     // Create service instances
@@ -556,6 +570,7 @@ pub async fn update_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.system.clone(),
     );
 
     match service.update(uuid, service_request).await {
@@ -604,6 +619,7 @@ pub async fn delete_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.system.clone(),
     );
 
     match service.delete(uuid).await {
@@ -652,6 +668,7 @@ pub async fn preview_proxy_config(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.system.clone(),
     );
 
     match service.generate_preview(request).await {
@@ -707,6 +724,7 @@ pub async fn preview_existing_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.system.clone(),
     );
 
     // Get the existing proxy first
@@ -998,9 +1016,9 @@ pub async fn proxy_stream(
 
     debug!(
         "Stream proxy request: proxy={}, channel={}, client_ip={}, user_agent={}",
-        proxy_id, 
-        channel_id, 
-        client_ip, 
+        proxy_id,
+        channel_id,
+        client_ip,
         user_agent.as_deref().unwrap_or("unknown")
     );
 
@@ -1067,8 +1085,7 @@ pub async fn proxy_stream(
         }
     };
 
-    // 3. Check if relay is active for this channel (placeholder for now)
-    // TODO: Implement relay lookup when relay manager is ready
+    // Note: Relay configuration is now handled per-proxy basis in the match statement below
 
     // 4. Log access metrics and create active session
     let session = state
@@ -1085,6 +1102,9 @@ pub async fn proxy_stream(
         )
         .await;
 
+    // Note: Relay logic is now handled in the match statement below based on proxy_mode
+
+    info!("Proxy mode for proxy {}: {:?}", proxy.id, proxy.proxy_mode);
     match proxy.proxy_mode {
         StreamProxyMode::Redirect => {
             info!(
@@ -1093,14 +1113,18 @@ pub async fn proxy_stream(
             );
 
             // Create active session for redirect (will be cleaned up quickly by housekeeper)
-            let session_id = match state.metrics_logger.create_active_session(
-                proxy_id.clone(),
-                channel_id,
-                client_ip.clone(),
-                user_agent.clone(),
-                referer.clone(),
-                "redirect"
-            ).await {
+            let session_id = match state
+                .metrics_logger
+                .create_active_session(
+                    proxy_id.clone(),
+                    channel_id,
+                    client_ip.clone(),
+                    user_agent.clone(),
+                    referer.clone(),
+                    "redirect",
+                )
+                .await
+            {
                 Ok(id) => id,
                 Err(e) => {
                     error!("Failed to create active session: {}", e);
@@ -1115,7 +1139,7 @@ pub async fn proxy_stream(
                 user_agent: user_agent.clone(),
                 referer: referer.clone(),
             };
-            
+
             let session_stats = SessionStats::new(
                 session_id.clone(),
                 client_info,
@@ -1125,7 +1149,7 @@ pub async fn proxy_stream(
                 channel.channel_name.clone(),
                 channel.stream_url.clone(),
             );
-            
+
             state.session_tracker.start_session(session_stats).await;
 
             // For redirects, immediately finish the session since we're not tracking the stream
@@ -1134,12 +1158,19 @@ pub async fn proxy_stream(
             tokio::spawn(async move {
                 session.finish(&state_clone.metrics_logger, 0).await;
                 if !session_id_clone.is_empty() {
-                    if let Err(e) = state_clone.metrics_logger.complete_active_session(&session_id_clone).await {
+                    if let Err(e) = state_clone
+                        .metrics_logger
+                        .complete_active_session(&session_id_clone)
+                        .await
+                    {
                         error!("Failed to complete active session: {}", e);
                     }
                 }
                 // End session tracking for redirect
-                state_clone.session_tracker.end_session(&session_id_clone).await;
+                state_clone
+                    .session_tracker
+                    .end_session(&session_id_clone)
+                    .await;
             });
 
             use axum::response::Redirect;
@@ -1152,18 +1183,26 @@ pub async fn proxy_stream(
             );
 
             // Create active session for proxy tracking
-            let session_id = match state.metrics_logger.create_active_session(
-                proxy_id.clone(),
-                channel_id,
-                client_ip.clone(),
-                user_agent.clone(),
-                referer.clone(),
-                "proxy"
-            ).await {
+            let session_id = match state
+                .metrics_logger
+                .create_active_session(
+                    proxy_id.clone(),
+                    channel_id,
+                    client_ip.clone(),
+                    user_agent.clone(),
+                    referer.clone(),
+                    "proxy",
+                )
+                .await
+            {
                 Ok(id) => id,
                 Err(e) => {
                     error!("Failed to create active session: {}", e);
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create session".to_string()).into_response();
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to create session".to_string(),
+                    )
+                        .into_response();
                 }
             };
 
@@ -1173,7 +1212,7 @@ pub async fn proxy_stream(
                 user_agent: user_agent.clone(),
                 referer: referer.clone(),
             };
-            
+
             let session_stats = SessionStats::new(
                 session_id.clone(),
                 client_info,
@@ -1183,11 +1222,258 @@ pub async fn proxy_stream(
                 channel.channel_name.clone(),
                 channel.stream_url.clone(),
             );
-            
+
             state.session_tracker.start_session(session_stats).await;
 
             // Implement HTTP proxying
-            proxy_http_stream(state, proxy, &channel.stream_url, headers, session, session_id).await
+            proxy_http_stream(
+                state,
+                proxy,
+                &channel.stream_url,
+                headers,
+                session,
+                session_id,
+            )
+            .await
+        }
+        StreamProxyMode::Relay => {
+            info!(
+                "Relay mode stream request for channel '{}' from URL: {}",
+                channel.channel_name, channel.stream_url
+            );
+
+            // Check if proxy has a relay profile configured
+            let relay_profile_id = match proxy.relay_profile_id {
+                Some(id) => id,
+                None => {
+                    error!(
+                        "Relay mode requested but no relay profile configured for proxy {}",
+                        proxy.id
+                    );
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        "No relay profile configured for this proxy",
+                    )
+                        .into_response();
+                }
+            };
+
+            // Get relay profile from database
+            let relay_profile =
+                match get_relay_profile_by_id_internal(&state.database, relay_profile_id).await {
+                    Ok(Some(profile)) => profile,
+                    Ok(None) => {
+                        error!("Relay profile {} not found", relay_profile_id);
+                        return (StatusCode::NOT_FOUND, "Relay profile not found").into_response();
+                    }
+                    Err(e) => {
+                        error!("Database error getting relay profile: {}", e);
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+                            .into_response();
+                    }
+                };
+
+            // Create a temporary ChannelRelayConfig for this request
+            // Use deterministic ID based on proxy + channel + profile to ensure same relay is reused
+            let deterministic_id = {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                proxy.id.hash(&mut hasher);
+                channel_id.hash(&mut hasher);
+                relay_profile_id.hash(&mut hasher);
+                let hash = hasher.finish();
+                uuid::Uuid::from_u128(hash as u128)
+            };
+            
+            let channel_relay_config = crate::models::relay::ChannelRelayConfig {
+                id: deterministic_id,
+                proxy_id: proxy.id,
+                channel_id,
+                profile_id: relay_profile_id,
+                name: format!("Temp relay config for {}", channel.channel_name),
+                description: Some(
+                    "Temporary relay configuration for stream proxy mode".to_string(),
+                ),
+                custom_args: None,
+                is_active: true,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+
+            // Create ResolvedRelayConfig as temporary
+            let resolved_config = match crate::models::relay::ResolvedRelayConfig::new_with_temporary_flag(
+                channel_relay_config,
+                relay_profile,
+                true // Mark as temporary
+            ) {
+                Ok(config) => config,
+                Err(e) => {
+                    error!("Failed to create resolved relay config: {}", e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create relay config")
+                        .into_response();
+                }
+            };
+
+            // Create active session for relay tracking
+            let session_id = match state
+                .metrics_logger
+                .create_active_session(
+                    proxy_id.clone(),
+                    channel_id,
+                    client_ip.clone(),
+                    user_agent.clone(),
+                    referer.clone(),
+                    "relay",
+                )
+                .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("Failed to create active session: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to create session".to_string(),
+                    )
+                        .into_response();
+                }
+            };
+
+            // Create session tracker entry for relay mode
+            let client_info = crate::proxy::session_tracker::ClientInfo {
+                ip: client_ip.clone(),
+                user_agent: user_agent.clone(),
+                referer: referer.clone(),
+            };
+
+            let session_stats = crate::proxy::session_tracker::SessionStats::new(
+                session_id.clone(),
+                client_info,
+                proxy_id.clone(),
+                proxy.name.clone(),
+                channel_id.to_string(),
+                channel.channel_name.clone(),
+                channel.stream_url.clone(),
+            );
+
+            state.session_tracker.start_session(session_stats).await;
+
+            // Ensure FFmpeg relay process is running
+            match state
+                .relay_manager
+                .ensure_relay_running(&resolved_config, &channel.stream_url)
+                .await
+            {
+                Ok(_) => {
+                    info!(
+                        "FFmpeg relay process started for channel {}",
+                        channel.channel_name
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to start FFmpeg relay process: {}", e);
+                    // Clean up session
+                    session.finish(&state.metrics_logger, 0).await;
+                    if let Err(e) = state
+                        .metrics_logger
+                        .complete_active_session(&session_id)
+                        .await
+                    {
+                        error!("Failed to complete active session: {}", e);
+                    }
+                    state.session_tracker.end_session(&session_id).await;
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to start relay process",
+                    )
+                        .into_response();
+                }
+            }
+
+            // Serve content using relay manager directly
+            info!("Serving relay content with profile: {}", resolved_config.profile.name);
+            
+            let client_info = crate::models::relay::ClientInfo {
+                ip: client_ip.clone(),
+                user_agent: user_agent.clone(),
+                referer: referer.clone(),
+            };
+
+            match state.relay_manager.serve_relay_content(
+                resolved_config.config.id,
+                "stream.ts",
+                &client_info,
+            ).await {
+                Ok(crate::models::relay::RelayContent::Stream(stream)) => {
+                    use futures::StreamExt;
+                    use axum::body::Body;
+                    use axum::http::{StatusCode, header};
+                    
+                    // Track bytes served for session tracking
+                    let state_clone = state.clone();
+                    let session_id_clone = session_id.clone();
+                    let tracked_stream = stream.map(move |chunk_result| {
+                        match &chunk_result {
+                            Ok(chunk) => {
+                                let bytes_len = chunk.len() as u64;
+                                // Update session tracker with bytes served (fire and forget)
+                                let state_update = state_clone.clone();
+                                let session_update = session_id_clone.clone();
+                                tokio::spawn(async move {
+                                    state_update
+                                        .session_tracker
+                                        .update_session_bytes(&session_update, bytes_len)
+                                        .await;
+                                });
+                            }
+                            Err(e) => {
+                                error!("Error in relay stream: {}", e);
+                                // Record error in session tracker
+                                let state_error = state_clone.clone();
+                                let session_error = session_id_clone.clone();
+                                let error_msg = e.to_string();
+                                tokio::spawn(async move {
+                                    state_error
+                                        .session_tracker
+                                        .record_session_error(&session_error, error_msg)
+                                        .await;
+                                });
+                            }
+                        }
+                        chunk_result
+                    });
+
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "video/mp2t")
+                        .header(header::CACHE_CONTROL, "no-cache, no-store")
+                        .body(Body::from_stream(tracked_stream))
+                        .unwrap()
+                        .into_response()
+                }
+                Ok(crate::models::relay::RelayContent::Segment(data)) => {
+                    use axum::body::Body;
+                    use axum::http::{StatusCode, header};
+                    
+                    info!("Serving relay segment: {} bytes", data.len());
+
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "video/mp2t")
+                        .header(header::CACHE_CONTROL, "no-cache, no-store")
+                        .body(Body::from(data))
+                        .unwrap()
+                        .into_response()
+                }
+                Ok(_content) => {
+                    error!("Unexpected content type from relay (expected stream or segment)");
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Unexpected content type").into_response()
+                }
+                Err(e) => {
+                    error!("Failed to serve relay content: {}", e);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Failed to serve relay content").into_response()
+                }
+            }
         }
     }
 }
@@ -1208,7 +1494,7 @@ async fn proxy_http_stream(
     use tracing::{debug, error, warn};
 
     let connection_timeout_secs = 10u64; // Connection timeout
-    let read_timeout_secs = proxy.upstream_timeout.unwrap_or(120) as u64; // Read timeout between chunks
+    let _read_timeout_secs = proxy.upstream_timeout.unwrap_or(120) as u64; // Read timeout between chunks
     let _buffer_size = proxy.buffer_size.unwrap_or(8192) as usize;
 
     // Create HTTP client with proper timeouts for streaming
@@ -1227,7 +1513,11 @@ async fn proxy_http_stream(
             let session_id_clone = session_id.clone();
             tokio::spawn(async move {
                 session.finish(&state_clone.metrics_logger, 0).await;
-                if let Err(e) = state_clone.metrics_logger.complete_active_session(&session_id_clone).await {
+                if let Err(e) = state_clone
+                    .metrics_logger
+                    .complete_active_session(&session_id_clone)
+                    .await
+                {
                     error!("Failed to complete active session: {}", e);
                 }
             });
@@ -1264,8 +1554,11 @@ async fn proxy_http_stream(
         }
     }
 
-    debug!("Making upstream request to: {} (connect_timeout={}s, stream_timeout=disabled)", 
-           upstream_url, connection_timeout_secs);
+    debug!(
+        "Making upstream request to: {} (connect_timeout={}s, stream_timeout=disabled)",
+        UrlUtils::obfuscate_credentials(upstream_url),
+        connection_timeout_secs
+    );
 
     // Make upstream request
     let upstream_response = match client
@@ -1276,12 +1569,20 @@ async fn proxy_http_stream(
     {
         Ok(response) => response,
         Err(e) => {
-            error!("Failed to connect to upstream {}: {}", upstream_url, e);
+            error!(
+                "Failed to connect to upstream {}: {}",
+                UrlUtils::obfuscate_credentials(upstream_url),
+                e
+            );
             let state_clone = state.clone();
             let session_id_clone = session_id.clone();
             tokio::spawn(async move {
                 session.finish(&state_clone.metrics_logger, 0).await;
-                if let Err(e) = state_clone.metrics_logger.complete_active_session(&session_id_clone).await {
+                if let Err(e) = state_clone
+                    .metrics_logger
+                    .complete_active_session(&session_id_clone)
+                    .await
+                {
                     error!("Failed to complete active session: {}", e);
                 }
             });
@@ -1330,18 +1631,22 @@ async fn proxy_http_stream(
 
     // Create streaming body with proper completion tracking
     let stream = upstream_response.bytes_stream();
-    
+
     // Create a stream that tracks bytes for metrics and handles completion
     let state_clone = state.clone();
     let session_id_clone = session_id.clone();
     let session_clone = session.clone();
-    
+
     // Use a shared counter for total bytes served
     let total_bytes_served = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let stream_ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    
-    debug!("Starting stream for session: {} (upstream: {})", session_id_clone, upstream_url);
-    
+
+    debug!(
+        "Starting stream for session: {} (upstream: {})",
+        session_id_clone,
+        UrlUtils::obfuscate_credentials(upstream_url)
+    );
+
     let tracked_stream = stream.map({
         let total_bytes_served = total_bytes_served.clone();
         let stream_ended = stream_ended.clone();
@@ -1349,55 +1654,77 @@ async fn proxy_http_stream(
             match chunk_result {
                 Ok(chunk) => {
                     let bytes_len = chunk.len() as u64;
-                    let total = total_bytes_served.fetch_add(bytes_len, std::sync::atomic::Ordering::Relaxed) + bytes_len;
+                    let total = total_bytes_served
+                        .fetch_add(bytes_len, std::sync::atomic::Ordering::Relaxed)
+                        + bytes_len;
                     tracing::trace!("Served {} bytes, total: {}", bytes_len, total);
-                    
+
                     // Update active session with new bytes (fire and forget)
                     let state_update = state_clone.clone();
                     let session_update = session_id_clone.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = state_update.metrics_logger.update_active_session(&session_update, bytes_len).await {
+                        if let Err(e) = state_update
+                            .metrics_logger
+                            .update_active_session(&session_update, bytes_len)
+                            .await
+                        {
                             debug!("Failed to update active session metrics: {}", e);
                         }
                         // Update session tracker with bytes served
-                        state_update.session_tracker.update_session_bytes(&session_update, bytes_len).await;
+                        state_update
+                            .session_tracker
+                            .update_session_bytes(&session_update, bytes_len)
+                            .await;
                     });
-                    
+
                     Ok(chunk)
                 }
                 Err(e) => {
                     warn!("Error streaming chunk: {}", e);
-                    
+
                     // Record error in session tracker
                     let state_error = state_clone.clone();
                     let session_error = session_id_clone.clone();
                     let error_msg = e.to_string();
                     tokio::spawn(async move {
-                        state_error.session_tracker.record_session_error(&session_error, error_msg).await;
+                        state_error
+                            .session_tracker
+                            .record_session_error(&session_error, error_msg)
+                            .await;
                     });
-                    
+
                     // Mark stream as ended on error (only once)
                     if !stream_ended.swap(true, std::sync::atomic::Ordering::Relaxed) {
                         let final_state = state_clone.clone();
                         let final_session = session_clone.clone();
                         let final_session_id = session_id_clone.clone();
-                        let final_bytes = total_bytes_served.load(std::sync::atomic::Ordering::Relaxed);
+                        let final_bytes =
+                            total_bytes_served.load(std::sync::atomic::Ordering::Relaxed);
                         tokio::spawn(async move {
                             debug!("Stream ended with error for session: {}", final_session_id);
-                            
+
                             // Finish metrics tracking
-                            final_session.finish(&final_state.metrics_logger, final_bytes).await;
-                            
+                            final_session
+                                .finish(&final_state.metrics_logger, final_bytes)
+                                .await;
+
                             // Complete the active session
-                            if let Err(e) = final_state.metrics_logger.complete_active_session(&final_session_id).await {
+                            if let Err(e) = final_state
+                                .metrics_logger
+                                .complete_active_session(&final_session_id)
+                                .await
+                            {
                                 error!("Failed to complete active session: {}", e);
                             }
-                            
+
                             // End session tracking
-                            final_state.session_tracker.end_session(&final_session_id).await;
+                            final_state
+                                .session_tracker
+                                .end_session(&final_session_id)
+                                .await;
                         });
                     }
-                    
+
                     Err(e)
                 }
             }
@@ -1410,50 +1737,62 @@ async fn proxy_http_stream(
     let completion_session_id = session_id.clone();
     let completion_bytes = total_bytes_served.clone();
     let completion_ended = stream_ended.clone();
-    
-    let stream_with_completion = futures::stream::unfold((tracked_stream, false), move |(mut stream, completed)| {
-        let state_ref = completion_state.clone();
-        let session_ref = completion_session.clone();
-        let session_id_ref = completion_session_id.clone();
-        let bytes_ref = completion_bytes.clone();
-        let ended_ref = completion_ended.clone();
-        
-        async move {
-            use futures::StreamExt;
-            
-            match stream.next().await {
-                Some(result) => {
-                    Some((result, (stream, completed)))
-                }
-                None => {
-                    // Stream completed (either successfully or client disconnected)
-                    if !completed && !ended_ref.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                        let final_bytes = bytes_ref.load(std::sync::atomic::Ordering::Relaxed);
-                        debug!("Stream completed normally for session: {} ({} bytes)", session_id_ref, final_bytes);
-                        
-                        // Handle completion asynchronously
-                        let final_state = state_ref.clone();
-                        let final_session = session_ref.clone();
-                        let final_session_id = session_id_ref.clone();
-                        tokio::spawn(async move {
-                            // Finish metrics tracking
-                            final_session.finish(&final_state.metrics_logger, final_bytes).await;
-                            
-                            // Complete the active session
-                            if let Err(e) = final_state.metrics_logger.complete_active_session(&final_session_id).await {
-                                error!("Failed to complete active session: {}", e);
-                            }
-                            
-                            // End session tracking
-                            final_state.session_tracker.end_session(&final_session_id).await;
-                        });
+
+    let stream_with_completion =
+        futures::stream::unfold((tracked_stream, false), move |(mut stream, completed)| {
+            let state_ref = completion_state.clone();
+            let session_ref = completion_session.clone();
+            let session_id_ref = completion_session_id.clone();
+            let bytes_ref = completion_bytes.clone();
+            let ended_ref = completion_ended.clone();
+
+            async move {
+                use futures::StreamExt;
+
+                match stream.next().await {
+                    Some(result) => Some((result, (stream, completed))),
+                    None => {
+                        // Stream completed (either successfully or client disconnected)
+                        if !completed && !ended_ref.swap(true, std::sync::atomic::Ordering::Relaxed)
+                        {
+                            let final_bytes = bytes_ref.load(std::sync::atomic::Ordering::Relaxed);
+                            debug!(
+                                "Stream completed normally for session: {} ({} bytes)",
+                                session_id_ref, final_bytes
+                            );
+
+                            // Handle completion asynchronously
+                            let final_state = state_ref.clone();
+                            let final_session = session_ref.clone();
+                            let final_session_id = session_id_ref.clone();
+                            tokio::spawn(async move {
+                                // Finish metrics tracking
+                                final_session
+                                    .finish(&final_state.metrics_logger, final_bytes)
+                                    .await;
+
+                                // Complete the active session
+                                if let Err(e) = final_state
+                                    .metrics_logger
+                                    .complete_active_session(&final_session_id)
+                                    .await
+                                {
+                                    error!("Failed to complete active session: {}", e);
+                                }
+
+                                // End session tracking
+                                final_state
+                                    .session_tracker
+                                    .end_session(&final_session_id)
+                                    .await;
+                            });
+                        }
+                        None
                     }
-                    None
                 }
             }
-        }
-    });
-    
+        });
+
     // Convert to axum Body
     let body = Body::from_stream(stream_with_completion);
 
@@ -1479,3 +1818,182 @@ async fn proxy_http_stream(
         }
     }
 }
+
+
+/// Proxy HLS stream requests (playlist.m3u8 and segments) with relay support
+pub async fn proxy_hls_stream(
+    axum::extract::Path((proxy_id, channel_id, path)): axum::extract::Path<(
+        String,
+        uuid::Uuid,
+        String,
+    )>,
+    headers: axum::http::HeaderMap,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use tracing::{error, info};
+
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .or_else(|| headers.get("x-real-ip"))
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    let referer = headers
+        .get("referer")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    info!(
+        "HLS stream request: proxy_id={}, channel_id={}, path={}, client_ip={}",
+        proxy_id, channel_id, path, client_ip
+    );
+
+    // 1. Resolve proxy ID to UUID
+    let resolved_proxy_id = match crate::utils::resolve_proxy_id(&proxy_id) {
+        Ok(id) => id,
+        Err(e) => {
+            error!("Failed to resolve proxy ID {}: {}", proxy_id, e);
+            return (StatusCode::NOT_FOUND, "Proxy not found".to_string()).into_response();
+        }
+    };
+
+    // 2. Look up proxy
+    let proxy = match state
+        .database
+        .get_proxy_by_id(&resolved_proxy_id.to_string())
+        .await
+    {
+        Ok(proxy) => {
+            if !proxy.is_active {
+                return (StatusCode::NOT_FOUND, "Proxy not active".to_string()).into_response();
+            }
+            proxy
+        }
+        Err(e) => {
+            error!("Failed to find proxy {}: {}", proxy_id, e);
+            return (StatusCode::NOT_FOUND, "Proxy not found".to_string()).into_response();
+        }
+    };
+
+    // 3. Look up channel within proxy context
+    let channel = match state
+        .database
+        .get_channel_for_proxy(&resolved_proxy_id.to_string(), channel_id)
+        .await
+    {
+        Ok(Some(channel)) => channel,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                "Channel not found in this proxy".to_string(),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!(
+                "Failed to lookup channel {} in proxy {}: {}",
+                channel_id, resolved_proxy_id, e
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database error".to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    // 4. Check if proxy is configured for relay mode
+    match proxy.proxy_mode {
+        crate::models::StreamProxyMode::Relay => {
+            info!("HLS request for relay mode proxy - not currently supported");
+            return (
+                StatusCode::NOT_IMPLEMENTED,
+                "HLS streaming not yet supported for relay mode".to_string(),
+            )
+                .into_response();
+        }
+        _ => {
+            // For non-relay modes, HLS is not available
+            return (
+                StatusCode::NOT_FOUND,
+                "HLS content not available for this proxy mode".to_string(),
+            )
+                .into_response();
+        }
+    }
+}
+
+/// Helper function to get relay profile by ID
+async fn get_relay_profile_by_id_internal(
+    database: &crate::database::Database,
+    id: Uuid,
+) -> Result<Option<crate::models::relay::RelayProfile>, sqlx::Error> {
+    let query = r#"
+        SELECT id, name, description,
+               video_codec, audio_codec, video_profile, video_preset,
+               video_bitrate, audio_bitrate, audio_sample_rate, audio_channels,
+               enable_hardware_acceleration, preferred_hwaccel,
+               manual_args, ffmpeg_args,
+               output_format, segment_duration, max_segments, input_timeout,
+               is_system_default, is_active, created_at, updated_at
+        FROM relay_profiles
+        WHERE id = ? AND is_active = true
+    "#;
+
+    let row = sqlx::query(query)
+        .bind(id.to_string())
+        .fetch_optional(&database.pool())
+        .await?;
+
+    if let Some(row) = row {
+        let profile = crate::models::relay::RelayProfile {
+            id: Uuid::parse_str(&row.get::<String, _>("id")).unwrap(),
+            name: row.get("name"),
+            description: row.get("description"),
+            
+            // Codec settings
+            video_codec: row.get::<String, _>("video_codec").parse().unwrap_or(VideoCodec::Copy),
+            audio_codec: row.get::<String, _>("audio_codec").parse().unwrap_or(AudioCodec::Copy),
+            video_profile: row.get("video_profile"),
+            video_preset: row.get("video_preset"),
+            video_bitrate: row.get::<Option<i32>, _>("video_bitrate").map(|v| v as u32),
+            audio_bitrate: row.get::<Option<i32>, _>("audio_bitrate").map(|v| v as u32),
+            audio_sample_rate: row.get::<Option<i32>, _>("audio_sample_rate").map(|v| v as u32),
+            audio_channels: row.get::<Option<i32>, _>("audio_channels").map(|v| v as u32),
+            
+            // Hardware acceleration
+            enable_hardware_acceleration: row.get("enable_hardware_acceleration"),
+            preferred_hwaccel: row.get("preferred_hwaccel"),
+            
+            // Manual override
+            manual_args: row.get("manual_args"),
+            ffmpeg_args: row.get("ffmpeg_args"),
+            
+            // Container settings
+            output_format: row.get::<String, _>("output_format").parse().unwrap_or(crate::models::relay::RelayOutputFormat::TransportStream),
+            segment_duration: row.get("segment_duration"),
+            max_segments: row.get("max_segments"),
+            input_timeout: row.get("input_timeout"),
+            
+            // System flags
+            is_system_default: row.get("is_system_default"),
+            is_active: row.get("is_active"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        };
+        Ok(Some(profile))
+    } else {
+        Ok(None)
+    }
+}
+
+
+
+

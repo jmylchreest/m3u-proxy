@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
@@ -14,7 +15,10 @@ use crate::proxy::stage_strategy::{
 use crate::utils::memory_config::{
     MemoryMonitoringConfig, MemoryVerbosity, get_global_memory_config,
 };
-use crate::utils::{MemoryLimitStatus, MemorySnapshot, MemoryStats, SimpleMemoryMonitor};
+use crate::utils::{
+    MemoryLimitStatus, MemorySnapshot, MemoryStats, SimpleMemoryMonitor, format_duration,
+    format_memory,
+};
 
 /// Unified memory context for the entire processing pipeline
 pub struct MemoryContext {
@@ -78,41 +82,14 @@ pub enum MemoryEfficiencyTrend {
 }
 
 impl MemoryContext {
-    /// Create a new memory context with optional memory limit
+    /// Create a new memory context with shared system instance
     pub fn new(
         memory_limit_mb: Option<usize>,
         memory_thresholds: Option<MemoryThresholds>,
+        system: Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         let config = get_global_memory_config();
-        let monitor = SimpleMemoryMonitor::new_with_config(memory_limit_mb, config.clone());
-
-        // Create a minimal strategy selector just for pressure calculation
-        let registry = crate::proxy::stage_strategy::StageStrategyRegistry::new();
-        let mut pressure_calculator = DynamicStrategySelector::new(registry);
-
-        // Use custom thresholds if provided
-        if let Some(thresholds) = memory_thresholds {
-            pressure_calculator.set_memory_thresholds(thresholds);
-        }
-
-        Self {
-            monitor,
-            pressure_calculator,
-            current_pressure: MemoryPressureLevel::Optimal,
-            stage_progression: Vec::new(),
-            last_observation: None,
-            stage_timings: HashMap::new(),
-            config,
-        }
-    }
-
-    /// Create a new memory context with custom configuration
-    pub fn new_with_config(
-        memory_limit_mb: Option<usize>,
-        memory_thresholds: Option<MemoryThresholds>,
-        config: MemoryMonitoringConfig,
-    ) -> Self {
-        let monitor = SimpleMemoryMonitor::new_with_config(memory_limit_mb, config.clone());
+        let monitor = SimpleMemoryMonitor::new(memory_limit_mb, config.clone(), system);
 
         // Create a minimal strategy selector just for pressure calculation
         let registry = crate::proxy::stage_strategy::StageStrategyRegistry::new();
@@ -135,14 +112,14 @@ impl MemoryContext {
     }
 
     /// Initialize the memory context
-    pub fn initialize(&mut self) -> Result<()> {
-        self.monitor.initialize()?;
+    pub async fn initialize(&mut self) -> Result<()> {
+        self.monitor.initialize().await?;
         debug!("Memory monitoring initialized");
         Ok(())
     }
 
     /// Start timing for a stage
-    pub fn start_stage(&mut self, stage_name: &str) -> Result<MemorySnapshot> {
+    pub async fn start_stage(&mut self, stage_name: &str) -> Result<MemorySnapshot> {
         // Record start timing
         self.stage_timings.insert(
             stage_name.to_string(),
@@ -156,7 +133,8 @@ impl MemoryContext {
         // Observe memory at stage start
         let snapshot = self
             .monitor
-            .observe_stage(&format!("{}_start", stage_name))?;
+            .observe_stage(&format!("{}_start", stage_name))
+            .await?;
 
         debug!("Stage started: {}", stage_name);
 
@@ -164,7 +142,7 @@ impl MemoryContext {
     }
 
     /// Complete a stage and analyze memory impact
-    pub fn complete_stage(&mut self, stage_name: &str) -> Result<StageMemoryInfo> {
+    pub async fn complete_stage(&mut self, stage_name: &str) -> Result<StageMemoryInfo> {
         // Get end timing
         let start_timing = self
             .stage_timings
@@ -189,7 +167,10 @@ impl MemoryContext {
         self.config = get_global_memory_config();
 
         // Observe memory at stage end
-        let end_snapshot = self.monitor.observe_stage(&format!("{}_end", stage_name))?;
+        let end_snapshot = self
+            .monitor
+            .observe_stage(&format!("{}_end", stage_name))
+            .await?;
 
         // Calculate memory pressure
         let pressure = self
@@ -270,27 +251,33 @@ impl MemoryContext {
 
             if stage_to_stage_delta_mb.abs() > self.config.min_stage_delta_mb {
                 info!(
-                    "Stage '{}' completed: Memory {} by {:.1}MB ({:.1}MB → {:.1}MB) in {}ms | Pressure: {:?}",
+                    "Stage '{}' completed: Memory {} by {} ({} → {}) in {} | Pressure: {:?}",
                     stage_name,
                     direction,
-                    stage_to_stage_delta_mb.abs(),
-                    stage_info.memory_before_mb,
-                    stage_info.memory_after_mb,
-                    duration_ms,
+                    format_memory(stage_to_stage_delta_mb.abs() * 1024.0 * 1024.0),
+                    format_memory(stage_info.memory_before_mb * 1024.0 * 1024.0),
+                    format_memory(stage_info.memory_after_mb * 1024.0 * 1024.0),
+                    format_duration(duration_ms),
                     pressure
                 );
             } else {
                 // Only log pressure escalation without memory details
                 debug!(
-                    "Stage '{}' completed: Memory stable at {:.1}MB in {}ms | Pressure: {:?}",
-                    stage_name, stage_info.memory_after_mb, duration_ms, pressure
+                    "Stage '{}' completed: Memory stable at {} in {} | Pressure: {:?}",
+                    stage_name,
+                    format_memory(stage_info.memory_after_mb * 1024.0 * 1024.0),
+                    format_duration(duration_ms),
+                    pressure
                 );
             }
         } else if self.config.verbosity == MemoryVerbosity::Debug {
             // Always log in debug mode
             debug!(
-                "Stage '{}' completed: Memory stable at {:.1}MB in {}ms | Pressure: {:?}",
-                stage_name, stage_info.memory_after_mb, duration_ms, pressure
+                "Stage '{}' completed: Memory stable at {} in {} | Pressure: {:?}",
+                stage_name,
+                format_memory(stage_info.memory_after_mb * 1024.0 * 1024.0),
+                format_duration(duration_ms),
+                pressure
             );
         }
 
@@ -302,11 +289,11 @@ impl MemoryContext {
     }
 
     /// Observe memory without stage boundaries (for custom monitoring points)
-    pub fn observe(
+    pub async fn observe(
         &mut self,
         observation_point: &str,
     ) -> Result<(MemorySnapshot, MemoryPressureLevel)> {
-        let snapshot = self.monitor.observe_stage(observation_point)?;
+        let snapshot = self.monitor.observe_stage(observation_point).await?;
         let pressure = self
             .pressure_calculator
             .assess_memory_pressure(snapshot.rss_mb as usize);
@@ -323,7 +310,7 @@ impl MemoryContext {
     }
 
     /// Check if memory cleanup is recommended
-    pub fn should_cleanup(&self) -> Result<bool> {
+    pub async fn should_cleanup(&self) -> Result<bool> {
         // Check pressure level
         if matches!(
             self.current_pressure,
@@ -335,12 +322,11 @@ impl MemoryContext {
         }
 
         // Check underlying monitor
-        self.monitor.check_memory_limit().map(|status| {
-            matches!(
-                status,
-                MemoryLimitStatus::Warning | MemoryLimitStatus::Exceeded
-            )
-        })
+        let status = self.monitor.check_memory_limit().await?;
+        Ok(matches!(
+            status,
+            MemoryLimitStatus::Warning | MemoryLimitStatus::Exceeded
+        ))
     }
 
     /// Analyze memory usage patterns across all stages
@@ -529,12 +515,12 @@ impl MemoryContext {
     }
 
     /// Reset the context for a new processing run
-    pub fn reset(&mut self) -> Result<()> {
+    pub async fn reset(&mut self) -> Result<()> {
         self.stage_progression.clear();
         self.last_observation = None;
         self.stage_timings.clear();
         self.current_pressure = MemoryPressureLevel::Optimal;
-        self.monitor.initialize()?;
+        self.monitor.initialize().await?;
         Ok(())
     }
 }

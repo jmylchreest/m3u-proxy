@@ -30,6 +30,11 @@ impl MetricsLogger {
         Self { db }
     }
     
+    /// Get database pool for relay logging
+    pub fn pool(&self) -> &SqlitePool {
+        &self.db
+    }
+    
     /// Log a stream access event
     pub async fn log_stream_access(&self, metrics: StreamAccessMetrics) {
         info!(

@@ -2,12 +2,12 @@ use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use uuid::Uuid;
 
-/// Resolve a proxy ID from any supported format to a standard UUID
+/// Parse a UUID from any supported format to a standard UUID
 /// Supports:
 /// - 36 characters with hyphens: "550e8400-e29b-41d4-a716-446655440000"
 /// - 32 characters without hyphens: "550e8400e29b41d4a716446655440000"
 /// - 22 characters base64: "VQ6EAOKbQdSnFkRmVUQAAA"
-pub fn resolve_proxy_id(input: &str) -> Result<Uuid> {
+pub fn parse_uuid_flexible(input: &str) -> Result<Uuid> {
     let trimmed = input.trim();
     
     match trimmed.len() {
@@ -55,6 +55,12 @@ pub fn resolve_proxy_id(input: &str) -> Result<Uuid> {
             ))
         }
     }
+}
+
+/// Resolve a proxy ID from any supported format to a standard UUID
+/// Alias for parse_uuid_flexible for backward compatibility
+pub fn resolve_proxy_id(input: &str) -> Result<Uuid> {
+    parse_uuid_flexible(input)
 }
 
 /// Convert UUID to base64 format (22 characters)

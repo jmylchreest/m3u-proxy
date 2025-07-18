@@ -394,7 +394,7 @@ impl crate::database::Database {
 
         let result = sqlx::query(
             "UPDATE epg_sources
-             SET name = ?, source_type = ?, url = ?, update_cron = ?, username = ?, password = ?, timezone = ?, time_offset = ?, is_active = ?
+             SET name = ?, source_type = ?, url = ?, update_cron = ?, username = ?, password = ?, original_timezone = ?, time_offset = ?, is_active = ?
              WHERE id = ?",
         )
         .bind(&source.name)
@@ -476,21 +476,24 @@ impl crate::database::Database {
     where
         F: Fn(usize, usize) + Send + Sync,
     {
-        // Use a timeout for the entire transaction to prevent indefinite blocking
-        let timeout_duration = std::time::Duration::from_secs(600); // 10 minutes max
+        // Use shorter transaction timeout to reduce deadlock risk
+        let timeout_duration = std::time::Duration::from_secs(120); // 2 minutes max per operation
 
-        let result = tokio::time::timeout(timeout_duration, async {
+        // Step 1: Clear existing data in a separate, quick transaction
+        let clear_result = tokio::time::timeout(Duration::from_secs(30), async {
             let mut tx = self.pool.begin().await?;
 
-            // Set a reasonable transaction timeout
-            sqlx::query("PRAGMA busy_timeout = 30000") // 30 seconds
+            // Set shorter busy timeout for cleanup operations
+            sqlx::query("PRAGMA busy_timeout = 10000") // 10 seconds
                 .execute(&mut *tx)
                 .await?;
 
             // Check for cancellation before starting
             if let Some(ref mut rx) = cancellation_rx {
                 if rx.try_recv().is_ok() {
-                    return Err(anyhow::anyhow!("Operation cancelled before database update"));
+                    return Err(anyhow::anyhow!(
+                        "Operation cancelled before database cleanup"
+                    ));
                 }
             }
 
@@ -500,38 +503,53 @@ impl crate::database::Database {
                 .execute(&mut *tx)
                 .await?;
 
-            // Check for cancellation after delete
-            if let Some(ref mut rx) = cancellation_rx {
-                if rx.try_recv().is_ok() {
-                    tx.rollback().await?;
-                    return Err(anyhow::anyhow!("Operation cancelled during program deletion"));
-                }
-            }
-
             sqlx::query("DELETE FROM epg_channels WHERE source_id = ?")
                 .bind(source_id.to_string())
                 .execute(&mut *tx)
                 .await?;
 
-            // Check for cancellation after channel deletion
-            if let Some(ref mut rx) = cancellation_rx {
-                if rx.try_recv().is_ok() {
-                    tx.rollback().await?;
-                    return Err(anyhow::anyhow!("Operation cancelled during channel deletion"));
-                }
-            }
+            tx.commit().await?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
 
-            // Insert channels using bulk inserts for better performance
-            // SQLite 3.32.0+ supports up to 32,766 variables per query, channels have 9 fields each
-            let channel_batch_size = self.batch_config.safe_epg_channel_batch_size();
-            for chunk in channels.chunks(channel_batch_size) {
-                if !chunk.is_empty() {
+        match clear_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "Database cleanup timed out after 30 seconds"
+                ));
+            }
+        }
+
+        // Check for cancellation after cleanup
+        if let Some(ref mut rx) = cancellation_rx {
+            if rx.try_recv().is_ok() {
+                return Err(anyhow::anyhow!("Operation cancelled after cleanup"));
+            }
+        }
+
+        // Step 2: Insert channels in smaller transactions
+        let channel_batch_size = self.batch_config.safe_epg_channel_batch_size();
+        let channel_chunks: Vec<_> = channels.chunks(channel_batch_size).collect();
+
+        for (i, chunk) in channel_chunks.iter().enumerate() {
+            if !chunk.is_empty() {
+                let insert_result = tokio::time::timeout(Duration::from_secs(60), async {
+                    let mut tx = self.pool.begin().await?;
+
+                    // Set busy timeout for individual transactions
+                    sqlx::query("PRAGMA busy_timeout = 15000") // 15 seconds
+                        .execute(&mut *tx)
+                        .await?;
+
                     // Prepare bulk insert statement
                     let mut query_builder = sqlx::QueryBuilder::new(
                         "INSERT INTO epg_channels (id, source_id, channel_id, channel_name, channel_logo, channel_group, language, created_at, updated_at) "
                     );
 
-                    query_builder.push_values(chunk, |mut b, channel| {
+                    query_builder.push_values(*chunk, |mut b, channel| {
                         b.push_bind(channel.id.to_string())
                             .push_bind(source_id.to_string())
                             .push_bind(&channel.channel_id)
@@ -546,31 +564,54 @@ impl crate::database::Database {
                     // Execute bulk insert
                     let query = query_builder.build();
                     query.execute(&mut *tx).await?;
+                    tx.commit().await?;
+                    Ok::<(), anyhow::Error>(())
+                }).await;
+
+                match insert_result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => return Err(e),
+                    Err(_) => {
+                        return Err(anyhow::anyhow!(
+                            "Channel insertion timed out for batch {}",
+                            i + 1
+                        ));
+                    }
                 }
 
-                // Check for cancellation after each batch
+                // Check for cancellation after each chunk
                 if let Some(ref mut rx) = cancellation_rx {
                     if rx.try_recv().is_ok() {
-                        tx.rollback().await?;
-                        return Err(anyhow::anyhow!("Operation cancelled during channel insertion"));
+                        return Err(anyhow::anyhow!(
+                            "Operation cancelled during channel insertion"
+                        ));
                     }
                 }
             }
+        }
 
-            // Insert programs using bulk inserts with progress tracking
-            // SQLite 3.32.0+ supports up to 32,766 variables per query, programs have 18 fields each
-            let program_batch_size = self.batch_config.safe_epg_program_batch_size();
-            let total_programs = programs.len();
-            let mut programs_saved = 0;
+        // Step 3: Insert programs in smaller transactions with progress tracking
+        let program_batch_size = self.batch_config.safe_epg_program_batch_size();
+        let total_programs = programs.len();
+        let mut programs_saved = 0;
+        let program_chunks: Vec<_> = programs.chunks(program_batch_size).collect();
 
-            for chunk in programs.chunks(program_batch_size) {
-                if !chunk.is_empty() {
+        for (i, chunk) in program_chunks.iter().enumerate() {
+            if !chunk.is_empty() {
+                let insert_result = tokio::time::timeout(Duration::from_secs(90), async {
+                    let mut tx = self.pool.begin().await?;
+
+                    // Set busy timeout for individual transactions
+                    sqlx::query("PRAGMA busy_timeout = 15000") // 15 seconds
+                        .execute(&mut *tx)
+                        .await?;
+
                     // Prepare bulk insert statement
                     let mut query_builder = sqlx::QueryBuilder::new(
                         "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, program_icon, created_at, updated_at) "
                     );
 
-                    query_builder.push_values(chunk, |mut b, program| {
+                    query_builder.push_values(*chunk, |mut b, program| {
                         b.push_bind(program.id.to_string())
                             .push_bind(source_id.to_string())
                             .push_bind(&program.channel_id)
@@ -594,6 +635,19 @@ impl crate::database::Database {
                     // Execute bulk insert
                     let query = query_builder.build();
                     query.execute(&mut *tx).await?;
+                    tx.commit().await?;
+                    Ok::<(), anyhow::Error>(())
+                }).await;
+
+                match insert_result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => return Err(e),
+                    Err(_) => {
+                        return Err(anyhow::anyhow!(
+                            "Program insertion timed out for batch {}",
+                            i + 1
+                        ));
+                    }
                 }
 
                 programs_saved += chunk.len();
@@ -606,32 +660,15 @@ impl crate::database::Database {
                 // Check for cancellation after each batch
                 if let Some(ref mut rx) = cancellation_rx {
                     if rx.try_recv().is_ok() {
-                        tx.rollback().await?;
-                        return Err(anyhow::anyhow!("Operation cancelled during program insertion"));
+                        return Err(anyhow::anyhow!(
+                            "Operation cancelled during program insertion"
+                        ));
                     }
                 }
             }
-
-            // Final cancellation check before commit
-            if let Some(ref mut rx) = cancellation_rx {
-                if rx.try_recv().is_ok() {
-                    tx.rollback().await?;
-                    return Err(anyhow::anyhow!("Operation cancelled before commit"));
-                }
-            }
-
-            tx.commit().await?;
-
-            Ok((channels.len(), programs.len()))
-        }).await;
-
-        match result {
-            Ok(inner_result) => inner_result,
-            Err(_) => Err(anyhow::anyhow!(
-                "Database operation timed out after {} seconds",
-                timeout_duration.as_secs()
-            )),
         }
+
+        Ok((channels.len(), programs.len()))
     }
 
     pub async fn update_epg_source_last_ingested(&self, source_id: Uuid) -> Result<DateTime<Utc>> {

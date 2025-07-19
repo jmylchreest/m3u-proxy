@@ -10,6 +10,7 @@ use axum::{
 };
 use serde_json::json;
 use tracing::{debug, error, info};
+use utoipa;
 
 use crate::{
     models::relay::{RelayProcessMetrics, RelayMetrics},
@@ -18,6 +19,17 @@ use crate::{
 
 /// Get all active relay process metrics
 /// GET /api/v1/active-relays
+#[utoipa::path(
+    get,
+    path = "/active-relays",
+    tag = "active-relays",
+    summary = "Get active relay metrics",
+    description = "Retrieve metrics for all currently active relay processes",
+    responses(
+        (status = 200, description = "Active relay metrics"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_active_relays(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
@@ -56,6 +68,22 @@ pub async fn get_active_relays(
 
 /// Get metrics for a specific active relay
 /// GET /api/v1/active-relays/:config_id
+#[utoipa::path(
+    get,
+    path = "/active-relays/{config_id}",
+    tag = "active-relays",
+    summary = "Get active relay by ID",
+    description = "Retrieve metrics for a specific active relay process by config ID",
+    params(
+        ("config_id" = String, Path, description = "Relay configuration ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "Active relay metrics"),
+        (status = 400, description = "Invalid config ID format"),
+        (status = 404, description = "Active relay not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_active_relay_by_id(
     State(state): State<AppState>,
     axum::extract::Path(config_id): axum::extract::Path<String>,
@@ -107,6 +135,17 @@ pub async fn get_active_relay_by_id(
 
 /// Get system health status for active relays
 /// GET /api/v1/active-relays/health
+#[utoipa::path(
+    get,
+    path = "/active-relays/health",
+    tag = "active-relays",
+    summary = "Get relay system health",
+    description = "Retrieve overall health status of the relay system",
+    responses(
+        (status = 200, description = "Relay system health status"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_relay_health(
     State(state): State<AppState>,
 ) -> impl IntoResponse {

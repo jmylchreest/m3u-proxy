@@ -242,12 +242,31 @@ CREATE TABLE relay_profiles (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL UNIQUE,
     description TEXT,
-    ffmpeg_args TEXT NOT NULL, -- JSON array of FFmpeg arguments
+    
+    -- TS-compatible codec selection
+    video_codec TEXT NOT NULL DEFAULT 'h264' CHECK (video_codec IN ('h264', 'h265', 'av1', 'mpeg2', 'mpeg4', 'copy')),
+    audio_codec TEXT NOT NULL DEFAULT 'aac' CHECK (audio_codec IN ('aac', 'mp3', 'ac3', 'eac3', 'mpeg2audio', 'dts', 'copy')),
+    video_profile TEXT, -- 'main', 'main10', 'high'
+    video_preset TEXT,  -- 'fast', 'medium', 'slow'
+    video_bitrate INTEGER, -- kbps
+    audio_bitrate INTEGER, -- kbps
+    audio_sample_rate INTEGER, -- Hz
+    audio_channels INTEGER, -- Number of audio channels
+    
+    -- Hardware acceleration
+    enable_hardware_acceleration BOOLEAN NOT NULL DEFAULT FALSE,
+    preferred_hwaccel TEXT, -- 'auto', 'vaapi', 'nvenc', 'qsv', 'amf'
+    
+    -- Manual override
+    manual_args TEXT,   -- User-defined args override (JSON)
+    
+    -- Container and streaming settings
     output_format TEXT NOT NULL DEFAULT 'transport_stream' CHECK (output_format IN ('transport_stream', 'hls', 'dash', 'copy')),
     segment_duration INTEGER, -- For segmented formats (seconds)
     max_segments INTEGER,     -- For circular buffer
     input_timeout INTEGER NOT NULL DEFAULT 30,
-    hardware_acceleration TEXT, -- 'cuda', 'vaapi', etc.
+    
+    -- System flags
     is_system_default BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),

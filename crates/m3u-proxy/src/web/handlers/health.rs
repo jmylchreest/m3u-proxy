@@ -4,6 +4,7 @@
 //! the application's status and dependencies.
 
 use axum::{extract::State, response::IntoResponse};
+use utoipa;
 
 use crate::database::Database;
 use crate::web::{
@@ -16,6 +17,17 @@ use crate::web::{
 /// Health check endpoint
 ///
 /// Returns basic application health status including database connectivity
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "health",
+    summary = "Health check",
+    description = "Basic health check endpoint for monitoring application status",
+    responses(
+        (status = 200, description = "Health status"),
+        (status = 503, description = "Service unhealthy")
+    )
+)]
 pub async fn health_check(
     State(state): State<AppState>,
     context: RequestContext,
@@ -39,6 +51,17 @@ pub async fn health_check(
 }
 
 /// Detailed health check with more comprehensive status
+#[utoipa::path(
+    get,
+    path = "/health/detailed",
+    tag = "health",
+    summary = "Detailed health check",
+    description = "Comprehensive health check with detailed component status",
+    responses(
+        (status = 200, description = "Detailed health status"),
+        (status = 503, description = "Service unhealthy")
+    )
+)]
 pub async fn detailed_health_check(
     State(state): State<AppState>,
     context: RequestContext,
@@ -107,6 +130,17 @@ pub async fn detailed_health_check(
 }
 
 /// Readiness check (for Kubernetes probes)
+#[utoipa::path(
+    get,
+    path = "/ready",
+    tag = "health",
+    summary = "Readiness check",
+    description = "Kubernetes readiness probe endpoint - checks if service is ready to accept traffic",
+    responses(
+        (status = 200, description = "Service ready"),
+        (status = 503, description = "Service not ready")
+    )
+)]
 pub async fn readiness_check(
     State(state): State<AppState>,
     context: RequestContext,
@@ -133,6 +167,16 @@ pub async fn readiness_check(
 }
 
 /// Liveness check (for Kubernetes probes)
+#[utoipa::path(
+    get,
+    path = "/live",
+    tag = "health",
+    summary = "Liveness check",
+    description = "Kubernetes liveness probe endpoint - checks if service is alive",
+    responses(
+        (status = 200, description = "Service alive")
+    )
+)]
 pub async fn liveness_check(_context: RequestContext) -> impl IntoResponse {
     log_request(
         &axum::http::Method::GET,

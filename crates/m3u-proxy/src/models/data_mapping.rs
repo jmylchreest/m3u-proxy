@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct DataMappingRule {
     pub id: Uuid,
     pub name: String,
@@ -317,7 +317,7 @@ pub struct EpgDataMappingResult {
     pub programs_affected: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DataMappingPreviewRequest {
     pub source_type: DataMappingSourceType,
     pub source_id: Option<Uuid>,

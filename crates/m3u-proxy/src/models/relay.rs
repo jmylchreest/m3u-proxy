@@ -11,7 +11,8 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// FFmpeg relay profile containing reusable command configurations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(description = "FFmpeg relay profile with reusable transcoding configurations")]
 pub struct RelayProfile {
     pub id: Uuid,
     pub name: String,
@@ -20,25 +21,34 @@ pub struct RelayProfile {
     // TS-compatible codec selection
     pub video_codec: VideoCodec,
     pub audio_codec: AudioCodec,
+    #[schema(example = "main")]
     pub video_profile: Option<String>, // "main", "main10", "high"
+    #[schema(example = "medium")]
     pub video_preset: Option<String>,  // "fast", "medium", "slow"
+    #[schema(example = 2000)]
     pub video_bitrate: Option<u32>,    // kbps
+    #[schema(example = 128)]
     pub audio_bitrate: Option<u32>,    // kbps
+    #[schema(example = 48000)]
     pub audio_sample_rate: Option<u32>, // Hz (e.g., 48000, 44100)
+    #[schema(example = 2)]
     pub audio_channels: Option<u32>,    // Channel count (e.g., 1, 2, 6)
     
     // Hardware acceleration
     pub enable_hardware_acceleration: bool,
+    #[schema(example = "auto")]
     pub preferred_hwaccel: Option<String>, // "auto", "vaapi", "nvenc", "qsv", "amf"
     
-    // Manual override and legacy support
+    // Manual override
     pub manual_args: Option<String>,   // User-defined args override
-    pub ffmpeg_args: Option<String>,   // Legacy: JSON array of FFmpeg arguments
     
     // Container and streaming settings
     pub output_format: RelayOutputFormat,
+    #[schema(example = 6)]
     pub segment_duration: Option<i32>,
+    #[schema(example = 5)]
     pub max_segments: Option<i32>,
+    #[schema(example = 30)]
     pub input_timeout: i32,
     
     // System flags
@@ -306,7 +316,6 @@ pub struct CreateRelayProfileRequest {
     
     // Manual override
     pub manual_args: Option<String>,
-    pub ffmpeg_args: Option<Vec<String>>, // Legacy support
     
     // Container settings
     pub output_format: RelayOutputFormat,
@@ -337,7 +346,6 @@ pub struct UpdateRelayProfileRequest {
     
     // Manual override
     pub manual_args: Option<String>,
-    pub ffmpeg_args: Option<Vec<String>>, // Legacy support
     
     // Container settings
     pub output_format: Option<RelayOutputFormat>,
@@ -539,28 +547,11 @@ pub struct TrafficDataPoint {
 }
 
 impl RelayProfile {
-    /// Parse FFmpeg arguments from JSON string (legacy support)
-    pub fn parse_ffmpeg_args(&self) -> Result<Vec<String>, serde_json::Error> {
-        if let Some(ref args) = self.ffmpeg_args {
-            serde_json::from_str(args)
-        } else {
-            Ok(Vec::new())
-        }
-    }
 
     /// Create a new relay profile with validation
     pub fn new(request: CreateRelayProfileRequest) -> Result<Self, String> {
         // Validate Transport Stream compatibility
         Self::validate_ts_compatibility(&request.video_codec, &request.audio_codec)?;
-        
-        // Handle legacy FFmpeg args if provided
-        let legacy_args_json = if let Some(ref args) = request.ffmpeg_args {
-            Self::validate_ffmpeg_args(args)?;
-            Some(serde_json::to_string(args)
-                .map_err(|e| format!("Invalid FFmpeg arguments: {}", e))?)
-        } else {
-            None
-        };
         
         // Validate manual args if provided
         if let Some(ref manual_args) = request.manual_args {
@@ -590,7 +581,6 @@ impl RelayProfile {
             
             // Manual override
             manual_args: request.manual_args,
-            ffmpeg_args: legacy_args_json,
             
             // Container settings
             output_format: request.output_format,
@@ -737,22 +727,8 @@ impl ResolvedRelayConfig {
     
     /// Create a resolved configuration with a temporary flag
     pub fn new_with_temporary_flag(config: ChannelRelayConfig, profile: RelayProfile, is_temporary: bool) -> Result<Self, String> {
-        // For new codec-based profiles, we don't use pre-computed args
-        // Instead, we generate them dynamically in generate_ffmpeg_command()
-        let effective_args = if profile.ffmpeg_args.is_some() {
-            // Legacy profile - use existing logic
-            let mut base_args = profile.parse_ffmpeg_args()
-                .map_err(|e| format!("Failed to parse profile FFmpeg args: {}", e))?;
-            
-            // Apply custom arguments if present
-            if let Some(custom_args) = config.parse_custom_args()
-                .map_err(|e| format!("Failed to parse custom FFmpeg args: {}", e))?
-            {
-                base_args.extend(custom_args);
-            }
-            
-            base_args
-        } else {
+        // For codec-based profiles, we generate them dynamically in generate_ffmpeg_command()
+        let effective_args = {
             // New codec-based profile - args generated dynamically
             Vec::new()
         };
@@ -771,6 +747,18 @@ impl ResolvedRelayConfig {
         input_url: &str,
         output_path: &str,
         hwaccel_caps: &HwAccelCapabilities,
+    ) -> Vec<String> {
+        // Use traditional hardcoded method for backward compatibility
+        self.generate_ffmpeg_command_with_mapping(input_url, output_path, hwaccel_caps, None)
+    }
+    
+    /// Generate complete FFmpeg command with dynamic stream mapping
+    pub fn generate_ffmpeg_command_with_mapping(
+        &self,
+        input_url: &str,
+        output_path: &str,
+        hwaccel_caps: &HwAccelCapabilities,
+        mapping_strategy: Option<&crate::services::StreamMappingStrategy>,
     ) -> Vec<String> {
         // If this is a legacy profile, use the old method
         if !self.effective_args.is_empty() {
@@ -793,20 +781,49 @@ impl ResolvedRelayConfig {
             "-i".to_string(), input_url.to_string()
         ]);
         
-        // Explicit stream mapping to ensure we get both video and audio
-        args.extend(["-map".to_string(), "0:v:0".to_string()]); // First video stream
-        args.extend(["-map".to_string(), "0:a:0".to_string()]); // First audio stream
+        // Dynamic stream mapping based on probe results or fallback to hardcoded
+        if let Some(strategy) = mapping_strategy {
+            // Use dynamic mapping based on probe results
+            if let Some(ref video_mapping) = strategy.video_mapping {
+                args.extend(["-map".to_string(), video_mapping.clone()]);
+            }
+            if let Some(ref audio_mapping) = strategy.audio_mapping {
+                args.extend(["-map".to_string(), audio_mapping.clone()]);
+            }
+        } else {
+            // Fallback to hardcoded mapping (legacy behavior)
+            args.extend(["-map".to_string(), "0:v:0".to_string()]); // First video stream
+            args.extend(["-map".to_string(), "0:a:0".to_string()]); // First audio stream
+        }
         
-        // Video codec
-        args.push("-c:v".to_string());
-        if self.profile.enable_hardware_acceleration {
-            if let Some(hw_encoder) = self.get_hwaccel_video_encoder(hwaccel_caps) {
-                args.push(hw_encoder);
+        // Video codec - use copy if strategy suggests it or handle normally
+        if let Some(strategy) = mapping_strategy {
+            if strategy.video_mapping.is_some() {
+                args.push("-c:v".to_string());
+                if strategy.video_copy {
+                    args.push("copy".to_string());
+                } else if self.profile.enable_hardware_acceleration {
+                    if let Some(hw_encoder) = self.get_hwaccel_video_encoder(hwaccel_caps) {
+                        args.push(hw_encoder);
+                    } else {
+                        args.push(self.profile.get_software_encoder());
+                    }
+                } else {
+                    args.push(self.profile.get_software_encoder());
+                }
+            }
+        } else {
+            // Legacy behavior
+            args.push("-c:v".to_string());
+            if self.profile.enable_hardware_acceleration {
+                if let Some(hw_encoder) = self.get_hwaccel_video_encoder(hwaccel_caps) {
+                    args.push(hw_encoder);
+                } else {
+                    args.push(self.profile.get_software_encoder());
+                }
             } else {
                 args.push(self.profile.get_software_encoder());
             }
-        } else {
-            args.push(self.profile.get_software_encoder());
         }
         
         // Hardware acceleration video filters (must come after codec specification)
@@ -817,8 +834,19 @@ impl ResolvedRelayConfig {
         }
         
         // Video settings - only apply encoding parameters if we're not copying
-        if self.profile.video_codec != VideoCodec::Copy {
-            if let Some(bitrate) = self.profile.video_bitrate {
+        let should_apply_video_settings = if let Some(strategy) = mapping_strategy {
+            strategy.video_mapping.is_some() && !strategy.video_copy
+        } else {
+            self.profile.video_codec != VideoCodec::Copy
+        };
+        
+        if should_apply_video_settings {
+            // Use optimal bitrate from strategy or profile default
+            let target_bitrate = mapping_strategy
+                .and_then(|s| s.target_video_bitrate)
+                .or(self.profile.video_bitrate);
+                
+            if let Some(bitrate) = target_bitrate {
                 args.extend(["-b:v".to_string(), format!("{}k", bitrate)]);
             }
             if let Some(ref preset) = self.profile.video_preset {
@@ -829,20 +857,46 @@ impl ResolvedRelayConfig {
             }
         }
         
-        // Audio codec
-        args.push("-c:a".to_string());
-        args.push(self.profile.get_audio_encoder());
-        
-        // Audio settings - only apply encoding parameters if we're not copying
-        if self.profile.audio_codec != AudioCodec::Copy {
-            if let Some(bitrate) = self.profile.audio_bitrate {
-                args.extend(["-b:a".to_string(), format!("{}k", bitrate)]);
+        // Audio codec - use copy if strategy suggests it or handle normally
+        if let Some(strategy) = mapping_strategy {
+            if strategy.audio_mapping.is_some() {
+                args.push("-c:a".to_string());
+                if strategy.audio_copy {
+                    args.push("copy".to_string());
+                } else {
+                    args.push(self.profile.get_audio_encoder());
+                    
+                    // Use optimal bitrate from strategy or profile default
+                    let target_bitrate = strategy.target_audio_bitrate
+                        .or(self.profile.audio_bitrate);
+                    
+                    if let Some(bitrate) = target_bitrate {
+                        args.extend(["-b:a".to_string(), format!("{}k", bitrate)]);
+                    }
+                    
+                    // Set explicit audio parameters to avoid codec parameter issues when transcoding
+                    let sample_rate = self.profile.audio_sample_rate.unwrap_or(48000);
+                    let channels = self.profile.audio_channels.unwrap_or(2);
+                    args.extend(["-ar".to_string(), sample_rate.to_string()]);
+                    args.extend(["-ac".to_string(), channels.to_string()]);
+                }
             }
-            // Set explicit audio parameters to avoid codec parameter issues when transcoding
-            let sample_rate = self.profile.audio_sample_rate.unwrap_or(48000);
-            let channels = self.profile.audio_channels.unwrap_or(2);
-            args.extend(["-ar".to_string(), sample_rate.to_string()]);
-            args.extend(["-ac".to_string(), channels.to_string()]);
+        } else {
+            // Legacy behavior
+            args.push("-c:a".to_string());
+            args.push(self.profile.get_audio_encoder());
+            
+            // Audio settings - only apply encoding parameters if we're not copying
+            if self.profile.audio_codec != AudioCodec::Copy {
+                if let Some(bitrate) = self.profile.audio_bitrate {
+                    args.extend(["-b:a".to_string(), format!("{}k", bitrate)]);
+                }
+                // Set explicit audio parameters to avoid codec parameter issues when transcoding
+                let sample_rate = self.profile.audio_sample_rate.unwrap_or(48000);
+                let channels = self.profile.audio_channels.unwrap_or(2);
+                args.extend(["-ar".to_string(), sample_rate.to_string()]);
+                args.extend(["-ac".to_string(), channels.to_string()]);
+            }
         }
         
         // Transport Stream specific settings

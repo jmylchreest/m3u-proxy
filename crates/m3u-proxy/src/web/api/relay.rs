@@ -31,10 +31,9 @@ pub fn relay_routes() -> Router<AppState> {
         .route("/proxies/{proxy_id}/channels/{channel_id}/relay", 
                get(get_channel_relay_config).post(create_channel_relay_config).delete(delete_channel_relay_config))
         
-        // Relay content serving (for HLS)
+        // Relay content serving
         .route("/relay/{config_id}/playlist.m3u8", get(serve_relay_playlist))
         .route("/relay/{config_id}/segments/{segment_name}", get(serve_relay_segment))
-        .route("/relay/{config_id}/hls/{*path}", get(serve_relay_hls_content))
         
         // Relay status and control
         .route("/relay/{config_id}/status", get(get_relay_status))
@@ -111,12 +110,6 @@ pub async fn create_profile(
     State(state): State<AppState>,
     Json(request): Json<CreateRelayProfileRequest>,
 ) -> impl IntoResponse {
-    // Validate the request
-    if let Some(ref ffmpeg_args) = request.ffmpeg_args {
-        if let Err(e) = RelayProfile::validate_ffmpeg_args(ffmpeg_args) {
-            return (StatusCode::BAD_REQUEST, format!("Invalid FFmpeg arguments: {}", e)).into_response();
-        }
-    }
 
     // Create the profile
     match RelayProfile::new(request) {
@@ -152,12 +145,6 @@ pub async fn update_profile(
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateRelayProfileRequest>,
 ) -> impl IntoResponse {
-    // Validate FFmpeg arguments if provided
-    if let Some(ref args) = request.ffmpeg_args {
-        if let Err(e) = RelayProfile::validate_ffmpeg_args(args) {
-            return (StatusCode::BAD_REQUEST, format!("Invalid FFmpeg arguments: {}", e)).into_response();
-        }
-    }
 
     match update_relay_profile(&state.database, id, request).await {
         Ok(Some(profile)) => Json(profile).into_response(),
@@ -352,47 +339,6 @@ async fn serve_relay_segment(
     }
 }
 
-/// Serve any HLS content (playlist or segments) based on path
-async fn serve_relay_hls_content(
-    State(state): State<AppState>,
-    Path((config_id, path)): Path<(Uuid, String)>,
-) -> impl IntoResponse {
-    let client_info = ClientInfo {
-        ip: "hls_request".to_string(),
-        user_agent: None,
-        referer: None,
-    };
-
-    match state.relay_manager.serve_relay_content(config_id, &path, &client_info).await {
-        Ok(RelayContent::Playlist(content)) => {
-            use axum::http::header;
-            (
-                [
-                    (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
-                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-                    (header::EXPIRES, "0"),
-                ],
-                content,
-            ).into_response()
-        }
-        Ok(RelayContent::Segment(data)) => {
-            use axum::http::header;
-            (
-                [
-                    (header::CONTENT_TYPE, "video/mp2t"),
-                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-                    (header::EXPIRES, "0"),
-                ],
-                data,
-            ).into_response()
-        }
-        Ok(RelayContent::Stream(_)) => {
-            // HLS doesn't typically serve streams, but handle gracefully
-            (StatusCode::BAD_REQUEST, "Stream content not supported for HLS path").into_response()
-        }
-        Err(e) => (StatusCode::NOT_FOUND, format!("HLS content not found: {}", e)).into_response(),
-    }
-}
 
 /// Get relay status
 async fn get_relay_status(
@@ -499,7 +445,7 @@ async fn get_relay_profiles(database: &Database) -> Result<Vec<RelayProfile>, sq
         SELECT id, name, description, video_codec, audio_codec, video_profile, video_preset,
                video_bitrate, audio_bitrate, audio_sample_rate, audio_channels,
                enable_hardware_acceleration, preferred_hwaccel,
-               manual_args, ffmpeg_args, output_format, segment_duration,
+               manual_args, output_format, segment_duration,
                max_segments, input_timeout, is_system_default,
                is_active, created_at, updated_at
         FROM relay_profiles
@@ -534,7 +480,6 @@ async fn get_relay_profiles(database: &Database) -> Result<Vec<RelayProfile>, sq
             
             // Manual override
             manual_args: row.get("manual_args"),
-            ffmpeg_args: row.get("ffmpeg_args"),
             
             // Container settings
             output_format: row.get::<String, _>("output_format").parse().unwrap_or(RelayOutputFormat::TransportStream),
@@ -560,7 +505,7 @@ async fn get_relay_profile_by_id(database: &Database, id: Uuid) -> Result<Option
         SELECT id, name, description, video_codec, audio_codec, video_profile, video_preset,
                video_bitrate, audio_bitrate, audio_sample_rate, audio_channels,
                enable_hardware_acceleration, preferred_hwaccel,
-               manual_args, ffmpeg_args, output_format, segment_duration,
+               manual_args, output_format, segment_duration,
                max_segments, input_timeout, is_system_default,
                is_active, created_at, updated_at
         FROM relay_profiles
@@ -594,7 +539,6 @@ async fn get_relay_profile_by_id(database: &Database, id: Uuid) -> Result<Option
             
             // Manual override
             manual_args: row.get("manual_args"),
-            ffmpeg_args: row.get("ffmpeg_args"),
             
             // Container settings
             output_format: row.get::<String, _>("output_format").parse().unwrap_or(RelayOutputFormat::TransportStream),
@@ -621,10 +565,10 @@ async fn create_relay_profile(database: &Database, profile: &RelayProfile) -> Re
             id, name, description, video_codec, audio_codec, video_profile, video_preset,
             video_bitrate, audio_bitrate, audio_sample_rate, audio_channels,
             enable_hardware_acceleration, preferred_hwaccel,
-            manual_args, ffmpeg_args, output_format, segment_duration,
+            manual_args, output_format, segment_duration,
             max_segments, input_timeout, is_system_default,
             is_active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     "#;
 
     sqlx::query(query)
@@ -642,7 +586,6 @@ async fn create_relay_profile(database: &Database, profile: &RelayProfile) -> Re
         .bind(profile.enable_hardware_acceleration)
         .bind(&profile.preferred_hwaccel)
         .bind(&profile.manual_args)
-        .bind(&profile.ffmpeg_args)
         .bind(profile.output_format.to_string())
         .bind(profile.segment_duration)
         .bind(profile.max_segments)
@@ -676,9 +619,6 @@ async fn update_relay_profile(
     }
     if let Some(description) = request.description {
         profile.description = Some(description);
-    }
-    if let Some(ffmpeg_args) = request.ffmpeg_args {
-        profile.ffmpeg_args = Some(serde_json::to_string(&ffmpeg_args).unwrap());
     }
     if let Some(output_format) = request.output_format {
         profile.output_format = output_format;
@@ -736,7 +676,7 @@ async fn update_relay_profile(
         UPDATE relay_profiles SET
             name = ?, description = ?, video_codec = ?, audio_codec = ?, video_profile = ?,
             video_preset = ?, video_bitrate = ?, audio_bitrate = ?, audio_sample_rate = ?, audio_channels = ?,
-            enable_hardware_acceleration = ?, preferred_hwaccel = ?, manual_args = ?, ffmpeg_args = ?, output_format = ?,
+            enable_hardware_acceleration = ?, preferred_hwaccel = ?, manual_args = ?, output_format = ?,
             segment_duration = ?, max_segments = ?, input_timeout = ?, is_active = ?, updated_at = ?
         WHERE id = ?
     "#;
@@ -755,7 +695,6 @@ async fn update_relay_profile(
         .bind(profile.enable_hardware_acceleration)
         .bind(&profile.preferred_hwaccel)
         .bind(&profile.manual_args)
-        .bind(&profile.ffmpeg_args)
         .bind(profile.output_format.to_string())
         .bind(profile.segment_duration)
         .bind(profile.max_segments)

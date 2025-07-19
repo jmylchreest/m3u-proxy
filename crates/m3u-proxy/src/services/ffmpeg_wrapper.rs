@@ -22,6 +22,7 @@ use crate::models::relay::*;
 use crate::services::relay_manager::RelayMetricsExt;
 use crate::services::cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient};
 use crate::services::error_fallback::{ErrorFallbackGenerator, StreamHealthMonitor};
+use crate::services::stream_prober::{StreamProber, StreamMappingStrategy};
 use crate::models::relay::ErrorFallbackConfig;
 use crate::config::BufferConfig;
 use sandboxed_file_manager::SandboxedManager;
@@ -736,7 +737,6 @@ mod tests {
             
             // Manual override
             manual_args: None,
-            ffmpeg_args: Some(r#"["-i", "{input_url}", "-c", "copy", "-f", "mpegts", "-y", "{output_path}/stream.ts"]"#.to_string()),
             
             // Container settings
             output_format: RelayOutputFormat::TransportStream,
@@ -783,36 +783,4 @@ mod tests {
         ]);
     }
 
-    #[test]
-    fn test_ffmpeg_args_validation() {
-        // Valid args
-        let valid_args = vec![
-            "-i".to_string(),
-            "{input_url}".to_string(),
-            "-c".to_string(),
-            "copy".to_string(),
-            "{output_path}/stream.ts".to_string(),
-        ];
-        assert!(RelayProfile::validate_ffmpeg_args(&valid_args).is_ok());
-
-        // Invalid args with command injection
-        let invalid_args = vec![
-            "-i".to_string(),
-            "{input_url}".to_string(),
-            "&&".to_string(),
-            "rm".to_string(),
-            "-rf".to_string(),
-            "/".to_string(),
-        ];
-        assert!(RelayProfile::validate_ffmpeg_args(&invalid_args).is_err());
-
-        // Missing required placeholder
-        let missing_placeholder = vec![
-            "-i".to_string(),
-            "input.ts".to_string(),
-            "-c".to_string(),
-            "copy".to_string(),
-        ];
-        assert!(RelayProfile::validate_ffmpeg_args(&missing_placeholder).is_err());
-    }
 }

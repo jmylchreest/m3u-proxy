@@ -15,12 +15,14 @@ pub mod stream_proxy;
 pub mod stream_source;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
+#[schema(description = "Stream source configuration for M3U playlists or Xtream Codes APIs")]
 pub struct StreamSource {
     pub id: Uuid,
     pub name: String,
     pub source_type: StreamSourceType,
     pub url: String,
     pub max_concurrent_streams: i32,
+    #[schema(example = "0 0 0 * * * *")]
     pub update_cron: String,
     pub username: Option<String>,
     pub password: Option<String>,
@@ -106,7 +108,8 @@ pub struct ProxyEpgSource {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(description = "Channel filter with complex condition logic for selecting/excluding channels")]
 pub struct Filter {
     pub id: Uuid,
     pub name: String,
@@ -350,7 +353,7 @@ pub struct FilterCreateRequest {
     pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterUpdateRequest {
     pub name: String,
     pub source_type: FilterSourceType,
@@ -366,7 +369,7 @@ pub struct FilterWithUsage {
     pub usage_count: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterTestRequest {
     pub source_id: Uuid,
     pub source_type: FilterSourceType,
@@ -374,7 +377,7 @@ pub struct FilterTestRequest {
     pub is_inverse: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterTestResult {
     pub is_valid: bool,
     pub error: Option<String>,
@@ -384,7 +387,7 @@ pub struct FilterTestResult {
     pub expression_tree: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterTestChannel {
     pub channel_name: String,
     pub group_title: Option<String>,
@@ -1207,50 +1210,6 @@ pub enum UnifiedSourceWithStats {
     },
 }
 
-// Relay Configuration Models
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct RelayConfig {
-    pub id: Uuid,
-    pub proxy_id: Uuid,
-    pub name: String,
-    pub description: Option<String>,
-    pub ffmpeg_args: String, // JSON array of FFmpeg arguments
-    pub input_timeout: i32,  // Timeout in seconds for input stream
-    pub output_format: RelayOutputFormat,
-    pub is_active: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "relay_output_format", rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
-pub enum RelayOutputFormat {
-    Hls,
-    Dash,
-    Rtmp,
-    Copy,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RelayConfigCreateRequest {
-    pub name: String,
-    pub description: Option<String>,
-    pub ffmpeg_args: Vec<String>, // Array of FFmpeg arguments
-    pub input_timeout: i32,
-    pub output_format: RelayOutputFormat,
-    pub is_active: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RelayConfigUpdateRequest {
-    pub name: String,
-    pub description: Option<String>,
-    pub ffmpeg_args: Vec<String>, // Array of FFmpeg arguments
-    pub input_timeout: i32,
-    pub output_format: RelayOutputFormat,
-    pub is_active: bool,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayStatus {

@@ -81,6 +81,9 @@ Check the endpoints below to see the complete API surface.
         (name = "health", description = "Service health monitoring and diagnostics"),
         (name = "metrics", description = "Performance metrics and analytics"),
         (name = "progress", description = "Background operation progress tracking"),
+        (name = "sources", description = "Unified source management operations"),
+        (name = "epg", description = "Electronic Program Guide operations"),
+        (name = "active-relays", description = "Active relay process monitoring"),
     ),
     components(
         schemas(
@@ -122,6 +125,17 @@ Check the endpoints below to see the complete API surface.
         crate::web::handlers::stream_sources::validate_stream_source,
         crate::web::handlers::stream_sources::get_stream_source_capabilities,
         
+        // Source operations (refresh, channels, etc.)
+        crate::web::api::refresh_stream_source,
+        crate::web::api::refresh_epg_source_unified,
+        crate::web::api::get_stream_source_channels,
+        crate::web::api::get_epg_source_channels_unified,
+        crate::web::api::list_all_sources,
+        
+        // Progress endpoints
+        crate::web::api::get_sources_progress,
+        crate::web::api::get_epg_progress,
+        
         // EPG Sources endpoints
         crate::web::handlers::epg_sources::list_epg_sources,
         crate::web::handlers::epg_sources::get_epg_source,
@@ -134,11 +148,24 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::list_logo_assets,
         crate::web::api::upload_logo_asset,
         crate::web::api::get_logo_asset_image,
+        crate::web::api::update_logo_asset,
+        crate::web::api::delete_logo_asset,
         crate::web::api::search_logo_assets,
+        crate::web::api::get_logo_cache_stats,
+        crate::web::api::get_logo_asset_with_formats,
+        crate::web::api::get_logo_asset_format,
+        crate::web::api::generate_cached_logo_metadata,
+        crate::web::api::get_cached_logo_asset,
         
         // Filter endpoints
         crate::web::api::list_filters,
         crate::web::api::create_filter,
+        crate::web::api::get_filter,
+        crate::web::api::update_filter,
+        crate::web::api::delete_filter,
+        crate::web::api::test_filter,
+        crate::web::api::validate_filter,
+        crate::web::api::get_filter_fields,
         
         // Data mapping endpoints
         crate::web::api::list_data_mapping_rules,
@@ -151,6 +178,11 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::get_data_mapping_stream_fields,
         crate::web::api::get_data_mapping_epg_fields,
         crate::web::api::test_data_mapping_rule,
+        crate::web::api::apply_data_mapping_rules,
+        crate::web::api::apply_data_mapping_rules_post,
+        
+        // EPG viewer
+        crate::web::api::get_epg_viewer_data,
         
         // Proxy endpoints
         crate::web::handlers::proxies::list_proxies,
@@ -166,6 +198,17 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::relay::create_profile,
         crate::web::api::relay::update_profile,
         crate::web::api::relay::delete_profile,
+        
+        // Active relay monitoring
+        crate::web::api::active_relays::get_active_relays,
+        crate::web::api::active_relays::get_active_relay_by_id,
+        crate::web::api::active_relays::get_relay_health,
+        
+        // Health endpoints
+        crate::web::handlers::health::health_check,
+        crate::web::handlers::health::detailed_health_check,
+        crate::web::handlers::health::readiness_check,
+        crate::web::handlers::health::liveness_check,
         
         // Metrics endpoints
         crate::web::api::get_dashboard_metrics,

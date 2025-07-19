@@ -170,10 +170,6 @@ impl WebServer {
                 "/stream/{proxy_ulid}/{channel_id}",
                 get(handlers::proxies::proxy_stream),
             )
-            .route(
-                "/stream/{proxy_ulid}/{channel_id}/hls/{*path}",
-                get(handlers::proxies::proxy_hls_stream),
-            )
             // .route("/logos/{logo_id}", get(handlers::static_assets::serve_logo))
             // Root route for basic index page
             .route("/", get(handlers::index::index))
@@ -330,8 +326,8 @@ impl WebServer {
                 "/data-mapping/reorder",
                 post(api::reorder_data_mapping_rules),
             )
-            .route("/data-mapping/fields/stream", get(api::get_stream_fields))
-            .route("/data-mapping/fields/epg", get(api::get_epg_fields))
+            .route("/data-mapping/fields/stream", get(api::get_data_mapping_stream_fields))
+            .route("/data-mapping/fields/epg", get(api::get_data_mapping_epg_fields))
             // EPG viewer
             .route("/epg/viewer", get(api::get_epg_viewer_data))
             // Proxies

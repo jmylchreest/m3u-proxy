@@ -30,10 +30,15 @@ use crate::{
 pub struct CreateStreamProxyRequest {
     pub name: String,
     pub description: Option<String>,
+    #[schema(example = "proxy")]
     pub proxy_mode: String, // Will be converted to StreamProxyMode
+    #[schema(example = 30)]
     pub upstream_timeout: Option<i32>,
+    #[schema(example = 1024)]
     pub buffer_size: Option<i32>,
+    #[schema(example = 100)]
     pub max_concurrent_streams: Option<i32>,
+    #[schema(example = 1)]
     pub starting_channel_number: i32,
     pub stream_sources: Vec<ProxySourceRequest>,
     pub epg_sources: Vec<ProxyEpgSourceRequest>,
@@ -1912,115 +1917,6 @@ async fn proxy_http_stream(
 }
 
 
-/// Proxy HLS stream requests (playlist.m3u8 and segments) with relay support
-pub async fn proxy_hls_stream(
-    axum::extract::Path((proxy_id, channel_id, path)): axum::extract::Path<(
-        String,
-        uuid::Uuid,
-        String,
-    )>,
-    headers: axum::http::HeaderMap,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    use axum::http::StatusCode;
-    use tracing::{error, info};
-
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .or_else(|| headers.get("x-real-ip"))
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let user_agent = headers
-        .get("user-agent")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
-
-    let referer = headers
-        .get("referer")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
-
-    info!(
-        "HLS stream request: proxy_id={}, channel_id={}, path={}, client_ip={}",
-        proxy_id, channel_id, path, client_ip
-    );
-
-    // 1. Resolve proxy ID to UUID
-    let resolved_proxy_id = match crate::utils::resolve_proxy_id(&proxy_id) {
-        Ok(id) => id,
-        Err(e) => {
-            error!("Failed to resolve proxy ID {}: {}", proxy_id, e);
-            return (StatusCode::NOT_FOUND, "Proxy not found".to_string()).into_response();
-        }
-    };
-
-    // 2. Look up proxy
-    let proxy = match state
-        .database
-        .get_proxy_by_id(&resolved_proxy_id.to_string())
-        .await
-    {
-        Ok(proxy) => {
-            if !proxy.is_active {
-                return (StatusCode::NOT_FOUND, "Proxy not active".to_string()).into_response();
-            }
-            proxy
-        }
-        Err(e) => {
-            error!("Failed to find proxy {}: {}", proxy_id, e);
-            return (StatusCode::NOT_FOUND, "Proxy not found".to_string()).into_response();
-        }
-    };
-
-    // 3. Look up channel within proxy context
-    let channel = match state
-        .database
-        .get_channel_for_proxy(&resolved_proxy_id.to_string(), channel_id)
-        .await
-    {
-        Ok(Some(channel)) => channel,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                "Channel not found in this proxy".to_string(),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            error!(
-                "Failed to lookup channel {} in proxy {}: {}",
-                channel_id, resolved_proxy_id, e
-            );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Database error".to_string(),
-            )
-                .into_response();
-        }
-    };
-
-    // 4. Check if proxy is configured for relay mode
-    match proxy.proxy_mode {
-        crate::models::StreamProxyMode::Relay => {
-            info!("HLS request for relay mode proxy - not currently supported");
-            return (
-                StatusCode::NOT_IMPLEMENTED,
-                "HLS streaming not yet supported for relay mode".to_string(),
-            )
-                .into_response();
-        }
-        _ => {
-            // For non-relay modes, HLS is not available
-            return (
-                StatusCode::NOT_FOUND,
-                "HLS content not available for this proxy mode".to_string(),
-            )
-                .into_response();
-        }
-    }
-}
 
 /// Helper function to get relay profile by ID
 async fn get_relay_profile_by_id_internal(
@@ -2032,7 +1928,7 @@ async fn get_relay_profile_by_id_internal(
                video_codec, audio_codec, video_profile, video_preset,
                video_bitrate, audio_bitrate, audio_sample_rate, audio_channels,
                enable_hardware_acceleration, preferred_hwaccel,
-               manual_args, ffmpeg_args,
+               manual_args,
                output_format, segment_duration, max_segments, input_timeout,
                is_system_default, is_active, created_at, updated_at
         FROM relay_profiles
@@ -2066,7 +1962,6 @@ async fn get_relay_profile_by_id_internal(
             
             // Manual override
             manual_args: row.get("manual_args"),
-            ffmpeg_args: row.get("ffmpeg_args"),
             
             // Container settings
             output_format: row.get::<String, _>("output_format").parse().unwrap_or(crate::models::relay::RelayOutputFormat::TransportStream),

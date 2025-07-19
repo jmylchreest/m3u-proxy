@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{debug, error, info, warn};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::AppState;
@@ -26,7 +27,7 @@ pub struct ChannelQueryParams {
     pub filter: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct DataMappingPreviewRequest {
     pub source_type: String,
     pub limit: Option<u32>,
@@ -398,6 +399,17 @@ pub async fn list_filters(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/filters/fields",
+    tag = "filters",
+    summary = "Get available filter fields",
+    description = "Retrieve list of fields available for filtering operations",
+    responses(
+        (status = 200, description = "List of available filter fields"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_filter_fields(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<FilterFieldInfo>>, StatusCode> {
@@ -542,6 +554,18 @@ pub async fn delete_filter(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/filters/test",
+    tag = "filters",
+    summary = "Test filter expression",
+    description = "Test a filter expression against sample data to validate functionality",
+    responses(
+        (status = 200, description = "Filter test result"),
+        (status = 400, description = "Invalid filter expression"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn test_filter(
     State(state): State<AppState>,
     Json(payload): Json<FilterTestRequest>,
@@ -559,6 +583,18 @@ pub async fn test_filter(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/filters/validate",
+    tag = "filters",
+    summary = "Validate filter expression",
+    description = "Validate filter expression syntax without testing against data",
+    responses(
+        (status = 200, description = "Filter validation result"),
+        (status = 400, description = "Invalid filter syntax"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn validate_filter(
     Json(payload): Json<FilterTestRequest>,
 ) -> Result<Json<FilterTestResult>, StatusCode> {
@@ -1661,6 +1697,18 @@ pub async fn apply_epg_source_data_mapping(
 }
 
 // Global data mapping application endpoints for "Preview All Rules" functionality
+#[utoipa::path(
+    post,
+    path = "/data-mapping/preview",
+    tag = "data-mapping",
+    summary = "Apply data mapping rules (POST)",
+    description = "Apply data mapping rules to preview transformations with request body",
+    responses(
+        (status = 200, description = "Data mapping preview result"),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn apply_data_mapping_rules_post(
     State(state): State<AppState>,
     Json(payload): Json<DataMappingPreviewRequest>,
@@ -1668,6 +1716,21 @@ pub async fn apply_data_mapping_rules_post(
     apply_data_mapping_rules_impl(state, &payload.source_type, payload.limit).await
 }
 
+#[utoipa::path(
+    get,
+    path = "/data-mapping/preview",
+    tag = "data-mapping",
+    summary = "Apply data mapping rules (GET)",
+    description = "Apply data mapping rules to preview transformations with query parameters",
+    params(
+        ("source_type" = Option<String>, Query, description = "Source type to preview (stream/epg)"),
+        ("limit" = Option<u32>, Query, description = "Limit number of preview results")
+    ),
+    responses(
+        (status = 200, description = "Data mapping preview result"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn apply_data_mapping_rules(
     Query(params): Query<std::collections::HashMap<String, String>>,
     State(state): State<AppState>,
@@ -2271,6 +2334,22 @@ pub async fn get_logo_asset_image(
 
 /// Get logo asset in a specific format
 /// Returns image bytes for /api/v1/logos/:id/formats/:format endpoint
+#[utoipa::path(
+    get,
+    path = "/logos/{id}/formats/{format}",
+    tag = "logos",
+    summary = "Get logo asset in specific format",
+    description = "Retrieve logo asset data in a specific format (webp, png, etc.)",
+    params(
+        ("id" = String, Path, description = "Logo asset ID (UUID)"),
+        ("format" = String, Path, description = "Desired format (webp, png, etc.)")
+    ),
+    responses(
+        (status = 200, description = "Logo image data", content_type = "image/*"),
+        (status = 404, description = "Logo asset or format not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_logo_asset_format(
     Path((id, format)): Path<(Uuid, String)>,
     State(state): State<AppState>,
@@ -2344,6 +2423,21 @@ async fn serve_asset(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/logos/{id}",
+    tag = "logos",
+    summary = "Update logo asset",
+    description = "Update logo asset metadata",
+    params(
+        ("id" = String, Path, description = "Logo asset ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Logo asset updated successfully"),
+        (status = 404, description = "Logo asset not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn update_logo_asset(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -2362,6 +2456,21 @@ pub async fn update_logo_asset(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/logos/{id}",
+    tag = "logos",
+    summary = "Delete logo asset",
+    description = "Delete a logo asset and its file",
+    params(
+        ("id" = String, Path, description = "Logo asset ID (UUID)"),
+    ),
+    responses(
+        (status = 204, description = "Logo asset deleted successfully"),
+        (status = 404, description = "Logo asset not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn delete_logo_asset(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -2415,6 +2524,21 @@ pub async fn delete_logo_asset(
 /// Get cached logo asset by cache ID
 /// This endpoint serves logos cached by the WASM plugin system using the sandboxed file manager
 /// Normalized format: cache_id.png, with fallback to legacy formats
+#[utoipa::path(
+    get,
+    path = "/logos/cached/{cache_id}",
+    tag = "logos",
+    summary = "Get cached logo asset",
+    description = "Retrieve cached logo asset by cache ID (served from file system)",
+    params(
+        ("cache_id" = String, Path, description = "Cached logo identifier")
+    ),
+    responses(
+        (status = 200, description = "Cached logo image data", content_type = "image/*"),
+        (status = 404, description = "Cached logo not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_cached_logo_asset(
     Path(cache_id): Path<String>,
     State(state): State<AppState>,
@@ -2488,6 +2612,21 @@ pub async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
 }
 
 /// Refresh stream source
+#[utoipa::path(
+    post,
+    path = "/sources/stream/{id}/refresh",
+    tag = "sources",
+    summary = "Refresh stream source",
+    description = "Manually trigger a refresh of a stream source to reload channels",
+    params(
+        ("id" = String, Path, description = "Stream source ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Refresh initiated successfully"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn refresh_stream_source(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -2566,6 +2705,24 @@ pub async fn get_stream_source_processing_info(
 }
 
 /// Get stream source channels
+#[utoipa::path(
+    get,
+    path = "/sources/stream/{id}/channels",
+    tag = "sources",
+    summary = "Get stream source channels",
+    description = "Retrieve paginated list of channels for a stream source",
+    params(
+        ("id" = String, Path, description = "Stream source ID (UUID)"),
+        ("page" = Option<u32>, Query, description = "Page number (default: 1)"),
+        ("limit" = Option<u32>, Query, description = "Items per page (default: 50)"),
+        ("filter" = Option<String>, Query, description = "Filter channels by name")
+    ),
+    responses(
+        (status = 200, description = "Paginated list of channels"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_stream_source_channels(
     Path(id): Path<Uuid>,
     Query(params): Query<ChannelQueryParams>,
@@ -2591,6 +2748,21 @@ pub async fn get_stream_source_channels(
 /// List EPG sources only
 
 /// Refresh EPG source
+#[utoipa::path(
+    post,
+    path = "/sources/epg/{id}/refresh",
+    tag = "sources",
+    summary = "Refresh EPG source",
+    description = "Manually trigger a refresh of an EPG source to reload program data",
+    params(
+        ("id" = String, Path, description = "EPG source ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Refresh initiated successfully"),
+        (status = 404, description = "EPG source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn refresh_epg_source_unified(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -2632,6 +2804,24 @@ pub async fn refresh_epg_source_unified(
 }
 
 /// Get EPG source channels
+#[utoipa::path(
+    get,
+    path = "/sources/epg/{id}/channels",
+    tag = "sources",
+    summary = "Get EPG source channels",
+    description = "Retrieve list of channels available in an EPG source",
+    params(
+        ("id" = String, Path, description = "EPG source ID (UUID)"),
+        ("page" = Option<u32>, Query, description = "Page number (default: 1)"),
+        ("limit" = Option<u32>, Query, description = "Items per page (default: 50)"),
+        ("filter" = Option<String>, Query, description = "Filter channels by name")
+    ),
+    responses(
+        (status = 200, description = "List of EPG channels"),
+        (status = 404, description = "EPG source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_epg_source_channels_unified(
     Path(id): Path<Uuid>,
     Query(params): Query<ChannelQueryParams>,
@@ -2651,6 +2841,17 @@ pub async fn get_epg_source_channels_unified(
 }
 
 // Unified Sources API
+#[utoipa::path(
+    get,
+    path = "/sources/unified",
+    tag = "sources",
+    summary = "List all sources (unified)",
+    description = "Retrieve a unified list of all stream and EPG sources with statistics",
+    responses(
+        (status = 200, description = "Unified list of all sources with statistics"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_all_sources(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UnifiedSourceWithStats>>, StatusCode> {
@@ -2744,6 +2945,21 @@ pub async fn search_logo_assets(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/logos/{id}/info",
+    tag = "logos",
+    summary = "Get logo asset with formats",
+    description = "Retrieve logo asset details including available formats",
+    params(
+        ("id" = String, Path, description = "Logo asset ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "Logo asset with format information"),
+        (status = 404, description = "Logo asset not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_logo_asset_with_formats(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -2798,6 +3014,17 @@ pub async fn get_logo_asset_with_formats(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/logos/stats",
+    tag = "logos",
+    summary = "Get logo cache statistics",
+    description = "Retrieve statistics about logo cache usage and performance",
+    responses(
+        (status = 200, description = "Logo cache statistics"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_logo_cache_stats(
     State(state): State<AppState>,
 ) -> Result<Json<crate::models::logo_asset::LogoCacheStats>, StatusCode> {
@@ -2815,6 +3042,17 @@ pub async fn get_logo_cache_stats(
 }
 
 /// Generate missing metadata for cached logos
+#[utoipa::path(
+    post,
+    path = "/logos/generate-metadata",
+    tag = "logos",
+    summary = "Generate cached logo metadata",
+    description = "Scan and generate missing metadata for cached logo files",
+    responses(
+        (status = 200, description = "Metadata generation completed"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn generate_cached_logo_metadata(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -2842,6 +3080,23 @@ pub async fn generate_cached_logo_metadata(
 
 // EPG Sources API
 
+#[utoipa::path(
+    get,
+    path = "/epg/viewer",
+    tag = "epg",
+    summary = "Get EPG viewer data",
+    description = "Retrieve EPG program data for the viewer interface within specified time range",
+    params(
+        ("start_time" = String, Query, description = "Start time in RFC3339 format"),
+        ("end_time" = String, Query, description = "End time in RFC3339 format"),
+        ("source_id" = Option<String>, Query, description = "EPG source ID to filter by")
+    ),
+    responses(
+        (status = 200, description = "EPG viewer data"),
+        (status = 400, description = "Invalid time format"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_epg_viewer_data(
     Query(request): Query<EpgViewerRequest>,
     State(state): State<AppState>,
@@ -3161,6 +3416,17 @@ fn generate_condition_node_json(node: &crate::models::ConditionNode) -> serde_js
 }
 
 /// Get progress for all sources (used by frontend polling)
+#[utoipa::path(
+    get,
+    path = "/progress/sources",
+    tag = "progress",
+    summary = "Get sources progress",
+    description = "Retrieve processing progress for all active stream sources (used by frontend polling)",
+    responses(
+        (status = 200, description = "Progress information for all sources"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_sources_progress(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -3197,6 +3463,17 @@ pub async fn get_sources_progress(
 }
 
 /// Get progress for all EPG sources (used by frontend polling)
+#[utoipa::path(
+    get,
+    path = "/progress/epg",
+    tag = "progress",
+    summary = "Get EPG progress",
+    description = "Retrieve processing progress for all active EPG sources (used by frontend polling)",
+    responses(
+        (status = 200, description = "Progress information for all EPG sources"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_epg_progress(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -3232,38 +3509,6 @@ pub async fn get_epg_progress(
     })))
 }
 
-/// Get stream fields for data mapping
-pub async fn get_stream_fields(
-    _state: State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    Ok(Json(json!({
-        "fields": [
-            {"name": "channel_name", "type": "string", "description": "Channel name"},
-            {"name": "tvg_id", "type": "string", "description": "TVG ID"},
-            {"name": "tvg_name", "type": "string", "description": "TVG name"},
-            {"name": "tvg_logo", "type": "string", "description": "TVG logo URL"},
-            {"name": "tvg_shift", "type": "string", "description": "TVG time shift"},
-            {"name": "group_title", "type": "string", "description": "Group title"},
-            {"name": "url", "type": "string", "description": "Stream URL"}
-        ]
-    })))
-}
-
-/// Get EPG fields for data mapping
-pub async fn get_epg_fields(
-    _state: State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    Ok(Json(json!({
-        "fields": [
-            {"name": "channel_id", "type": "string", "description": "Channel ID"},
-            {"name": "channel_name", "type": "string", "description": "Channel display name"},
-            {"name": "programme_title", "type": "string", "description": "Programme title"},
-            {"name": "programme_description", "type": "string", "description": "Programme description"},
-            {"name": "start_time", "type": "datetime", "description": "Programme start time"},
-            {"name": "end_time", "type": "datetime", "description": "Programme end time"}
-        ]
-    })))
-}
 
 /// Preview proxies (placeholder implementation)
 pub async fn preview_proxies(

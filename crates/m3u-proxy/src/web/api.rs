@@ -344,6 +344,18 @@ pub async fn regenerate_proxy(
 }
 
 // Filters API
+/// List all filters
+#[utoipa::path(
+    get,
+    path = "/filters",
+    tag = "filters",
+    summary = "List filters",
+    description = "Retrieve all filters with usage statistics and expression trees",
+    responses(
+        (status = 200, description = "List of filters with statistics"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_filters(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -398,6 +410,20 @@ pub async fn get_filter_fields(
     }
 }
 
+/// Create a new filter
+#[utoipa::path(
+    post,
+    path = "/filters",
+    tag = "filters",
+    summary = "Create filter",
+    description = "Create a new channel filter with conditions",
+    request_body = FilterCreateRequest,
+    responses(
+        (status = 200, description = "Filter created successfully"),
+        (status = 400, description = "Invalid filter data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn create_filter(
     State(state): State<AppState>,
     Json(payload): Json<FilterCreateRequest>,
@@ -411,6 +437,21 @@ pub async fn create_filter(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/filters/{id}",
+    tag = "filters",
+    summary = "Get filter",
+    description = "Retrieve a specific filter by ID",
+    params(
+        ("id" = String, Path, description = "Filter ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Filter details"),
+        (status = 404, description = "Filter not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_filter(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -442,6 +483,21 @@ pub async fn get_filter(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/filters/{id}",
+    tag = "filters",
+    summary = "Update filter",
+    description = "Update an existing filter",
+    params(
+        ("id" = String, Path, description = "Filter ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Filter updated successfully"),
+        (status = 404, description = "Filter not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn update_filter(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -457,6 +513,21 @@ pub async fn update_filter(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/filters/{id}",
+    tag = "filters",
+    summary = "Delete filter",
+    description = "Delete a filter",
+    params(
+        ("id" = String, Path, description = "Filter ID (UUID)"),
+    ),
+    responses(
+        (status = 204, description = "Filter deleted successfully"),
+        (status = 404, description = "Filter not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn delete_filter(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -785,6 +856,18 @@ pub async fn get_epg_filter_fields(
 }
 
 // Data Mapping API
+/// List all data mapping rules
+#[utoipa::path(
+    get,
+    path = "/data-mapping",
+    tag = "data-mapping",
+    summary = "List data mapping rules",
+    description = "Retrieve all data mapping rules with enhanced metadata",
+    responses(
+        (status = 200, description = "List of data mapping rules"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_data_mapping_rules(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
@@ -899,6 +982,17 @@ pub async fn list_data_mapping_rules(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/data-mapping",
+    tag = "data-mapping",
+    summary = "Create data mapping rule",
+    description = "Create a new data mapping rule for transforming channel metadata",
+    responses(
+        (status = 200, description = "Data mapping rule created successfully"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn create_data_mapping_rule(
     State(state): State<AppState>,
     Json(payload): Json<crate::models::data_mapping::DataMappingRuleCreateRequest>,
@@ -912,6 +1006,21 @@ pub async fn create_data_mapping_rule(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/data-mapping/{id}",
+    tag = "data-mapping",
+    summary = "Get data mapping rule",
+    description = "Retrieve a specific data mapping rule by ID",
+    params(
+        ("id" = String, Path, description = "Data mapping rule ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Data mapping rule details"),
+        (status = 404, description = "Data mapping rule not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_data_mapping_rule(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -925,6 +1034,21 @@ pub async fn get_data_mapping_rule(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/data-mapping/{id}",
+    tag = "data-mapping",
+    summary = "Update data mapping rule",
+    description = "Update an existing data mapping rule",
+    params(
+        ("id" = String, Path, description = "Data mapping rule ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Data mapping rule updated successfully"),
+        (status = 404, description = "Data mapping rule not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn update_data_mapping_rule(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -939,6 +1063,21 @@ pub async fn update_data_mapping_rule(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/data-mapping/{id}",
+    tag = "data-mapping",
+    summary = "Delete data mapping rule",
+    description = "Delete a data mapping rule",
+    params(
+        ("id" = String, Path, description = "Data mapping rule ID (UUID)"),
+    ),
+    responses(
+        (status = 204, description = "Data mapping rule deleted successfully"),
+        (status = 404, description = "Data mapping rule not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn delete_data_mapping_rule(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -952,6 +1091,17 @@ pub async fn delete_data_mapping_rule(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/data-mapping/reorder",
+    tag = "data-mapping",
+    summary = "Reorder data mapping rules",
+    description = "Update the order/priority of data mapping rules",
+    responses(
+        (status = 204, description = "Data mapping rules reordered successfully"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn reorder_data_mapping_rules(
     State(state): State<AppState>,
     Json(payload): Json<Vec<(Uuid, i32)>>,
@@ -965,6 +1115,17 @@ pub async fn reorder_data_mapping_rules(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/data-mapping/validate-expression",
+    tag = "data-mapping",
+    summary = "Validate data mapping expression",
+    description = "Validate a data mapping expression for syntax and available fields",
+    responses(
+        (status = 200, description = "Expression validation result"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn validate_data_mapping_expression(
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -1027,6 +1188,17 @@ pub async fn validate_data_mapping_expression(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/data-mapping/fields/stream",
+    tag = "data-mapping",
+    summary = "Get stream mapping fields",
+    description = "Get available fields for stream data mapping expressions",
+    responses(
+        (status = 200, description = "List of available stream mapping fields"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_data_mapping_stream_fields() -> Result<Json<serde_json::Value>, StatusCode> {
     use crate::models::data_mapping::StreamMappingFields;
 
@@ -1047,6 +1219,17 @@ pub async fn get_data_mapping_stream_fields() -> Result<Json<serde_json::Value>,
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/data-mapping/fields/epg",
+    tag = "data-mapping",
+    summary = "Get EPG mapping fields",
+    description = "Get available fields for EPG data mapping expressions",
+    responses(
+        (status = 200, description = "List of available EPG mapping fields"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_data_mapping_epg_fields() -> Result<Json<serde_json::Value>, StatusCode> {
     use crate::models::data_mapping::EpgMappingFields;
 
@@ -1084,6 +1267,17 @@ fn get_field_description(field: &str) -> &'static str {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/data-mapping/test",
+    tag = "data-mapping",
+    summary = "Test data mapping rule",
+    description = "Test a data mapping rule against sample channel data",
+    responses(
+        (status = 200, description = "Data mapping test result"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn test_data_mapping_rule(
     State(state): State<AppState>,
     Json(payload): Json<crate::models::data_mapping::DataMappingTestRequest>,
@@ -1757,6 +1951,23 @@ async fn apply_data_mapping_rules_impl(
 }
 
 // Logo Assets API
+/// List logo assets with optional filtering
+#[utoipa::path(
+    get,
+    path = "/logos",
+    tag = "logos",
+    summary = "List logo assets",
+    description = "Retrieve a list of logo assets with optional filtering and cached logo inclusion",
+    params(
+        ("include_cached" = Option<bool>, Query, description = "Include cached logos in the response"),
+        ("page" = Option<u32>, Query, description = "Page number for pagination"),
+        ("limit" = Option<u32>, Query, description = "Number of items per page"),
+    ),
+    responses(
+        (status = 200, description = "List of logo assets"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_logo_assets(
     Query(params): Query<crate::models::logo_asset::LogoAssetListRequest>,
     State(state): State<AppState>,
@@ -1879,6 +2090,20 @@ async fn list_logo_assets_with_cached(
     })
 }
 
+/// Upload a new logo asset
+#[utoipa::path(
+    post,
+    path = "/logos/upload",
+    tag = "logos",
+    summary = "Upload logo asset",
+    description = "Upload a new logo asset file with metadata",
+    request_body(content = String, description = "Multipart form data with logo file and metadata"),
+    responses(
+        (status = 200, description = "Logo asset uploaded successfully"),
+        (status = 400, description = "Invalid upload data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn upload_logo_asset(
     State(state): State<AppState>,
     mut multipart: Multipart,
@@ -1992,6 +2217,21 @@ pub async fn upload_logo_asset(
 
 /// Get logo asset image bytes with preference for PNG format
 /// Returns image bytes for /api/v1/logos/:id endpoint
+#[utoipa::path(
+    get,
+    path = "/logos/{id}",
+    tag = "logos",
+    summary = "Get logo asset image",
+    description = "Retrieve logo asset image data with preference for PNG format",
+    params(
+        ("id" = String, Path, description = "Logo asset ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Logo asset image data"),
+        (status = 404, description = "Logo asset not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_logo_asset_image(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -2448,6 +2688,22 @@ pub async fn list_all_sources(
     Ok(Json(unified_sources))
 }
 
+/// Search logo assets
+#[utoipa::path(
+    get,
+    path = "/logos/search",
+    tag = "logos",
+    summary = "Search logo assets",
+    description = "Search for logo assets using various criteria",
+    params(
+        ("q" = Option<String>, Query, description = "Search query"),
+        ("include_cached" = Option<bool>, Query, description = "Include cached logos"),
+    ),
+    responses(
+        (status = 200, description = "Search results"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn search_logo_assets(
     Query(params): Query<crate::models::logo_asset::LogoAssetSearchRequest>,
     State(state): State<AppState>,
@@ -3247,7 +3503,17 @@ pub struct UsageQuery {
     pub hours: Option<u32>,
 }
 
-/// Get dashboard metrics overview
+#[utoipa::path(
+    get,
+    path = "/dashboard/metrics",
+    tag = "metrics",
+    summary = "Get dashboard metrics",
+    description = "Retrieve overview metrics for the dashboard",
+    responses(
+        (status = 200, description = "Dashboard metrics overview"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_dashboard_metrics(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardMetrics>, StatusCode> {
@@ -3288,7 +3554,17 @@ pub async fn get_dashboard_metrics(
     }))
 }
 
-/// Get real-time metrics
+#[utoipa::path(
+    get,
+    path = "/metrics/realtime",
+    tag = "metrics",
+    summary = "Get real-time metrics",
+    description = "Retrieve real-time performance metrics",
+    responses(
+        (status = 200, description = "Real-time metrics data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_realtime_metrics(
     State(_state): State<AppState>,
 ) -> Result<Json<RealtimeMetrics>, StatusCode> {
@@ -3300,7 +3576,21 @@ pub async fn get_realtime_metrics(
     }))
 }
 
-/// Get usage metrics over time
+#[utoipa::path(
+    get,
+    path = "/metrics/usage",
+    tag = "metrics",
+    summary = "Get usage metrics",
+    description = "Retrieve usage metrics over time",
+    params(
+        ("days" = Option<u32>, Query, description = "Number of days to include"),
+        ("hours" = Option<u32>, Query, description = "Number of hours to include"),
+    ),
+    responses(
+        (status = 200, description = "Usage metrics data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_usage_metrics(
     Query(_params): Query<UsageQuery>,
     State(_state): State<AppState>,

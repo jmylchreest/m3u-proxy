@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// FFmpeg relay profile containing reusable command configurations
@@ -160,7 +161,7 @@ impl FromStr for RelayEventType {
 }
 
 /// Video codec options (Transport Stream compatible)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub enum VideoCodec {
     H264,      // Most compatible
     H265,      // Better compression
@@ -171,7 +172,7 @@ pub enum VideoCodec {
 }
 
 /// Audio codec options (Transport Stream compatible)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub enum AudioCodec {
     AAC,       // Most common in TS
     MP3,       // Universal compatibility
@@ -183,7 +184,7 @@ pub enum AudioCodec {
 }
 
 /// FFmpeg output format types
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub enum RelayOutputFormat {
     TransportStream,
     HLS,
@@ -284,7 +285,7 @@ pub enum RelayContent {
 }
 
 /// Request to create a new relay profile
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CreateRelayProfileRequest {
     pub name: String,
     pub description: Option<String>,
@@ -315,7 +316,7 @@ pub struct CreateRelayProfileRequest {
 }
 
 /// Request to update an existing relay profile
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UpdateRelayProfileRequest {
     pub name: Option<String>,
     pub description: Option<String>,

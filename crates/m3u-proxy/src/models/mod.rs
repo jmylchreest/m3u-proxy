@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 pub mod channel;
@@ -13,7 +14,7 @@ pub mod relay;
 pub mod stream_proxy;
 pub mod stream_source;
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct StreamSource {
     pub id: Uuid,
     pub name: String,
@@ -30,7 +31,7 @@ pub struct StreamSource {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Hash, ToSchema)]
 #[sqlx(type_name = "stream_source_type", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum StreamSourceType {
@@ -118,7 +119,7 @@ pub struct Filter {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, ToSchema)]
 #[sqlx(type_name = "filter_source_type", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum FilterSourceType {
@@ -339,7 +340,7 @@ pub struct ChannelListResponse {
     pub total_pages: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterCreateRequest {
     pub name: String,
     pub source_type: FilterSourceType,
@@ -945,7 +946,7 @@ impl GenerationTiming {
 }
 
 // EPG Source Models
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct EpgSource {
     pub id: Uuid,
     pub name: String,
@@ -962,7 +963,7 @@ pub struct EpgSource {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, ToSchema)]
 #[sqlx(type_name = "epg_source_type", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum EpgSourceType {

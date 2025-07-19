@@ -8,6 +8,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -25,7 +26,7 @@ use crate::{
 };
 
 /// Request DTO for creating a stream proxy
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateStreamProxyRequest {
     pub name: String,
     pub description: Option<String>,
@@ -52,21 +53,21 @@ fn default_cache_channel_logos() -> bool {
 }
 
 /// Stream source assignment for proxy
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ProxySourceRequest {
     pub source_id: Uuid,
     pub priority_order: i32,
 }
 
 /// EPG source assignment for proxy
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ProxyEpgSourceRequest {
     pub epg_source_id: Uuid,
     pub priority_order: i32,
 }
 
 /// Filter assignment for proxy
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ProxyFilterRequest {
     pub filter_id: Uuid,
     pub priority_order: i32,
@@ -74,7 +75,7 @@ pub struct ProxyFilterRequest {
 }
 
 /// Request DTO for updating a stream proxy
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct UpdateStreamProxyRequest {
     pub name: String,
     pub description: Option<String>,
@@ -232,7 +233,7 @@ impl From<StreamProxy> for StreamProxyResponse {
 
 // Preview DTOs
 /// Request DTO for previewing a proxy configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct PreviewProxyRequest {
     pub name: String,
     pub description: Option<String>,
@@ -327,6 +328,22 @@ pub struct ProcessingEvent {
 }
 
 /// List all proxies
+#[utoipa::path(
+    get,
+    path = "/proxies",
+    tag = "proxies",
+    summary = "List stream proxies",
+    description = "Retrieve a list of stream proxy configurations",
+    params(
+        ("page" = Option<u32>, Query, description = "Page number (1-based)"),
+        ("limit" = Option<u32>, Query, description = "Number of items per page"),
+        ("search" = Option<String>, Query, description = "Search term"),
+    ),
+    responses(
+        (status = 200, description = "List of stream proxies"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_proxies(
     State(state): State<AppState>,
     context: RequestContext,
@@ -382,6 +399,21 @@ pub async fn list_proxies(
 }
 
 /// Get a specific proxy by ID
+#[utoipa::path(
+    get,
+    path = "/proxies/{id}",
+    tag = "proxies",
+    summary = "Get stream proxy",
+    description = "Retrieve a specific stream proxy configuration by ID",
+    params(
+        ("id" = String, Path, description = "Proxy ID (UUID or friendly name)"),
+    ),
+    responses(
+        (status = 200, description = "Stream proxy details"),
+        (status = 404, description = "Stream proxy not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_proxy(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -432,6 +464,19 @@ pub async fn get_proxy(
 }
 
 /// Create a new proxy
+#[utoipa::path(
+    post,
+    path = "/proxies",
+    tag = "proxies",
+    summary = "Create stream proxy",
+    description = "Create a new stream proxy configuration",
+    request_body = CreateStreamProxyRequest,
+    responses(
+        (status = 201, description = "Stream proxy created successfully"),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn create_proxy(
     State(state): State<AppState>,
     context: RequestContext,
@@ -479,6 +524,23 @@ pub async fn create_proxy(
 }
 
 /// Update an existing proxy
+#[utoipa::path(
+    put,
+    path = "/proxies/{id}",
+    tag = "proxies",
+    summary = "Update stream proxy",
+    description = "Update an existing stream proxy configuration",
+    params(
+        ("id" = String, Path, description = "Proxy ID (UUID or friendly name)"),
+    ),
+    request_body = UpdateStreamProxyRequest,
+    responses(
+        (status = 200, description = "Stream proxy updated successfully"),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Stream proxy not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn update_proxy(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -580,6 +642,21 @@ pub async fn update_proxy(
 }
 
 /// Delete a proxy
+#[utoipa::path(
+    delete,
+    path = "/proxies/{id}",
+    tag = "proxies",
+    summary = "Delete stream proxy",
+    description = "Delete a stream proxy configuration",
+    params(
+        ("id" = String, Path, description = "Proxy ID (UUID or friendly name)"),
+    ),
+    responses(
+        (status = 200, description = "Stream proxy deleted successfully"),
+        (status = 404, description = "Stream proxy not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn delete_proxy(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -780,6 +857,21 @@ pub async fn preview_existing_proxy(
 // Proxy Content Serving Handlers (Non-API endpoints)
 
 /// Serve M3U8 content for a proxy (from static file)
+#[utoipa::path(
+    get,
+    path = "/proxies/{id}/playlist.m3u",
+    tag = "proxies",
+    summary = "Get proxy M3U playlist",
+    description = "Retrieve the M3U playlist for a specific proxy",
+    params(
+        ("id" = String, Path, description = "Proxy ID (UUID or friendly name)"),
+    ),
+    responses(
+        (status = 200, description = "M3U playlist content", content_type = "application/vnd.apple.mpegurl"),
+        (status = 404, description = "Proxy not found or no playlist available"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn serve_proxy_m3u(
     axum::extract::Path(id): axum::extract::Path<String>,
     State(state): State<AppState>,

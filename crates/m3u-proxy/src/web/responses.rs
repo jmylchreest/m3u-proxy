@@ -10,11 +10,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use utoipa::ToSchema;
 
 use crate::errors::{AppError, AppResult};
 
 /// Standard API response wrapper
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ApiResponse<T> {
     /// Whether the operation was successful
     pub success: bool,
@@ -86,7 +87,7 @@ where
 }
 
 /// Paginated response wrapper
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PaginatedResponse<T> {
     /// The actual data items
     pub items: Vec<T>,

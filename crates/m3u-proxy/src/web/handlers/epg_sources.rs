@@ -10,6 +10,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::models::{EpgSource, EpgSourceType};
@@ -17,12 +18,12 @@ use crate::models::{EpgSource, EpgSourceType};
 use crate::web::{
     AppState,
     extractors::{EpgSourceFilterParams, ListParams, RequestContext},
-    responses::ok,
+    responses::{ok, ApiResponse, PaginatedResponse},
     utils::{extract_uuid_param, log_request},
 };
 
 /// Request DTO for creating an EPG source
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateEpgSourceRequest {
     pub name: String,
     pub source_type: String, // Will be converted to EpgSourceType
@@ -57,7 +58,7 @@ impl CreateEpgSourceRequest {
 }
 
 /// Request DTO for updating an EPG source
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct UpdateEpgSourceRequest {
     pub name: String,
     pub source_type: String,
@@ -93,7 +94,7 @@ impl UpdateEpgSourceRequest {
 }
 
 /// Response DTO for EPG source
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EpgSourceResponse {
     pub id: Uuid,
     pub name: String,
@@ -138,7 +139,27 @@ impl From<EpgSource> for EpgSourceResponse {
     }
 }
 
-/// List all EPG sources
+/// List all EPG sources with utoipa automatic discovery
+#[utoipa::path(
+    get,
+    path = "/sources/epg",
+    tag = "epg-sources",
+    summary = "List EPG sources",
+    description = "Retrieve a paginated list of EPG sources with optional filtering",
+    params(
+        ("page" = Option<u32>, Query, description = "Page number (1-based)"),
+        ("limit" = Option<u32>, Query, description = "Number of items per page"),
+        ("search" = Option<String>, Query, description = "Search term"),
+        ("source_type" = Option<String>, Query, description = "Filter by source type"),
+        ("enabled" = Option<bool>, Query, description = "Filter by enabled status"),
+        ("healthy" = Option<bool>, Query, description = "Filter by health status"),
+    ),
+    responses(
+        (status = 200, description = "List of EPG sources", body = PaginatedResponse<EpgSourceResponse>),
+        (status = 400, description = "Bad request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_epg_sources(
     State(state): State<AppState>,
     context: RequestContext,
@@ -212,6 +233,22 @@ pub async fn list_epg_sources(
 }
 
 /// Get a specific EPG source by ID
+#[utoipa::path(
+    get,
+    path = "/sources/epg/{id}",
+    tag = "epg-sources",
+    summary = "Get EPG source",
+    description = "Retrieve a specific EPG source by ID",
+    params(
+        ("id" = String, Path, description = "EPG source ID (UUID)", example = "550e8400-e29b-41d4-a716-446655440000"),
+    ),
+    responses(
+        (status = 200, description = "EPG source details", body = ApiResponse<EpgSourceResponse>),
+        (status = 400, description = "Invalid UUID format"),
+        (status = 404, description = "EPG source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_epg_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -240,7 +277,20 @@ pub async fn get_epg_source(
     }
 }
 
-/// Create a new EPG source
+/// Create a new EPG source with utoipa automatic discovery
+#[utoipa::path(
+    post,
+    path = "/sources/epg",
+    tag = "epg-sources",
+    summary = "Create EPG source",
+    description = "Create a new EPG source configuration",
+    request_body = CreateEpgSourceRequest,
+    responses(
+        (status = 201, description = "EPG source created successfully", body = ApiResponse<EpgSourceResponse>),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn create_epg_source(
     State(state): State<AppState>,
     context: RequestContext,
@@ -276,6 +326,23 @@ pub async fn create_epg_source(
 }
 
 /// Update an existing EPG source
+#[utoipa::path(
+    put,
+    path = "/sources/epg/{id}",
+    tag = "epg-sources",
+    summary = "Update EPG source",
+    description = "Update an existing EPG source configuration",
+    params(
+        ("id" = String, Path, description = "EPG source ID (UUID)"),
+    ),
+    request_body = UpdateEpgSourceRequest,
+    responses(
+        (status = 200, description = "EPG source updated successfully", body = ApiResponse<EpgSourceResponse>),
+        (status = 400, description = "Invalid request data or UUID format"),
+        (status = 404, description = "EPG source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn update_epg_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -316,6 +383,22 @@ pub async fn update_epg_source(
 }
 
 /// Delete an EPG source
+#[utoipa::path(
+    delete,
+    path = "/sources/epg/{id}",
+    tag = "epg-sources",
+    summary = "Delete EPG source",
+    description = "Delete an EPG source and clean up related data",
+    params(
+        ("id" = String, Path, description = "EPG source ID (UUID)", example = "550e8400-e29b-41d4-a716-446655440000"),
+    ),
+    responses(
+        (status = 200, description = "EPG source deleted successfully"),
+        (status = 400, description = "Invalid UUID format"),
+        (status = 404, description = "EPG source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn delete_epg_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -346,6 +429,19 @@ pub async fn delete_epg_source(
 }
 
 /// Validate an EPG source configuration
+#[utoipa::path(
+    post,
+    path = "/sources/epg/validate",
+    tag = "epg-sources",
+    summary = "Validate EPG source",
+    description = "Test an EPG source configuration for validity",
+    request_body = CreateEpgSourceRequest,
+    responses(
+        (status = 200, description = "EPG source validation result"),
+        (status = 400, description = "Invalid request data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn validate_epg_source(
     State(state): State<AppState>,
     context: RequestContext,

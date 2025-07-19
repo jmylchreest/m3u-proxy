@@ -45,6 +45,7 @@ pub mod api;
 pub mod extractors;
 pub mod handlers;
 pub mod middleware;
+pub mod openapi;
 pub mod responses;
 pub mod utils;
 
@@ -155,23 +156,25 @@ impl WebServer {
             )
             .route("/ready", get(handlers::health::readiness_check))
             .route("/live", get(handlers::health::liveness_check))
+            // OpenAPI documentation
+            .merge(Self::openapi_routes())
             // API v1 routes
             .nest("/api/v1", Self::api_v1_routes())
             // Proxy/Streaming endpoints (non-API content serving)
-            .route("/proxy/:ulid/m3u8", get(handlers::proxies::serve_proxy_m3u))
+            .route("/proxy/{ulid}/m3u8", get(handlers::proxies::serve_proxy_m3u))
             .route(
-                "/proxy/:ulid/xmltv",
+                "/proxy/{ulid}/xmltv",
                 get(handlers::proxies::serve_proxy_xmltv),
             )
             .route(
-                "/stream/:proxy_ulid/:channel_id",
+                "/stream/{proxy_ulid}/{channel_id}",
                 get(handlers::proxies::proxy_stream),
             )
             .route(
-                "/stream/:proxy_ulid/:channel_id/hls/*path",
+                "/stream/{proxy_ulid}/{channel_id}/hls/{*path}",
                 get(handlers::proxies::proxy_hls_stream),
             )
-            // .route("/logos/:logo_id", get(handlers::static_assets::serve_logo))
+            // .route("/logos/{logo_id}", get(handlers::static_assets::serve_logo))
             // Root route for basic index page
             .route("/", get(handlers::index::index))
             // Web interface routes
@@ -184,7 +187,7 @@ impl WebServer {
             .route("/relay", get(handlers::web_pages::relay_page))
             // Static assets
             .route(
-                "/static/*path",
+                "/static/{*path}",
                 get(handlers::static_assets::serve_static_asset),
             )
             .route("/favicon.ico", get(handlers::static_assets::serve_favicon))
@@ -196,60 +199,73 @@ impl WebServer {
             .with_state(state)
     }
 
-    /// API v1 routes (clean architecture with working implementations)
-    fn api_v1_routes() -> Router<AppState> {
+    /// OpenAPI documentation routes
+    fn openapi_routes() -> Router<AppState> {
+        use utoipa_rapidoc::RapiDoc;
+        
         Router::new()
-            // Stream sources
+            // RapiDoc interactive documentation (includes OpenAPI spec endpoint)
+            .merge(
+                RapiDoc::with_openapi("/api/openapi.json", openapi::get_comprehensive_openapi_spec())
+                    .path("/docs")
+            )
+    }
+
+    /// API v1 routes with standard Axum routing
+    fn api_v1_routes() -> Router<AppState> {        
+        Router::new()
+            // Stream Sources routes (with utoipa annotations)
             .route(
                 "/sources/stream",
                 get(handlers::stream_sources::list_stream_sources)
                     .post(handlers::stream_sources::create_stream_source),
             )
             .route(
-                "/sources/stream/:id",
+                "/sources/stream/{id}",
                 get(handlers::stream_sources::get_stream_source)
                     .put(handlers::stream_sources::update_stream_source)
                     .delete(handlers::stream_sources::delete_stream_source),
-            )
-            .route(
-                "/sources/stream/:id/refresh",
-                post(api::refresh_stream_source),
-            )
-            .route(
-                "/sources/stream/:id/channels",
-                get(api::get_stream_source_channels),
             )
             .route(
                 "/sources/stream/validate",
                 post(handlers::stream_sources::validate_stream_source),
             )
             .route(
-                "/sources/stream/capabilities/:source_type",
+                "/sources/capabilities/{source_type}",
                 get(handlers::stream_sources::get_stream_source_capabilities),
             )
-            // EPG sources
+            // EPG Sources routes (with utoipa annotations)
             .route(
                 "/sources/epg",
                 get(handlers::epg_sources::list_epg_sources)
                     .post(handlers::epg_sources::create_epg_source),
             )
             .route(
-                "/sources/epg/:id",
+                "/sources/epg/{id}",
                 get(handlers::epg_sources::get_epg_source)
                     .put(handlers::epg_sources::update_epg_source)
                     .delete(handlers::epg_sources::delete_epg_source),
             )
             .route(
-                "/sources/epg/:id/refresh",
+                "/sources/epg/validate",
+                post(handlers::epg_sources::validate_epg_source),
+            )
+            // Additional routes that don't have utoipa annotations yet
+            .route(
+                "/sources/stream/{id}/refresh",
+                post(api::refresh_stream_source),
+            )
+            .route(
+                "/sources/stream/{id}/channels",
+                get(api::get_stream_source_channels),
+            )
+            .route(
+                "/sources/epg/{id}/refresh",
                 post(api::refresh_epg_source_unified),
             )
             .route(
-                "/sources/epg/:id/channels",
+                "/sources/epg/{id}/channels",
                 get(api::get_epg_source_channels_unified),
-            )
-            .route(
-                "/sources/epg/validate",
-                post(handlers::epg_sources::validate_epg_source),
             )
             // Unified sources
             .route("/sources", get(api::list_all_sources))
@@ -262,14 +278,14 @@ impl WebServer {
             .route("/logos/stats", get(api::get_logo_cache_stats))
             .route("/logos/search", get(api::search_logo_assets))
             .route(
-                "/logos/:id",
+                "/logos/{id}",
                 get(api::get_logo_asset_image)
                     .put(api::update_logo_asset)
                     .delete(api::delete_logo_asset),
             )
-            .route("/logos/:id/info", get(api::get_logo_asset_with_formats))
+            .route("/logos/{id}/info", get(api::get_logo_asset_with_formats))
             .route(
-                "/logos/:id/formats/:format",
+                "/logos/{id}/formats/{format}",
                 get(api::get_logo_asset_format),
             )
             .route("/logos/upload", post(api::upload_logo_asset))
@@ -278,11 +294,11 @@ impl WebServer {
                 post(api::generate_cached_logo_metadata),
             )
             // Cached logo endpoint (uses sandboxed file manager, no database)
-            .route("/logos/cached/:cache_id", get(api::get_cached_logo_asset))
+            .route("/logos/cached/{cache_id}", get(api::get_cached_logo_asset))
             // Filters
             .route("/filters", get(api::list_filters).post(api::create_filter))
             .route(
-                "/filters/:id",
+                "/filters/{id}",
                 get(api::get_filter)
                     .put(api::update_filter)
                     .delete(api::delete_filter),
@@ -296,7 +312,7 @@ impl WebServer {
                 get(api::list_data_mapping_rules).post(api::create_data_mapping_rule),
             )
             .route(
-                "/data-mapping/:id",
+                "/data-mapping/{id}",
                 get(api::get_data_mapping_rule)
                     .put(api::update_data_mapping_rule)
                     .delete(api::delete_data_mapping_rule),
@@ -324,7 +340,7 @@ impl WebServer {
                 get(handlers::proxies::list_proxies).post(handlers::proxies::create_proxy),
             )
             .route(
-                "/proxies/:id",
+                "/proxies/{id}",
                 get(handlers::proxies::get_proxy)
                     .put(handlers::proxies::update_proxy)
                     .delete(handlers::proxies::delete_proxy),
@@ -334,16 +350,16 @@ impl WebServer {
                 post(handlers::proxies::preview_proxy_config),
             )
             .route(
-                "/proxies/:id/preview",
+                "/proxies/{id}/preview",
                 get(handlers::proxies::preview_existing_proxy),
             )
-            .route("/proxies/:id/regenerate", post(api::regenerate_proxy))
+            .route("/proxies/{id}/regenerate", post(api::regenerate_proxy))
             .route("/proxies/regenerate-all", post(api::regenerate_all_proxies))
             // Relay system endpoints
             .merge(api::relay::relay_routes())
             // Active relay monitoring
             .route("/active-relays", get(api::active_relays::get_active_relays))
-            .route("/active-relays/:config_id", get(api::active_relays::get_active_relay_by_id))
+            .route("/active-relays/{config_id}", get(api::active_relays::get_active_relay_by_id))
             .route("/active-relays/health", get(api::active_relays::get_relay_health))
             // Metrics and analytics
             .route("/metrics/dashboard", get(api::get_dashboard_metrics))

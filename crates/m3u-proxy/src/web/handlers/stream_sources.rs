@@ -10,6 +10,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
@@ -26,7 +27,7 @@ use crate::web::{
 };
 
 /// Request DTO for creating a stream source
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateStreamSourceRequest {
     pub name: String,
     pub source_type: String, // Will be converted to StreamSourceType
@@ -61,7 +62,7 @@ impl CreateStreamSourceRequest {
 }
 
 /// Request DTO for updating a stream source
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct UpdateStreamSourceRequest {
     pub name: String,
     pub source_type: String,
@@ -97,7 +98,7 @@ impl UpdateStreamSourceRequest {
 }
 
 /// Response DTO for stream source
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct StreamSourceResponse {
     pub id: Uuid,
     pub name: String,
@@ -140,7 +141,23 @@ impl From<StreamSource> for StreamSourceResponse {
     }
 }
 
-/// List all stream sources
+/// List all stream sources with filtering and pagination
+#[utoipa::path(
+    get,
+    path = "/sources/stream",
+    tag = "stream-sources",
+    params(
+        ("page" = Option<u32>, Query, description = "Page number (1-based)", example = 1),
+        ("limit" = Option<u32>, Query, description = "Items per page (1-100)", example = 20),
+        ("search" = Option<String>, Query, description = "Search term for name or URL"),
+        ("source_type" = Option<String>, Query, description = "Filter by source type: m3u, xtream"),
+    ),
+    responses(
+        (status = 200, description = "List of stream sources retrieved successfully"),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 500, description = "Internal server error"),
+    )
+)]
 pub async fn list_stream_sources(
     State(state): State<AppState>,
     context: RequestContext,
@@ -213,6 +230,20 @@ pub async fn list_stream_sources(
 }
 
 /// Get a specific stream source by ID
+#[utoipa::path(
+    get,
+    path = "/sources/stream/{id}",
+    tag = "stream-sources",
+    params(
+        ("id" = String, Path, description = "Stream source ID (UUID)", example = "550e8400-e29b-41d4-a716-446655440000"),
+    ),
+    responses(
+        (status = 200, description = "Stream source details retrieved successfully"),
+        (status = 400, description = "Invalid UUID format"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error"),
+    )
+)]
 pub async fn get_stream_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -242,6 +273,18 @@ pub async fn get_stream_source(
 }
 
 /// Create a new stream source
+#[utoipa::path(
+    post,
+    path = "/sources/stream",
+    tag = "stream-sources",
+    request_body = CreateStreamSourceRequest,
+    responses(
+        (status = 201, description = "Stream source created successfully"),
+        (status = 400, description = "Invalid request data or validation failed"),
+        (status = 409, description = "Stream source with this name already exists"),
+        (status = 500, description = "Internal server error"),
+    )
+)]
 pub async fn create_stream_source(
     State(state): State<AppState>,
     context: RequestContext,
@@ -277,6 +320,21 @@ pub async fn create_stream_source(
 }
 
 /// Update an existing stream source
+#[utoipa::path(
+    put,
+    path = "/sources/stream/{id}",
+    tag = "stream-sources",
+    params(
+        ("id" = String, Path, description = "Stream source ID (UUID)"),
+    ),
+    request_body = UpdateStreamSourceRequest,
+    responses(
+        (status = 200, description = "Stream source updated successfully"),
+        (status = 400, description = "Invalid request data or UUID format"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error"),
+    )
+)]
 pub async fn update_stream_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -317,6 +375,20 @@ pub async fn update_stream_source(
 }
 
 /// Delete a stream source
+#[utoipa::path(
+    delete,
+    path = "/sources/stream/{id}",
+    tag = "stream-sources",
+    params(
+        ("id" = String, Path, description = "Stream source ID (UUID)", example = "550e8400-e29b-41d4-a716-446655440000"),
+    ),
+    responses(
+        (status = 200, description = "Stream source deleted successfully"),
+        (status = 400, description = "Invalid UUID format"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error"),
+    )
+)]
 pub async fn delete_stream_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -346,9 +418,20 @@ pub async fn delete_stream_source(
     }
 }
 
-/// Refresh a stream source (trigger ingestion)
+// TODO: Add refresh functionality when ingestion service is available
 
 /// Validate a stream source configuration
+#[utoipa::path(
+    post,
+    path = "/sources/stream/validate",
+    tag = "stream-sources",
+    request_body = CreateStreamSourceRequest,
+    responses(
+        (status = 200, description = "Stream source validation result"),
+        (status = 400, description = "Invalid request data"),
+        (status = 500, description = "Internal server error"),
+    )
+)]
 pub async fn validate_stream_source(
     State(state): State<AppState>,
     context: RequestContext,
@@ -392,6 +475,19 @@ pub async fn validate_stream_source(
 }
 
 /// Get stream source capabilities
+#[utoipa::path(
+    get,
+    path = "/sources/capabilities/{source_type}",
+    tag = "capabilities",
+    params(
+        ("source_type" = String, Path, description = "Stream source type (m3u, xtream)", example = "m3u"),
+    ),
+    responses(
+        (status = 200, description = "Stream source capabilities retrieved successfully"),
+        (status = 400, description = "Invalid source type"),
+        (status = 500, description = "Internal server error"),
+    )
+)]
 pub async fn get_stream_source_capabilities(
     State(_state): State<AppState>,
     Path(source_type): Path<String>,
@@ -399,7 +495,7 @@ pub async fn get_stream_source_capabilities(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::GET,
-        &format!("/api/v1/sources/stream/capabilities/{}", source_type)
+        &format!("/api/v1/sources/capabilities/{}", source_type)
             .parse()
             .unwrap(),
         &context,

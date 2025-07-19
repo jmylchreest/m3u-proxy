@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -19,7 +20,7 @@ pub struct DataMappingRule {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, ToSchema)]
 #[sqlx(type_name = "data_mapping_source_type", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum DataMappingSourceType {
@@ -36,7 +37,7 @@ impl std::fmt::Display for DataMappingSourceType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, ToSchema)]
 #[sqlx(type_name = "data_mapping_rule_scope", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum DataMappingRuleScope {
@@ -246,7 +247,7 @@ pub struct MappedEpgProgram {
     pub applied_rules: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DataMappingRuleCreateRequest {
     pub name: String,
     pub description: Option<String>,
@@ -254,7 +255,7 @@ pub struct DataMappingRuleCreateRequest {
     pub expression: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DataMappingRuleUpdateRequest {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -263,7 +264,7 @@ pub struct DataMappingRuleUpdateRequest {
     pub is_active: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DataMappingTestRequest {
     pub source_id: Uuid,
     pub source_type: DataMappingSourceType,

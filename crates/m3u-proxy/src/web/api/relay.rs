@@ -11,6 +11,7 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
+use utoipa::ToSchema;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -24,31 +25,42 @@ pub fn relay_routes() -> Router<AppState> {
     Router::new()
         // Profile management
         .route("/relay/profiles", get(list_profiles).post(create_profile))
-        .route("/relay/profiles/:id", get(get_profile).put(update_profile).delete(delete_profile))
+        .route("/relay/profiles/{id}", get(get_profile).put(update_profile).delete(delete_profile))
         
         // Channel relay configuration
-        .route("/proxies/:proxy_id/channels/:channel_id/relay", 
+        .route("/proxies/{proxy_id}/channels/{channel_id}/relay", 
                get(get_channel_relay_config).post(create_channel_relay_config).delete(delete_channel_relay_config))
         
         // Relay content serving (for HLS)
-        .route("/relay/:config_id/playlist.m3u8", get(serve_relay_playlist))
-        .route("/relay/:config_id/segments/:segment_name", get(serve_relay_segment))
-        .route("/relay/:config_id/hls/*path", get(serve_relay_hls_content))
+        .route("/relay/{config_id}/playlist.m3u8", get(serve_relay_playlist))
+        .route("/relay/{config_id}/segments/{segment_name}", get(serve_relay_segment))
+        .route("/relay/{config_id}/hls/{*path}", get(serve_relay_hls_content))
         
         // Relay status and control
-        .route("/relay/:config_id/status", get(get_relay_status))
-        .route("/proxy/:proxy_id/relay/:channel_id/start", post(start_relay))
-        .route("/relay/:config_id/stop", post(stop_relay))
+        .route("/relay/{config_id}/status", get(get_relay_status))
+        .route("/proxy/{proxy_id}/relay/{channel_id}/start", post(start_relay))
+        .route("/relay/{config_id}/stop", post(stop_relay))
         
         // Metrics and monitoring
         .route("/relay/metrics", get(get_relay_metrics))
-        .route("/relay/metrics/:config_id", get(get_relay_metrics_for_config))
+        .route("/relay/metrics/{config_id}", get(get_relay_metrics_for_config))
         .route("/relay/health", get(get_relay_health))
-        .route("/relay/health/:config_id", get(get_relay_health_for_config))
+        .route("/relay/health/{config_id}", get(get_relay_health_for_config))
 }
 
 /// List all relay profiles
-async fn list_profiles(State(state): State<AppState>) -> impl IntoResponse {
+#[utoipa::path(
+    get,
+    path = "/relay/profiles",
+    tag = "relay",
+    summary = "List relay profiles",
+    description = "Retrieve all relay profiles for stream transcoding",
+    responses(
+        (status = 200, description = "List of relay profiles"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn list_profiles(State(state): State<AppState>) -> impl IntoResponse {
     match get_relay_profiles(&state.database).await {
         Ok(profiles) => Json(profiles).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", e)).into_response(),
@@ -56,7 +68,22 @@ async fn list_profiles(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// Get a specific relay profile
-async fn get_profile(
+#[utoipa::path(
+    get,
+    path = "/relay/profiles/{id}",
+    tag = "relay",
+    summary = "Get relay profile",
+    description = "Retrieve a specific relay profile by ID",
+    params(
+        ("id" = String, Path, description = "Relay profile ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Relay profile details"),
+        (status = 404, description = "Relay profile not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_profile(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -68,7 +95,19 @@ async fn get_profile(
 }
 
 /// Create a new relay profile
-async fn create_profile(
+#[utoipa::path(
+    post,
+    path = "/relay/profiles",
+    tag = "relay",
+    summary = "Create relay profile",
+    description = "Create a new relay profile for stream transcoding",
+    responses(
+        (status = 201, description = "Relay profile created successfully"),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn create_profile(
     State(state): State<AppState>,
     Json(request): Json<CreateRelayProfileRequest>,
 ) -> impl IntoResponse {
@@ -92,7 +131,23 @@ async fn create_profile(
 }
 
 /// Update an existing relay profile
-async fn update_profile(
+#[utoipa::path(
+    put,
+    path = "/relay/profiles/{id}",
+    tag = "relay",
+    summary = "Update relay profile",
+    description = "Update an existing relay profile",
+    params(
+        ("id" = String, Path, description = "Relay profile ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Relay profile updated successfully"),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Relay profile not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn update_profile(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateRelayProfileRequest>,
@@ -112,7 +167,22 @@ async fn update_profile(
 }
 
 /// Delete a relay profile
-async fn delete_profile(
+#[utoipa::path(
+    delete,
+    path = "/relay/profiles/{id}",
+    tag = "relay",
+    summary = "Delete relay profile",
+    description = "Delete a relay profile",
+    params(
+        ("id" = String, Path, description = "Relay profile ID (UUID)"),
+    ),
+    responses(
+        (status = 204, description = "Relay profile deleted successfully"),
+        (status = 404, description = "Relay profile not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn delete_profile(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {

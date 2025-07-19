@@ -4,18 +4,19 @@
 //! pagination parameters, and other common request processing needs.
 
 use axum::{
-    Json, async_trait,
+    Json,
     extract::{FromRequestParts, Query},
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::responses::{ApiResponse, ValidationErrorResponse, validation_error};
 
 /// Pagination parameters from query string
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct PaginationParams {
     #[serde(default = "default_page")]
     pub page: u32,
@@ -72,7 +73,6 @@ impl PaginationParams {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for PaginationParams
 where
     S: Send + Sync,
@@ -124,7 +124,6 @@ impl Default for SearchParams {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for SearchParams
 where
     S: Send + Sync,
@@ -154,7 +153,6 @@ pub struct ListParams {
     pub search: SearchParams,
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for ListParams
 where
     S: Send + Sync,
@@ -172,7 +170,6 @@ where
 /// Validated JSON extractor that provides better error messages
 pub struct ValidatedJson<T>(pub T);
 
-#[async_trait]
 impl<T, S> FromRequestParts<S> for ValidatedJson<T>
 where
     T: for<'de> Deserialize<'de> + Send,
@@ -211,7 +208,7 @@ pub trait ValidateQuery {
 }
 
 /// Stream source filter parameters
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct StreamSourceFilterParams {
     #[serde(default)]
     pub source_type: Option<String>,
@@ -244,7 +241,6 @@ impl ValidateQuery for StreamSourceFilterParams {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for StreamSourceFilterParams
 where
     S: Send + Sync,
@@ -272,7 +268,7 @@ where
 }
 
 /// Filter parameters for EPG sources from query string
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct EpgSourceFilterParams {
     #[serde(default)]
     pub source_type: Option<String>,
@@ -305,7 +301,6 @@ impl ValidateQuery for EpgSourceFilterParams {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for EpgSourceFilterParams
 where
     S: Send + Sync,
@@ -352,7 +347,6 @@ impl Default for RequestContext {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for RequestContext
 where
     S: Send + Sync,

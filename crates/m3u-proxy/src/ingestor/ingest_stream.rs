@@ -123,7 +123,7 @@ impl StreamIngestor {
 
                         let duration = start_time.elapsed();
                         info!(
-                            "Stream source refresh completed source={} channels={} trigger={:?} duration={}",
+                            "Stream source refresh completed source={} channels={} trigger={} duration={}",
                             source_name, channel_count, trigger, 
                             crate::utils::format_duration(duration.as_millis() as u64)
                         );

@@ -159,11 +159,12 @@ impl RelayManager {
 
         if let Some(row) = row {
             // Build config from proxy data (creating a synthetic config)
+            let profile_id = Uuid::parse_str(&row.get::<String, _>("profile_id"))?;
             let config = ChannelRelayConfig {
-                id: Uuid::new_v4(), // Generate temporary ID for the channel-specific config
+                id: crate::utils::generate_relay_config_uuid(&proxy_id, &channel_id, &profile_id),
                 proxy_id,
                 channel_id,
-                profile_id: Uuid::parse_str(&row.get::<String, _>("profile_id"))?,
+                profile_id,
                 name: format!("{} - Channel {}", row.get::<String, _>("proxy_name"), channel_id),
                 description: Some(format!("Auto-generated relay config for proxy {} channel {}", proxy_id, channel_id)),
                 custom_args: None, // No custom args at proxy level

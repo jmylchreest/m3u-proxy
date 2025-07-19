@@ -4,6 +4,7 @@
 //! across different parts of the system.
 
 pub mod datetime;
+pub mod deterministic_uuid;
 pub mod human_format;
 pub mod logo;
 pub mod memory_cleanup;
@@ -19,6 +20,7 @@ pub mod uuid_parser;
 pub mod validation;
 
 // Re-export commonly used types for convenience
+pub use deterministic_uuid::{generate_channel_uuid, generate_deterministic_uuid, generate_proxy_config_uuid, generate_relay_config_uuid};
 pub use human_format::{format_duration, format_memory, format_memory_delta};
 pub use memory_cleanup::{
     CleanupStrategy, MemoryCleanable, MemoryCleanupCoordinator, StageTransition,

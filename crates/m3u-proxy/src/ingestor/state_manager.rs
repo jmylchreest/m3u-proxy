@@ -26,6 +26,15 @@ pub enum ProcessingTrigger {
     Manual,
 }
 
+impl std::fmt::Display for ProcessingTrigger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProcessingTrigger::Scheduler => write!(f, "scheduler"),
+            ProcessingTrigger::Manual => write!(f, "manual"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct IngestionStateManager {
     states: Arc<RwLock<HashMap<Uuid, IngestionProgress>>>,

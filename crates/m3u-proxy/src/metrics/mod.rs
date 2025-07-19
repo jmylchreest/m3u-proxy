@@ -65,7 +65,7 @@ impl MetricsLogger {
         let result = sqlx::query(
             r#"
             INSERT INTO stream_access_logs (
-                id, proxy_id, channel_id, client_ip, user_agent, referer,
+                id, proxy_name, channel_id, client_ip, user_agent, referer,
                 start_time, end_time, bytes_served, relay_used, relay_config_id,
                 duration_seconds, proxy_mode, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -127,7 +127,7 @@ impl MetricsLogger {
     /// Create active session for real-time tracking
     pub async fn create_active_session(
         &self,
-        proxy_id: String,
+        proxy_name: String,
         channel_id: Uuid,
         client_ip: String,
         user_agent: Option<String>,
@@ -140,13 +140,13 @@ impl MetricsLogger {
         sqlx::query(
             r#"
             INSERT INTO active_stream_sessions (
-                session_id, proxy_id, channel_id, client_ip, user_agent, referer,
+                session_id, proxy_name, channel_id, client_ip, user_agent, referer,
                 start_time, last_access_time, proxy_mode, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             "#,
         )
         .bind(&session_id)
-        .bind(proxy_id)
+        .bind(proxy_name)
         .bind(channel_id.to_string())
         .bind(client_ip)
         .bind(user_agent)
@@ -186,12 +186,12 @@ impl MetricsLogger {
         sqlx::query(
             r#"
             INSERT INTO stream_access_logs (
-                id, proxy_id, channel_id, client_ip, user_agent, referer,
+                id, proxy_name, channel_id, client_ip, user_agent, referer,
                 start_time, end_time, bytes_served, relay_used, relay_config_id,
                 duration_seconds, proxy_mode, created_at
             )
             SELECT 
-                session_id, proxy_id, channel_id, client_ip, user_agent, referer,
+                session_id, proxy_name, channel_id, client_ip, user_agent, referer,
                 start_time, last_access_time, bytes_served, relay_used, relay_config_id,
                 CAST((julianday(last_access_time) - julianday(start_time)) * 86400 AS INTEGER),
                 proxy_mode, created_at

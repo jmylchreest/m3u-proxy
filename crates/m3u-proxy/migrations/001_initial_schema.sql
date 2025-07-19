@@ -319,7 +319,7 @@ CREATE TABLE relay_events (
 -- Stream Access Logs Table
 CREATE TABLE stream_access_logs (
     id TEXT PRIMARY KEY NOT NULL,
-    proxy_id TEXT NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
+    proxy_name TEXT NOT NULL, -- Proxy name for metrics (no FK constraint)
     channel_id TEXT NOT NULL, -- References channels(id) but not FK due to channel lifecycle
     client_ip TEXT NOT NULL,
     user_agent TEXT,
@@ -337,7 +337,7 @@ CREATE TABLE stream_access_logs (
 -- Active Stream Sessions (for real-time tracking)
 CREATE TABLE active_stream_sessions (
     session_id TEXT PRIMARY KEY NOT NULL,
-    proxy_id TEXT NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
+    proxy_name TEXT NOT NULL, -- Proxy name for metrics (no FK constraint)
     channel_id TEXT NOT NULL,
     client_ip TEXT NOT NULL,
     user_agent TEXT,
@@ -355,7 +355,7 @@ CREATE TABLE active_stream_sessions (
 -- Hourly Statistics
 CREATE TABLE stream_stats_hourly (
     id TEXT PRIMARY KEY NOT NULL, -- Changed to TEXT for composite IDs
-    proxy_id TEXT NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
+    proxy_name TEXT NOT NULL, -- Proxy name for metrics (no FK constraint)
     channel_id TEXT,
     hour_bucket TEXT NOT NULL, -- Renamed from hour_start to match app code
     unique_clients INTEGER NOT NULL DEFAULT 0,
@@ -365,14 +365,13 @@ CREATE TABLE stream_stats_hourly (
     relay_sessions INTEGER NOT NULL DEFAULT 0,
     proxy_sessions INTEGER NOT NULL DEFAULT 0,
     redirect_sessions INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(proxy_id, channel_id, hour_bucket)
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Daily Statistics
 CREATE TABLE stream_stats_daily (
     id TEXT PRIMARY KEY NOT NULL, -- Changed to TEXT for composite IDs
-    proxy_id TEXT NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
+    proxy_name TEXT NOT NULL, -- Proxy name for metrics (no FK constraint)
     channel_id TEXT,
     date TEXT NOT NULL,
     unique_clients INTEGER NOT NULL DEFAULT 0,
@@ -383,13 +382,12 @@ CREATE TABLE stream_stats_daily (
     relay_sessions INTEGER NOT NULL DEFAULT 0,
     proxy_sessions INTEGER NOT NULL DEFAULT 0,
     redirect_sessions INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(proxy_id, channel_id, date)
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Real-time Statistics Cache
 CREATE TABLE stream_stats_realtime (
-    proxy_id TEXT PRIMARY KEY NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
+    proxy_name TEXT PRIMARY KEY NOT NULL, -- Proxy name for metrics (no FK constraint)
     active_sessions INTEGER NOT NULL DEFAULT 0,
     active_clients INTEGER NOT NULL DEFAULT 0,
     bytes_per_second INTEGER NOT NULL DEFAULT 0,
@@ -527,20 +525,20 @@ CREATE INDEX idx_relay_events_timestamp ON relay_events(timestamp);
 CREATE INDEX idx_relay_events_event_type ON relay_events(event_type);
 
 -- Stream Access Logs
-CREATE INDEX idx_stream_access_logs_proxy_id ON stream_access_logs(proxy_id);
+CREATE INDEX idx_stream_access_logs_proxy_name ON stream_access_logs(proxy_name);
 CREATE INDEX idx_stream_access_logs_channel_id ON stream_access_logs(channel_id);
 CREATE INDEX idx_stream_access_logs_start_time ON stream_access_logs(start_time);
 CREATE INDEX idx_stream_access_logs_client_ip ON stream_access_logs(client_ip);
 CREATE INDEX idx_stream_access_logs_relay_used ON stream_access_logs(relay_used);
 
 -- Metrics Tables
-CREATE INDEX idx_active_sessions_proxy_channel ON active_stream_sessions(proxy_id, channel_id);
+CREATE INDEX idx_active_sessions_proxy_channel ON active_stream_sessions(proxy_name, channel_id);
 CREATE INDEX idx_active_sessions_client_ip ON active_stream_sessions(client_ip);
 CREATE INDEX idx_active_sessions_start_time ON active_stream_sessions(start_time);
 CREATE INDEX idx_active_sessions_last_activity ON active_stream_sessions(last_activity);
-CREATE INDEX idx_hourly_stats_lookup ON stream_stats_hourly(proxy_id, hour_bucket);
+CREATE INDEX idx_hourly_stats_lookup ON stream_stats_hourly(proxy_name, hour_bucket);
 CREATE INDEX idx_hourly_stats_channel ON stream_stats_hourly(channel_id, hour_bucket);
-CREATE INDEX idx_daily_stats_lookup ON stream_stats_daily(proxy_id, date);
+CREATE INDEX idx_daily_stats_lookup ON stream_stats_daily(proxy_name, date);
 CREATE INDEX idx_daily_stats_channel ON stream_stats_daily(channel_id, date);
 CREATE INDEX idx_realtime_stats_updated ON stream_stats_realtime(last_updated);
 

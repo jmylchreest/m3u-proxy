@@ -14,6 +14,7 @@ use crate::database::Database;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 use crate::pipeline::chunk_manager::ChunkSizeManager;
+use crate::utils::uuid_parser::uuid_to_base64;
 use crate::pipeline::generic_iterator::{
     MappingIterator, MultiSourceIterator, SingleSourceIterator,
 };
@@ -750,7 +751,8 @@ impl NativePipeline {
         let mut total_logos_cached = 0;
 
         // Process channels in chunks for memory efficiency
-        for chunk in channels.chunks(requested_chunk_size) {
+        let total_channels = channels.len();
+        for (chunk_index, chunk) in channels.chunks(requested_chunk_size).enumerate() {
             let mut chunk_channels = chunk.to_vec();
 
             // Process each channel for logo caching
@@ -776,7 +778,7 @@ impl NativePipeline {
                                 );
                                 total_logos_cached += 1;
 
-                                // Update channel to use cached logo URL
+                                // Update channel to use cached logo URL (relative path, will be converted to full URL during M3U generation)
                                 let cached_logo_url = format!("/api/v1/logos/cached/{}", cache_id);
                                 channel.tvg_logo = Some(cached_logo_url);
                             }
@@ -798,7 +800,16 @@ impl NativePipeline {
 
             processed_channels.extend(chunk_channels);
 
-            info!("Processed logo prefetch chunk: {} channels", chunk.len());
+            let processed_so_far = processed_channels.len();
+            let percentage = (processed_so_far as f64 / total_channels as f64 * 100.0).round() as u32;
+            
+            info!(
+                "Processed logo prefetch chunk: {} channels ({}/{} = {}%)", 
+                chunk.len(), 
+                processed_so_far, 
+                total_channels, 
+                percentage
+            );
         }
 
         let stage_info = memory_context.complete_stage("logo_prefetch").await?;
@@ -867,8 +878,9 @@ impl NativePipeline {
 
         // Process channels in chunks for memory efficiency
         let mut current_number = starting_number;
+        let total_channels = channels.len();
 
-        for chunk in channels.chunks(requested_chunk_size) {
+        for (chunk_index, chunk) in channels.chunks(requested_chunk_size).enumerate() {
             let mut chunk_numbered = Vec::new();
 
             for channel in chunk {
@@ -882,11 +894,18 @@ impl NativePipeline {
             }
 
             numbered_channels.extend(chunk_numbered);
+            
+            let processed_so_far = numbered_channels.len();
+            let percentage = (processed_so_far as f64 / total_channels as f64 * 100.0).round() as u32;
+            
             info!(
-                "Numbered chunk of {} channels (numbers {} to {})",
+                "Numbered chunk of {} channels (numbers {} to {}) ({}/{} = {}%)",
                 chunk.len(),
                 current_number - chunk.len() as i32,
-                current_number - 1
+                current_number - 1,
+                processed_so_far,
+                total_channels,
+                percentage
             );
         }
 
@@ -952,7 +971,8 @@ impl NativePipeline {
         let mut total_channels_processed = 0;
 
         // Process numbered channels in chunks for memory efficiency
-        for chunk in numbered_channels.chunks(requested_chunk_size) {
+        let total_channels = numbered_channels.len();
+        for (chunk_index, chunk) in numbered_channels.chunks(requested_chunk_size).enumerate() {
             let mut chunk_content = String::new();
 
             for numbered_channel in chunk {
@@ -985,7 +1005,13 @@ impl NativePipeline {
 
                 if let Some(tvg_logo) = &channel.tvg_logo {
                     if !tvg_logo.is_empty() {
-                        extinf_parts.push(format!("tvg-logo=\"{}\"", tvg_logo));
+                        // Ensure logo URL is full URL if it's a relative cached path
+                        let full_logo_url = if tvg_logo.starts_with("/api/v1/logos/cached/") {
+                            format!("{}{}", base_url.trim_end_matches('/'), tvg_logo)
+                        } else {
+                            tvg_logo.clone()
+                        };
+                        extinf_parts.push(format!("tvg-logo=\"{}\"", full_logo_url));
                     }
                 }
 
@@ -1016,8 +1042,11 @@ impl NativePipeline {
                 chunk_content.push_str(&complete_extinf);
                 chunk_content.push('\n');
 
-                // Add stream URL (always use proxy endpoints for consistency)
-                let stream_url = format!("{}/stream/{}/{}", base_url, config.proxy.id, channel.id);
+                // Add stream URL (always use proxy endpoints for consistency) with base64 encoded UUIDs
+                let stream_url = format!("{}/stream/{}/{}", 
+                    base_url, 
+                    uuid_to_base64(&config.proxy.id), 
+                    uuid_to_base64(&channel.id));
                 chunk_content.push_str(&stream_url);
                 chunk_content.push('\n');
 
@@ -1025,10 +1054,16 @@ impl NativePipeline {
             }
 
             m3u_content.push_str(&chunk_content);
+            
+            let percentage = (total_channels_processed as f64 / total_channels as f64 * 100.0).round() as u32;
+            
             info!(
-                "Generated M3U chunk: {} channels, {} bytes",
+                "Generated M3U chunk: {} channels, {} bytes ({}/{} = {}%)",
                 chunk.len(),
-                chunk_content.len()
+                chunk_content.len(),
+                total_channels_processed,
+                total_channels,
+                percentage
             );
         }
 
@@ -1297,11 +1332,23 @@ impl NativePipeline {
         F: FnMut(&[T]) -> Result<Vec<R>>,
     {
         let mut results = Vec::new();
+        let total_items = items.len();
 
-        for chunk in items.chunks(chunk_size) {
+        for (chunk_index, chunk) in items.chunks(chunk_size).enumerate() {
             let chunk_results = processor(chunk)?;
             results.extend(chunk_results);
-            info!("Processed {} chunk: {} items", stage_name, chunk.len());
+            
+            let processed_so_far = results.len();
+            let percentage = (processed_so_far as f64 / total_items as f64 * 100.0).round() as u32;
+            
+            info!(
+                "Processed {} chunk: {} items ({}/{} = {}%)", 
+                stage_name, 
+                chunk.len(),
+                processed_so_far,
+                total_items,
+                percentage
+            );
         }
 
         Ok(results)

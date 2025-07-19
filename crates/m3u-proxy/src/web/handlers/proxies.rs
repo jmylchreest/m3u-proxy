@@ -16,7 +16,7 @@ use crate::{
     models::{StreamProxy, StreamProxyMode},
     models::relay::{VideoCodec, AudioCodec},
     proxy::session_tracker::{ClientInfo, SessionStats},
-    utils::{resolve_proxy_id, url::UrlUtils},
+    utils::{resolve_proxy_id, url::UrlUtils, uuid_parser::parse_uuid_flexible},
     web::{
         AppState,
         extractors::{ListParams, RequestContext},
@@ -1087,7 +1087,7 @@ pub async fn serve_proxy_xmltv(
 
 /// Proxy stream requests to original sources or relays
 pub async fn proxy_stream(
-    axum::extract::Path((proxy_id, channel_id)): axum::extract::Path<(String, uuid::Uuid)>,
+    axum::extract::Path((proxy_id, channel_id_str)): axum::extract::Path<(String, String)>,
     headers: axum::http::HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
@@ -1111,16 +1111,8 @@ pub async fn proxy_stream(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
 
-    debug!(
-        "Stream proxy request: proxy={}, channel={}, client_ip={}, user_agent={}",
-        proxy_id,
-        channel_id,
-        client_ip,
-        user_agent.as_deref().unwrap_or("unknown")
-    );
-
     // 1. Resolve proxy ID from any supported format
-    let resolved_uuid = match resolve_proxy_id(&proxy_id) {
+    let resolved_proxy_uuid = match resolve_proxy_id(&proxy_id) {
         Ok(uuid) => uuid,
         Err(e) => {
             error!("Invalid proxy ID format '{}': {}", proxy_id, e);
@@ -1132,10 +1124,31 @@ pub async fn proxy_stream(
         }
     };
 
-    // 2. Look up proxy to get its configuration
+    // 2. Resolve channel ID from any supported format (UUID or base64)
+    let channel_id = match parse_uuid_flexible(&channel_id_str) {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            error!("Invalid channel ID format '{}': {}", channel_id_str, e);
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid channel ID format: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    debug!(
+        "Stream proxy request: proxy={}, channel={}, client_ip={}, user_agent={}",
+        proxy_id,
+        channel_id,
+        client_ip,
+        user_agent.as_deref().unwrap_or("unknown")
+    );
+
+    // 3. Look up proxy to get its configuration
     let proxy = match state
         .database
-        .get_proxy_by_id(&resolved_uuid.to_string())
+        .get_proxy_by_id(&resolved_proxy_uuid.to_string())
         .await
     {
         Ok(proxy) => {
@@ -1154,14 +1167,14 @@ pub async fn proxy_stream(
     // 2. Look up channel within proxy context
     let channel = match state
         .database
-        .get_channel_for_proxy(&proxy_id, channel_id)
+        .get_channel_for_proxy(&resolved_proxy_uuid.to_string(), channel_id)
         .await
     {
         Ok(Some(channel)) => channel,
         Ok(None) => {
             warn!(
                 "Channel {} not found in proxy {} or proxy not active",
-                channel_id, proxy_id
+                channel_id, resolved_proxy_uuid
             );
             return (
                 StatusCode::NOT_FOUND,
@@ -1172,7 +1185,7 @@ pub async fn proxy_stream(
         Err(e) => {
             error!(
                 "Failed to lookup channel {} in proxy {}: {}",
-                channel_id, proxy_id, e
+                channel_id, resolved_proxy_uuid, e
             );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1188,7 +1201,7 @@ pub async fn proxy_stream(
     let session = state
         .metrics_logger
         .log_stream_start(
-            proxy_id.clone(),
+            proxy.name.clone(),
             channel_id,
             client_ip.clone(),
             user_agent.clone(),
@@ -1213,7 +1226,7 @@ pub async fn proxy_stream(
             let session_id = match state
                 .metrics_logger
                 .create_active_session(
-                    proxy_id.clone(),
+                    proxy.name.clone(),
                     channel_id,
                     client_ip.clone(),
                     user_agent.clone(),
@@ -1240,7 +1253,7 @@ pub async fn proxy_stream(
             let session_stats = SessionStats::new(
                 session_id.clone(),
                 client_info,
-                proxy_id.clone(),
+                proxy.name.clone(),
                 proxy.name.clone(),
                 channel_id.to_string(),
                 channel.channel_name.clone(),
@@ -1283,7 +1296,7 @@ pub async fn proxy_stream(
             let session_id = match state
                 .metrics_logger
                 .create_active_session(
-                    proxy_id.clone(),
+                    proxy.name.clone(),
                     channel_id,
                     client_ip.clone(),
                     user_agent.clone(),
@@ -1313,7 +1326,7 @@ pub async fn proxy_stream(
             let session_stats = SessionStats::new(
                 session_id.clone(),
                 client_info,
-                proxy_id.clone(),
+                proxy.name.clone(),
                 proxy.name.clone(),
                 channel_id.to_string(),
                 channel.channel_name.clone(),
@@ -1416,7 +1429,7 @@ pub async fn proxy_stream(
             let session_id = match state
                 .metrics_logger
                 .create_active_session(
-                    proxy_id.clone(),
+                    proxy.name.clone(),
                     channel_id,
                     client_ip.clone(),
                     user_agent.clone(),
@@ -1446,7 +1459,7 @@ pub async fn proxy_stream(
             let session_stats = crate::proxy::session_tracker::SessionStats::new(
                 session_id.clone(),
                 client_info,
-                proxy_id.clone(),
+                proxy.name.clone(),
                 proxy.name.clone(),
                 channel_id.to_string(),
                 channel.channel_name.clone(),

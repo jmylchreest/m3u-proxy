@@ -106,24 +106,24 @@ impl StreamProber {
         let mut video_streams = Vec::new();
         let mut audio_streams = Vec::new();
         
-        if let Some(streams_array) = data["streams"].as_array() {
+        if let Some(streams_array) = data.get("streams").and_then(|v| v.as_array()) {
             for (index, stream) in streams_array.iter().enumerate() {
-                let codec_type = stream["codec_type"].as_str().unwrap_or("unknown").to_string();
-                let codec_name = stream["codec_name"].as_str().unwrap_or("unknown").to_string();
+                let codec_type = stream.get("codec_type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                let codec_name = stream.get("codec_name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
                 
                 let stream_info = StreamInfo {
                     index: index as u32,
                     codec_type: codec_type.clone(),
                     codec_name: codec_name.clone(),
-                    codec_tag_string: stream["codec_tag_string"].as_str().map(|s| s.to_string()),
-                    duration: stream["duration"].as_str().and_then(|s| s.parse().ok()),
-                    bit_rate: stream["bit_rate"].as_str().and_then(|s| s.parse().ok()),
-                    width: stream["width"].as_u64().map(|v| v as u32),
-                    height: stream["height"].as_u64().map(|v| v as u32),
-                    r_frame_rate: stream["r_frame_rate"].as_str().map(|s| s.to_string()),
-                    sample_rate: stream["sample_rate"].as_str().and_then(|s| s.parse().ok()),
-                    channels: stream["channels"].as_u64().map(|v| v as u32),
-                    channel_layout: stream["channel_layout"].as_str().map(|s| s.to_string()),
+                    codec_tag_string: stream.get("codec_tag_string").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    duration: stream.get("duration").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()),
+                    bit_rate: stream.get("bit_rate").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()),
+                    width: stream.get("width").and_then(|v| v.as_u64()).map(|v| v as u32),
+                    height: stream.get("height").and_then(|v| v.as_u64()).map(|v| v as u32),
+                    r_frame_rate: stream.get("r_frame_rate").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    sample_rate: stream.get("sample_rate").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()),
+                    channels: stream.get("channels").and_then(|v| v.as_u64()).map(|v| v as u32),
+                    channel_layout: stream.get("channel_layout").and_then(|v| v.as_str()).map(|s| s.to_string()),
                 };
                 
                 match codec_type.as_str() {
@@ -136,15 +136,18 @@ impl StreamProber {
             }
         }
         
-        let format = data["format"].as_object();
+        let format = data.get("format").and_then(|v| v.as_object());
         let format_name = format
-            .and_then(|f| f["format_name"].as_str())
+            .and_then(|f| f.get("format_name"))
+            .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let duration = format
-            .and_then(|f| f["duration"].as_str())
+            .and_then(|f| f.get("duration"))
+            .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok());
         let bit_rate = format
-            .and_then(|f| f["bit_rate"].as_str())
+            .and_then(|f| f.get("bit_rate"))
+            .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok());
         
         Ok(ProbeResult {

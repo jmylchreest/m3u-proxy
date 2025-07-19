@@ -10,6 +10,7 @@ use crate::database::Database;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 use crate::proxy::filter_engine::FilterEngine;
+use crate::utils::uuid_parser::uuid_to_base64;
 use sandboxed_file_manager::SandboxedManager;
 
 pub struct ProxyGenerator {
@@ -499,7 +500,13 @@ impl ProxyGenerator {
 
             if let Some(tvg_logo) = &channel.tvg_logo {
                 if !tvg_logo.is_empty() {
-                    extinf.push_str(&format!(" tvg-logo=\"{}\"", tvg_logo));
+                    // Ensure logo URL is full URL if it's a relative cached path
+                    let full_logo_url = if tvg_logo.starts_with("/api/v1/logos/cached/") {
+                        format!("{}{}", base_url.trim_end_matches('/'), tvg_logo)
+                    } else {
+                        tvg_logo.clone()
+                    };
+                    extinf.push_str(&format!(" tvg-logo=\"{}\"", full_logo_url));
                 }
             }
 
@@ -519,8 +526,8 @@ impl ProxyGenerator {
             let proxy_stream_url = format!(
                 "{}/stream/{}/{}",
                 base_url.trim_end_matches('/'),
-                proxy_id,
-                channel.id
+                uuid_to_base64(&Uuid::parse_str(proxy_id).unwrap_or_else(|_| Uuid::new_v4())),
+                uuid_to_base64(&channel.id)
             );
             m3u.push_str(&format!("{}\n", proxy_stream_url));
         }
@@ -632,7 +639,7 @@ impl ProxyGenerator {
     pub async fn save_m3u_file_by_id(&self, proxy_id: &str, content: &str) -> Result<PathBuf> {
         if let Some(file_manager) = &self.proxy_output_file_manager {
             // Use sandboxed file manager for safer file handling
-            let file_id = format!("m3u-{}.m3u", uuid::Uuid::new_v4());
+            let file_id = format!("m3u-{}.m3u", proxy_id);
             file_manager
                 .write(&file_id, content)
                 .await
@@ -989,7 +996,12 @@ impl ProxyGenerator {
                                 },
                                 Err(e) => {
                                     debug!("Failed to cache logo URL for '{}': {}", original_logo, e);
-                                    original_logo.clone()
+                                    // For failed caches, still ensure we return full URL if it's a relative path
+                                    if original_logo.starts_with("/api/v1/logos/cached/") {
+                                        format!("{}{}", base_url.trim_end_matches('/'), original_logo)
+                                    } else {
+                                        original_logo.clone()
+                                    }
                                 }
                             }
                         }
@@ -1000,7 +1012,13 @@ impl ProxyGenerator {
                     String::new()
                 }
             } else {
-                nc.channel.tvg_logo.as_deref().unwrap_or("").to_string()
+                // Even when not caching, ensure logo URLs are full URLs if they're relative cached paths
+                let logo = nc.channel.tvg_logo.as_deref().unwrap_or("");
+                if logo.starts_with("/api/v1/logos/cached/") {
+                    format!("{}{}", base_url.trim_end_matches('/'), logo)
+                } else {
+                    logo.to_string()
+                }
             };
 
             let extinf = format!(
@@ -1017,8 +1035,8 @@ impl ProxyGenerator {
             let proxy_stream_url = format!(
                 "{}/stream/{}/{}",
                 base_url.trim_end_matches('/'),
-                proxy_id,
-                nc.channel.id
+                uuid_to_base64(&Uuid::parse_str(proxy_id).unwrap_or_else(|_| Uuid::new_v4())),
+                uuid_to_base64(&nc.channel.id)
             );
 
             let entry = format!("{}\n{}\n", extinf, proxy_stream_url);
@@ -1105,7 +1123,7 @@ impl ProxyGenerator {
         match output {
             GenerationOutput::Preview { file_manager, proxy_name } => {
                 // Write M3U to preview file manager
-                let m3u_file_id = format!("{}-{}.m3u", proxy_name, Uuid::new_v4());
+                let m3u_file_id = format!("{}.m3u", proxy_name);
                 file_manager
                     .write(&m3u_file_id, &generation.m3u_content)
                     .await
@@ -1117,7 +1135,7 @@ impl ProxyGenerator {
             GenerationOutput::Production { file_manager, update_database } => {
                 if let Some(config) = config {
                     // Write M3U to production file manager
-                    let m3u_file_id = format!("{}-{}.m3u", config.proxy.id, Uuid::new_v4());
+                    let m3u_file_id = format!("{}.m3u", config.proxy.id);
                     file_manager
                         .write(&m3u_file_id, &generation.m3u_content)
                         .await

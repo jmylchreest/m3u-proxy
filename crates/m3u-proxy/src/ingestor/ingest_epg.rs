@@ -120,7 +120,7 @@ impl EpgIngestor {
 
                         let duration = start_time.elapsed();
                         info!(
-                            "EPG refresh completed source={} channels={} programs={} trigger={:?} duration={}",
+                            "EPG refresh completed source={} channels={} programs={} trigger={} duration={}",
                             source_name, channel_count, program_count, trigger, 
                             crate::utils::format_duration(duration.as_millis() as u64)
                         );

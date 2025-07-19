@@ -558,7 +558,7 @@ impl SourceIngestor for XtreamIngestor {
             let clean_channel_name = Self::extract_clean_channel_name(&xtream_channel.name);
 
             let channel = Channel {
-                id: Uuid::new_v4(),
+                id: crate::utils::generate_channel_uuid(&source.id, &stream_url, &clean_channel_name),
                 source_id: source.id,
                 tvg_id: xtream_channel.epg_channel_id,
                 tvg_name: Some(clean_channel_name.clone()),

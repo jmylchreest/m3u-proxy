@@ -394,7 +394,7 @@ impl M3uIngestor {
         }
 
         Ok(Some(Channel {
-            id: Uuid::new_v4(),
+            id: crate::utils::generate_channel_uuid(&source.id, &url, &channel_name),
             source_id: source.id,
             tvg_id,
             tvg_name,

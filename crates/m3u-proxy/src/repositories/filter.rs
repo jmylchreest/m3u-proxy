@@ -194,9 +194,15 @@ impl Repository<Filter, Uuid> for FilterRepository {
             FilterSourceType::Epg => "epg",
         };
 
-        // For now, we'll store the filter expression as-is in condition_tree
-        // In a full implementation, this would be parsed into a proper JSON tree
-        let condition_tree = format!(r#"{{"expression":"{}"}}"#, request.filter_expression);
+        // Parse the filter expression into a proper ConditionTree
+        let parser = crate::filter_parser::FilterParser::new();
+        let condition_tree = parser.parse(&request.filter_expression)
+            .map_err(|e| RepositoryError::QueryFailed { 
+                query: "filter expression parsing".to_string(), 
+                message: format!("Invalid filter expression: {}", e) 
+            })?;
+        let condition_tree_json = serde_json::to_string(&condition_tree)
+            .map_err(|e| RepositoryError::SerializationFailed(e))?;
 
         sqlx::query(
             r#"
@@ -209,7 +215,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         .bind(source_type_str)
         .bind(request.starting_channel_number)
         .bind(request.is_inverse)
-        .bind(condition_tree.clone())
+        .bind(condition_tree_json.clone())
         .bind(now_str.clone())
         .bind(now_str)
         .execute(&self.pool)
@@ -241,7 +247,15 @@ impl Repository<Filter, Uuid> for FilterRepository {
             FilterSourceType::Epg => "epg",
         };
 
-        let condition_tree = format!(r#"{{"expression":"{}"}}"#, request.filter_expression);
+        // Parse the filter expression into a proper ConditionTree
+        let parser = crate::filter_parser::FilterParser::new();
+        let condition_tree = parser.parse(&request.filter_expression)
+            .map_err(|e| RepositoryError::QueryFailed { 
+                query: "filter expression parsing".to_string(), 
+                message: format!("Invalid filter expression: {}", e) 
+            })?;
+        let condition_tree_json = serde_json::to_string(&condition_tree)
+            .map_err(|e| RepositoryError::SerializationFailed(e))?;
 
         sqlx::query(
             r#"
@@ -254,7 +268,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         .bind(source_type_str)
         .bind(request.starting_channel_number)
         .bind(request.is_inverse)
-        .bind(condition_tree)
+        .bind(condition_tree_json)
         .bind(now_str)
         .bind(id_str.clone())
         .execute(&self.pool)

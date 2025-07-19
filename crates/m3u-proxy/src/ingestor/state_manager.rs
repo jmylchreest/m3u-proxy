@@ -20,6 +20,7 @@ pub struct ProcessingInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ProcessingTrigger {
     Scheduler,
     Manual,

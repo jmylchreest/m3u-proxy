@@ -18,7 +18,6 @@ pub mod active_relays;
 
 use crate::data_mapping::DataMappingService;
 use crate::models::*;
-use crate::proxy::generator::ProxyGenerator;
 
 #[derive(Debug, Deserialize)]
 pub struct ChannelQueryParams {
@@ -234,7 +233,7 @@ pub async fn regenerate_proxy(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     info!("Regenerating proxy {}", proxy_id);
-
+    
     // Get the proxy
     let proxy = match state.database.get_stream_proxy(proxy_id).await {
         Ok(Some(proxy)) => proxy,
@@ -248,114 +247,86 @@ pub async fn regenerate_proxy(
         }
     };
 
-    // Use the existing proxy generator to regenerate with current data mapping rules
-    let proxy_generator = ProxyGenerator::new(state.config.storage.clone());
+    // Create repositories for dependency injection
+    use crate::repositories::{
+        FilterRepository, StreamProxyRepository, StreamSourceRepository,
+    };
+    let proxy_repo = StreamProxyRepository::new(state.database.pool());
+    let stream_source_repo = StreamSourceRepository::new(state.database.pool());
+    let filter_repo = FilterRepository::new(state.database.pool());
 
-    // Generate the updated proxy
-    #[allow(deprecated)]
-    match proxy_generator
-        .generate(
-            &proxy,
-            &state.database,
-            &state.data_mapping_service,
-            &state.logo_asset_service,
-            &state.config.web.base_url,
-            state.config.data_mapping_engine.clone(),
-        )
-        .await
-    {
-        Ok(generation) => {
-            // Save the new M3U file
-            match proxy_generator
-                .save_m3u_file(proxy.id, &generation.m3u_content)
+    let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
+        proxy_repo,
+        stream_source_repo,
+        filter_repo,
+        state.database.clone(),
+    );
+
+    // Resolve proxy configuration upfront (single database query)
+    match config_resolver.resolve_config(proxy_id).await {
+        Ok(resolved_config) => {
+            // Validate configuration
+            if let Err(e) = config_resolver.validate_config(&resolved_config) {
+                error!("Invalid proxy configuration for {}: {}", proxy_id, e);
+                return Err(StatusCode::BAD_REQUEST);
+            }
+
+            // Create production output destination  
+            let output = crate::models::GenerationOutput::InMemory;
+
+            // Generate using dependency injection
+            match state.proxy_service
+                .generate_proxy_with_config(
+                    resolved_config,
+                    output,
+                    &state.database,
+                    &state.data_mapping_service,
+                    &state.logo_asset_service,
+                    &state.config.web.base_url,
+                    state.config.data_mapping_engine.clone(),
+                    &state.config,
+                )
                 .await
             {
-                Ok(_) => {
-                    // Generate and save XMLTV content using processed channels
-                    let epg_generator =
-                        crate::proxy::epg_generator::EpgGenerator::new(state.database.clone());
-                    let epg_config =
-                        Some(crate::proxy::epg_generator::EpgGenerationConfig::default());
-
-                    // Use processed channels from the generation
-                    let processed_channels = generation
-                        .processed_channels
-                        .as_ref()
-                        .expect("Processed channels should be available after generation");
-
-                    match epg_generator
-                        .generate_xmltv_for_proxy_with_processed_channels(
-                            &proxy,
-                            processed_channels,
-                            &state.logo_asset_service,
-                            &state.config.web.base_url,
-                            epg_config,
+                Ok(generation) => {
+                    // Save the M3U file using the proxy service
+                    match state.proxy_service
+                        .save_m3u_file_with_manager(
+                            &proxy.id.to_string(),
+                            &generation.m3u_content,
+                            None,
                         )
                         .await
                     {
-                        Ok((xmltv_content, _stats)) => {
-                            // Save the XMLTV file
-                            match proxy_generator
-                                .save_xmltv_file(proxy.id, &xmltv_content)
-                                .await
-                            {
-                                Ok(_) => {
-                                    // Update the last_generated_at timestamp
-                                    if let Err(e) = state.database.update_proxy_last_generated(proxy_id).await {
-                                        error!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
-                                    }
-                                    
-                                    info!(
-                                        "Successfully regenerated proxy '{}' with {} channels and EPG",
-                                        proxy.name, generation.channel_count
-                                    );
-                                    Ok(Json(serde_json::json!({
-                                        "success": true,
-                                        "message": format!("Proxy '{}' and EPG regenerated successfully", proxy.name),
-                                        "channel_count": generation.channel_count,
-                                        "regenerated_at": generation.created_at
-                                    })))
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to save regenerated XMLTV for proxy {}: {}",
-                                        proxy_id, e
-                                    );
-                                    // Update the last_generated_at timestamp even if XMLTV failed
-                                    if let Err(e) = state.database.update_proxy_last_generated(proxy_id).await {
-                                        error!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
-                                    }
-                                    
-                                    // M3U was saved successfully, so we'll return partial success
-                                    Ok(Json(serde_json::json!({
-                                        "success": true,
-                                        "message": format!("Proxy '{}' regenerated successfully, but EPG generation failed: {}", proxy.name, e),
-                                        "channel_count": generation.channel_count,
-                                        "regenerated_at": generation.created_at
-                                    })))
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to generate XMLTV for proxy {}: {}", proxy_id, e);
-                            // Update the last_generated_at timestamp even if XMLTV generation failed
+                        Ok(_) => {
+                            // Update the last_generated_at timestamp for the proxy
                             if let Err(e) = state.database.update_proxy_last_generated(proxy_id).await {
                                 error!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
                             }
                             
-                            // M3U was saved successfully, so we'll return partial success
+                            info!(
+                                "Successfully regenerated proxy '{}' with {} channels using ProxyService",
+                                proxy.name, generation.channel_count
+                            );
                             Ok(Json(serde_json::json!({
                                 "success": true,
-                                "message": format!("Proxy '{}' regenerated successfully, but EPG generation failed: {}", proxy.name, e),
+                                "message": format!("Proxy '{}' regenerated successfully", proxy.name),
                                 "channel_count": generation.channel_count,
                                 "regenerated_at": generation.created_at
                             })))
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to save regenerated M3U for proxy {}: {}",
+                                proxy_id, e
+                            );
+                            Err(StatusCode::INTERNAL_SERVER_ERROR)
                         }
                     }
                 }
                 Err(e) => {
                     error!(
-                        "Failed to save regenerated M3U for proxy {}: {}",
+                        "Failed to regenerate proxy {} using ProxyService: {}",
                         proxy_id, e
                     );
                     Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -363,7 +334,10 @@ pub async fn regenerate_proxy(
             }
         }
         Err(e) => {
-            error!("Failed to regenerate proxy {}: {}", proxy_id, e);
+            error!(
+                "Failed to resolve proxy configuration for {}: {}",
+                proxy_id, e
+            );
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -440,9 +414,26 @@ pub async fn create_filter(
 pub async fn get_filter(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
-) -> Result<Json<Filter>, StatusCode> {
+) -> Result<Json<serde_json::Value>, StatusCode> {
     match state.database.get_filter(id).await {
-        Ok(Some(filter)) => Ok(Json(filter)),
+        Ok(Some(filter)) => {
+            let expression_tree = if !filter.condition_tree.trim().is_empty() {
+                // Parse the condition_tree JSON to generate expression tree
+                if let Ok(condition_tree) = serde_json::from_str::<crate::models::ConditionTree>(&filter.condition_tree) {
+                    Some(generate_expression_tree_json(&condition_tree))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let response = serde_json::json!({
+                "filter": filter,
+                "expression_tree": expression_tree,
+            });
+            Ok(Json(response))
+        },
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             error!("Failed to get filter {}: {}", id, e);
@@ -1145,7 +1136,7 @@ pub async fn test_data_mapping_rule(
                             original_values: serde_json::to_value(original_values)
                                 .unwrap_or_default(),
                             mapped_values: serde_json::to_value(mapped_values).unwrap_or_default(),
-                            applied_actions: vec![], // Actions are applied in the engine, no need for descriptions
+                            applied_actions: mc.applied_rules,
                         }
                     })
                     .collect();
@@ -3057,106 +3048,92 @@ pub async fn regenerate_all_proxies(
         active_proxies.len()
     );
 
-    let proxy_generator = ProxyGenerator::new(state.config.storage.clone());
+    // Create repositories for dependency injection
+    use crate::repositories::{
+        FilterRepository, StreamProxyRepository, StreamSourceRepository,
+    };
+    let proxy_repo = StreamProxyRepository::new(state.database.pool());
+    let stream_source_repo = StreamSourceRepository::new(state.database.pool());
+    let filter_repo = FilterRepository::new(state.database.pool());
+
+    let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
+        proxy_repo,
+        stream_source_repo,
+        filter_repo,
+        state.database.clone(),
+    );
+
     let mut successful_count = 0;
     let mut failed_count = 0;
     let mut errors = Vec::new();
 
-    // Regenerate each proxy
+    // Regenerate each proxy using ProxyService
     for proxy in active_proxies.iter() {
         info!("Regenerating proxy '{}'", proxy.name);
 
-        // Use the same logic as the individual regenerate_proxy function
-        #[allow(deprecated)]
-        match proxy_generator
-            .generate(
-                proxy,
-                &state.database,
-                &state.data_mapping_service,
-                &state.logo_asset_service,
-                &state.config.web.base_url,
-                state.config.data_mapping_engine.clone(),
-            )
-            .await
-        {
-            Ok(generation) => {
-                // Save the new M3U file
-                match proxy_generator
-                    .save_m3u_file(proxy.id, &generation.m3u_content)
+        // Resolve proxy configuration
+        match config_resolver.resolve_config(proxy.id).await {
+            Ok(resolved_config) => {
+                // Validate configuration
+                if let Err(e) = config_resolver.validate_config(&resolved_config) {
+                    error!("Invalid proxy configuration for {}: {}", proxy.id, e);
+                    failed_count += 1;
+                    errors.push(format!("Proxy '{}': Invalid configuration: {}", proxy.name, e));
+                    continue;
+                }
+
+                // Create production output destination
+                let output = crate::models::GenerationOutput::InMemory;
+
+                // Generate using dependency injection
+                match state.proxy_service
+                    .generate_proxy_with_config(
+                        resolved_config,
+                        output,
+                        &state.database,
+                        &state.data_mapping_service,
+                        &state.logo_asset_service,
+                        &state.config.web.base_url,
+                        state.config.data_mapping_engine.clone(),
+                        &state.config,
+                    )
                     .await
                 {
-                    Ok(_) => {
-                        // Generate and save XMLTV content using processed channels
-                        let epg_generator =
-                            crate::proxy::epg_generator::EpgGenerator::new(state.database.clone());
-                        let epg_config =
-                            Some(crate::proxy::epg_generator::EpgGenerationConfig::default());
-
-                        // Use processed channels from the generation
-                        let processed_channels = generation
-                            .processed_channels
-                            .as_ref()
-                            .expect("Processed channels should be available after generation");
-
-                        match epg_generator
-                            .generate_xmltv_for_proxy_with_processed_channels(
-                                proxy,
-                                processed_channels,
-                                &state.logo_asset_service,
-                                &state.config.web.base_url,
-                                epg_config,
+                    Ok(generation) => {
+                        // Save the M3U file using the proxy service
+                        match state.proxy_service
+                            .save_m3u_file_with_manager(
+                                &proxy.id.to_string(),
+                                &generation.m3u_content,
+                                None,
                             )
                             .await
                         {
-                            Ok((xmltv_content, _stats)) => {
-                                // Save the XMLTV file
-                                match proxy_generator
-                                    .save_xmltv_file(proxy.id, &xmltv_content)
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        // Update the last_generated_at timestamp
-                                        if let Err(e) = state.database.update_proxy_last_generated(proxy.id).await {
-                                            error!("Failed to update last_generated_at for proxy {}: {}", proxy.id, e);
-                                        }
-                                        
-                                        info!(
-                                            "Successfully regenerated proxy '{}' with {} channels and EPG",
-                                            proxy.name, generation.channel_count
-                                        );
-                                        successful_count += 1;
-                                    }
-                                    Err(e) => {
-                                        // Update the last_generated_at timestamp even if XMLTV failed
-                                        if let Err(e) = state.database.update_proxy_last_generated(proxy.id).await {
-                                            error!("Failed to update last_generated_at for proxy {}: {}", proxy.id, e);
-                                        }
-                                        
-                                        warn!(
-                                            "Proxy '{}' M3U regenerated but XMLTV save failed: {}",
-                                            proxy.name, e
-                                        );
-                                        successful_count += 1; // M3U was saved successfully
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                // Update the last_generated_at timestamp even if EPG generation failed
+                            Ok(_) => {
+                                // Update the last_generated_at timestamp for the proxy
                                 if let Err(e) = state.database.update_proxy_last_generated(proxy.id).await {
                                     error!("Failed to update last_generated_at for proxy {}: {}", proxy.id, e);
                                 }
                                 
-                                warn!(
-                                    "Proxy '{}' M3U regenerated but EPG generation failed: {}",
+                                info!(
+                                    "Successfully regenerated proxy '{}' with {} channels using ProxyService",
+                                    proxy.name, generation.channel_count
+                                );
+                                successful_count += 1;
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to save regenerated M3U for proxy '{}': {}",
                                     proxy.name, e
                                 );
-                                successful_count += 1; // M3U was saved successfully
+                                failed_count += 1;
+                                errors.push(format!("Proxy '{}': {}", proxy.name, e));
                             }
                         }
                     }
                     Err(e) => {
                         error!(
-                            "Failed to save regenerated M3U for proxy '{}': {}",
+                            "Failed to regenerate proxy '{}' using ProxyService: {}",
                             proxy.name, e
                         );
                         failed_count += 1;
@@ -3165,9 +3142,12 @@ pub async fn regenerate_all_proxies(
                 }
             }
             Err(e) => {
-                error!("Failed to regenerate proxy '{}': {}", proxy.name, e);
+                error!(
+                    "Failed to resolve proxy configuration for '{}': {}",
+                    proxy.name, e
+                );
                 failed_count += 1;
-                errors.push(format!("Proxy '{}': {}", proxy.name, e));
+                errors.push(format!("Proxy '{}': Config resolution failed: {}", proxy.name, e));
             }
         }
     }
@@ -3338,3 +3318,4 @@ pub async fn get_popular_channels(
 ) -> Result<Json<Vec<PopularChannel>>, StatusCode> {
     Ok(Json(Vec::new()))
 }
+

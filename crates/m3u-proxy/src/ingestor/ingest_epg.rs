@@ -73,6 +73,7 @@ impl EpgIngestor {
     ) -> Result<(usize, usize), Box<dyn std::error::Error + Send + Sync>> {
         use tracing::{error, info};
 
+        let start_time = std::time::Instant::now();
         let source_id = source.id;
         let source_name = source.name.clone();
 
@@ -117,9 +118,11 @@ impl EpgIngestor {
                             )
                             .await;
 
+                        let duration = start_time.elapsed();
                         info!(
-                            "EPG refresh completed for '{}': {} channels, {} programs - trigger: {:?}",
-                            source_name, channel_count, program_count, trigger
+                            "EPG refresh completed source={} channels={} programs={} trigger={:?} duration={}",
+                            source_name, channel_count, program_count, trigger, 
+                            crate::utils::format_duration(duration.as_millis() as u64)
                         );
 
                         Ok((channel_count, program_count))

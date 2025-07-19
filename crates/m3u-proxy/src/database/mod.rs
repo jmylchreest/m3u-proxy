@@ -421,19 +421,16 @@ impl Database {
                     .get::<Option<i64>, _>("max_concurrent_streams")
                     .map(|v| v as i32),
                 starting_channel_number: row.get::<i64, _>("starting_channel_number") as i32,
-                created_at: chrono::DateTime::parse_from_rfc3339(
-                    &row.get::<String, _>("created_at"),
-                )?
-                .with_timezone(&chrono::Utc),
-                updated_at: chrono::DateTime::parse_from_rfc3339(
-                    &row.get::<String, _>("updated_at"),
-                )?
-                .with_timezone(&chrono::Utc),
+                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("created_at")
+                ).map_err(|e| anyhow::anyhow!("Failed to parse created_at: {}", e))?,
+                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("updated_at")
+                ).map_err(|e| anyhow::anyhow!("Failed to parse updated_at: {}", e))?,
                 last_generated_at: row
                     .get::<Option<String>, _>("last_generated_at")
-                    .map(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                    .flatten()
-                    .map(|dt| dt.with_timezone(&chrono::Utc)),
+                    .map(|s| crate::utils::datetime::DateTimeParser::parse_flexible(&s).ok())
+                    .flatten(),
                 is_active: row.get("is_active"),
                 auto_regenerate: row.get("auto_regenerate"),
                 cache_channel_logos: row.get("cache_channel_logos"),
@@ -586,4 +583,5 @@ impl Database {
 
         Ok(programs)
     }
+
 }

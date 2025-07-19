@@ -1004,10 +1004,11 @@ impl ProxyGenerator {
             };
 
             let extinf = format!(
-                "#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" tvg-channo=\"{}\" group-title=\"{}\",{}",
+                "#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" tvg-shift=\"{}\" tvg-channo=\"{}\" group-title=\"{}\",{}",
                 nc.channel.tvg_id.as_deref().unwrap_or(""),
                 nc.channel.tvg_name.as_deref().unwrap_or(""),
                 logo_url,
+                nc.channel.tvg_shift.as_deref().unwrap_or(""),
                 nc.assigned_number,
                 nc.channel.group_title.as_deref().unwrap_or(""),
                 nc.channel.channel_name

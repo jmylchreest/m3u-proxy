@@ -80,6 +80,7 @@ impl StreamIngestor {
     ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         use tracing::{error, info};
 
+        let start_time = std::time::Instant::now();
         let source_id = source.id;
         let source_name = source.name.clone();
 
@@ -120,9 +121,11 @@ impl StreamIngestor {
                             .complete_ingestion(source_id, channel_count)
                             .await;
 
+                        let duration = start_time.elapsed();
                         info!(
-                            "Stream source refresh completed for '{}': {} channels - trigger: {:?}",
-                            source_name, channel_count, trigger
+                            "Stream source refresh completed source={} channels={} trigger={:?} duration={}",
+                            source_name, channel_count, trigger, 
+                            crate::utils::format_duration(duration.as_millis() as u64)
                         );
 
                         Ok(channel_count)

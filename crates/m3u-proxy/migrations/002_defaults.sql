@@ -15,10 +15,12 @@ INSERT INTO filters (id, name, source_type, starting_channel_number, is_inverse,
  false,
  true,
  '{
-   "type": "condition",
-   "field": "stream_url",
-   "operator": "starts_with",
-   "value": "http"
+   "root": {
+     "type": "condition",
+     "field": "stream_url",
+     "operator": "starts_with",
+     "value": "http"
+   }
  }'),
 
 -- Exclude Adult Content
@@ -29,18 +31,40 @@ INSERT INTO filters (id, name, source_type, starting_channel_number, is_inverse,
  true,
  true,
  '{
-   "type": "group",
-   "operator": "or",
-   "children": [
-     {"type": "condition", "field": "group_title", "operator": "contains", "value": "adult"},
-     {"type": "condition", "field": "group_title", "operator": "contains", "value": "xxx"},
-     {"type": "condition", "field": "group_title", "operator": "contains", "value": "porn"},
-     {"type": "condition", "field": "channel_name", "operator": "contains", "value": "adult"},
-     {"type": "condition", "field": "channel_name", "operator": "contains", "value": "xxx"},
-     {"type": "condition", "field": "channel_name", "operator": "contains", "value": "porn"},
-     {"type": "condition", "field": "group_title", "operator": "matches", "value": "\\b18\\+\\b"},
-     {"type": "condition", "field": "channel_name", "operator": "matches", "value": "\\b18\\+\\b"}
-   ]
+   "root": {
+     "type": "group",
+     "operator": "or",
+     "children": [
+       {"type": "condition", "field": "group_title", "operator": "contains", "value": "adult"},
+       {"type": "condition", "field": "group_title", "operator": "contains", "value": "xxx"},
+       {"type": "condition", "field": "group_title", "operator": "contains", "value": "porn"},
+       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "adult"},
+       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "xxx"},
+       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "porn"},
+       {"type": "condition", "field": "group_title", "operator": "matches", "value": "\\b18\\+\\b"},
+       {"type": "condition", "field": "channel_name", "operator": "matches", "value": "\\b18\\+\\b"}
+     ]
+   }
+ }'),
+
+-- HD Only Filter
+('00000000-0000-0000-0000-000000000003',
+ 'HD Only',
+ 'stream',
+ 1,
+ false,
+ true,
+ '{
+   "root": {
+     "type": "group",
+     "operator": "or",
+     "children": [
+       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "HD", "case_sensitive": true},
+       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "FHD", "case_sensitive": true},
+       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "4K", "case_sensitive": true},
+       {"type": "condition", "field": "channel_name", "operator": "matches", "value": "\\b(720p|1080p|1080i|2160p)\\b"}
+     ]
+   }
  }');
 
 -- =============================================================================
@@ -101,7 +125,7 @@ INSERT INTO data_mapping_rules (id, name, description, source_type, scope, expre
  'Automatically detects timeshift channels (+1, +24, etc.) and sets tvg-shift field using regex capture groups.',
  'stream',
  'individual',
- 'channel_name matches ".*(?:[^0-9]\\+([0-9]+)[hH]?(?:[^0-9].*|$)|[^0-9](-[0-9]+)[hH]?(?:[^0-9].*|$)).*" AND channel_name not_matches ".*(?:start:|stop:|\\d{4}-\\d{2}-\\d{2}|\\d{2}:\\d{2}:\\d{2}).*" AND tvg_id matches "^.+$" SET tvg_shift = "$1$2"',
+ 'channel_name matches ".*[ ](?:\\+([0-9]{1,2})|(-[0-9]{1,2}))([hH]?)(?:$|[ ]).*" AND channel_name not_matches ".*(?:start:|stop:|24[-/]7).*" AND tvg_id matches "^.+$" SET tvg_shift = "$1$2"',
  1,
  true);
 

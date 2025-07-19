@@ -21,12 +21,131 @@ use crate::pipeline::iterator_traits::PipelineIterator;
 use crate::pipeline::orchestrator::OrchestratorIteratorFactory;
 use crate::pipeline::rolling_buffer_iterator::BufferConfig;
 use crate::pipeline::{AccumulatorFactory, AccumulationStrategy, IteratorAccumulator, IteratorRegistry};
-use crate::proxy::simple_strategies::*;
-use crate::proxy::stage_contracts::*;
 use crate::proxy::stage_strategy::{MemoryPressureLevel, StageContext};
 use crate::services::sandboxed_file::{SandboxedFileManager, SandboxedManagerAdapter};
 use crate::utils::{MemoryCleanupCoordinator, MemoryContext, SimpleMemoryMonitor};
 use sandboxed_file_manager::SandboxedManager;
+
+// Simple data structures for pipeline stages
+#[derive(Debug, Clone)]
+struct SourceLoadingInput {
+    source_ids: Vec<uuid::Uuid>,
+    proxy_config: ResolvedProxyConfig,
+}
+
+#[derive(Debug, Clone)]
+struct DataMappingInput {
+    channels: Vec<Channel>,
+    proxy_config: ResolvedProxyConfig,
+    engine_config: Option<crate::config::DataMappingEngineConfig>,
+    base_url: String,
+}
+
+#[derive(Debug, Clone)]
+struct FilteringInput {
+    channels: Vec<Channel>,
+    filters: Vec<(Filter, ProxyFilter)>,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelNumberingInput {
+    channels: Vec<Channel>,
+    starting_number: i32,
+    numbering_strategy: ChannelNumberingStrategy,
+}
+
+#[derive(Debug, Clone)]
+enum ChannelNumberingStrategy {
+    Sequential,
+}
+
+// Simple strategy implementations
+struct SimpleSourceLoader {
+    database: Database,
+}
+
+impl SimpleSourceLoader {
+    fn new(database: Database) -> Self {
+        Self { database }
+    }
+    
+    async fn execute(&self, input: SourceLoadingInput, _memory_context: &MemoryContext) -> Result<Vec<Channel>> {
+        let mut all_channels = Vec::new();
+        for source_id in input.source_ids {
+            let channels = self.database.get_source_channels(source_id).await?;
+            all_channels.extend(channels);
+        }
+        Ok(all_channels)
+    }
+}
+
+struct SimpleDataMapper {
+    data_mapping_service: DataMappingService,
+    logo_service: LogoAssetService,
+}
+
+impl SimpleDataMapper {
+    fn new(data_mapping_service: DataMappingService, logo_service: LogoAssetService) -> Self {
+        Self {
+            data_mapping_service,
+            logo_service,
+        }
+    }
+    
+    async fn execute(&self, input: DataMappingInput, _memory_context: &MemoryContext) -> Result<Vec<Channel>> {
+        // Apply mapping for each source separately and then combine
+        let mut all_mapped_channels = Vec::new();
+        
+        // Group channels by their source_id
+        let mut channels_by_source: std::collections::HashMap<uuid::Uuid, Vec<Channel>> = std::collections::HashMap::new();
+        for channel in input.channels {
+            channels_by_source.entry(channel.source_id).or_insert_with(Vec::new).push(channel);
+        }
+        
+        // Apply mapping for each source
+        for (source_id, channels) in channels_by_source {
+            let mapped_channels = self.data_mapping_service.apply_mapping_for_proxy(
+                channels,
+                source_id,
+                &self.logo_service,
+                &input.base_url,
+                input.engine_config.clone(),
+            ).await?;
+            all_mapped_channels.extend(mapped_channels);
+        }
+        
+        Ok(all_mapped_channels)
+    }
+}
+
+struct SimpleFilter;
+
+impl SimpleFilter {
+    async fn execute(&self, input: FilteringInput, _memory_context: &MemoryContext) -> Result<Vec<Channel>> {
+        let mut engine = crate::proxy::filter_engine::FilterEngine::new();
+        engine.apply_filters(input.channels, input.filters).await
+    }
+}
+
+struct SimpleChannelNumbering;
+
+impl SimpleChannelNumbering {
+    async fn execute(&self, input: ChannelNumberingInput, _memory_context: &MemoryContext) -> Result<Vec<NumberedChannel>> {
+        let mut numbered_channels = Vec::new();
+        let mut current_number = input.starting_number;
+        
+        for channel in input.channels {
+            numbered_channels.push(NumberedChannel {
+                channel,
+                assigned_number: current_number,
+                assignment_type: ChannelNumberAssignmentType::Sequential,
+            });
+            current_number += 1;
+        }
+        
+        Ok(numbered_channels)
+    }
+}
 
 /// Unified iterator-based pipeline with sophisticated buffering and native processing
 
@@ -124,8 +243,8 @@ impl NativePipeline {
         let total_duration = overall_start.elapsed().as_millis() as u64;
 
         info!(
-            "Unified pipeline completed proxy={} total_time={}ms channels={} pipeline=iterator-based",
-            config.proxy.name, total_duration, generation.channel_count
+            "Unified pipeline completed proxy={} total_time={} channels={} pipeline=iterator-based",
+            config.proxy.name, crate::utils::format_duration(total_duration), generation.channel_count
         );
 
         // Log memory analysis
@@ -691,7 +810,7 @@ impl NativePipeline {
              ├─ Logos cached: {} ({:.1}% success rate)\n\
              ├─ Chunk size used: {}\n\
              ├─ Memory used: {:.1}MB\n\
-             ├─ Processing time: {}ms\n\
+             ├─ Processing time: {}\n\
              ├─ Memory pressure: {:?}\n\
              └─ Note: EPG logo integration pending",
             processed_channels.len(),
@@ -703,7 +822,7 @@ impl NativePipeline {
             },
             requested_chunk_size,
             stage_info.memory_delta_mb,
-            stage_info.duration_ms,
+            crate::utils::format_duration(stage_info.duration_ms),
             stage_info.pressure_level
         );
 
@@ -867,6 +986,12 @@ impl NativePipeline {
                 if let Some(tvg_logo) = &channel.tvg_logo {
                     if !tvg_logo.is_empty() {
                         extinf_parts.push(format!("tvg-logo=\"{}\"", tvg_logo));
+                    }
+                }
+
+                if let Some(tvg_shift) = &channel.tvg_shift {
+                    if !tvg_shift.is_empty() {
+                        extinf_parts.push(format!("tvg-shift=\"{}\"", tvg_shift));
                     }
                 }
 
@@ -1071,11 +1196,11 @@ impl NativePipeline {
                          ├─ Channels processed: {}\n\
                          ├─ Programs generated: {}\n\
                          ├─ XMLTV size: {} bytes\n\
-                         └─ Time span: {} hours",
+                         └─ Duration: {}",
                         stats.matched_epg_channels,
                         stats.total_programs_after_filter,
                         xmltv_content.len(),
-                        (stats.generation_time_ms as f64 / 3600000.0)
+                        crate::utils::format_duration(stats.generation_time_ms)
                     );
                     xmltv_content
                 }
@@ -1340,7 +1465,7 @@ impl NativePipeline {
 
         info!(
             "Source loading completed: {} channels, {:.1}MB memory used, {:?} pressure",
-            output.channels.len(),
+            output.len(),
             stage_info.memory_delta_mb,
             stage_info.pressure_level
         );
@@ -1354,7 +1479,7 @@ impl NativePipeline {
             )?;
         }
 
-        Ok(output.channels)
+        Ok(output)
     }
 
     /// Execute data mapping stage with strategy selection
@@ -1378,7 +1503,7 @@ impl NativePipeline {
             SimpleDataMapper::new(self.data_mapping_service.clone(), self.logo_service.clone());
         let input = DataMappingInput {
             channels,
-            source_configs: config.sources.clone(),
+            proxy_config: config.clone(),
             engine_config,
             base_url: base_url.to_string(),
         };
@@ -1388,7 +1513,7 @@ impl NativePipeline {
 
         info!(
             "Data mapping completed: {} channels, {:.1}MB memory used",
-            output.mapped_channels.len(),
+            output.len(),
             stage_info.memory_delta_mb
         );
 
@@ -1401,7 +1526,7 @@ impl NativePipeline {
             )?;
         }
 
-        Ok(output.mapped_channels)
+        Ok(output)
     }
 
     /// Execute filtering stage with strategy selection
@@ -1420,9 +1545,21 @@ impl NativePipeline {
 
         // Use simple strategy (default)
         let strategy = SimpleFilter;
+        // Convert ProxyFilterConfig to (Filter, ProxyFilter) tuples
+        let filters: Vec<(Filter, ProxyFilter)> = config.filters.iter().map(|filter_config| {
+            let proxy_filter = ProxyFilter {
+                proxy_id: config.proxy.id,
+                filter_id: filter_config.filter.id,
+                priority_order: filter_config.priority_order,
+                is_active: filter_config.is_active,
+                created_at: chrono::Utc::now(),
+            };
+            (filter_config.filter.clone(), proxy_filter)
+        }).collect();
+        
         let input = FilteringInput {
             channels,
-            filters: config.filters.clone(),
+            filters,
         };
 
         let mut output = strategy.execute(input, memory_context).await?;
@@ -1430,7 +1567,7 @@ impl NativePipeline {
 
         info!(
             "Filtering completed: {} channels, {:.1}MB memory used",
-            output.filtered_channels.len(),
+            output.len(),
             stage_info.memory_delta_mb
         );
 
@@ -1443,7 +1580,7 @@ impl NativePipeline {
             )?;
         }
 
-        Ok(output.filtered_channels)
+        Ok(output)
     }
 
     /// Execute channel numbering stage with strategy selection
@@ -1473,7 +1610,7 @@ impl NativePipeline {
 
         info!(
             "Channel numbering completed: {} channels, {:.1}MB memory used",
-            output.numbered_channels.len(),
+            output.len(),
             stage_info.memory_delta_mb
         );
 
@@ -1486,9 +1623,8 @@ impl NativePipeline {
             )?;
         }
 
-        Ok(output.numbered_channels)
+        Ok(output)
     }
-
 
     /// Get current memory pressure level
     async fn get_current_memory_pressure(&self, memory_context: &MemoryContext) -> MemoryPressureLevel {

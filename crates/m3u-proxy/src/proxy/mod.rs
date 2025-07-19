@@ -15,12 +15,9 @@ pub mod generator;
 pub mod native_pipeline;
 pub mod robust_streaming;
 pub mod session_tracker;
-pub mod simple_strategies;
-pub mod stage_contracts;
 pub mod stage_strategy;
-pub mod streaming_pipeline;
-pub mod streaming_stages;
 
+#[derive(Clone)]
 pub struct ProxyService {
     storage_config: StorageConfig,
     shared_memory_monitor: Option<crate::utils::SimpleMemoryMonitor>,

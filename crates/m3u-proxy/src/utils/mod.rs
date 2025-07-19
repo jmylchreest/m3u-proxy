@@ -10,6 +10,7 @@ pub mod memory_cleanup;
 pub mod memory_config;
 pub mod memory_context;
 pub mod pressure_monitor;
+pub mod regex_preprocessor;
 pub mod sqlite;
 pub mod system_manager;
 pub mod time;
@@ -28,5 +29,6 @@ pub use pressure_monitor::{
     MemoryLimitStatus, MemorySnapshot, MemoryStats, SimpleMemoryMonitor, SystemPressureAssessment,
     SystemPressureMetrics,
 };
+pub use regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
 pub use system_manager::SystemManager;
 pub use uuid_parser::{resolve_proxy_id, uuid_to_base64, uuid_to_hex32};

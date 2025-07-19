@@ -693,7 +693,7 @@ impl Filter {
 
     /// Parse the condition tree from JSON
     pub fn get_condition_tree(&self) -> Option<ConditionTree> {
-        match serde_json::from_str(&self.condition_tree) {
+        match serde_json::from_str::<ConditionTree>(&self.condition_tree) {
             Ok(tree) => {
                 if self.name.contains("Adult") {
                     tracing::debug!(

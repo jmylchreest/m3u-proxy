@@ -7,6 +7,7 @@ use crate::models::{
     logo_asset::LogoAsset,
     Channel, ExtendedExpression, FilterOperator, LogicalOperator,
 };
+use crate::utils::{RegexPreprocessor, RegexPreprocessorConfig};
 
 use chrono::Utc;
 use regex::{Regex, RegexBuilder};
@@ -25,19 +26,19 @@ const REGEX_SPECIAL_CHARS: &[char] = &[
 /// Configuration for the Data Mapping Engine
 #[derive(Debug, Clone)]
 pub struct DataMappingEngineConfig {
-    pub enable_first_pass_filtering: bool,
     pub enable_regex_caching: bool,
     pub enable_performance_logging: bool,
     pub max_regex_cache_size: usize,
+    pub preprocessor: RegexPreprocessorConfig,
 }
 
 impl Default for DataMappingEngineConfig {
     fn default() -> Self {
         Self {
-            enable_first_pass_filtering: true,
             enable_regex_caching: true,
             enable_performance_logging: false,
             max_regex_cache_size: 1000,
+            preprocessor: RegexPreprocessorConfig::default(),
         }
     }
 }
@@ -71,12 +72,15 @@ pub struct DataMappingEngine {
     regex_cache: HashMap<String, Regex>,
     #[allow(dead_code)]
     parser: FilterParser,
+    preprocessor: RegexPreprocessor,
 }
 
 impl DataMappingEngine {
     pub fn new() -> Self {
+        let config = DataMappingEngineConfig::default();
         Self {
-            config: DataMappingEngineConfig::default(),
+            preprocessor: RegexPreprocessor::new(config.preprocessor.clone()),
+            config,
             regex_cache: HashMap::new(),
             parser: FilterParser::new(),
         }
@@ -84,6 +88,7 @@ impl DataMappingEngine {
 
     pub fn with_config(config: DataMappingEngineConfig) -> Self {
         Self {
+            preprocessor: RegexPreprocessor::new(config.preprocessor.clone()),
             config,
             regex_cache: HashMap::new(),
             parser: FilterParser::new(),
@@ -937,31 +942,41 @@ impl DataMappingEngine {
                         !field_value.to_lowercase().ends_with(&value.to_lowercase())
                     }
                     FilterOperator::Matches => {
-                        let regex = self.get_or_create_regex(value, false)?;
-                        if let Some(matched) = regex.captures(&field_value) {
-                            // Store captures for later use in actions
-                            // Skip group 0 (full match) and start with group 1 (first capture group)
-                            let capture_count = regex.captures_len();
-                            for i in 1..capture_count {
-                                if let Some(group_match) = matched.get(i) {
-                                    // Capture group exists (may be empty)
-                                    captures.add_capture(
-                                        format!("${}", i),
-                                        group_match.as_str().to_string(),
-                                    );
-                                } else {
-                                    // Capture group doesn't exist in this match
-                                    captures.add_capture(format!("${}", i), String::new());
-                                }
-                            }
-                            true
-                        } else {
+                        // Apply first-pass filtering if enabled
+                        if !self.preprocessor.should_run_regex(&field_value, value, "Data mapping") {
                             false
+                        } else {
+                            let regex = self.get_or_create_regex(value, false)?;
+                            if let Some(matched) = regex.captures(&field_value) {
+                                // Store captures for later use in actions
+                                // Skip group 0 (full match) and start with group 1 (first capture group)
+                                let capture_count = regex.captures_len();
+                                for i in 1..capture_count {
+                                    if let Some(group_match) = matched.get(i) {
+                                        // Capture group exists (may be empty)
+                                        captures.add_capture(
+                                            format!("${}", i),
+                                            group_match.as_str().to_string(),
+                                        );
+                                    } else {
+                                        // Capture group doesn't exist in this match
+                                        captures.add_capture(format!("${}", i), String::new());
+                                    }
+                                }
+                                true
+                            } else {
+                                false
+                            }
                         }
                     }
                     FilterOperator::NotMatches => {
-                        let regex = self.get_or_create_regex(value, false)?;
-                        !regex.is_match(&field_value)
+                        // Apply first-pass filtering if enabled
+                        if !self.preprocessor.should_run_regex(&field_value, value, "Data mapping") {
+                            true // If preprocessing suggests no match, then "not matches" should be true
+                        } else {
+                            let regex = self.get_or_create_regex(value, false)?;
+                            !regex.is_match(&field_value)
+                        }
                     }
                 };
 
@@ -1131,13 +1146,90 @@ impl Default for DataMappingEngine {
     }
 }
 
-impl From<crate::config::DataMappingEngineConfig> for DataMappingEngineConfig {
-    fn from(_config: crate::config::DataMappingEngineConfig) -> Self {
-        Self {
-            enable_first_pass_filtering: true,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_preprocessing_with_special_chars() {
+        let engine = DataMappingEngine::new();
+        
+        // Test channel with + character (should run regex)
+        let should_run = engine.should_run_regex_on_field("UK: ITV 1 +1 ◉", ".*(?:[^0-9]\\\\+([0-9]+)[hH]?(?:[^0-9].*|$)|[^0-9](-[0-9]+)[hH]?(?:[^0-9].*|$)).*");
+        assert!(should_run, "Should run regex for channel with + character");
+        
+        // Test channel without special chars but with pattern that has no literals >= minimum length (should run regex - default for no literals)
+        let should_run_no_special = engine.should_run_regex_on_field("BBC One HD", ".*(?:[^0-9]\\\\+([0-9]+)[hH]?(?:[^0-9].*|$)|[^0-9](-[0-9]+)[hH]?(?:[^0-9].*|$)).*");
+        assert!(should_run_no_special, "Should run regex when pattern has no significant literals (valid case)");
+        
+        // Test with - character (should run regex) 
+        let should_run_minus = engine.should_run_regex_on_field("Channel -2H", ".*(?:[^0-9]\\\\+([0-9]+)[hH]?(?:[^0-9].*|$)|[^0-9](-[0-9]+)[hH]?(?:[^0-9].*|$)).*");
+        assert!(should_run_minus, "Should run regex for channel with - character");
+        
+        // Test case where we should skip: pattern with significant literals not present in field
+        let should_not_run = engine.should_run_regex_on_field("BBC One HD", "channel.*sport.*name");
+        assert!(!should_not_run, "Should not run regex when required literals 'sport' not present in field");
+        
+        // Test case where we should run: pattern with significant literals present in field
+        let should_run_literal = engine.should_run_regex_on_field("This is a sports channel name", "channel.*sport.*name");
+        assert!(should_run_literal, "Should run regex when required literals present in field");
+    }
+    
+    #[test]
+    fn test_preprocessing_disabled() {
+        let config = DataMappingEngineConfig {
+            enable_first_pass_filtering: false,
             enable_regex_caching: true,
             enable_performance_logging: false,
             max_regex_cache_size: 1000,
+            precheck_special_chars: "+-@#$%&*=<>!~`€£{}[].".to_string(),
+            minimum_literal_length: 2,
+        };
+        let mut engine = DataMappingEngine::with_config(config);
+        
+        // Should always run regex when preprocessing is disabled
+        let should_run = engine.should_run_regex_on_field("BBC One HD", ".*complex.*regex.*");
+        assert!(should_run, "Should always run regex when preprocessing is disabled");
+    }
+    
+    #[test]
+    fn test_literal_strings_extraction() {
+        let engine = DataMappingEngine::new();
+        
+        // Test simple pattern with literal strings
+        let literals = engine.extract_literal_strings_from_regex("channel.*name");
+        assert!(literals.contains(&"channel".to_string()));
+        assert!(literals.contains(&"name".to_string()));
+        assert_eq!(literals.len(), 2);
+        
+        // Test pattern with regex metacharacters
+        let literals2 = engine.extract_literal_strings_from_regex(".*sport.*");
+        assert!(literals2.contains(&"sport".to_string()));
+        assert_eq!(literals2.len(), 1);
+        
+        // Test timeshift pattern
+        let literals3 = engine.extract_literal_strings_from_regex(".*(?:[^0-9]\\\\+([0-9]+)[hH]?(?:[^0-9].*|$)|[^0-9](-[0-9]+)[hH]?(?:[^0-9].*|$)).*");
+        // This complex pattern should extract minimal literals due to metacharacters
+        println!("Timeshift pattern literals: {:?}", literals3);
+        
+        // Test pattern with no meaningful literals
+        let literals4 = engine.extract_literal_strings_from_regex(".*+.*");
+        assert!(literals4.is_empty());
+    }
+}
+
+impl From<crate::config::DataMappingEngineConfig> for DataMappingEngineConfig {
+    fn from(config: crate::config::DataMappingEngineConfig) -> Self {
+        Self {
+            enable_regex_caching: true,
+            enable_performance_logging: false,
+            max_regex_cache_size: 1000,
+            preprocessor: RegexPreprocessorConfig {
+                enable_first_pass_filtering: true,
+                precheck_special_chars: config.precheck_special_chars
+                    .unwrap_or_else(|| "+-@#$%&*=<>!~`€£{}[].".to_string()),
+                minimum_literal_length: config.minimum_literal_length.unwrap_or(2),
+            },
         }
     }
 }

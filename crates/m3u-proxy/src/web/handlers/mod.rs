@@ -7,8 +7,6 @@
 pub mod stream_sources;
 pub mod epg_sources;
 pub mod proxies;
-pub mod filters;
-pub mod data_mapping;
 pub mod health;
 pub mod index;
 pub mod static_assets;

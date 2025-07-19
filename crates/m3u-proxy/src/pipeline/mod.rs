@@ -14,7 +14,6 @@ pub mod iterator_traits;
 pub mod iterator_types;
 pub mod orchestrator;
 pub mod rolling_buffer_iterator;
-pub mod stages;
 
 // Re-export key types for easier access
 pub use accumulator::{

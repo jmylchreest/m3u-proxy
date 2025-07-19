@@ -166,13 +166,15 @@ async function loadStats() {
 // Render statistics
 function renderStats(stats) {
   const container = document.getElementById("statsContainer");
-  const totalLogos = stats.total_uploaded_logos + stats.total_cached_logos;
+  const totalCachedLogos = stats.total_cached_logos + (stats.filesystem_cached_logos || 0);
+  const totalLogos = stats.total_uploaded_logos + totalCachedLogos;
   const totalLinkedAssets = stats.total_linked_assets || 0;
+  const totalStorage = stats.total_storage_used + (stats.filesystem_cached_storage || 0);
 
   container.innerHTML = `
         <strong>Logos:</strong> ${totalLogos}
-        (${stats.total_uploaded_logos} uploaded, ${stats.total_cached_logos} cached) •
-        <strong>Storage:</strong> ${formatFileSize(stats.total_storage_used)} •
+        (${stats.total_uploaded_logos} uploaded, ${totalCachedLogos} cached) •
+        <strong>Storage:</strong> ${formatFileSize(totalStorage)} •
         <strong>Linked:</strong> +${totalLinkedAssets}
     `;
 }

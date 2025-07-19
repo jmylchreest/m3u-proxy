@@ -4,11 +4,14 @@ use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
 use crate::models::*;
+use crate::utils::RegexPreprocessor;
 
 #[allow(dead_code)]
 pub struct FilterEngine {
     // Cache compiled regexes for performance
     regex_cache: HashMap<String, Regex>,
+    // Regex preprocessor for performance optimization
+    preprocessor: RegexPreprocessor,
 }
 
 impl FilterEngine {
@@ -16,6 +19,7 @@ impl FilterEngine {
     pub fn new() -> Self {
         Self {
             regex_cache: HashMap::new(),
+            preprocessor: RegexPreprocessor::default(),
         }
     }
 
@@ -396,14 +400,21 @@ impl FilterEngine {
                     field_value.to_lowercase().ends_with(&value.to_lowercase())
                 }
             }
-            FilterOperator::Matches => match self.get_or_compile_regex(value, case_sensitive) {
-                Ok(regex) => regex.is_match(&field_value),
-                Err(e) => {
-                    warn!(
-                        "Regex compilation failed for pattern '{}': {}. Defaulting to false.",
-                        value, e
-                    );
+            FilterOperator::Matches => {
+                // Apply first-pass filtering if enabled
+                if !self.preprocessor.should_run_regex(&field_value, value, "Filter") {
                     false
+                } else {
+                    match self.get_or_compile_regex(value, case_sensitive) {
+                        Ok(regex) => regex.is_match(&field_value),
+                        Err(e) => {
+                            warn!(
+                                "Regex compilation failed for pattern '{}': {}. Defaulting to false.",
+                                value, e
+                            );
+                            false
+                        }
+                    }
                 }
             },
             FilterOperator::NotContains => {
@@ -420,14 +431,21 @@ impl FilterEngine {
                     field_value.to_lowercase() != value.to_lowercase()
                 }
             }
-            FilterOperator::NotMatches => match self.get_or_compile_regex(value, case_sensitive) {
-                Ok(regex) => !regex.is_match(&field_value),
-                Err(e) => {
-                    warn!(
-                        "Regex compilation failed for pattern '{}': {}. Defaulting to true (not matching).",
-                        value, e
-                    );
-                    true
+            FilterOperator::NotMatches => {
+                // Apply first-pass filtering if enabled
+                if !self.preprocessor.should_run_regex(&field_value, value, "Filter") {
+                    true // If preprocessing suggests no match, then "not matches" should be true
+                } else {
+                    match self.get_or_compile_regex(value, case_sensitive) {
+                        Ok(regex) => !regex.is_match(&field_value),
+                        Err(e) => {
+                            warn!(
+                                "Regex compilation failed for pattern '{}': {}. Defaulting to true (not matching).",
+                                value, e
+                            );
+                            true
+                        }
+                    }
                 }
             },
             FilterOperator::NotStartsWith => {

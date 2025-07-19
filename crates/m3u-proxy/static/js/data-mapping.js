@@ -1176,43 +1176,6 @@ function displayTestResults(result) {
           <div class="test-result-channel">
             <strong>${escapeHtml(channel.channel_name)}</strong>
             ${channel.group_title ? `<span class="badge badge-secondary">${escapeHtml(channel.group_title)}</span>` : ""}
-            ${
-              channel.applied_actions && channel.applied_actions.length > 0
-                ? `
-              <div class="applied-actions">
-                <small>Applied actions: ${channel.applied_actions.length}</small>
-                <div class="action-details">
-                  ${channel.applied_actions
-                    .map((action) => {
-                      // Check if action contains a logo URL
-                      const logoUrlMatch = action.match(
-                        /\(http[s]?:\/\/[^\)]+\/api\/logos\/[^)]+\)/,
-                      );
-                      if (logoUrlMatch) {
-                        const logoUrl = logoUrlMatch[0].slice(1, -1); // Remove parentheses
-                        const actionText = action.replace(logoUrlMatch[0], "");
-                        return `
-                        <div class="action-item">
-                          <span>${escapeHtml(actionText)}</span>
-                          <a href="${logoUrl}" target="_blank" class="logo-link" title="View logo">
-                            <img src="${logoUrl}" alt="Logo" style="width: 24px; height: 24px; object-fit: contain; margin-left: 8px; border-radius: 2px; vertical-align: middle;">
-                          </a>
-                        </div>
-                      `;
-                      } else {
-                        return `<div class="action-item">${escapeHtml(action)}</div>`;
-                      }
-                    })
-                    .join("")}
-                </div>
-              </div>
-            `
-                : `
-              <div class="applied-actions">
-                <small>Applied actions: 0</small>
-              </div>
-            `
-            }
           </div>
         `,
           )

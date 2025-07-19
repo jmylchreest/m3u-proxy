@@ -104,6 +104,13 @@ impl WebServer {
         let source_linking_service =
             std::sync::Arc::new(crate::services::SourceLinkingService::new(database.clone()));
 
+        // Create proxy service
+        let proxy_service = crate::proxy::ProxyService::new(
+            config.storage.clone(),
+            temp_file_manager.clone(),
+            system.clone(),
+        );
+
         let app = Self::create_router(AppState {
             database: database.clone(),
             config: config.clone(),
@@ -128,6 +135,7 @@ impl WebServer {
             stream_source_service,
             epg_source_service,
             source_linking_service,
+            proxy_service,
         })
         .await;
 
@@ -409,6 +417,7 @@ pub struct AppState {
     pub stream_source_service: std::sync::Arc<crate::services::StreamSourceBusinessService>,
     pub epg_source_service: std::sync::Arc<crate::services::EpgSourceService>,
     pub source_linking_service: std::sync::Arc<crate::services::SourceLinkingService>,
+    pub proxy_service: crate::proxy::ProxyService,
 }
 
 impl AppState {}

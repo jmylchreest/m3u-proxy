@@ -33,6 +33,9 @@ pub struct RelayManager {
     ffmpeg_available: bool,
     ffmpeg_version: Option<String>,
     ffmpeg_command: String,
+    ffprobe_available: bool,
+    ffprobe_version: Option<String>,
+    ffprobe_command: String,
     hwaccel_available: bool,
     hwaccel_capabilities: HwAccelCapabilities,
 }
@@ -53,13 +56,29 @@ impl RelayManager {
             .map(|r| r.ffmpeg_command.clone())
             .unwrap_or_else(|| "ffmpeg".to_string());
 
+        // Get FFprobe command from config
+        let ffprobe_command = config
+            .relay
+            .as_ref()
+            .map(|r| r.ffprobe_command.clone())
+            .unwrap_or_else(|| "ffprobe".to_string());
+
         // Check FFmpeg availability once at startup
         let (ffmpeg_available, ffmpeg_version) =
             Self::check_ffmpeg_availability_static(&ffmpeg_command).await;
 
+        // Check FFprobe availability once at startup
+        let (ffprobe_available, ffprobe_version) =
+            Self::check_ffprobe_availability_static(&ffprobe_command).await;
+
         info!(
             "FFmpeg: available={}, version={:?}, command={}",
             ffmpeg_available, ffmpeg_version, ffmpeg_command
+        );
+
+        info!(
+            "FFprobe: available={}, version={:?}, command={}",
+            ffprobe_available, ffprobe_version, ffprobe_command
         );
 
         // Detect hardware acceleration capabilities if FFmpeg is available
@@ -67,6 +86,13 @@ impl RelayManager {
             Self::detect_hwaccel_capabilities(&ffmpeg_command).await
         } else {
             (false, HwAccelCapabilities::default())
+        };
+
+        // Create stream prober if ffprobe is available
+        let stream_prober = if ffprobe_available {
+            Some(crate::services::StreamProber::new(Some(ffprobe_command.clone())))
+        } else {
+            None
         };
 
         let manager = Self {
@@ -77,6 +103,7 @@ impl RelayManager {
                 metrics_logger.clone(),
                 hwaccel_capabilities.clone(),
                 config.relay.as_ref().map(|r| r.buffer.clone()).unwrap_or_default(),
+                stream_prober,
             ),
             metrics_logger,
             cleanup_interval: Duration::from_secs(10),
@@ -85,6 +112,9 @@ impl RelayManager {
             ffmpeg_available,
             ffmpeg_version: ffmpeg_version.clone(),
             ffmpeg_command: ffmpeg_command.clone(),
+            ffprobe_available,
+            ffprobe_version: ffprobe_version.clone(),
+            ffprobe_command: ffprobe_command.clone(),
             hwaccel_available,
             hwaccel_capabilities,
         };
@@ -112,7 +142,7 @@ impl RelayManager {
                 rp.id as profile_id, rp.name as profile_name, rp.description as profile_description,
                 rp.video_codec, rp.audio_codec, rp.video_profile, rp.video_preset,
                 rp.video_bitrate, rp.audio_bitrate, rp.audio_sample_rate, rp.audio_channels,
-                rp.enable_hardware_acceleration, rp.preferred_hwaccel, rp.manual_args, rp.ffmpeg_args,
+                rp.enable_hardware_acceleration, rp.preferred_hwaccel, rp.manual_args,
                 rp.output_format, rp.segment_duration, rp.max_segments,
                 rp.input_timeout, rp.is_system_default,
                 rp.is_active as profile_is_active, rp.created_at as profile_created_at,
@@ -166,7 +196,6 @@ impl RelayManager {
                 
                 // Manual override and legacy
                 manual_args: row.get("manual_args"),
-                ffmpeg_args: row.get("ffmpeg_args"),
                 
                 // Container settings
                 output_format: row
@@ -693,6 +722,47 @@ impl RelayManager {
             .await?;
 
         Ok(())
+    }
+
+    /// Check if FFprobe is available and get version information (static version for initialization)
+    async fn check_ffprobe_availability_static(ffprobe_command: &str) -> (bool, Option<String>) {
+        match tokio::process::Command::new(ffprobe_command)
+            .arg("-version")
+            .output()
+            .await
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    let version_output = String::from_utf8_lossy(&output.stdout);
+
+                    // Extract version from the first line (e.g., "ffprobe version 4.4.2-0ubuntu0.22.04.1")
+                    let version = version_output.lines().next().and_then(|line| {
+                        if line.starts_with("ffprobe version") {
+                            line.split_whitespace()
+                                .nth(2) // Get the version part
+                                .map(|v| v.to_string())
+                        } else {
+                            None
+                        }
+                    });
+
+                    (true, version)
+                } else {
+                    warn!(
+                        "FFprobe command '{}' failed with status: {}",
+                        ffprobe_command, output.status
+                    );
+                    (false, None)
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to execute FFprobe command '{}': {}",
+                    ffprobe_command, e
+                );
+                (false, None)
+            }
+        }
     }
 
     /// Check if FFmpeg is available and get version information (static version for initialization)

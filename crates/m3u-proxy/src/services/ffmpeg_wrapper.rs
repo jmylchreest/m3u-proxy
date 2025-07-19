@@ -8,7 +8,7 @@ use futures::Stream;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tracing::{debug, error, info, warn};
@@ -131,15 +131,17 @@ pub struct FFmpegProcessWrapper {
     metrics: Arc<MetricsLogger>,
     hwaccel_capabilities: HwAccelCapabilities,
     buffer_config: BufferConfig,
+    stream_prober: Option<StreamProber>,
 }
 
 impl FFmpegProcessWrapper {
-    pub fn new(temp_manager: SandboxedManager, metrics: Arc<MetricsLogger>, hwaccel_capabilities: HwAccelCapabilities, buffer_config: BufferConfig) -> Self {
+    pub fn new(temp_manager: SandboxedManager, metrics: Arc<MetricsLogger>, hwaccel_capabilities: HwAccelCapabilities, buffer_config: BufferConfig, stream_prober: Option<StreamProber>) -> Self {
         Self {
             temp_manager,
             metrics,
             hwaccel_capabilities,
             buffer_config,
+            stream_prober,
         }
     }
 
@@ -149,12 +151,96 @@ impl FFmpegProcessWrapper {
         config: &ResolvedRelayConfig,
         input_url: &str,
     ) -> Result<FFmpegProcess, RelayError> {
+        self.start_process_with_retry(config, input_url, 3).await
+    }
+
+    /// Start an FFmpeg process with retry logic
+    async fn start_process_with_retry(
+        &self,
+        config: &ResolvedRelayConfig,
+        input_url: &str,
+        max_attempts: u32,
+    ) -> Result<FFmpegProcess, RelayError> {
+        let mut last_error = None;
+        
+        for attempt in 1..=max_attempts {
+            debug!("Starting FFmpeg process attempt {} of {} for relay {}", 
+                   attempt, max_attempts, config.config.id);
+            
+            match self.try_start_process(config, input_url).await {
+                Ok(process) => {
+                    if attempt > 1 {
+                        info!("FFmpeg process started successfully on attempt {} for relay {}", 
+                              attempt, config.config.id);
+                    }
+                    return Ok(process);
+                }
+                Err(e) => {
+                    warn!("FFmpeg process start attempt {} failed for relay {}: {}", 
+                          attempt, config.config.id, e);
+                    last_error = Some(e);
+                    
+                    // Apply backoff delay if not the last attempt
+                    if attempt < max_attempts {
+                        let delay_seconds = 5; // 5 seconds between retries
+                        debug!("Waiting {} seconds before retry attempt {} for relay {}", 
+                               delay_seconds, attempt + 1, config.config.id);
+                        tokio::time::sleep(Duration::from_secs(delay_seconds)).await;
+                    }
+                }
+            }
+        }
+        
+        error!("All {} attempts failed for relay {}", max_attempts, config.config.id);
+        Err(last_error.unwrap_or_else(|| RelayError::ProcessFailed("All retry attempts failed".to_string())))
+    }
+
+    /// Single attempt to start an FFmpeg process
+    async fn try_start_process(
+        &self,
+        config: &ResolvedRelayConfig,
+        input_url: &str,
+    ) -> Result<FFmpegProcess, RelayError> {
+        // Probe stream first if prober is available
+        let mapping_strategy = if let Some(ref prober) = self.stream_prober {
+            debug!("Probing input stream before starting FFmpeg: {}", input_url);
+            match prober.probe_input(input_url).await {
+                Ok(probe_result) => {
+                    debug!("Stream probe successful: has_video={}, has_audio={}, video_streams={}, audio_streams={}", 
+                           probe_result.has_video, probe_result.has_audio, 
+                           probe_result.video_streams.len(), probe_result.audio_streams.len());
+                    
+                    // Generate optimal mapping strategy
+                    let strategy = prober.generate_mapping_strategy(
+                        &probe_result,
+                        &config.profile.video_codec.to_string(),
+                        &config.profile.audio_codec.to_string(),
+                        config.profile.video_bitrate,
+                        config.profile.audio_bitrate,
+                    );
+                    
+                    debug!("Generated mapping strategy: video_mapping={:?}, audio_mapping={:?}, video_copy={}, audio_copy={}",
+                           strategy.video_mapping, strategy.audio_mapping, strategy.video_copy, strategy.audio_copy);
+                    
+                    Some(strategy)
+                }
+                Err(e) => {
+                    warn!("Stream probing failed for {}: {}. Falling back to traditional mapping.", input_url, e);
+                    None
+                }
+            }
+        } else {
+            debug!("No stream prober available, using traditional mapping");
+            None
+        };
+
         // For cyclic buffer mode, we don't need sandbox directories since we stream to stdout
         // Generate complete FFmpeg command with hardware acceleration support
-        let resolved_args = config.generate_ffmpeg_command(
+        let resolved_args = config.generate_ffmpeg_command_with_mapping(
             input_url,
             "", // No output path needed for stdout streaming
             &self.hwaccel_capabilities,
+            mapping_strategy.as_ref(),
         );
 
         debug!("Starting FFmpeg process for relay {} with args: {:?}", 

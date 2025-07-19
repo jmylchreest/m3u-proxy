@@ -364,6 +364,12 @@ pub struct RelayConfig {
     #[serde(default = "default_ffmpeg_command")]
     pub ffmpeg_command: String,
     
+    /// FFprobe command to use for stream probing operations
+    /// Can be a full path (/usr/bin/ffprobe) or command name (ffprobe)
+    /// The system will search $PATH if not a full path
+    #[serde(default = "default_ffprobe_command")]
+    pub ffprobe_command: String,
+    
     /// Cyclic buffer configuration for in-memory stream buffering
     #[serde(default)]
     pub buffer: BufferConfig,
@@ -373,10 +379,15 @@ fn default_ffmpeg_command() -> String {
     "ffmpeg".to_string()
 }
 
+fn default_ffprobe_command() -> String {
+    "ffprobe".to_string()
+}
+
 impl Default for RelayConfig {
     fn default() -> Self {
         Self {
             ffmpeg_command: default_ffmpeg_command(),
+            ffprobe_command: default_ffprobe_command(),
             buffer: BufferConfig::default(),
         }
     }

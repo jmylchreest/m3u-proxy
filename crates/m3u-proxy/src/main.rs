@@ -135,6 +135,12 @@ async fn main() -> Result<()> {
     // Create state manager for ingestion progress tracking
     let state_manager = IngestionStateManager::new();
     info!("Ingestion state manager initialized");
+    
+    // Create universal progress service
+    let progress_service = std::sync::Arc::new(
+        m3u_proxy::services::progress_service::ProgressService::new(state_manager.clone())
+    );
+    info!("Universal progress service initialized");
 
     // Initialize data mapping service
     let data_mapping_service = DataMappingService::new(database.pool());
@@ -152,118 +158,88 @@ async fn main() -> Result<()> {
 
     info!("Logo asset service and storage initialized");
 
-    // Initialize sandboxed file managers using configuration
-    let cache_dir = std::env::temp_dir().join("m3u-proxy");
-    let file_manager_config = config
-        .file_manager
-        .clone()
-        .unwrap_or_else(|| m3u_proxy::config::FileManagerConfig::with_defaults(cache_dir.clone()));
+    // Initialize sandboxed file managers directly from storage config
+    use sandboxed_file_manager::{CleanupPolicy, TimeMatch};
 
-    // Validate no duplicate base directories before creating any managers
-    let mut all_paths = std::collections::HashMap::new();
-
-    // Check file manager config categories
-    for category in file_manager_config.category_names() {
-        if let Some(path) = file_manager_config.category_path(category) {
-            let canonical_path = path.canonicalize().unwrap_or(path.clone());
-            if let Some(existing_category) =
-                all_paths.insert(canonical_path.clone(), category.clone())
-            {
-                return Err(anyhow::anyhow!(
-                    "Duplicate base directory detected! Categories '{}' and '{}' both use path: {:?}. This would cause cleanup conflicts.",
-                    existing_category,
-                    category,
-                    canonical_path
-                ));
-            }
-        }
-    }
-
-    // Check logo paths
-    let cached_logo_canonical = config
-        .storage
-        .cached_logo_path
-        .canonicalize()
-        .unwrap_or(config.storage.cached_logo_path.clone());
-    if let Some(existing_category) = all_paths.get(&cached_logo_canonical) {
-        return Err(anyhow::anyhow!(
-            "Duplicate base directory detected! Category '{}' and logos_cached both use path: {:?}. This would cause cleanup conflicts.",
-            existing_category,
-            cached_logo_canonical
-        ));
-    }
-
-    // Create file managers for each category (now safe from duplicates)
-    let create_manager = |category: &str| {
-        let category = category.to_string(); // Take ownership
-        let config = file_manager_config.clone();
-        async move {
-            if let (Some(policy), Some(interval)) = (
-                config.cleanup_policy_for_category(&category),
-                config.cleanup_interval_for_category(&category),
-            ) {
-                if let Some(path) = config.category_path(&category) {
-                    SandboxedManager::builder()
-                        .base_directory(path)
-                        .cleanup_policy(policy)
-                        .cleanup_interval(interval)
-                        .build()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Failed to create file manager: {}", e))
-                } else {
-                    Err(anyhow::anyhow!(
-                        "No path configured for category: {}",
-                        category
-                    ))
-                }
-            } else {
-                Err(anyhow::anyhow!(
-                    "No configuration found for category: {}",
-                    category
-                ))
-            }
-        }
+    // Helper function to parse duration strings (e.g., "5m", "30d", "12h")
+    let parse_duration = |duration_str: &str| -> Result<std::time::Duration, anyhow::Error> {
+        humantime::parse_duration(duration_str)
+            .map_err(|e| anyhow::anyhow!("Invalid duration '{}': {}", duration_str, e))
     };
 
-    // Create specialized logo file manager for cached logos (duplicate check already done above)
-    // Note: uploaded logos use LogoAssetStorage direct file operations (could be enhanced with sandboxing)
-    let logos_cached_file_manager = m3u_proxy::config::FileManagerConfig::create_logo_manager(
-        &config.storage.cached_logo_path,
-        false, // Regular retention with cleanup
-    )
-    .await?;
+    // Create temp file manager using storage config
+    let temp_path = config.storage.temp_path.as_deref().unwrap_or("./data/temp");
+    let temp_file_manager = SandboxedManager::builder()
+        .base_directory(temp_path)
+        .cleanup_policy(CleanupPolicy::new()
+            .remove_after(parse_duration(&config.storage.temp_retention)?)
+            .time_match(TimeMatch::LastAccess))
+        .cleanup_interval(parse_duration(&config.storage.temp_cleanup_interval)?)
+        .build()
+        .await?;
+
+    // Create proxy output file manager using storage config
+    let proxy_output_file_manager = SandboxedManager::builder()
+        .base_directory(&config.storage.m3u_path)
+        .cleanup_policy(CleanupPolicy::new()
+            .remove_after(parse_duration(&config.storage.m3u_retention)?)
+            .time_match(TimeMatch::Modified))
+        .cleanup_interval(parse_duration(&config.storage.m3u_cleanup_interval)?)
+        .build()
+        .await?;
+
+    // Create cached logo file manager using storage config
+    let logos_cached_file_manager = SandboxedManager::builder()
+        .base_directory(&config.storage.cached_logo_path)
+        .cleanup_policy(CleanupPolicy::new()
+            .remove_after(parse_duration(&config.storage.cached_logo_retention)?)
+            .time_match(TimeMatch::LastAccess))
+        .cleanup_interval(parse_duration(&config.storage.cached_logo_cleanup_interval)?)
+        .build()
+        .await?;
+
+    // Create pipeline file manager with dedicated directory for pipeline intermediate files
+    let pipeline_file_manager = SandboxedManager::builder()
+        .base_directory(&config.storage.pipeline_path)
+        .cleanup_policy(CleanupPolicy::new()
+            .remove_after(parse_duration(&config.storage.pipeline_retention)?)
+            .time_match(TimeMatch::LastAccess))
+        .cleanup_interval(parse_duration(&config.storage.pipeline_cleanup_interval)?)
+        .build()
+        .await?;
 
     // Update logo asset service with the cached logo file manager
     logo_asset_service = logo_asset_service.with_file_manager(logos_cached_file_manager.clone());
 
-    let proxy_output_file_manager = create_manager("proxy_output").await?;
-    let temp_file_manager = create_manager("temp").await?;
-
     info!("Sandboxed file managers initialized with configured retention policies:");
     info!(
-        "  logos_cached: 3 months retention, cleanup every 12 hours, path: {:?}",
-        Some(&config.storage.cached_logo_path)
+        "  temp: {} retention, cleanup every {}, path: {:?}",
+        config.storage.temp_retention,
+        config.storage.temp_cleanup_interval,
+        temp_path
+    );
+    info!(
+        "  pipeline: {} retention, cleanup every {}, path: {:?}",
+        config.storage.pipeline_retention,
+        config.storage.pipeline_cleanup_interval,
+        config.storage.pipeline_path
+    );
+    info!(
+        "  m3u_proxy_output: {} retention, cleanup every {}, path: {:?}",
+        config.storage.m3u_retention,
+        config.storage.m3u_cleanup_interval,
+        config.storage.m3u_path
+    );
+    info!(
+        "  logos_cached: {} retention, cleanup every {}, path: {:?}",
+        config.storage.cached_logo_retention,
+        config.storage.cached_logo_cleanup_interval,
+        config.storage.cached_logo_path
     );
     info!(
         "  logos_uploaded: never expires (direct file ops via LogoAssetStorage), path: {:?}",
-        Some(&config.storage.uploaded_logo_path)
+        config.storage.uploaded_logo_path
     );
-    for category in file_manager_config.category_names() {
-        if let Some(config_cat) = file_manager_config.get_category(category) {
-            let path = file_manager_config.category_path(category);
-            info!(
-                "  {}: {} retention, cleanup every {}, path: {:?}",
-                category,
-                humantime::format_duration(config_cat.retention_duration),
-                humantime::format_duration(
-                    file_manager_config
-                        .cleanup_interval_for_category(category)
-                        .unwrap_or_default()
-                ),
-                path
-            );
-        }
-    }
 
     // Create shared system manager for centralized system monitoring
     let system_manager = SystemManager::new(Duration::from_secs(10));
@@ -280,14 +256,16 @@ async fn main() -> Result<()> {
         memory_limit
     );
 
-    // Initialize proxy regeneration service with managed temp file manager
+    // Initialize proxy regeneration service with managed pipeline file manager
     let proxy_regeneration_service = ProxyRegenerationService::new(
         database.pool(),
+        config.clone(),
         None,
-        temp_file_manager.clone(),
+        pipeline_file_manager.clone(),
         system_manager.get_system(),
+        progress_service.clone(),
     );
-    info!("Proxy regeneration service initialized");
+    info!("Proxy regeneration service initialized with in-memory state");
 
     // Create scheduler service now that proxy regeneration service exists
     let scheduler = SchedulerService::new(
@@ -296,17 +274,14 @@ async fn main() -> Result<()> {
         config.ingestion.run_missed_immediately,
         Some(cache_invalidation_rx),
         Some(proxy_regeneration_service.clone()),
+        progress_service.clone(), // Pass shared ProgressService!
     );
     info!("Scheduler service initialized");
 
     // Native pipeline only - no plugin system needed
 
-    // Clone values needed for background services before moving into web server
+    // Clone proxy regeneration service for background processing
     let bg_proxy_regeneration_service = proxy_regeneration_service.clone();
-    let bg_database = database.clone();
-    let bg_data_mapping_service = data_mapping_service.clone();
-    let bg_logo_asset_service = logo_asset_service.clone();
-    let bg_config = config.clone();
 
     // Clone again for metrics housekeeper
     let metrics_database = database.clone();
@@ -325,7 +300,7 @@ async fn main() -> Result<()> {
     );
     info!("Relay manager initialized with shared system monitoring");
 
-    let web_server = WebServer::new(
+    let mut web_server = WebServer::new(
         config,
         database,
         state_manager,
@@ -335,12 +310,18 @@ async fn main() -> Result<()> {
         logo_asset_storage,
         proxy_regeneration_service,
         temp_file_manager.clone(), // Use temp for both temp and preview operations
+        pipeline_file_manager,
         logos_cached_file_manager,
         proxy_output_file_manager,
         relay_manager,
         system_manager.get_system(),
+        progress_service.clone(),
     )
     .await?;
+    
+    // RACE CONDITION FIX: Wire up the API request tracker to prevent duplicates
+    // between manual API requests and background auto-regeneration
+    web_server.wire_duplicate_protection().await;
 
     info!(
         "Starting web server on {}:{}",
@@ -379,16 +360,7 @@ async fn main() -> Result<()> {
 
     // Now start the background services after the web server is listening
     info!("Starting background processor for auto-regeneration");
-    tokio::spawn(async move {
-        bg_proxy_regeneration_service
-            .start_processor(
-                bg_database,
-                bg_data_mapping_service,
-                bg_logo_asset_service,
-                bg_config,
-            )
-            .await;
-    });
+    bg_proxy_regeneration_service.start_processor();
 
     info!("Starting scheduler service");
     tokio::spawn(async move {

@@ -6,6 +6,7 @@ use crate::{
     policy::CleanupPolicy,
     security::set_secure_permissions,
 };
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -43,6 +44,7 @@ pub struct SandboxedManager {
     file_registry: Arc<RwLock<HashMap<String, FileInfo>>>,
     cleanup_policy: CleanupPolicy,
     cleanup_interval: Duration,
+    cleanup_suspension: Arc<RwLock<Option<std::time::Instant>>>,
 }
 
 impl SandboxedManager {
@@ -387,9 +389,55 @@ impl SandboxedManager {
         Ok(full_path)
     }
 
+    /// Suspend cleanup operations for a specified duration.
+    /// This prevents automatic cleanup from running until the TTL expires or resume_cleanup() is called.
+    pub async fn suspend_cleanup(&self, ttl: Duration) -> Result<()> {
+        let suspension_until = std::time::Instant::now() + ttl;
+        let mut suspension = self.cleanup_suspension.write().await;
+        *suspension = Some(suspension_until);
+        tracing::debug!("Cleanup suspended for {:?} (until {:?})", ttl, suspension_until);
+        Ok(())
+    }
+
+    /// Update cleanup suspension to expire the specified duration from now.
+    /// This always sets the suspension to "duration from current time", not additive.
+    /// If no suspension is active, this behaves like suspend_cleanup().
+    pub async fn update_suspension(&self, duration_from_now: Duration) -> Result<()> {
+        let suspension_until = std::time::Instant::now() + duration_from_now;
+        let mut suspension = self.cleanup_suspension.write().await;
+        *suspension = Some(suspension_until);
+        tracing::trace!("Cleanup suspension updated to {:?} from now (until {:?})", duration_from_now, suspension_until);
+        Ok(())
+    }
+
+
+    /// Resume cleanup operations immediately, clearing any active suspension.
+    pub async fn resume_cleanup(&self) {
+        let mut suspension = self.cleanup_suspension.write().await;
+        if suspension.is_some() {
+            *suspension = None;
+            tracing::debug!("Cleanup operations resumed");
+        }
+    }
+
+    /// Check if cleanup is currently suspended (TTL hasn't expired).
+    async fn is_cleanup_suspended(&self) -> bool {
+        let suspension = self.cleanup_suspension.read().await;
+        match *suspension {
+            Some(until) => std::time::Instant::now() < until,
+            None => false,
+        }
+    }
+
     /// Manually trigger cleanup of expired files.
     pub async fn cleanup_expired_files(&self) -> Result<usize> {
         if self.cleanup_policy.infinite_retention {
+            return Ok(0);
+        }
+
+        // Check if cleanup is suspended
+        if self.is_cleanup_suspended().await {
+            tracing::trace!("Cleanup skipped due to active suspension");
             return Ok(0);
         }
 
@@ -656,6 +704,7 @@ impl SandboxedManagerBuilder {
             file_registry: Arc::new(RwLock::new(HashMap::new())),
             cleanup_policy: self.cleanup_policy,
             cleanup_interval: self.cleanup_interval,
+            cleanup_suspension: Arc::new(RwLock::new(None)),
         };
 
         // Load existing files from disk

@@ -13,7 +13,7 @@ use tracing::{debug, error, info};
 use utoipa;
 
 use crate::{
-    models::relay::{RelayProcessMetrics, RelayMetrics},
+    models::relay::RelayMetrics,
     web::AppState,
 };
 
@@ -44,6 +44,7 @@ pub async fn get_active_relays(
             let relay_metrics = RelayMetrics {
                 total_active_relays: process_metrics.len() as i64,
                 total_clients,
+                total_bytes_upstream,
                 total_bytes_served: total_bytes_downstream, // Use downstream for UI compatibility
                 active_processes: process_metrics,
             };

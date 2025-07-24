@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::database::Database;
 use crate::models::{EpgSource, EpgSourceType, StreamSource, StreamSourceType};
@@ -356,6 +356,7 @@ impl SourceLinkingService {
             username: epg_source.username.clone(),
             password: epg_source.password.clone(),
             field_map: None,
+            ignore_channel_numbers: true, // Default to true for Xtream sources
         };
 
         self.database.create_stream_source(&stream_request).await
@@ -408,7 +409,7 @@ pub struct LinkingStats {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use super::*; // Currently unused
 
     #[tokio::test]
     async fn test_sources_match() {

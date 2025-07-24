@@ -4,7 +4,9 @@ use axum::{
     response::Json,
 };
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,8 +18,10 @@ use super::AppState;
 
 pub mod relay;
 pub mod active_relays;
+pub mod unified_progress;
 
 use crate::data_mapping::DataMappingService;
+use crate::pipeline::engines::validation::StageValidator;
 use crate::models::*;
 
 #[derive(Debug, Deserialize)]
@@ -33,37 +37,6 @@ pub struct DataMappingPreviewRequest {
     pub limit: Option<u32>,
 }
 
-// Helper function to convert MappedChannel to test format
-fn mapped_channel_to_test_format(
-    mc: &crate::models::data_mapping::MappedChannel,
-) -> (
-    HashMap<String, Option<String>>,
-    HashMap<String, Option<String>>,
-) {
-    let mut original_values = HashMap::new();
-    original_values.insert(
-        "channel_name".to_string(),
-        Some(mc.original.channel_name.clone()),
-    );
-    original_values.insert("tvg_id".to_string(), mc.original.tvg_id.clone());
-    original_values.insert("tvg_name".to_string(), mc.original.tvg_name.clone());
-    original_values.insert("tvg_logo".to_string(), mc.original.tvg_logo.clone());
-    original_values.insert("tvg_shift".to_string(), mc.original.tvg_shift.clone());
-    original_values.insert("group_title".to_string(), mc.original.group_title.clone());
-
-    let mut mapped_values = HashMap::new();
-    mapped_values.insert(
-        "channel_name".to_string(),
-        Some(mc.mapped_channel_name.clone()),
-    );
-    mapped_values.insert("tvg_id".to_string(), mc.mapped_tvg_id.clone());
-    mapped_values.insert("tvg_name".to_string(), mc.mapped_tvg_name.clone());
-    mapped_values.insert("tvg_logo".to_string(), mc.mapped_tvg_logo.clone());
-    mapped_values.insert("tvg_shift".to_string(), mc.mapped_tvg_shift.clone());
-    mapped_values.insert("group_title".to_string(), mc.mapped_group_title.clone());
-
-    (original_values, mapped_values)
-}
 
 // Helper function to get the resolved value for a field from a MappedChannel
 #[allow(dead_code)]
@@ -229,119 +202,189 @@ pub async fn get_epg_source_progress(
 
 // Stream Proxies API - implementations are in handlers/proxies.rs
 
+#[utoipa::path(
+    post,
+    path = "/proxies/{proxy_id}/regenerate",
+    tag = "proxies",
+    summary = "Regenerate proxy",
+    description = "Queue a proxy for background regeneration and return immediately with queue ID",
+    params(
+        ("proxy_id" = String, Path, description = "Proxy ID (UUID)"),
+    ),
+    responses(
+        (status = 202, description = "Proxy queued for regeneration"),
+        (status = 404, description = "Proxy not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn regenerate_proxy(
     Path(proxy_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    info!("Regenerating proxy {}", proxy_id);
+    info!("Queuing proxy {} for background regeneration", proxy_id);
     
-    // Get the proxy
-    let proxy = match state.database.get_stream_proxy(proxy_id).await {
-        Ok(Some(proxy)) => proxy,
-        Ok(None) => {
-            error!("Proxy {} not found", proxy_id);
-            return Err(StatusCode::NOT_FOUND);
+    // CRITICAL FIX: Check for duplicate API requests to prevent race conditions
+    {
+        let mut active_requests = state.active_regeneration_requests.lock().await;
+        if active_requests.contains(&proxy_id) {
+            warn!("Duplicate regeneration API request for proxy {} - rejecting", proxy_id);
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": "A regeneration request for this proxy is already being processed",
+                "proxy_id": proxy_id,
+                "status": "duplicate_request"
+            })));
         }
-        Err(e) => {
-            error!("Failed to get proxy {}: {}", proxy_id, e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
+        // Reserve this proxy ID to prevent other requests
+        active_requests.insert(proxy_id);
+    }
+    
+    // Create a cleanup guard to ensure we always remove the proxy ID from active requests
+    let _cleanup_guard = RequestCleanupGuard {
+        proxy_id,
+        active_requests: state.active_regeneration_requests.clone(),
     };
-
-    // Create repositories for dependency injection
-    use crate::repositories::{
-        FilterRepository, StreamProxyRepository, StreamSourceRepository,
-    };
-    let proxy_repo = StreamProxyRepository::new(state.database.pool());
-    let stream_source_repo = StreamSourceRepository::new(state.database.pool());
-    let filter_repo = FilterRepository::new(state.database.pool());
-
-    let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
-        proxy_repo,
-        stream_source_repo,
-        filter_repo,
-        state.database.clone(),
-    );
-
-    // Resolve proxy configuration upfront (single database query)
-    match config_resolver.resolve_config(proxy_id).await {
-        Ok(resolved_config) => {
-            // Validate configuration
-            if let Err(e) = config_resolver.validate_config(&resolved_config) {
-                error!("Invalid proxy configuration for {}: {}", proxy_id, e);
-                return Err(StatusCode::BAD_REQUEST);
-            }
-
-            // Create production output destination  
-            let output = crate::models::GenerationOutput::InMemory;
-
-            // Generate using dependency injection
-            match state.proxy_service
-                .generate_proxy_with_config(
-                    resolved_config,
-                    output,
-                    &state.database,
-                    &state.data_mapping_service,
-                    &state.logo_asset_service,
-                    &state.config.web.base_url,
-                    state.config.data_mapping_engine.clone(),
-                    &state.config,
-                )
-                .await
-            {
-                Ok(generation) => {
-                    // Save the M3U file using the proxy service
-                    match state.proxy_service
-                        .save_m3u_file_with_manager(
-                            &proxy.id.to_string(),
-                            &generation.m3u_content,
-                            None,
-                        )
-                        .await
-                    {
-                        Ok(_) => {
-                            // Update the last_generated_at timestamp for the proxy
-                            if let Err(e) = state.database.update_proxy_last_generated(proxy_id).await {
-                                error!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
-                            }
-                            
-                            info!(
-                                "Successfully regenerated proxy '{}' with {} channels using ProxyService",
-                                proxy.name, generation.channel_count
-                            );
-                            Ok(Json(serde_json::json!({
-                                "success": true,
-                                "message": format!("Proxy '{}' regenerated successfully", proxy.name),
-                                "channel_count": generation.channel_count,
-                                "regenerated_at": generation.created_at
-                            })))
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to save regenerated M3U for proxy {}: {}",
-                                proxy_id, e
-                            );
-                            Err(StatusCode::INTERNAL_SERVER_ERROR)
-                        }
-                    }
+    
+    // Verify the proxy exists first
+    match state.database.get_stream_proxy(proxy_id).await {
+        Ok(Some(proxy)) => {
+            // Queue the proxy for manual regeneration using background processing
+            match state.proxy_regeneration_service.queue_manual_regeneration(proxy_id).await {
+                Ok(_) => {
+                    // Emit scheduler event for immediate processing
+                    state.database.emit_scheduler_event(
+                        crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(proxy_id)
+                    );
+                    
+                    info!("Proxy '{}' queued for background regeneration", proxy.name);
+                    
+                    // _cleanup_guard will automatically clean up when function returns
+                    // The service-level deduplication will handle actual regeneration conflicts
+                    
+                    Ok(Json(serde_json::json!({
+                        "success": true,
+                        "message": format!("Proxy '{}' queued for regeneration", proxy.name),
+                        "queue_id": format!("universal-{}", proxy_id), // Use consistent queue_id format
+                        "proxy_id": proxy_id,
+                        "status": "queued",
+                        "queued_at": chrono::Utc::now()
+                    })))
                 }
                 Err(e) => {
-                    error!(
-                        "Failed to regenerate proxy {} using ProxyService: {}",
-                        proxy_id, e
-                    );
+                    error!("Failed to queue proxy {} for regeneration: {}", proxy_id, e);
+                    // _cleanup_guard will automatically clean up when function returns
                     Err(StatusCode::INTERNAL_SERVER_ERROR)
                 }
             }
         }
+        Ok(None) => {
+            error!("Proxy {} not found", proxy_id);
+            // _cleanup_guard will automatically clean up when function returns
+            Err(StatusCode::NOT_FOUND)
+        }
         Err(e) => {
-            error!(
-                "Failed to resolve proxy configuration for {}: {}",
-                proxy_id, e
-            );
+            error!("Failed to get proxy {}: {}", proxy_id, e);
+            // _cleanup_guard will automatically clean up when function returns
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/proxies/regeneration/status",
+    tag = "proxies",
+    summary = "Get regeneration queue status",
+    description = "Get current regeneration queue status and statistics",
+    responses(
+        (status = 200, description = "Queue status retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_regeneration_queue_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.proxy_regeneration_service.get_queue_status().await {
+        Ok(status) => {
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": "Queue status retrieved",
+                "queue_status": status,
+                "timestamp": chrono::Utc::now()
+            })))
+        }
+        Err(e) => {
+            error!("Failed to get regeneration queue status: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/progress/regeneration",
+    tag = "proxies",
+    summary = "Get proxy regeneration progress",
+    description = "Get real-time progress of proxy regeneration operations",
+    responses(
+        (status = 200, description = "Regeneration progress data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_proxy_regeneration_progress(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Use UniversalProgress system to get all proxy regeneration operations
+    let regeneration_operations = state.progress_service.get_progress_by_type(
+        crate::services::progress_service::OperationType::ProxyRegeneration
+    ).await;
+    
+    let mut progress_data = Vec::new();
+    
+    // Convert UniversalProgress entries to API format
+    for (operation_id, progress) in regeneration_operations {
+        // Get proxy name for display
+        let proxy_name = match state.database.get_stream_proxy(operation_id).await {
+            Ok(Some(proxy)) => proxy.name,
+            Ok(None) => format!("Proxy {}", operation_id),
+            Err(_) => format!("Proxy {}", operation_id),
+        };
+
+        // Convert UniversalState to API status
+        let status = match progress.state {
+            crate::services::progress_service::UniversalState::Preparing => "pending",
+            crate::services::progress_service::UniversalState::Processing => "processing",
+            crate::services::progress_service::UniversalState::Completed => "completed",
+            crate::services::progress_service::UniversalState::Error => "failed",
+            crate::services::progress_service::UniversalState::Cancelled => "cancelled",
+            _ => "unknown",
+        };
+
+        progress_data.push(serde_json::json!({
+            "proxy_id": operation_id,
+            "proxy_name": proxy_name,
+            "queue_id": format!("universal-{}", operation_id),
+            "status": status,
+            "progress": {
+                "percentage": progress.progress_percentage.unwrap_or(0.0),
+                "current_step": progress.current_step,
+            },
+            "scheduled_at": progress.started_at,
+            "created_at": progress.started_at,
+            "updated_at": progress.updated_at,
+            "completed_at": progress.completed_at,
+            "trigger_source_id": null, // Not available in UniversalProgress
+            "trigger_type": "auto", // Default since we can't distinguish
+            "error_message": progress.error_message
+        }));
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Regeneration progress retrieved",
+        "regenerations": progress_data,
+        "timestamp": chrono::Utc::now()
+    })))
 }
 
 // Filters API
@@ -996,7 +1039,6 @@ pub async fn list_data_mapping_rules(
                         "name": rule.name,
                         "description": rule.description,
                         "source_type": rule.source_type,
-                        "scope": rule.scope,
                         "expression": rule.expression,
                         "sort_order": rule.sort_order,
                         "is_active": rule.is_active,
@@ -1062,10 +1104,14 @@ pub async fn get_data_mapping_rule(
     State(state): State<AppState>,
 ) -> Result<Json<crate::models::data_mapping::DataMappingRule>, StatusCode> {
     match state.data_mapping_service.get_rule_with_details(id).await {
-        Ok(rule) => Ok(Json(rule)),
+        Ok(Some(rule)) => Ok(Json(rule)),
+        Ok(None) => {
+            error!("Data mapping rule {} not found", id);
+            Err(StatusCode::NOT_FOUND)
+        }
         Err(e) => {
             error!("Failed to get data mapping rule {}: {}", id, e);
-            Err(StatusCode::NOT_FOUND)
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }
@@ -1166,7 +1212,8 @@ pub async fn validate_data_mapping_expression(
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     use crate::filter_parser::FilterParser;
-    use crate::models::data_mapping::{EpgMappingFields, StreamMappingFields};
+    use crate::models::data_mapping::DataMappingSourceType;
+    use crate::pipeline::engines::DataMappingValidator;
 
     let expression = payload
         .get("expression")
@@ -1174,7 +1221,7 @@ pub async fn validate_data_mapping_expression(
         .unwrap_or("")
         .trim();
 
-    let source_type = payload
+    let source_type_str = payload
         .get("source_type")
         .and_then(|v| v.as_str())
         .unwrap_or("stream");
@@ -1186,16 +1233,10 @@ pub async fn validate_data_mapping_expression(
         })));
     }
 
-    // Get available fields for this source type
-    let available_fields = match source_type {
-        "stream" => StreamMappingFields::available_fields()
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect(),
-        "epg" => EpgMappingFields::available_fields()
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect(),
+    // Convert source type string to enum
+    let source_type = match source_type_str {
+        "stream" => DataMappingSourceType::Stream,
+        "epg" => DataMappingSourceType::Epg,
         _ => {
             return Ok(Json(serde_json::json!({
                 "isValid": false,
@@ -1204,23 +1245,211 @@ pub async fn validate_data_mapping_expression(
         }
     };
 
-    let parser = FilterParser::new().with_fields(available_fields);
+    // Use the new validator
+    let validation_result = DataMappingValidator::validate_expression(expression, &source_type);
 
-    // Parse and validate the expression
-    match parser.parse_extended(expression) {
-        Ok(parsed) => match parser.validate_extended(&parsed) {
-            Ok(_) => Ok(Json(serde_json::json!({
-                "isValid": true
-            }))),
-            Err(e) => Ok(Json(serde_json::json!({
-                "isValid": false,
-                "error": format!("Validation error: {}", e)
-            }))),
-        },
+    // Also generate expression tree for UI (maintain existing functionality)
+    let expression_tree = if validation_result.is_valid {
+        let validator = DataMappingValidator::new(source_type.clone());
+        let available_fields = validator.get_available_fields();
+        let parser = FilterParser::new().with_fields(available_fields);
+        
+        match parser.parse_extended(expression) {
+            Ok(parsed) => match parsed {
+                crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
+                    Some(generate_expression_tree_json(&condition_tree))
+                }
+                crate::models::ExtendedExpression::ConditionWithActions { condition, .. } => {
+                    Some(generate_expression_tree_json(&condition))
+                }
+                crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
+                    // For action groups, generate tree from first group's condition
+                    if let Some(first_group) = groups.first() {
+                        Some(generate_expression_tree_json(&first_group.conditions))
+                    } else {
+                        None
+                    }
+                }
+            },
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let mut response = serde_json::json!({
+        "isValid": validation_result.is_valid
+    });
+
+    if let Some(error) = validation_result.error {
+        response["error"] = serde_json::Value::String(error);
+    }
+
+    if let Some(tree) = expression_tree {
+        response["expression_tree"] = tree;
+    }
+
+    if !validation_result.field_errors.is_empty() {
+        response["field_errors"] = serde_json::Value::Array(
+            validation_result.field_errors
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect()
+        );
+    }
+
+    Ok(Json(response))
+}
+
+/// Generalized validation endpoint for any pipeline stage
+#[utoipa::path(
+    post,
+    path = "/pipeline/validate",
+    tag = "pipeline",
+    summary = "Validate expression for any pipeline stage",
+    description = "Validate expressions for data mapping, filtering, numbering, or generation stages",
+    responses(
+        (status = 200, description = "Validation result"),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn validate_pipeline_expression(
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use crate::models::data_mapping::DataMappingSourceType;
+    use crate::pipeline::{ApiValidationService, PipelineValidationService, PipelineStageType};
+
+    let expression = payload
+        .get("expression")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    let stage_name = payload
+        .get("stage")
+        .and_then(|v| v.as_str())
+        .unwrap_or("data_mapping");
+
+    let source_type = payload
+        .get("source_type")
+        .and_then(|v| v.as_str());
+
+    if expression.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "isValid": false,
+            "error": "Expression cannot be empty"
+        })));
+    }
+
+    // Use the API validation service for string-based stage identification
+    match ApiValidationService::validate_by_stage_name(expression, stage_name, source_type) {
+        Ok(validation_result) => {
+            let mut response = serde_json::json!({
+                "isValid": validation_result.is_valid,
+                "stage": stage_name
+            });
+
+            if let Some(error) = validation_result.error {
+                response["error"] = serde_json::Value::String(error);
+            }
+
+            if !validation_result.field_errors.is_empty() {
+                response["field_errors"] = serde_json::Value::Array(
+                    validation_result.field_errors
+                        .into_iter()
+                        .map(serde_json::Value::String)
+                        .collect()
+                );
+            }
+
+            // Add expression tree for valid expressions (UI feature)
+            if validation_result.is_valid && stage_name == "data_mapping" {
+                if let Some(source_type_str) = source_type {
+                    let source_type_enum = match source_type_str {
+                        "stream" => Some(DataMappingSourceType::Stream),
+                        "epg" => Some(DataMappingSourceType::Epg),
+                        _ => None,
+                    };
+
+                    if let Some(st) = source_type_enum {
+                        let stage_type = PipelineStageType::DataMapping;
+                        let fields = PipelineValidationService::get_available_fields_for_stage(stage_type, Some(st));
+                        
+                        let parser = crate::filter_parser::FilterParser::new().with_fields(fields);
+                        if let Ok(parsed) = parser.parse_extended(expression) {
+                            match parsed {
+                                crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
+                                    response["expression_tree"] = generate_expression_tree_json(&condition_tree);
+                                }
+                                crate::models::ExtendedExpression::ConditionWithActions { condition, .. } => {
+                                    response["expression_tree"] = generate_expression_tree_json(&condition);
+                                }
+                                crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
+                                    // For action groups, generate tree from first group's condition
+                                    if let Some(first_group) = groups.first() {
+                                        response["expression_tree"] = generate_expression_tree_json(&first_group.conditions);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok(Json(response))
+        }
         Err(e) => Ok(Json(serde_json::json!({
             "isValid": false,
-            "error": format!("Syntax error: {}", e)
-        }))),
+            "error": e
+        })))
+    }
+}
+
+/// Get available fields for any pipeline stage
+#[utoipa::path(
+    get,
+    path = "/pipeline/fields/{stage}",
+    tag = "pipeline", 
+    summary = "Get available fields for a pipeline stage",
+    description = "Get available fields for data mapping, filtering, numbering, or generation stages",
+    responses(
+        (status = 200, description = "List of available fields"),
+        (status = 400, description = "Invalid stage"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_pipeline_stage_fields(
+    Path(stage_name): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use crate::pipeline::ApiValidationService;
+
+    let source_type = params.get("source_type").map(|s| s.as_str());
+
+    match ApiValidationService::get_fields_by_stage_name(&stage_name, source_type) {
+        Ok(fields) => {
+            let field_list = fields
+                .into_iter()
+                .map(|field| {
+                    serde_json::json!({
+                        "name": field,
+                        "description": get_field_description(&field),
+                        "type": "string"
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "stage": stage_name,
+                "fields": field_list
+            })))
+        }
+        Err(e) => Ok(Json(serde_json::json!({
+            "success": false,
+            "error": e
+        })))
     }
 }
 
@@ -1236,15 +1465,19 @@ pub async fn validate_data_mapping_expression(
     )
 )]
 pub async fn get_data_mapping_stream_fields() -> Result<Json<serde_json::Value>, StatusCode> {
-    use crate::models::data_mapping::StreamMappingFields;
+    use crate::models::data_mapping::DataMappingSourceType;
+    use crate::pipeline::engines::DataMappingValidator;
 
-    let fields = StreamMappingFields::available_fields()
+    let field_infos = DataMappingValidator::get_available_fields_for_source(&DataMappingSourceType::Stream);
+    
+    let fields = field_infos
         .into_iter()
-        .map(|field| {
+        .map(|field_info| {
             serde_json::json!({
-                "name": field,
-                "description": get_field_description(&field),
-                "type": "string"
+                "name": field_info.field_name,
+                "description": get_field_description(&field_info.field_name),
+                "type": "string",
+                "display_name": field_info.display_name
             })
         })
         .collect::<Vec<_>>();
@@ -1267,15 +1500,19 @@ pub async fn get_data_mapping_stream_fields() -> Result<Json<serde_json::Value>,
     )
 )]
 pub async fn get_data_mapping_epg_fields() -> Result<Json<serde_json::Value>, StatusCode> {
-    use crate::models::data_mapping::EpgMappingFields;
+    use crate::models::data_mapping::DataMappingSourceType;
+    use crate::pipeline::engines::DataMappingValidator;
 
-    let fields = EpgMappingFields::available_fields()
+    let field_infos = DataMappingValidator::get_available_fields_for_source(&DataMappingSourceType::Epg);
+    
+    let fields = field_infos
         .into_iter()
-        .map(|field| {
+        .map(|field_info| {
             serde_json::json!({
-                "name": field,
-                "description": get_field_description(&field),
-                "type": "string"
+                "name": field_info.field_name,
+                "description": get_field_description(&field_info.field_name),
+                "type": "string",
+                "display_name": field_info.display_name
             })
         })
         .collect::<Vec<_>>();
@@ -1318,7 +1555,7 @@ pub async fn test_data_mapping_rule(
     State(state): State<AppState>,
     Json(payload): Json<crate::models::data_mapping::DataMappingTestRequest>,
 ) -> Result<Json<crate::models::data_mapping::DataMappingTestResult>, StatusCode> {
-    use crate::data_mapping::DataMappingEngine;
+    use crate::pipeline::engines::DataMappingTestService;
 
     // Get channels from the source
     let channels = match state
@@ -1338,42 +1575,50 @@ pub async fn test_data_mapping_rule(
 
     let total_channels_count = channels.len();
 
-    // Get logo assets (simplified for now - could be enhanced later)
-    let logo_assets = HashMap::new();
-
-    // Use the engine to test the mapping rule directly
-    let mut engine = DataMappingEngine::new();
+    // Use the new engine-based testing service
     let start_time = std::time::Instant::now();
-    match engine.test_mapping_rule(
-        channels,
-        logo_assets,
-        &state.config.web.base_url,
-        &payload.expression,
-    ) {
-        Ok(mapped_channels) => {
+    match DataMappingTestService::test_single_rule(payload.expression.clone(), channels) {
+        Ok(engine_result) => {
             let _execution_time = start_time.elapsed().as_micros();
 
+            // Convert engine result to the expected API format
             let test_channels: Vec<crate::models::data_mapping::DataMappingTestChannel> =
-                mapped_channels
+                engine_result.results
                     .into_iter()
-                    .filter(|mc| !mc.applied_rules.is_empty()) // Only show channels that had rules applied
-                    .map(|mc| {
-                        let (original_values, mapped_values) = mapped_channel_to_test_format(&mc);
+                    .filter(|r| r.was_modified) // Only show channels that were modified
+                    .map(|r| {
+                        // Create original and mapped values in the expected format
+                        let original_values = serde_json::json!({
+                            "channel_name": r.initial_channel.channel_name,
+                            "tvg_id": r.initial_channel.tvg_id,
+                            "tvg_name": r.initial_channel.tvg_name,
+                            "tvg_logo": r.initial_channel.tvg_logo,
+                            "tvg_shift": r.initial_channel.tvg_shift,
+                            "group_title": r.initial_channel.group_title,
+                        });
+
+                        let mapped_values = serde_json::json!({
+                            "channel_name": r.final_channel.channel_name,
+                            "tvg_id": r.final_channel.tvg_id,
+                            "tvg_name": r.final_channel.tvg_name,
+                            "tvg_logo": r.final_channel.tvg_logo,
+                            "tvg_shift": r.final_channel.tvg_shift,
+                            "group_title": r.final_channel.group_title,
+                        });
 
                         crate::models::data_mapping::DataMappingTestChannel {
-                            channel_name: mc.original.channel_name,
-                            group_title: mc.original.group_title,
-                            original_values: serde_json::to_value(original_values)
-                                .unwrap_or_default(),
-                            mapped_values: serde_json::to_value(mapped_values).unwrap_or_default(),
-                            applied_actions: mc.applied_rules,
+                            channel_name: r.channel_name,
+                            group_title: r.final_channel.group_title,
+                            original_values,
+                            mapped_values,
+                            applied_actions: r.rule_applications.iter().map(|ra| ra.rule_name.clone()).collect(),
                         }
                     })
                     .collect();
 
             let result = crate::models::data_mapping::DataMappingTestResult {
                 is_valid: true,
-                error: None, // No error for successful tests
+                error: None,
                 matching_channels: test_channels.clone(),
                 total_channels: total_channels_count as i32,
                 matched_count: test_channels.len() as i32,
@@ -1465,10 +1710,10 @@ pub async fn apply_stream_source_data_mapping(
         rule_performance.len()
     );
     info!("Available performance rule IDs:");
-    for (rule_id, (total_time, avg_time, processed)) in &rule_performance {
+    for (rule_id, &total_time) in rule_performance.iter() {
         info!(
-            "  Performance Rule ID '{}': total={}μs, avg={}μs, channels={}",
-            rule_id, total_time, avg_time, processed
+            "  Performance Rule ID '{}': total={}μs",
+            rule_id, total_time
         );
     }
 
@@ -1497,8 +1742,9 @@ pub async fn apply_stream_source_data_mapping(
 
                 // Get performance stats for this rule
                 let (total_execution_time, avg_execution_time) = rule_performance
-                    .get(&rule.id)
-                    .map(|(total_micros, avg_micros, _)| (*total_micros, *avg_micros))
+                    .rule_performance
+                    .get(&rule.id.to_string())
+                    .map(|&time_ms| (time_ms, time_ms)) // Convert ms to (total, avg)
                     .unwrap_or((0, 0));
 
                 // Debug logging for performance data
@@ -1510,12 +1756,12 @@ pub async fn apply_stream_source_data_mapping(
                     "Rule '{}' (ID: {}): performance stats lookup - found: {}, total_time: {}μs, avg_time: {}μs",
                     rule.name,
                     rule.id,
-                    rule_performance.contains_key(&rule.id),
+                    rule_performance.rule_performance.contains_key(&rule.id.to_string()),
                     total_execution_time,
                     avg_execution_time
                 );
-                if !rule_performance.contains_key(&rule.id) {
-                    info!("Available IDs in performance data: {:?}", rule_performance.keys().collect::<Vec<_>>());
+                if !rule_performance.rule_performance.contains_key(&rule.id.to_string()) {
+                    info!("Available IDs in performance data: {:?}", rule_performance.rule_performance.keys().collect::<Vec<_>>());
                 }
 
                 // Parse expression to get counts
@@ -1804,18 +2050,13 @@ async fn apply_data_mapping_rules_impl(
                     };
 
                     // Merge performance data from all sources
-                    for (rule_id, (total_time, avg_time, processed_count)) in rule_performance {
+                    for (rule_id, &time_ms) in &rule_performance.rule_performance {
                         let entry = combined_performance_data
-                            .entry(rule_id)
+                            .entry(rule_id.clone())
                             .or_insert((0u128, 0u128, 0usize));
-                        entry.0 += total_time; // Sum total execution times
-                        entry.1 = if entry.2 + processed_count > 0 {
-                            (entry.1 * entry.2 as u128 + avg_time * processed_count as u128)
-                                / (entry.2 + processed_count) as u128
-                        } else {
-                            0
-                        }; // Recalculate weighted average
-                        entry.2 += processed_count; // Sum processed counts
+                        entry.0 += time_ms; // Sum total execution times
+                        entry.1 = time_ms; // Use the time as average (simplified)
+                        entry.2 += 1; // Count number of rule executions
                     }
 
                     // Filter to show only modified channels
@@ -1858,7 +2099,7 @@ async fn apply_data_mapping_rules_impl(
                         // Get actual performance data for this rule
                         let (total_execution_time, avg_execution_time, _processed_count) =
                             combined_performance_data
-                                .get(&rule.id)
+                                .get(&rule.id.to_string())
                                 .map(|(total, avg, count)| (*total, *avg, *count))
                                 .unwrap_or((0, 0, 0));
 
@@ -2634,18 +2875,17 @@ pub async fn refresh_stream_source(
     match state.database.get_stream_source(id).await {
         Ok(Some(source)) => {
             tokio::spawn({
-                let database = state.database.clone();
-                let state_manager = state.state_manager.clone();
+                let stream_service = state.stream_source_service.clone();
+                let progress_service = state.progress_service.clone(); // Use shared instance!
                 async move {
-                    use crate::ingestor::IngestorService;
-                    use crate::ingestor::ProcessingTrigger;
-
-                    let ingestor = IngestorService::new(state_manager);
-                    let _ = ingestor
-                        .refresh_stream_source(database, &source, ProcessingTrigger::Manual)
-                        .await;
+                    if let Err(e) = stream_service.refresh_with_progress(&source, &progress_service).await {
+                        error!("Failed to refresh stream source {}: {}", source.id, e);
+                    }
                 }
             });
+
+            // Emit scheduler event for manual refresh trigger
+            state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
 
             Ok(Json(serde_json::json!({
                 "success": true,
@@ -2769,19 +3009,17 @@ pub async fn refresh_epg_source_unified(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     match state.database.get_epg_source(id).await {
         Ok(Some(source)) => {
-            tokio::spawn({
-                let database = state.database.clone();
-                let state_manager = state.state_manager.clone();
-                async move {
-                    use crate::ingestor::IngestorService;
-                    use crate::ingestor::ProcessingTrigger;
-
-                    let ingestor = IngestorService::new(state_manager);
-                    let _ = ingestor
-                        .ingest_epg_source(database, &source, ProcessingTrigger::Manual)
-                        .await;
+            // Use EPG source service to trigger refresh with new source handlers
+            let epg_service = state.epg_source_service.clone();
+            let progress_service = state.progress_service.clone(); // Use shared instance!
+            tokio::spawn(async move {
+                if let Err(e) = epg_service.refresh_with_progress(&source, &progress_service).await {
+                    error!("Failed to refresh EPG source {}: {}", source.id, e);
                 }
             });
+
+            // Emit scheduler event for manual refresh trigger
+            state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
 
             Ok(Json(serde_json::json!({
                 "success": true,
@@ -2831,8 +3069,34 @@ pub async fn get_epg_source_channels_unified(
     let _limit = params.limit.unwrap_or(50);
     let _filter = params.filter;
 
-    match state.database.get_epg_source_channels(id).await {
-        Ok(result) => Ok(Json(json!(result))),
+    match state.database.get_epg_source_channels_with_display_names(id).await {
+        Ok(channels_with_names) => {
+            // Convert to enhanced response format with display names
+            let enhanced_channels: Vec<_> = channels_with_names.into_iter().map(|ch| {
+                serde_json::json!({
+                    "id": ch.channel.id,
+                    "source_id": ch.channel.source_id,
+                    "channel_id": ch.channel.channel_id,
+                    "channel_name": ch.channel.channel_name,
+                    "channel_logo": ch.channel.channel_logo,
+                    "channel_group": ch.channel.channel_group,
+                    "language": ch.channel.language,
+                    "created_at": ch.channel.created_at,
+                    "updated_at": ch.channel.updated_at,
+                    "display_names": ch.display_names.into_iter().map(|dn| {
+                        serde_json::json!({
+                            "id": dn.id,
+                            "display_name": dn.display_name,
+                            "language": dn.language,
+                            "is_primary": dn.is_primary,
+                            "created_at": dn.created_at,
+                            "updated_at": dn.updated_at
+                        })
+                    }).collect::<Vec<_>>()
+                })
+            }).collect();
+            Ok(Json(json!(enhanced_channels)))
+        },
         Err(e) => {
             error!("Failed to get channels for EPG source {}: {}", id, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -3525,159 +3789,74 @@ pub async fn preview_proxies(
 pub async fn regenerate_all_proxies(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    info!("Starting regeneration of all active proxies");
-
-    // Get all active proxies
+    info!("Queuing all active proxies for background regeneration");
+    
+    // CRITICAL FIX: Use a special UUID for batch operations to prevent concurrent batch requests
+    let batch_operation_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+    
+    // Check for duplicate batch requests
+    {
+        let mut active_requests = state.active_regeneration_requests.lock().await;
+        if active_requests.contains(&batch_operation_id) {
+            tracing::warn!("Duplicate batch regeneration API request - rejecting");
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": "A batch regeneration request is already being processed",
+                "status": "duplicate_request"
+            })));
+        }
+        // Reserve the batch operation ID to prevent other requests
+        active_requests.insert(batch_operation_id);
+    }
+    
+    // Create a cleanup guard for the batch operation
+    let _cleanup_guard = RequestCleanupGuard {
+        proxy_id: batch_operation_id,
+        active_requests: state.active_regeneration_requests.clone(),
+    };
+    
+    // Get all active proxies count for response
     let active_proxies = match state.database.get_all_active_proxies().await {
         Ok(proxies) => proxies,
         Err(e) => {
             error!("Failed to get active proxies: {}", e);
+            // _cleanup_guard will automatically clean up when function returns
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
-
+    
     if active_proxies.is_empty() {
+        // cleanup_guard will automatically clean up when function returns
         return Ok(Json(json!({
             "success": true,
             "message": "No active proxies found to regenerate",
             "count": 0
         })));
     }
-
-    info!(
-        "Found {} active proxies to regenerate",
-        active_proxies.len()
-    );
-
-    // Create repositories for dependency injection
-    use crate::repositories::{
-        FilterRepository, StreamProxyRepository, StreamSourceRepository,
-    };
-    let proxy_repo = StreamProxyRepository::new(state.database.pool());
-    let stream_source_repo = StreamSourceRepository::new(state.database.pool());
-    let filter_repo = FilterRepository::new(state.database.pool());
-
-    let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
-        proxy_repo,
-        stream_source_repo,
-        filter_repo,
-        state.database.clone(),
-    );
-
-    let mut successful_count = 0;
-    let mut failed_count = 0;
-    let mut errors = Vec::new();
-
-    // Regenerate each proxy using ProxyService
-    for proxy in active_proxies.iter() {
-        info!("Regenerating proxy '{}'", proxy.name);
-
-        // Resolve proxy configuration
-        match config_resolver.resolve_config(proxy.id).await {
-            Ok(resolved_config) => {
-                // Validate configuration
-                if let Err(e) = config_resolver.validate_config(&resolved_config) {
-                    error!("Invalid proxy configuration for {}: {}", proxy.id, e);
-                    failed_count += 1;
-                    errors.push(format!("Proxy '{}': Invalid configuration: {}", proxy.name, e));
-                    continue;
-                }
-
-                // Create production output destination
-                let output = crate::models::GenerationOutput::InMemory;
-
-                // Generate using dependency injection
-                match state.proxy_service
-                    .generate_proxy_with_config(
-                        resolved_config,
-                        output,
-                        &state.database,
-                        &state.data_mapping_service,
-                        &state.logo_asset_service,
-                        &state.config.web.base_url,
-                        state.config.data_mapping_engine.clone(),
-                        &state.config,
-                    )
-                    .await
-                {
-                    Ok(generation) => {
-                        // Save the M3U file using the proxy service
-                        match state.proxy_service
-                            .save_m3u_file_with_manager(
-                                &proxy.id.to_string(),
-                                &generation.m3u_content,
-                                None,
-                            )
-                            .await
-                        {
-                            Ok(_) => {
-                                // Update the last_generated_at timestamp for the proxy
-                                if let Err(e) = state.database.update_proxy_last_generated(proxy.id).await {
-                                    error!("Failed to update last_generated_at for proxy {}: {}", proxy.id, e);
-                                }
-                                
-                                info!(
-                                    "Successfully regenerated proxy '{}' with {} channels using ProxyService",
-                                    proxy.name, generation.channel_count
-                                );
-                                successful_count += 1;
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to save regenerated M3U for proxy '{}': {}",
-                                    proxy.name, e
-                                );
-                                failed_count += 1;
-                                errors.push(format!("Proxy '{}': {}", proxy.name, e));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to regenerate proxy '{}' using ProxyService: {}",
-                            proxy.name, e
-                        );
-                        failed_count += 1;
-                        errors.push(format!("Proxy '{}': {}", proxy.name, e));
-                    }
-                }
-            }
-            Err(e) => {
-                error!(
-                    "Failed to resolve proxy configuration for '{}': {}",
-                    proxy.name, e
-                );
-                failed_count += 1;
-                errors.push(format!("Proxy '{}': Config resolution failed: {}", proxy.name, e));
-            }
+    
+    // Queue all proxies for regeneration using the service
+    match state.proxy_regeneration_service.queue_manual_regeneration_all().await {
+        Ok(_) => {
+            info!("All {} active proxies queued for background regeneration", active_proxies.len());
+            
+            // Cleanup guard will automatically clean up when function returns
+            // The service-level deduplication will handle actual regeneration conflicts
+            
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": format!("All {} active proxies queued for regeneration", active_proxies.len()),
+                "queue_id": "universal-batch-regeneration", // Use consistent format for batch operations
+                "count": active_proxies.len(),
+                "total": active_proxies.len(),
+                "status": "queued",
+                "queued_at": chrono::Utc::now()
+            })))
+        }
+        Err(e) => {
+            error!("Failed to queue all proxies for regeneration: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
-
-    let total_count = active_proxies.len();
-    let message = if failed_count == 0 {
-        format!(
-            "Successfully regenerated all {} active proxies",
-            successful_count
-        )
-    } else if successful_count == 0 {
-        format!("Failed to regenerate all {} proxies", failed_count)
-    } else {
-        format!(
-            "Regenerated {}/{} proxies ({} succeeded, {} failed)",
-            successful_count, total_count, successful_count, failed_count
-        )
-    };
-
-    info!("{}", message);
-
-    Ok(Json(json!({
-        "success": failed_count == 0,
-        "message": message,
-        "count": successful_count,
-        "total": total_count,
-        "failed": failed_count,
-        "errors": if errors.is_empty() { serde_json::Value::Null } else { json!(errors) }
-    })))
 }
 
 // Relay Configuration API Endpoints - implemented in web/api/relay.rs
@@ -3852,5 +4031,25 @@ pub async fn get_popular_channels(
     State(_state): State<AppState>,
 ) -> Result<Json<Vec<PopularChannel>>, StatusCode> {
     Ok(Json(Vec::new()))
+}
+
+/// CONCURRENCY FIX: Cleanup guard to ensure API request deduplication is properly cleaned up
+struct RequestCleanupGuard {
+    proxy_id: Uuid,
+    active_requests: Arc<Mutex<HashSet<Uuid>>>,
+}
+
+impl Drop for RequestCleanupGuard {
+    fn drop(&mut self) {
+        let proxy_id = self.proxy_id;
+        let active_requests = self.active_requests.clone();
+        
+        // Spawn a cleanup task since Drop can't be async
+        tokio::spawn(async move {
+            let mut requests = active_requests.lock().await;
+            requests.remove(&proxy_id);
+            tracing::debug!("Cleaned up API regeneration request tracking for proxy {}", proxy_id);
+        });
+    }
 }
 

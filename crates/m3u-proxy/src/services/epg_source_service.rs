@@ -4,9 +4,8 @@
 //! including auto-linking with stream sources for Xtream providers.
 
 use anyhow::Result;
-use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::database::Database;
 use crate::models::{EpgSource, EpgSourceCreateRequest, EpgSourceUpdateRequest};
@@ -36,20 +35,34 @@ impl EpgSourceService {
         // Create the EPG source (this includes auto-stream creation logic)
         let source = self.database.create_epg_source(&request).await?;
 
-        // Auto-link with existing stream sources if this is an Xtream source
-        if let Err(e) = self.database.auto_link_epg_source(&source).await {
-            error!("Failed to auto-link EPG source '{}': {}", source.name, e);
-        }
+        // Auto-populate credentials from linked stream sources if this is an Xtream source
+        let final_source = if source.source_type == crate::models::EpgSourceType::Xtream {
+            match self.database.auto_populate_epg_credentials(source.id).await {
+                Ok(Some(updated_source)) => {
+                    if updated_source.username.is_some() && source.username.is_none() {
+                        info!("Auto-populated credentials for EPG source '{}'", source.name);
+                    }
+                    updated_source
+                }
+                Ok(None) => source,
+                Err(e) => {
+                    error!("Failed to auto-populate EPG source '{}': {}", source.name, e);
+                    source
+                }
+            }
+        } else {
+            source
+        };
 
         // Invalidate cache since we added a new source
         let _ = self.cache_invalidation_tx.send(());
 
         info!(
             "Successfully created EPG source: {} ({})",
-            source.name, source.id
+            final_source.name, final_source.id
         );
 
-        Ok(source)
+        Ok(final_source)
     }
 
     /// Update an EPG source with validation
@@ -59,6 +72,21 @@ impl EpgSourceService {
         request: EpgSourceUpdateRequest,
     ) -> Result<EpgSource> {
         info!("Updating EPG source: {}", id);
+
+        // Update linked sources first if requested
+        if request.update_linked {
+            match self.database.update_linked_sources(id, "epg", &request, request.update_linked).await {
+                Ok(count) if count > 0 => {
+                    info!("Updated {} linked sources for EPG source {}", count, id);
+                }
+                Ok(_) => {
+                    // No linked sources to update
+                }
+                Err(e) => {
+                    error!("Failed to update linked sources for EPG source '{}': {}", id, e);
+                }
+            }
+        }
 
         // Update the EPG source
         let updated = self.database.update_epg_source(id, &request).await?;
@@ -72,14 +100,6 @@ impl EpgSourceService {
             .get_epg_source(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("EPG source not found after update"))?;
-
-        // If credentials or URL changed and it's an Xtream source, re-check auto-linking
-        if let Err(e) = self.database.auto_link_epg_source(&source).await {
-            error!(
-                "Failed to auto-link updated EPG source '{}': {}",
-                source.name, e
-            );
-        }
 
         // Invalidate cache
         let _ = self.cache_invalidation_tx.send(());
@@ -137,7 +157,15 @@ impl EpgSourceService {
             .ok_or_else(|| anyhow::anyhow!("EPG source not found"))?;
 
         let channel_count = self.database.get_epg_source_channel_count(id).await? as u64;
-        let linked_stream = self.database.find_linked_stream_by_epg_id(id).await?;
+        
+        // Find linked stream sources using URL-based matching
+        let linked_stream = if source.source_type == crate::models::EpgSourceType::Xtream {
+            let linked_sources = self.database.find_linked_stream_sources(&source).await
+                .unwrap_or_default();
+            linked_sources.into_iter().next() // Return first linked stream source if any
+        } else {
+            None
+        };
 
         Ok(EpgSourceWithDetails {
             source: source.clone(),
@@ -316,10 +344,160 @@ pub struct TestConnectionResult {
     pub has_streams: bool,
 }
 
+impl EpgSourceService {
+    /// Refresh an EPG source using new source handlers with progress tracking
+    pub async fn refresh_with_progress(&self, 
+        source: &crate::models::EpgSource,
+        progress_service: &crate::services::ProgressService
+    ) -> Result<(usize, usize)> {
+        let start_time = std::time::Instant::now();
+        
+        // Execute the refresh and handle progress completion
+        let result = self.execute_refresh_internal(source, progress_service).await;
+        
+        // Complete or fail the progress operation based on result
+        match &result {
+            Ok((channels_saved, programs_saved)) => {
+                let elapsed = start_time.elapsed();
+                info!(
+                    "EPG source refresh completed for '{}' in {:.2}s: {} channels saved, {} programs saved",
+                    source.name,
+                    elapsed.as_secs_f64(),
+                    channels_saved,
+                    programs_saved
+                );
+                progress_service.complete_operation(source.id).await;
+            }
+            Err(e) => {
+                let elapsed = start_time.elapsed();
+                warn!(
+                    "EPG source refresh failed for '{}' after {:.2}s: {}",
+                    source.name,
+                    elapsed.as_secs_f64(),
+                    e
+                );
+                progress_service.fail_operation(source.id, e.to_string()).await;
+            }
+        }
+        
+        result
+    }
+    
+    /// Internal refresh implementation without progress handling
+    async fn execute_refresh_internal(&self, 
+        source: &crate::models::EpgSource,
+        progress_service: &crate::services::ProgressService
+    ) -> Result<(usize, usize)> {
+        use crate::sources::factory::SourceHandlerFactory;
+        use tracing::info;
+        
+        // Create EPG source handler
+        let handler = SourceHandlerFactory::create_epg_handler(&source.source_type)
+            .map_err(|e| anyhow::anyhow!("Failed to create EPG source handler: {}", e))?;
+        
+        // Create universal progress callback using provided progress service
+        let progress_callback = progress_service
+            .start_operation(
+                source.id, 
+                crate::services::progress_service::OperationType::EpgIngestion,
+                format!("EPG Ingestion: {}", source.name)
+            )
+            .await;
+            
+        // Use new EPG source handler with universal progress to ingest programs only
+        let programs = handler
+            .ingest_epg_programs_with_universal_progress(
+                source, 
+                Some(&Box::new(progress_callback))
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("EPG source handler failed: {}", e))?;
+        
+        info!(
+            "EPG handler ingested {} programs from source '{}'",
+            programs.len(),
+            source.name
+        );
+        
+        // Save programs to database (programs-only mode)
+        info!("Saving {} EPG programs to database for '{}'", programs.len(), source.name);
+        let programs_saved = match self.save_epg_programs(source.id, programs).await {
+            Ok(count) => count,
+            Err(e) => {
+                warn!("Failed to save EPG programs for '{}': {}", source.name, e);
+                0
+            }
+        };
+        
+        info!("Completed database save for EPG source '{}': {} programs saved", 
+              source.name, programs_saved);
+        
+        // Update last ingested timestamp
+        info!("Updating last_ingested_at timestamp for EPG source '{}'", source.name);
+        if let Err(e) = self.database.update_epg_source_last_ingested(source.id).await {
+            tracing::error!("Failed to update last_ingested_at for EPG source '{}': {}", source.name, e);
+        } else {
+            info!("Updated timestamp for EPG source '{}'", source.name);
+        }
+        
+        Ok((0, programs_saved)) // programs-only mode: no channels saved
+    }
+
+
+    /// Save EPG programs to database
+    async fn save_epg_programs(
+        &self,
+        source_id: uuid::Uuid,
+        programs: Vec<crate::models::EpgProgram>,
+    ) -> Result<usize> {
+        use tracing::debug;
+        
+        debug!("Saving {} EPG programs to database", programs.len());
+        
+        // Start a transaction for atomicity
+        let mut tx = self.database.pool().begin().await?;
+        
+        // Delete existing programs for this source
+        sqlx::query("DELETE FROM epg_programs WHERE source_id = ?")
+            .bind(source_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        
+        let mut programs_saved = 0;
+        
+        for program in programs {
+            sqlx::query(
+                "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, language, created_at, updated_at) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(program.id.to_string())
+            .bind(program.source_id.to_string())
+            .bind(&program.channel_id)
+            .bind(&program.channel_name)
+            .bind(&program.program_title)
+            .bind(&program.program_description)
+            .bind(&program.program_category)
+            .bind(program.start_time)
+            .bind(program.end_time)
+            .bind(&program.language)
+            .bind(program.created_at)
+            .bind(program.updated_at)
+            .execute(&mut *tx)
+            .await?;
+            
+            programs_saved += 1;
+        }
+        
+        tx.commit().await?;
+        debug!("Successfully saved {} EPG programs", programs_saved);
+        
+        Ok(programs_saved)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::EpgSourceType;
 
     #[tokio::test]
     async fn test_create_with_auto_stream() {

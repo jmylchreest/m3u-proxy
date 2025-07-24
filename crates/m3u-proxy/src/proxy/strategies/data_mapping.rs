@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use tracing::{debug, info};
 
-use crate::data_mapping::service::DataMappingService;
+use crate::data_mapping::DataMappingService;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::Channel;
 use crate::proxy::stage_strategy::{MemoryPressureLevel, StageContext, StageStrategy};

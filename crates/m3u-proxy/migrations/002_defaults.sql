@@ -212,7 +212,7 @@ INSERT INTO data_mapping_rules (id, name, description, source_type, scope, expre
  'Automatically detects timeshift channels (+1, +24, etc.) and sets tvg-shift field using regex capture groups.',
  'stream',
  'individual',
- 'channel_name matches ".*[ ](?:\\+([0-9]{1,2})|(-[0-9]{1,2}))([hH]?)(?:$|[ ]).*" AND channel_name not_matches ".*(?:start:|stop:|24[-/]7).*" AND tvg_id matches "^.+$" SET tvg_shift = "$1$2"',
+ 'channel_name matches ".*[ ](?:\+([0-9]{1,2})|(-[0-9]{1,2}))([hH]?)(?:$|[ ]).*" AND channel_name not_matches ".*(?:start:|stop:|24[-/]7).*" AND tvg_id matches "^.+$" SET tvg_shift = "$1$2"',
  1,
  true);
 

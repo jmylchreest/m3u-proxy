@@ -11,6 +11,8 @@ use uuid::Uuid;
 use super::Database;
 use crate::models::*;
 use crate::utils::url::UrlUtils;
+use crate::utils::uuid_parser::parse_uuid_flexible;
+use crate::utils::datetime::DateTimeParser;
 
 // Helper function to check if an Xtream server provides EPG data
 async fn check_xtream_epg_availability(base_url: &str, username: &str, password: &str) -> bool {
@@ -62,25 +64,13 @@ async fn check_xtream_epg_availability(base_url: &str, username: &str, password:
     }
 }
 
-// Helper function to parse datetime from either RFC3339 or SQLite format
-fn parse_datetime(s: &str) -> Result<DateTime<Utc>> {
-    // Try RFC3339 first
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Utc));
-    }
-    // Try SQLite datetime format (YYYY-MM-DD HH:MM:SS)
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return Ok(dt.and_utc());
-    }
-    Err(anyhow::anyhow!("Failed to parse datetime: {}", s))
-}
 
 impl Database {
     pub async fn list_stream_sources_with_stats(&self) -> Result<Vec<StreamSourceWithStats>> {
         // Get sources first (simple query)
         let source_rows = sqlx::query(
             "SELECT id, name, source_type, url, max_concurrent_streams, update_cron,
-             username, password, field_map, created_at, updated_at, last_ingested_at, is_active
+             username, password, field_map, ignore_channel_numbers, created_at, updated_at, last_ingested_at, is_active
              FROM stream_sources ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -101,7 +91,7 @@ impl Database {
             let source_id_str = row.get::<String, _>("id");
 
             let source = StreamSource {
-                id: Uuid::parse_str(&source_id_str)?,
+                id: parse_uuid_flexible(&source_id_str)?,
                 name: row.get("name"),
                 source_type,
                 url: row.get("url"),
@@ -110,9 +100,10 @@ impl Database {
                 username: row.get("username"),
                 password: row.get("password"),
                 field_map: row.get("field_map"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
-                last_ingested_at: last_ingested_at.map(|s| parse_datetime(&s)).transpose()?,
+                ignore_channel_numbers: row.get("ignore_channel_numbers"),
+                created_at: DateTimeParser::parse_flexible(&created_at)?,
+                updated_at: DateTimeParser::parse_flexible(&updated_at)?,
+                last_ingested_at: last_ingested_at.map(|s| DateTimeParser::parse_flexible(&s)).transpose()?,
                 is_active: row.get("is_active"),
             };
 
@@ -147,7 +138,7 @@ impl Database {
     pub async fn list_stream_sources(&self) -> Result<Vec<StreamSource>> {
         let rows = sqlx::query(
             "SELECT id, name, source_type, url, max_concurrent_streams, update_cron,
-             username, password, field_map, created_at, updated_at, last_ingested_at, is_active
+             username, password, field_map, ignore_channel_numbers, created_at, updated_at, last_ingested_at, is_active
              FROM stream_sources ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -167,7 +158,7 @@ impl Database {
             let last_ingested_at = row.get::<Option<String>, _>("last_ingested_at");
 
             sources.push(StreamSource {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
                 name: row.get("name"),
                 source_type,
                 url: row.get("url"),
@@ -176,9 +167,10 @@ impl Database {
                 username: row.get("username"),
                 password: row.get("password"),
                 field_map: row.get("field_map"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
-                last_ingested_at: last_ingested_at.map(|s| parse_datetime(&s)).transpose()?,
+                ignore_channel_numbers: row.get("ignore_channel_numbers"),
+                created_at: DateTimeParser::parse_flexible(&created_at)?,
+                updated_at: DateTimeParser::parse_flexible(&updated_at)?,
+                last_ingested_at: last_ingested_at.map(|s| DateTimeParser::parse_flexible(&s)).transpose()?,
                 is_active: row.get("is_active"),
             });
         }
@@ -189,7 +181,7 @@ impl Database {
     pub async fn get_stream_source(&self, id: Uuid) -> Result<Option<StreamSource>> {
         let row = sqlx::query(
             "SELECT id, name, source_type, url, max_concurrent_streams, update_cron,
-             username, password, field_map, created_at, updated_at, last_ingested_at, is_active
+             username, password, field_map, ignore_channel_numbers, created_at, updated_at, last_ingested_at, is_active
              FROM stream_sources WHERE id = ?",
         )
         .bind(id.to_string())
@@ -212,7 +204,7 @@ impl Database {
         let last_ingested_at = row.get::<Option<String>, _>("last_ingested_at");
 
         Ok(Some(StreamSource {
-            id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+            id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
             name: row.get("name"),
             source_type,
             url: row.get("url"),
@@ -221,9 +213,10 @@ impl Database {
             username: row.get("username"),
             password: row.get("password"),
             field_map: row.get("field_map"),
-            created_at: parse_datetime(&created_at)?,
-            updated_at: parse_datetime(&updated_at)?,
-            last_ingested_at: last_ingested_at.map(|s| parse_datetime(&s)).transpose()?,
+            ignore_channel_numbers: row.get("ignore_channel_numbers"),
+            created_at: DateTimeParser::parse_flexible(&created_at)?,
+            updated_at: DateTimeParser::parse_flexible(&updated_at)?,
+            last_ingested_at: last_ingested_at.map(|s| DateTimeParser::parse_flexible(&s)).transpose()?,
             is_active: row.get("is_active"),
         }))
     }
@@ -248,8 +241,8 @@ impl Database {
         sqlx::query(
             "INSERT INTO stream_sources
              (id, name, source_type, url, max_concurrent_streams, update_cron,
-              username, password, field_map, created_at, updated_at, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              username, password, field_map, ignore_channel_numbers, created_at, updated_at, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&source.name)
@@ -260,6 +253,7 @@ impl Database {
         .bind(&source.username)
         .bind(&source.password)
         .bind(&source.field_map)
+        .bind(source.ignore_channel_numbers)
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .bind(true)
@@ -285,6 +279,7 @@ impl Database {
             username: source.username.clone(),
             password: source.password.clone(),
             field_map: source.field_map.clone(),
+            ignore_channel_numbers: source.ignore_channel_numbers,
             created_at: now,
             updated_at: now,
             last_ingested_at: None,
@@ -385,6 +380,9 @@ impl Database {
             }
         }
 
+        // Emit scheduler event for source creation
+        self.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::SourceCreated(stream_source.id));
+
         Ok(stream_source)
     }
 
@@ -401,26 +399,57 @@ impl Database {
 
         info!("Updating stream source '{}' ({})", source.name, id);
 
-        let result = sqlx::query(
-            "UPDATE stream_sources
-             SET name = ?, source_type = ?, url = ?, max_concurrent_streams = ?,
-                 update_cron = ?, username = ?, password = ?, field_map = ?,
-                 updated_at = ?, is_active = ?
-             WHERE id = ?",
-        )
-        .bind(&source.name)
-        .bind(source_type_str)
-        .bind(&source.url)
-        .bind(source.max_concurrent_streams)
-        .bind(&source.update_cron)
-        .bind(&source.username)
-        .bind(&source.password)
-        .bind(&source.field_map)
-        .bind(now.to_rfc3339())
-        .bind(source.is_active)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await
+        // Conditionally update password - only if provided and non-empty
+        let should_update_password = source.password.as_ref().map_or(false, |p| !p.is_empty());
+        
+        let result = if should_update_password {
+            // Password provided and non-empty - update it
+            info!("Updating password for stream source '{}' ({})", source.name, id);
+            sqlx::query(
+                "UPDATE stream_sources
+                 SET name = ?, source_type = ?, url = ?, max_concurrent_streams = ?,
+                     update_cron = ?, username = ?, password = ?, field_map = ?,
+                     ignore_channel_numbers = ?, updated_at = ?, is_active = ?
+                 WHERE id = ?",
+            )
+            .bind(&source.name)
+            .bind(source_type_str)
+            .bind(&source.url)
+            .bind(source.max_concurrent_streams)
+            .bind(&source.update_cron)
+            .bind(&source.username)
+            .bind(source.password.as_ref().unwrap())
+            .bind(&source.field_map)
+            .bind(source.ignore_channel_numbers)
+            .bind(now.to_rfc3339())
+            .bind(source.is_active)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+        } else {
+            // Password not provided or empty - preserve existing password
+            debug!("Preserving existing password for stream source '{}' ({})", source.name, id);
+            sqlx::query(
+                "UPDATE stream_sources
+                 SET name = ?, source_type = ?, url = ?, max_concurrent_streams = ?,
+                     update_cron = ?, username = ?, field_map = ?,
+                     ignore_channel_numbers = ?, updated_at = ?, is_active = ?
+                 WHERE id = ?",
+            )
+            .bind(&source.name)
+            .bind(source_type_str)
+            .bind(&source.url)
+            .bind(source.max_concurrent_streams)
+            .bind(&source.update_cron)
+            .bind(&source.username)
+            .bind(&source.field_map)
+            .bind(source.ignore_channel_numbers)
+            .bind(now.to_rfc3339())
+            .bind(source.is_active)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+        }
         .map_err(|e| {
             error!(
                 "Failed to update stream source '{}' ({}): {}",
@@ -441,7 +470,15 @@ impl Database {
             "Successfully updated stream source '{}' ({})",
             source.name, id
         );
-        self.get_stream_source(id).await
+        
+        let updated_source = self.get_stream_source(id).await?;
+        
+        // Emit scheduler event for source update
+        if updated_source.is_some() {
+            self.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::SourceUpdated(id));
+        }
+        
+        Ok(updated_source)
     }
 
     pub async fn delete_stream_source(&self, id: Uuid) -> Result<bool> {
@@ -459,6 +496,8 @@ impl Database {
         let deleted = result.rows_affected() > 0;
         if deleted {
             info!("Successfully deleted stream source ({})", id);
+            // Emit scheduler event for source deletion
+            self.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::SourceDeleted(id));
         } else {
             warn!("Stream source ({}) not found for deletion", id);
         }
@@ -537,7 +576,7 @@ impl Database {
 
                 // Prepare bulk insert statement
                 let mut query_builder = sqlx::QueryBuilder::new(
-                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at) ",
+                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at) ",
                 );
 
                 query_builder.push_values(chunk, |mut b, channel| {
@@ -545,7 +584,9 @@ impl Database {
                         .push_bind(source_id.to_string())
                         .push_bind(&channel.tvg_id)
                         .push_bind(&channel.tvg_name)
+                        .push_bind(&channel.tvg_chno)
                         .push_bind(&channel.tvg_logo)
+                        .push_bind(&channel.tvg_shift)
                         .push_bind(&channel.group_title)
                         .push_bind(&channel.channel_name)
                         .push_bind(&channel.stream_url)
@@ -636,7 +677,7 @@ impl Database {
             if !channels.is_empty() {
                 // Prepare bulk insert statement for all channels
                 let mut query_builder = sqlx::QueryBuilder::new(
-                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_logo, group_title, channel_name, stream_url, created_at, updated_at) ",
+                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at) ",
                 );
 
                 query_builder.push_values(channels, |mut b, channel| {
@@ -644,7 +685,9 @@ impl Database {
                         .push_bind(source_id.to_string())
                         .push_bind(&channel.tvg_id)
                         .push_bind(&channel.tvg_name)
+                        .push_bind(&channel.tvg_chno)
                         .push_bind(&channel.tvg_logo)
+                        .push_bind(&channel.tvg_shift)
                         .push_bind(&channel.group_title)
                         .push_bind(&channel.channel_name)
                         .push_bind(&channel.stream_url)
@@ -736,7 +779,7 @@ impl Database {
     #[allow(dead_code)]
     pub async fn get_source_channels(&self, source_id: Uuid) -> Result<Vec<Channel>> {
         let rows = sqlx::query(
-            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
              FROM channels WHERE source_id = ? ORDER BY channel_name"
         )
         .bind(source_id.to_string())
@@ -749,17 +792,18 @@ impl Database {
             let updated_at = row.get::<String, _>("updated_at");
 
             channels.push(Channel {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
+                tvg_chno: row.try_get("tvg_chno").unwrap_or(None),
                 tvg_logo: row.get("tvg_logo"),
                 tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
+                created_at: DateTimeParser::parse_flexible(&created_at)?,
+                updated_at: DateTimeParser::parse_flexible(&updated_at)?,
             });
         }
 
@@ -843,7 +887,7 @@ impl Database {
 
                 // Get paginated results
                 let select_query = format!(
-                    "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
+                    "SELECT id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
                      FROM channels {} LIMIT ? OFFSET ?",
                     where_clause
                 );
@@ -866,17 +910,18 @@ impl Database {
                     let updated_at = row.get::<String, _>("updated_at");
 
                     channels.push(Channel {
-                        id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                        source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                        id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                        source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
                         tvg_id: row.get("tvg_id"),
                         tvg_name: row.get("tvg_name"),
+                        tvg_chno: row.try_get("tvg_chno").unwrap_or(None),
                         tvg_logo: row.get("tvg_logo"),
                         tvg_shift: row.get("tvg_shift"),
                         group_title: row.get("group_title"),
                         channel_name: row.get("channel_name"),
                         stream_url: row.get("stream_url"),
-                        created_at: parse_datetime(&created_at)?,
-                        updated_at: parse_datetime(&updated_at)?,
+                        created_at: DateTimeParser::parse_flexible(&created_at)?,
+                        updated_at: DateTimeParser::parse_flexible(&updated_at)?,
                     });
                 }
 
@@ -900,7 +945,7 @@ impl Database {
                 .await?;
 
         let rows = sqlx::query(
-            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
              FROM channels WHERE source_id = ? ORDER BY channel_name LIMIT ? OFFSET ?"
         )
         .bind(source_id.to_string())
@@ -915,17 +960,18 @@ impl Database {
             let updated_at = row.get::<String, _>("updated_at");
 
             channels.push(Channel {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
+                tvg_chno: row.try_get("tvg_chno").unwrap_or(None),
                 tvg_logo: row.get("tvg_logo"),
                 tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
+                created_at: DateTimeParser::parse_flexible(&created_at)?,
+                updated_at: DateTimeParser::parse_flexible(&updated_at)?,
             });
         }
 
@@ -942,7 +988,7 @@ impl Database {
 
     pub async fn get_channels_for_source(&self, source_id: Uuid) -> Result<Vec<Channel>> {
         let rows = sqlx::query(
-            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
              FROM channels WHERE source_id = ? ORDER BY channel_name"
         )
         .bind(source_id.to_string())
@@ -955,17 +1001,18 @@ impl Database {
             let updated_at = row.get::<String, _>("updated_at");
 
             channels.push(Channel {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
+                tvg_chno: row.try_get("tvg_chno").unwrap_or(None),
                 tvg_logo: row.get("tvg_logo"),
                 tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
+                created_at: DateTimeParser::parse_flexible(&created_at)?,
+                updated_at: DateTimeParser::parse_flexible(&updated_at)?,
             });
         }
 
@@ -980,7 +1027,7 @@ impl Database {
         limit: usize,
     ) -> Result<Vec<Channel>> {
         let rows = sqlx::query(
-            "SELECT id, source_id, tvg_id, tvg_name, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift, group_title, channel_name, stream_url, created_at, updated_at
              FROM channels WHERE source_id = ? ORDER BY channel_name LIMIT ? OFFSET ?"
         )
         .bind(source_id.to_string())
@@ -995,17 +1042,18 @@ impl Database {
             let updated_at = row.get::<String, _>("updated_at");
 
             channels.push(Channel {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
+                tvg_chno: row.try_get("tvg_chno").unwrap_or(None),
                 tvg_logo: row.get("tvg_logo"),
                 tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
+                created_at: DateTimeParser::parse_flexible(&created_at)?,
+                updated_at: DateTimeParser::parse_flexible(&updated_at)?,
             });
         }
 
@@ -1021,7 +1069,7 @@ impl Database {
         limit: usize,
     ) -> Result<Vec<Channel>> {
         let rows = sqlx::query(
-            "SELECT c.id, c.source_id, c.tvg_id, c.tvg_name, c.tvg_logo, c.tvg_shift, c.group_title, c.channel_name, c.stream_url, c.created_at, c.updated_at
+            "SELECT c.id, c.source_id, c.tvg_id, c.tvg_name, c.tvg_chno, c.tvg_logo, c.tvg_shift, c.group_title, c.channel_name, c.stream_url, c.created_at, c.updated_at
              FROM channels c
              INNER JOIN stream_sources s ON c.source_id = s.id
              WHERE c.source_id = ? AND s.is_active = true
@@ -1040,17 +1088,18 @@ impl Database {
             let updated_at = row.get::<String, _>("updated_at");
 
             channels.push(Channel {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
+                tvg_chno: row.try_get("tvg_chno").unwrap_or(None),
                 tvg_logo: row.get("tvg_logo"),
                 tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
+                created_at: DateTimeParser::parse_flexible(&created_at)?,
+                updated_at: DateTimeParser::parse_flexible(&updated_at)?,
             });
         }
 

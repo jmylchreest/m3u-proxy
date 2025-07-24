@@ -4,7 +4,7 @@ use humantime::parse_duration;
 use sqlx::SqlitePool;
 use std::time::Duration;
 use tokio::time::{interval, MissedTickBehavior};
-use tracing::{error, info};
+use tracing::{error, info, trace};
 
 use crate::config::MetricsConfig;
 
@@ -76,17 +76,27 @@ impl MetricsHousekeeper {
         self.update_realtime_stats().await?;
 
         let duration = Utc::now().signed_duration_since(start_time);
+        let duration_ms = duration.num_milliseconds();
         
-        info!(
-            "Metrics housekeeper completed in {}ms: {} stale sessions, {} hourly aggregated, {} daily aggregated, {} logs pruned, {} hourly pruned, {} daily pruned",
-            duration.num_milliseconds(),
-            stale_sessions,
-            hourly_aggregated,
-            daily_aggregated,
-            pruned_logs,
-            pruned_hourly,
-            pruned_daily
-        );
+        // Only log if something was actually done or if it took longer than 10 seconds
+        let total_work = stale_sessions + hourly_aggregated + daily_aggregated + pruned_logs + pruned_hourly + pruned_daily;
+        if total_work > 0 || duration_ms > 10_000 {
+            info!(
+                "Metrics housekeeper completed in {}ms: {} stale sessions, {} hourly aggregated, {} daily aggregated, {} logs pruned, {} hourly pruned, {} daily pruned",
+                duration_ms,
+                stale_sessions,
+                hourly_aggregated,
+                daily_aggregated,
+                pruned_logs,
+                pruned_hourly,
+                pruned_daily
+            );
+        } else {
+            trace!(
+                "Metrics housekeeper completed in {}ms: no work performed",
+                duration_ms
+            );
+        }
 
         Ok(())
     }
@@ -100,12 +110,12 @@ impl MetricsHousekeeper {
         let result = sqlx::query(
             r#"
             INSERT INTO stream_access_logs (
-                id, proxy_id, channel_id, client_ip, user_agent, referer,
+                id, proxy_name, channel_id, client_ip, user_agent, referer,
                 start_time, end_time, bytes_served, relay_used, relay_config_id,
                 duration_seconds, proxy_mode, created_at
             )
             SELECT 
-                session_id, proxy_id, channel_id, client_ip, user_agent, referer,
+                session_id, proxy_name, channel_id, client_ip, user_agent, referer,
                 start_time, last_access_time, bytes_served, relay_used, relay_config_id,
                 CAST((julianday(last_access_time) - julianday(start_time)) * 86400 AS INTEGER),
                 proxy_mode, created_at
@@ -135,14 +145,14 @@ impl MetricsHousekeeper {
         let result = sqlx::query(
             r#"
             INSERT OR REPLACE INTO stream_stats_hourly (
-                id, hour_bucket, proxy_id, channel_id,
+                id, hour_bucket, proxy_name, channel_id,
                 total_sessions, unique_clients, total_bytes_served, total_duration_seconds,
                 proxy_sessions, redirect_sessions, created_at
             )
             SELECT 
-                proxy_id || '_' || channel_id || '_' || strftime('%Y-%m-%d %H:00:00', start_time) as id,
+                proxy_name || '_' || channel_id || '_' || strftime('%Y-%m-%d %H:00:00', start_time) as id,
                 strftime('%Y-%m-%d %H:00:00', start_time) as hour_bucket,
-                proxy_id,
+                proxy_name,
                 channel_id,
                 COUNT(*) as total_sessions,
                 COUNT(DISTINCT client_ip) as unique_clients,
@@ -153,7 +163,7 @@ impl MetricsHousekeeper {
                 datetime('now') as created_at
             FROM stream_access_logs
             WHERE start_time >= datetime('now', '-2 hours')
-            GROUP BY proxy_id, channel_id, strftime('%Y-%m-%d %H:00:00', start_time)
+            GROUP BY proxy_name, channel_id, strftime('%Y-%m-%d %H:00:00', start_time)
             "#
         )
         .execute(&self.db)
@@ -167,14 +177,14 @@ impl MetricsHousekeeper {
         let result = sqlx::query(
             r#"
             INSERT OR REPLACE INTO stream_stats_daily (
-                id, date, proxy_id, channel_id,
+                id, date, proxy_name, channel_id,
                 total_sessions, unique_clients, total_bytes_served, total_duration_seconds,
                 peak_concurrent_sessions, proxy_sessions, redirect_sessions, created_at
             )
             SELECT 
-                proxy_id || '_' || channel_id || '_' || date(hour_bucket) as id,
+                proxy_name || '_' || channel_id || '_' || date(hour_bucket) as id,
                 date(hour_bucket) as date,
-                proxy_id,
+                proxy_name,
                 channel_id,
                 SUM(total_sessions) as total_sessions,
                 MAX(unique_clients) as unique_clients, -- Approximation for daily unique clients
@@ -186,7 +196,7 @@ impl MetricsHousekeeper {
                 datetime('now') as created_at
             FROM stream_stats_hourly
             WHERE hour_bucket >= date('now', '-2 days')
-            GROUP BY proxy_id, channel_id, date(hour_bucket)
+            GROUP BY proxy_name, channel_id, date(hour_bucket)
             "#
         )
         .execute(&self.db)
@@ -239,16 +249,16 @@ impl MetricsHousekeeper {
         sqlx::query(
             r#"
             INSERT INTO stream_stats_realtime (
-                proxy_id, active_sessions, active_clients, bytes_per_second, last_updated
+                proxy_name, active_sessions, active_clients, bytes_per_second, last_updated
             )
             SELECT 
-                proxy_id,
+                proxy_name,
                 COUNT(*) as active_sessions,
                 COUNT(DISTINCT client_ip) as active_clients,
                 COALESCE(SUM(bytes_served) / MAX(1, CAST((julianday('now') - julianday(start_time)) * 86400 AS INTEGER)), 0) as bytes_per_second,
                 datetime('now') as last_updated
             FROM active_stream_sessions
-            GROUP BY proxy_id
+            GROUP BY proxy_name
             "#
         )
         .execute(&self.db)

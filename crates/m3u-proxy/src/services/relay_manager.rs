@@ -11,8 +11,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use sysinfo::{Pid, PidExt, ProcessExt, System, SystemExt};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
+use crate::utils::uuid_parser::parse_uuid_flexible;
 
 use crate::config::Config;
 use crate::database::Database;
@@ -29,12 +30,18 @@ pub struct RelayManager {
     metrics_logger: Arc<MetricsLogger>,
     cleanup_interval: Duration,
     system: Arc<tokio::sync::RwLock<System>>,
+    #[allow(dead_code)]
     config: Config,
     ffmpeg_available: bool,
+    #[allow(dead_code)]
     ffmpeg_version: Option<String>,
+    #[allow(dead_code)]
     ffmpeg_command: String,
+    #[allow(dead_code)]
     ffprobe_available: bool,
+    #[allow(dead_code)]
     ffprobe_version: Option<String>,
+    #[allow(dead_code)]
     ffprobe_command: String,
     hwaccel_available: bool,
     hwaccel_capabilities: HwAccelCapabilities,
@@ -159,7 +166,8 @@ impl RelayManager {
 
         if let Some(row) = row {
             // Build config from proxy data (creating a synthetic config)
-            let profile_id = Uuid::parse_str(&row.get::<String, _>("profile_id"))?;
+            let profile_id = parse_uuid_flexible(&row.get::<String, _>("profile_id"))
+                .map_err(|e| RelayError::InvalidArgument(format!("Invalid profile_id UUID: {}", e)))?;
             let config = ChannelRelayConfig {
                 id: crate::utils::generate_relay_config_uuid(&proxy_id, &channel_id, &profile_id),
                 proxy_id,
@@ -175,7 +183,8 @@ impl RelayManager {
 
             // Build profile from row data
             let profile = RelayProfile {
-                id: Uuid::parse_str(&row.get::<String, _>("profile_id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("profile_id"))
+                    .map_err(|e| RelayError::InvalidArgument(format!("Invalid profile_id UUID: {}", e)))?,
                 name: row.get("profile_name"),
                 description: row.get("profile_description"),
                 
@@ -684,11 +693,26 @@ impl RelayManager {
                     let bytes_received = buffer_stats.bytes_received_from_upstream;
                     let bytes_delivered = buffer_stats.total_bytes_written;
                     
-                    let channel_name = format!("Channel-{}", config_id.to_string().split('-').next().unwrap_or("unknown"));
+                    // Get actual channel name from database, fallback to config channel_id
+                    let channel_id_str = process.config.config.channel_id.to_string();
+                    let channel_name = {
+                        let result = sqlx::query("SELECT channel_name FROM channels WHERE id = ?")
+                            .bind(&channel_id_str)
+                            .fetch_optional(&database.pool())
+                            .await;
+                        
+                        match result {
+                            Ok(Some(row)) => row.get::<String, _>("channel_name"),
+                            _ => format!("Channel {}", process.config.config.channel_id),
+                        }
+                    };
+                    
+                    // Use first 8 characters of config_id for relay identifier (more readable than full UUID)
+                    let relay_short_id = config_id.to_string().chars().take(8).collect::<String>();
                     
                     info!(
                         "  Relay {}: {} | Profile: {} | Clients: {} | Rx: {} | Tx: {}",
-                        config_id.to_string().split('-').next().unwrap_or("unknown"),
+                        relay_short_id,
                         channel_name,
                         process.config.profile.name,
                         client_count,
@@ -989,19 +1013,19 @@ impl RelayManager {
 
 /// Extension trait for MetricsLogger to add relay-specific logging
 pub trait RelayMetricsExt {
-    async fn log_relay_event(
+    fn log_relay_event(
         &self,
         config_id: Uuid,
         event_type: RelayEventType,
         details: Option<&str>,
-    ) -> Result<(), RelayError>;
+    ) -> impl std::future::Future<Output = Result<(), RelayError>> + Send;
     
-    async fn log_relay_event_if_persistent(
+    fn log_relay_event_if_persistent(
         &self,
         config: &ResolvedRelayConfig,
         event_type: RelayEventType,
         details: Option<&str>,
-    ) -> Result<(), RelayError>;
+    ) -> impl std::future::Future<Output = Result<(), RelayError>> + Send;
 }
 
 impl RelayMetricsExt for MetricsLogger {
@@ -1048,9 +1072,6 @@ impl RelayMetricsExt for MetricsLogger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::relay::*;
-    use chrono::Utc;
-    use uuid::Uuid;
 
     #[tokio::test]
     async fn test_relay_manager_creation() {

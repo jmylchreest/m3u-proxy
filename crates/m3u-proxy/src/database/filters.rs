@@ -1,6 +1,8 @@
 use crate::models::*;
 use anyhow::Result;
 use sqlx::Row;
+use crate::utils::uuid_parser::parse_uuid_flexible;
+use crate::utils::datetime::DateTimeParser;
 
 use uuid::Uuid;
 
@@ -67,7 +69,7 @@ impl super::Database {
         let mut filters = Vec::new();
         for row in rows {
             let filter = Filter {
-                id: row.try_get::<String, _>("id")?.parse()?,
+                id: parse_uuid_flexible(&row.try_get::<String, _>("id")?)?,
                 name: row.try_get("name")?,
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
@@ -129,7 +131,7 @@ impl super::Database {
 
         if let Some(row) = row {
             let filter = Filter {
-                id: row.try_get::<String, _>("id")?.parse()?,
+                id: parse_uuid_flexible(&row.try_get::<String, _>("id")?)?,
                 name: row.try_get("name")?,
                 source_type: FilterSourceType::Stream,
                 starting_channel_number: row.try_get("starting_channel_number")?,
@@ -217,7 +219,7 @@ impl super::Database {
 
         let mut result = Vec::new();
         for row in filters {
-            let filter_id: Uuid = row.try_get::<String, _>("id")?.parse()?;
+            let filter_id: Uuid = parse_uuid_flexible(&row.try_get::<String, _>("id")?)?;
             let filter = Filter {
                 id: filter_id,
                 name: row.try_get("name")?,
@@ -300,22 +302,18 @@ impl super::Database {
             let updated_at_str: String = row.get("updated_at");
 
             channels.push(Channel {
-                id: Uuid::parse_str(&id_str).map_err(|e| anyhow::anyhow!("Invalid UUID: {}", e))?,
-                source_id: Uuid::parse_str(&source_id_str)
-                    .map_err(|e| anyhow::anyhow!("Invalid UUID: {}", e))?,
+                id: parse_uuid_flexible(&id_str)?,
+                source_id: parse_uuid_flexible(&source_id_str)?,
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
+                tvg_chno: row.try_get("tvg_chno").unwrap_or(None),
                 tvg_logo: row.get("tvg_logo"),
                 tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
-                created_at: chrono::DateTime::parse_from_rfc3339(&created_at_str)
-                    .map_err(|e| anyhow::anyhow!("Invalid datetime: {}", e))?
-                    .with_timezone(&chrono::Utc),
-                updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| anyhow::anyhow!("Invalid datetime: {}", e))?
-                    .with_timezone(&chrono::Utc),
+                created_at: DateTimeParser::parse_flexible(&created_at_str)?,
+                updated_at: DateTimeParser::parse_flexible(&updated_at_str)?,
             });
         }
 
@@ -380,8 +378,8 @@ impl super::Database {
         let mut result = Vec::new();
         for row in filters {
             let proxy_filter = ProxyFilter {
-                proxy_id: Uuid::parse_str(&row.get::<String, _>("proxy_id"))?,
-                filter_id: Uuid::parse_str(&row.get::<String, _>("filter_id"))?,
+                proxy_id: parse_uuid_flexible(&row.get::<String, _>("proxy_id"))?,
+                filter_id: parse_uuid_flexible(&row.get::<String, _>("filter_id"))?,
                 priority_order: row.get("priority_order"),
                 is_active: row.get("is_active"),
                 created_at: row.get("created_at"),

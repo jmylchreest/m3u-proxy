@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     config::StorageConfig,
-    data_mapping::service::DataMappingService,
+    data_mapping::DataMappingService,
     database::Database,
     errors::types::AppError,
     logo_assets::service::LogoAssetService,
@@ -38,6 +38,7 @@ pub struct StreamProxyService {
     storage_config: StorageConfig,
     app_config: crate::config::Config,
     temp_file_manager: SandboxedManager,
+    proxy_output_file_manager: SandboxedManager,
     system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
@@ -55,6 +56,7 @@ impl StreamProxyService {
         storage_config: StorageConfig,
         app_config: crate::config::Config,
         temp_file_manager: SandboxedManager,
+        proxy_output_file_manager: SandboxedManager,
         system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
@@ -70,6 +72,7 @@ impl StreamProxyService {
             storage_config,
             app_config,
             temp_file_manager,
+            proxy_output_file_manager,
             system,
         }
     }
@@ -233,6 +236,7 @@ impl StreamProxyService {
         let proxy_service = crate::proxy::ProxyService::new(
             self.storage_config.clone(),
             self.temp_file_manager.clone(),
+            self.proxy_output_file_manager.clone(),
             self.system.clone(),
         );
         let proxy_generation = proxy_service
@@ -242,7 +246,7 @@ impl StreamProxyService {
                 &self.database,
                 &self.data_mapping_service,
                 &self.logo_service,
-                "http://localhost:8080", // TODO: Get from config
+                &self.app_config.web.base_url,
                 None,                    // engine_config
                 &self.app_config,
             )
@@ -517,7 +521,7 @@ impl StreamProxyService {
             m3u_content.push('\n');
 
             // Add stream URL (would be proxied in real scenario)
-            let stream_url = format!("http://localhost:8080/stream/preview/{}", channel.id);
+            let stream_url = format!("{}/stream/preview/{}", self.app_config.web.base_url.trim_end_matches('/'), channel.id);
             m3u_content.push_str(&stream_url);
             m3u_content.push('\n');
         }
@@ -543,7 +547,7 @@ impl StreamProxyService {
                 group_title: channel.group_title.clone(),
                 tvg_id: channel.tvg_id.clone(),
                 tvg_logo: channel.tvg_logo.clone(),
-                stream_url: format!("http://localhost:8080/stream/preview/{}", channel.id),
+                stream_url: format!("{}/stream/preview/{}", self.app_config.web.base_url.trim_end_matches('/'), channel.id),
                 source_name: "Preview".to_string(), // TODO: Get actual source name
                 channel_number,
                 tvg_chno: None, // Channel model doesn't have tvg_chno field

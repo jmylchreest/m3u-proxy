@@ -20,6 +20,7 @@ pub const DEFAULT_M3U_PATH: &str = "./data/m3u";
 pub const DEFAULT_UPLOADED_LOGO_PATH: &str = "./data/logos/uploaded";
 pub const DEFAULT_CACHED_LOGO_PATH: &str = "./data/logos/cached";
 pub const DEFAULT_TEMP_PATH: &str = "./data/temp";
+pub const DEFAULT_PIPELINE_PATH: &str = "./data/pipeline";
 pub const DEFAULT_PROXY_VERSIONS_TO_KEEP: u32 = 3;
 pub const DEFAULT_CLEAN_ORPHAN_LOGOS: bool = true;
 

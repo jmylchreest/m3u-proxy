@@ -374,6 +374,7 @@ impl RobustStreamingProxy {
 /// Health monitor for upstream sources
 pub struct UpstreamHealthMonitor {
     health_status: Arc<RwLock<HashMap<String, bool>>>,
+    #[allow(dead_code)]
     config: RobustStreamingConfig,
 }
 
@@ -397,7 +398,6 @@ impl UpstreamHealthMonitor {
     pub async fn start_health_checks(&self, hosts: Vec<String>) {
         for host in hosts {
             let health_status = self.health_status.clone();
-            let config = self.config.clone();
             let host_clone = host.clone();
 
             tokio::spawn(async move {

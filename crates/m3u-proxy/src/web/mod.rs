@@ -28,17 +28,22 @@ use axum::{
     routing::{get, post},
 };
 use std::net::SocketAddr;
+use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
+use uuid::Uuid;
 
 use crate::{
     config::Config,
     data_mapping::DataMappingService,
     database::Database,
-    ingestor::{IngestionStateManager, scheduler::CacheInvalidationSender},
+    ingestor::{IngestionStateManager, scheduler::{CacheInvalidationSender, SchedulerEvent}},
     logo_assets::{LogoAssetService, LogoAssetStorage},
     metrics::MetricsLogger,
-    services::ProxyRegenerationService,
+    services::{ProxyRegenerationService, progress_service::ProgressService},
 };
+use tokio::sync::mpsc;
 use sandboxed_file_manager::SandboxedManager;
 
 pub mod api;
@@ -71,10 +76,12 @@ impl WebServer {
         logo_asset_storage: LogoAssetStorage,
         proxy_regeneration_service: ProxyRegenerationService,
         temp_file_manager: SandboxedManager, // Use temp for both temp and preview operations
+        pipeline_file_manager: SandboxedManager, // Pipeline-specific file manager
         logos_cached_file_manager: SandboxedManager,
         proxy_output_file_manager: SandboxedManager,
         relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
         system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+        progress_service: std::sync::Arc<ProgressService>,
     ) -> Result<Self> {
         tracing::info!("WebServer using native pipeline");
 
@@ -88,6 +95,8 @@ impl WebServer {
                 base_path,
             ))
         };
+
+        // Use shared progress service passed from main application
 
         // Initialize new service layer components
         let epg_source_service = std::sync::Arc::new(crate::services::EpgSourceService::new(
@@ -105,10 +114,11 @@ impl WebServer {
         let source_linking_service =
             std::sync::Arc::new(crate::services::SourceLinkingService::new(database.clone()));
 
-        // Create proxy service
+        // Create proxy service with pipeline file manager for pipeline operations
         let proxy_service = crate::proxy::ProxyService::new(
             config.storage.clone(),
-            temp_file_manager.clone(),
+            pipeline_file_manager.clone(),
+            proxy_output_file_manager.clone(),
             system.clone(),
         );
 
@@ -126,6 +136,7 @@ impl WebServer {
             proxy_output_file_manager,
             temp_file_manager,
             metrics_logger: MetricsLogger::new(database.pool()),
+            scheduler_event_tx: None, // Will be set later when scheduler is initialized
             logo_cache_scanner,
             session_tracker: std::sync::Arc::new(
                 crate::proxy::session_tracker::SessionTracker::default(),
@@ -137,6 +148,8 @@ impl WebServer {
             epg_source_service,
             source_linking_service,
             proxy_service,
+            progress_service,
+            active_regeneration_requests: Arc::new(Mutex::new(HashSet::new())),
         })
         .await;
 
@@ -266,9 +279,19 @@ impl WebServer {
             // Unified sources
             .route("/sources", get(api::list_all_sources))
             .route("/sources/unified", get(api::list_all_sources))
-            // Progress endpoints for frontend polling
-            .route("/progress/sources", get(api::get_sources_progress))
-            .route("/progress/epg", get(api::get_epg_progress))
+            // Legacy progress endpoints (deprecated - commented out to avoid conflicts)
+            // .route("/progress/sources", get(api::get_sources_progress))
+            // .route("/progress/epg", get(api::get_epg_progress))
+            // New unified progress endpoints
+            .route("/progress", get(api::unified_progress::get_unified_progress))
+            .route("/progress/events", get(api::unified_progress::progress_events_stream))
+            .route("/progress/operations/{operation_id}", get(api::unified_progress::get_operation_progress))
+            .route("/progress/streams", get(api::unified_progress::get_stream_progress))
+            .route("/progress/epg", get(api::unified_progress::get_epg_progress))
+            .route("/progress/proxies", get(api::unified_progress::get_proxy_progress))
+            .route("/progress/resources/streams/{source_id}", get(api::unified_progress::get_stream_source_progress))
+            .route("/progress/resources/epg/{source_id}", get(api::unified_progress::get_epg_source_progress))
+            .route("/progress/resources/proxies/{proxy_id}", get(api::unified_progress::get_proxy_regeneration_progress))
             // Logo assets
             .route("/logos", get(api::list_logo_assets))
             .route("/logos/stats", get(api::get_logo_cache_stats))
@@ -328,6 +351,9 @@ impl WebServer {
             )
             .route("/data-mapping/fields/stream", get(api::get_data_mapping_stream_fields))
             .route("/data-mapping/fields/epg", get(api::get_data_mapping_epg_fields))
+            // Generalized pipeline validation endpoints
+            .route("/pipeline/validate", post(api::validate_pipeline_expression))
+            .route("/pipeline/fields/{stage}", get(api::get_pipeline_stage_fields))
             // EPG viewer
             .route("/epg/viewer", get(api::get_epg_viewer_data))
             // Proxies
@@ -351,6 +377,8 @@ impl WebServer {
             )
             .route("/proxies/{id}/regenerate", post(api::regenerate_proxy))
             .route("/proxies/regenerate-all", post(api::regenerate_all_proxies))
+            .route("/proxies/regeneration/status", get(api::get_regeneration_queue_status))
+            .route("/progress/regeneration", get(api::get_proxy_regeneration_progress))
             // Relay system endpoints
             .merge(api::relay::relay_routes())
             // Active relay monitoring
@@ -403,6 +431,14 @@ impl WebServer {
     pub fn port(&self) -> u16 {
         self.addr.port()
     }
+    
+    /// Wire up duplicate protection between API requests and background auto-regeneration
+    /// This prevents race conditions where manual and automatic regenerations run simultaneously
+    pub async fn wire_duplicate_protection(&mut self) {
+        // The duplicate protection is now handled via the shared progress service
+        // The has_active_regeneration() method checks both local state and progress service
+        tracing::info!("Duplicate protection enabled via shared progress service tracking");
+    }
 }
 
 /// Application state shared across all handlers
@@ -421,6 +457,7 @@ pub struct AppState {
     pub proxy_output_file_manager: SandboxedManager,
     pub temp_file_manager: SandboxedManager,
     pub metrics_logger: MetricsLogger,
+    pub scheduler_event_tx: Option<mpsc::UnboundedSender<SchedulerEvent>>,
     pub logo_cache_scanner: Option<crate::services::logo_cache_scanner::LogoCacheScanner>,
     pub session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
     pub relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
@@ -430,6 +467,9 @@ pub struct AppState {
     pub epg_source_service: std::sync::Arc<crate::services::EpgSourceService>,
     pub source_linking_service: std::sync::Arc<crate::services::SourceLinkingService>,
     pub proxy_service: crate::proxy::ProxyService,
+    pub progress_service: std::sync::Arc<ProgressService>,
+    /// CONCURRENCY FIX: Track active API regeneration requests to prevent duplicates
+    pub active_regeneration_requests: Arc<Mutex<HashSet<Uuid>>>,
 }
 
 impl AppState {}

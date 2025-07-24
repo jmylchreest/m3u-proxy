@@ -381,6 +381,7 @@ pub async fn list_proxies(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.proxy_output_file_manager.clone(),
         state.system.clone(),
     );
 
@@ -458,6 +459,7 @@ pub async fn get_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.proxy_output_file_manager.clone(),
         state.system.clone(),
     );
 
@@ -519,6 +521,7 @@ pub async fn create_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.proxy_output_file_manager.clone(),
         state.system.clone(),
     );
 
@@ -637,6 +640,7 @@ pub async fn update_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.proxy_output_file_manager.clone(),
         state.system.clone(),
     );
 
@@ -701,6 +705,7 @@ pub async fn delete_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.proxy_output_file_manager.clone(),
         state.system.clone(),
     );
 
@@ -750,6 +755,7 @@ pub async fn preview_proxy_config(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.proxy_output_file_manager.clone(),
         state.system.clone(),
     );
 
@@ -806,6 +812,7 @@ pub async fn preview_existing_proxy(
         state.config.storage.clone(),
         state.config.clone(),
         state.temp_file_manager.clone(),
+        state.proxy_output_file_manager.clone(),
         state.system.clone(),
     );
 
@@ -986,7 +993,30 @@ pub async fn serve_proxy_m3u(
     }
 }
 
-/// Serve XMLTV content for a proxy (from static file)
+/// Serve XMLTV Electronic Program Guide for a proxy
+#[utoipa::path(
+    get,
+    path = "/proxy/{id}/xmltv",
+    tag = "streaming",
+    summary = "Get proxy XMLTV EPG",
+    description = "Retrieve the XMLTV Electronic Program Guide file for a specific proxy.
+
+This endpoint serves the EPG data in XMLTV format that corresponds to the channels
+in the proxy's M3U playlist. The XMLTV file includes:
+- Channel definitions with display names and logos
+- Program schedules with titles, descriptions, and timing
+- Filtered program data matching the proxy's channel selection
+
+The ID can be provided in any supported format (UUID, base64-encoded UUID, etc.).",
+    params(
+        ("id" = String, Path, description = "Proxy identifier (UUID, base64, or other supported format)")
+    ),
+    responses(
+        (status = 200, description = "XMLTV EPG content", content_type = "application/xml"),
+        (status = 404, description = "Proxy not found or XMLTV not generated yet"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn serve_proxy_xmltv(
     axum::extract::Path(id): axum::extract::Path<String>,
     State(state): State<AppState>,
@@ -1085,7 +1115,36 @@ pub async fn serve_proxy_xmltv(
     }
 }
 
-/// Proxy stream requests to original sources or relays
+/// Stream content through the proxy
+#[utoipa::path(
+    get,
+    path = "/stream/{proxy_id}/{channel_id}",
+    tag = "streaming",
+    summary = "Stream IPTV channel",
+    description = "Stream live IPTV content through the proxy with metrics tracking and relay support.
+
+This is the main streaming endpoint that:
+- Proxies live streams from original sources
+- Captures viewing metrics and statistics  
+- Supports relay/transcoding when configured
+- Handles client connection management
+- Provides health monitoring for upstream sources
+
+The proxy_id and channel_id are base64-encoded UUIDs from the M3U playlist.",
+    params(
+        ("proxy_id" = String, Path, description = "Base64-encoded proxy UUID (from M3U playlist)"),
+        ("channel_id" = String, Path, description = "Base64-encoded channel UUID (from M3U playlist)")
+    ),
+    responses(
+        (status = 200, description = "Streaming content (video/audio stream)", content_type = "video/mp2t"),
+        (status = 404, description = "Proxy or channel not found"),
+        (status = 502, description = "Upstream source unavailable"),
+        (status = 503, description = "Service temporarily unavailable")
+    ),
+    security(
+        // No authentication required for streaming
+    )
+)]
 pub async fn proxy_stream(
     axum::extract::Path((proxy_id, channel_id_str)): axum::extract::Path<(String, String)>,
     headers: axum::http::HeaderMap,
@@ -1955,7 +2014,7 @@ async fn get_relay_profile_by_id_internal(
 
     if let Some(row) = row {
         let profile = crate::models::relay::RelayProfile {
-            id: Uuid::parse_str(&row.get::<String, _>("id")).unwrap(),
+            id: parse_uuid_flexible(&row.get::<String, _>("id")).unwrap(),
             name: row.get("name"),
             description: row.get("description"),
             

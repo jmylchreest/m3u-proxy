@@ -29,6 +29,29 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
+/// Trait for types that can be converted to DateTime flexibly
+pub trait FlexibleDateTimeSource {
+    fn to_datetime_flexible(&self) -> Result<DateTime<Utc>, DateTimeError>;
+}
+
+impl FlexibleDateTimeSource for &str {
+    fn to_datetime_flexible(&self) -> Result<DateTime<Utc>, DateTimeError> {
+        DateTimeParser::parse_flexible(self)
+    }
+}
+
+impl FlexibleDateTimeSource for String {
+    fn to_datetime_flexible(&self) -> Result<DateTime<Utc>, DateTimeError> {
+        DateTimeParser::parse_flexible(self)
+    }
+}
+
+impl FlexibleDateTimeSource for DateTime<Utc> {
+    fn to_datetime_flexible(&self) -> Result<DateTime<Utc>, DateTimeError> {
+        Ok(*self)
+    }
+}
+
 /// Errors that can occur during datetime operations
 #[derive(Error, Debug)]
 pub enum DateTimeError {
@@ -51,6 +74,12 @@ pub enum DateTimeError {
 pub struct DateTimeParser;
 
 impl DateTimeParser {
+    /// Parse datetime from any supported source type (String, &str, or DateTime<Utc>)
+    /// This is the recommended function to use for maximum flexibility
+    pub fn parse_from_any<T: FlexibleDateTimeSource>(input: T) -> Result<DateTime<Utc>, DateTimeError> {
+        input.to_datetime_flexible()
+    }
+
     /// Parse datetime from various common formats used in the application
     ///
     /// Supports:
@@ -327,5 +356,23 @@ mod tests {
         let dt = DateTimeParser::parse_sqlite("2023-01-01 12:00:00").unwrap();
         assert_eq!(dt.year(), 2023);
         assert_eq!(dt.month(), 1);
+    }
+
+    #[test]
+    fn test_parse_from_any() {
+        let expected = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+        
+        // Test with DateTime<Utc> type
+        assert_eq!(DateTimeParser::parse_from_any(expected).unwrap(), expected);
+        
+        // Test with String
+        let datetime_string = "2023-01-01T12:00:00Z".to_string();
+        assert_eq!(DateTimeParser::parse_from_any(datetime_string).unwrap(), expected);
+        
+        // Test with &str
+        assert_eq!(DateTimeParser::parse_from_any("2023-01-01T12:00:00Z").unwrap(), expected);
+        
+        // Test with SQLite format
+        assert_eq!(DateTimeParser::parse_from_any("2023-01-01 12:00:00").unwrap(), expected);
     }
 }

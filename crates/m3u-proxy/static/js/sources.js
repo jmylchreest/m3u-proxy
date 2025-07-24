@@ -5,6 +5,7 @@ class SourcesManager {
     this.sources = [];
     this.editingSource = null;
     this.progressPollingInterval = null;
+    this.progressMonitor = null;
     this.progressData = {};
     this.processingInfo = {};
     this.lastHadProgress = false;
@@ -170,17 +171,19 @@ class SourcesManager {
     if (progress) {
       const stateColors = {
         idle: "secondary",
+        preparing: "primary",
         connecting: "primary",
         downloading: "primary",
-        parsing: "primary",
-        saving: "primary",
         processing: "primary",
+        saving: "primary",
+        cleanup: "primary",
         completed: "success",
         error: "danger",
+        cancelled: "warning",
       };
 
       const color = stateColors[progress.state] || "secondary";
-      const percentage = progress.progress.percentage || 0;
+      const percentage = progress.percentage || 0;
 
       return `
                 <div>
@@ -194,7 +197,8 @@ class SourcesManager {
                             <div class="progress" style="height: 6px;">
                                 <div class="progress-bar" role="progressbar" style="width: ${percentage}%"></div>
                             </div>
-                            <small class="text-muted" style="font-size: 0.75em; line-height: 1.2;">${this.formatProgressText(progress.progress)}</small>
+                            <small class="text-muted" style="font-size: 0.75em; line-height: 1.2;">${progress.current_step || this.formatProgressText(progress)}</small>
+                            ${this.renderStageProgress(progress)}
                         </div>
                     `
                         : ""
@@ -212,11 +216,7 @@ class SourcesManager {
   }
 
   renderActionsCell(source, progress) {
-    const isIngesting =
-      progress &&
-      ["connecting", "downloading", "parsing", "saving", "processing"].includes(
-        progress.state,
-      );
+    const isIngesting = progress && this.isActivelyProcessing(progress.state);
 
     const processingInfo = this.processingInfo[source.id];
     const isInBackoff =
@@ -274,6 +274,7 @@ class SourcesManager {
       document.getElementById("username").value = source.username || "";
       document.getElementById("password").value = source.password || "";
       document.getElementById("fieldMap").value = source.field_map || "";
+      document.getElementById("ignoreChannelNumbers").checked = source.ignore_channel_numbers !== false; // Default to true
       document.getElementById("isActive").checked = source.is_active;
     } else {
       form.reset();
@@ -282,6 +283,7 @@ class SourcesManager {
       document.getElementById("updateCron").value = "0 0 */6 * * * *";
       document.getElementById("isActive").checked = true;
       document.getElementById("sourceType").value = "xtream";
+      document.getElementById("ignoreChannelNumbers").checked = true;
       // Force the cron field to update by triggering an input event
       const cronField = document.getElementById("updateCron");
       cronField.dispatchEvent(new Event("input", { bubbles: true }));
@@ -361,7 +363,7 @@ class SourcesManager {
   }
 
   getFormData() {
-    return {
+    const data = {
       name: document.getElementById("sourceName").value.trim(),
       source_type: document.getElementById("sourceType").value,
       url: document.getElementById("sourceUrl").value.trim(),
@@ -374,6 +376,13 @@ class SourcesManager {
       field_map: document.getElementById("fieldMap").value.trim() || null,
       is_active: document.getElementById("isActive").checked,
     };
+
+    // Add ignore_channel_numbers field only for Xtream sources
+    if (data.source_type === "xtream") {
+      data.ignore_channel_numbers = document.getElementById("ignoreChannelNumbers").checked;
+    }
+
+    return data;
   }
 
   validateForm(data) {
@@ -519,38 +528,147 @@ class SourcesManager {
   }
 
   async startProgressPolling() {
-    // Poll every 2 seconds for progress updates
+    // Stop any existing monitoring
+    this.stopProgressPolling();
+    
+    // Check if ProgressMonitor is available
+    if (typeof ProgressMonitor === 'undefined') {
+      console.error('ProgressMonitor class not found, falling back to legacy polling');
+      this.startLegacyPolling();
+      return;
+    }
+    
+    console.log('Starting progress monitoring with SSE support for stream sources');
+    
+    // Initialize progress monitor for stream ingestion operations
+    this.progressMonitor = new ProgressMonitor(
+      'stream_ingestion',
+      (operation) => this.handleProgressUpdate(operation),
+      (error) => console.debug("Stream progress monitoring error:", error)
+    );
+    
+    // Enable debug logging
+    this.progressMonitor.enableDebug();
+    
+    this.progressMonitor.start();
+  }
+
+  // Legacy polling fallback
+  startLegacyPolling() {
+    console.log('Using legacy polling for stream progress updates');
     this.progressPollingInterval = setInterval(async () => {
       await this.loadProgress();
     }, 2000);
   }
 
   stopProgressPolling() {
+    // Stop SSE progress monitor if active
+    if (this.progressMonitor) {
+      this.progressMonitor.stop();
+      this.progressMonitor = null;
+    }
+    
+    // Stop legacy polling if active
     if (this.progressPollingInterval) {
       clearInterval(this.progressPollingInterval);
       this.progressPollingInterval = null;
     }
   }
 
+  // Handle individual progress update from SSE
+  handleProgressUpdate(operation) {
+    const sourceId = operation.id;
+    const oldProgress = this.progressData[sourceId];
+    
+    // Convert to internal format with metadata support
+    const newProgress = {
+      source_id: sourceId,
+      state: operation.state,
+      current_step: operation.current_step,
+      total_bytes: operation.progress.bytes?.total,
+      downloaded_bytes: operation.progress.bytes?.processed,
+      channels_parsed: operation.progress.items?.processed,
+      channels_saved: operation.progress.items?.total,
+      percentage: operation.progress.percentage,
+      started_at: operation.timing.started_at,
+      updated_at: operation.timing.updated_at,
+      completed_at: operation.timing.completed_at,
+      error_message: operation.error,
+      // Include metadata for stage-specific progress
+      metadata: operation.metadata || {}
+    };
+    
+    // Update progress data
+    this.progressData[sourceId] = newProgress;
+    
+    // Check if source just completed
+    const justCompleted = oldProgress && 
+      this.isActiveProcessing(oldProgress.state) && 
+      (newProgress.state === "completed" || newProgress.state === "error");
+    
+    // Reload sources if just completed (to refresh UI)
+    if (justCompleted) {
+      console.log("Stream ingestion completed for source:", sourceId);
+      this.loadSources();
+    } else {
+      // Just re-render without full reload for intermediate updates
+      this.renderSources();
+    }
+  }
+
+  // Check if a unified state represents active processing
+  isActiveProcessing(state) {
+    return [
+      'preparing',
+      'connecting', 
+      'downloading',
+      'processing',
+      'saving',
+      'cleanup'
+    ].includes(state);
+  }
+
   async loadProgress() {
     try {
-      const response = await fetch("/api/v1/progress/sources");
+      const response = await fetch("/api/v1/progress/streams");
       if (!response.ok) return;
 
       const data = await response.json();
-      const newProgressData = data.progress || {};
+      const operations = data.operations || [];
 
-      // Extract progress and processing info from consolidated response
+      // Use unified progress format directly
       const extractedProgress = {};
       const extractedProcessingInfo = {};
 
-      Object.entries(newProgressData).forEach(([sourceId, data]) => {
-        if (data.progress) {
-          extractedProgress[sourceId] = data.progress;
-        }
-        if (data.processing_info) {
-          extractedProcessingInfo[sourceId] = data.processing_info;
-        }
+      operations.forEach(operation => {
+        // The operation_id should be the source_id for ingestion operations
+        const sourceId = operation.id;
+        
+        // Use unified progress format directly with metadata support
+        extractedProgress[sourceId] = {
+          source_id: sourceId,
+          state: operation.state, // Use unified state directly
+          current_step: operation.current_step,
+          total_bytes: operation.progress.bytes?.total,
+          downloaded_bytes: operation.progress.bytes?.processed,
+          channels_parsed: operation.progress.items?.processed,
+          channels_saved: operation.progress.items?.total,
+          percentage: operation.progress.percentage,
+          started_at: operation.timing.started_at,
+          updated_at: operation.timing.updated_at,
+          completed_at: operation.timing.completed_at,
+          error: operation.error,
+          // Include metadata for stage-specific progress
+          metadata: operation.metadata || {}
+        };
+        
+        // Map timing info to processing info format
+        extractedProcessingInfo[sourceId] = {
+          started_at: operation.timing.started_at,
+          triggered_by: operation.metadata.triggered_by || "manual",
+          failure_count: 0, // Not available in unified format
+          next_retry_after: null
+        };
       });
 
       // Check if any sources just completed
@@ -560,13 +678,7 @@ class SourcesManager {
           const newProgress = extractedProgress[sourceId];
           return (
             oldProgress &&
-            [
-              "connecting",
-              "downloading",
-              "parsing",
-              "saving",
-              "processing",
-            ].includes(oldProgress.state) &&
+            this.isActivelyProcessing(oldProgress.state) &&
             newProgress.state === "completed"
           );
         },
@@ -582,13 +694,7 @@ class SourcesManager {
 
       // Only re-render if there's actual progress to show
       const hasActiveProgress = Object.values(extractedProgress).some((p) =>
-        [
-          "connecting",
-          "downloading",
-          "parsing",
-          "saving",
-          "processing",
-        ].includes(p.state),
+        this.isActivelyProcessing(p.state)
       );
 
       if (hasActiveProgress || this.lastHadProgress) {
@@ -629,6 +735,24 @@ class SourcesManager {
     return SharedUtils.formatFileSize(bytes);
   }
 
+  renderStageProgress(progress) {
+    // Check if we have stage-specific progress in metadata
+    const metadata = progress.metadata || {};
+    const stageProgress = metadata.stage_percentage;
+    const currentStage = metadata.current_stage;
+    
+    if (stageProgress !== undefined && currentStage) {
+      return `
+        <div class="progress mt-1" style="height: 4px;">
+          <div class="progress-bar bg-info" style="width: ${stageProgress}%"></div>
+        </div>
+        <small class="text-info" style="font-size: 0.75em;">${currentStage.replace('_', ' ')}: ${Math.round(stageProgress)}%</small>
+      `;
+    }
+    
+    return '';
+  }
+
   formatProgressText(progress) {
     let text = progress.current_step;
 
@@ -665,13 +789,15 @@ class SourcesManager {
     return text;
   }
 
+
   isActivelyProcessing(state) {
     return [
+      "preparing",
       "connecting",
       "downloading",
-      "parsing",
-      "saving",
       "processing",
+      "saving",
+      "cleanup",
     ].includes(state);
   }
 

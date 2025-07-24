@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use sqlx::{Pool, Row, Sqlite};
 use std::collections::HashMap;
 use uuid::Uuid;
+use crate::utils::uuid_parser::parse_uuid_flexible;
 
 use super::traits::{
     BulkRepository, PaginatedRepository, PaginatedResult, QueryParams, Repository,
@@ -98,7 +99,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         match row {
             Some(row) => {
                 let filter = Filter {
-                    id: Uuid::parse_str(&row.get::<String, _>("id")).map_err(|e| {
+                    id: parse_uuid_flexible(&row.get::<String, _>("id")).map_err(|e| {
                         RepositoryError::QueryFailed {
                             query: "parse_filter_id".to_string(),
                             message: e.to_string(),
@@ -161,7 +162,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         for row in rows {
             let id_str: String = row.get("id");
             let filter = Filter {
-                id: Uuid::parse_str(&id_str).map_err(|e| RepositoryError::QueryFailed {
+                id: parse_uuid_flexible(&id_str).map_err(|e| RepositoryError::QueryFailed {
                     query: "parse_filter_id".to_string(),
                     message: e.to_string(),
                 })?,

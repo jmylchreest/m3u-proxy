@@ -12,9 +12,10 @@ use std::collections::BTreeMap;
 
 use std::path::PathBuf;
 use tokio::fs;
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 use url::Url;
 use uuid::Uuid;
+use crate::utils::uuid_parser::parse_uuid_flexible;
 
 #[derive(Debug, Clone)]
 pub struct LogoAssetService {
@@ -226,7 +227,7 @@ impl LogoAssetService {
             };
 
             let asset = LogoAsset {
-                id: Uuid::parse_str(&row.get::<String, _>("id")).unwrap(),
+                id: parse_uuid_flexible(&row.get::<String, _>("id")).unwrap(),
                 name: row.get("name"),
                 description: row.get("description"),
                 file_name: row.get("file_name"),
@@ -318,7 +319,7 @@ impl LogoAssetService {
                 .await?;
 
             for linked_row in linked_assets {
-                let linked_id = Uuid::parse_str(&linked_row.get::<String, _>("id")).unwrap();
+                let linked_id = parse_uuid_flexible(&linked_row.get::<String, _>("id")).unwrap();
                 if !processed.contains(&linked_id) {
                     assets_to_delete.push(linked_id);
                 }
@@ -376,7 +377,7 @@ impl LogoAssetService {
             };
 
             let asset = LogoAsset {
-                id: Uuid::parse_str(&row.get::<String, _>("id")).unwrap(),
+                id: parse_uuid_flexible(&row.get::<String, _>("id")).unwrap(),
                 name: row.get("name"),
                 description: row.get("description"),
                 file_name: row.get("file_name"),
@@ -685,6 +686,14 @@ impl LogoAssetService {
         self.cache_logo_from_url_with_metadata(logo_url, None, None, None)
             .await
     }
+    
+    /// Download and cache a logo from a URL with size tracking
+    ///
+    /// Returns (cache_id, bytes_transferred) where bytes_transferred is 0 for cache hits
+    pub async fn cache_logo_from_url_with_size_tracking(&self, logo_url: &str) -> Result<(String, u64), anyhow::Error> {
+        self.cache_logo_from_url_with_metadata_and_size_tracking(logo_url, None, None, None)
+            .await
+    }
 
     /// Download and cache a logo from a URL with optional metadata
     pub async fn cache_logo_from_url_with_metadata(
@@ -694,6 +703,20 @@ impl LogoAssetService {
         channel_group: Option<String>,
         extra_fields: Option<std::collections::HashMap<String, String>>,
     ) -> Result<String, anyhow::Error> {
+        let (cache_id, _bytes_transferred) = self.cache_logo_from_url_with_metadata_and_size_tracking(
+            logo_url, channel_name, channel_group, extra_fields
+        ).await?;
+        Ok(cache_id)
+    }
+    
+    /// Download and cache a logo from a URL with optional metadata and size tracking
+    pub async fn cache_logo_from_url_with_metadata_and_size_tracking(
+        &self,
+        logo_url: &str,
+        channel_name: Option<String>,
+        channel_group: Option<String>,
+        extra_fields: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<(String, u64), anyhow::Error> {
         // Generate cache ID
         let cache_id = Self::generate_cache_id_from_url(logo_url)?;
 
@@ -707,16 +730,16 @@ impl LogoAssetService {
             let metadata_exists = file_manager.read(&metadata_file_path).await.is_ok();
 
             if file_exists && metadata_exists {
-                debug!(
+                trace!(
                     "Logo and metadata already cached: {} -> {}",
                     logo_url, cache_id
                 );
-                return Ok(cache_id);
+                return Ok((cache_id, 0)); // 0 bytes for cache hit
             }
 
             if file_exists && !metadata_exists {
                 // File exists but no metadata - generate it
-                debug!(
+                trace!(
                     "Generating missing metadata for cached logo: {} -> {}",
                     logo_url, cache_id
                 );
@@ -728,7 +751,7 @@ impl LogoAssetService {
                     extra_fields,
                 )
                 .await?;
-                return Ok(cache_id);
+                return Ok((cache_id, 0)); // 0 bytes for cache hit
             }
         } else {
             // Fallback to direct filesystem access for backward compatibility
@@ -742,16 +765,16 @@ impl LogoAssetService {
             let metadata_exists = metadata_path.exists();
 
             if file_exists && metadata_exists {
-                debug!(
+                trace!(
                     "Logo and metadata already cached: {} -> {}",
                     logo_url, cache_id
                 );
-                return Ok(cache_id);
+                return Ok((cache_id, 0)); // 0 bytes for cache hit
             }
 
             if file_exists && !metadata_exists {
                 // File exists but no metadata - generate it
-                debug!(
+                trace!(
                     "Generating missing metadata for cached logo: {} -> {}",
                     logo_url, cache_id
                 );
@@ -763,7 +786,7 @@ impl LogoAssetService {
                     extra_fields,
                 )
                 .await?;
-                return Ok(cache_id);
+                return Ok((cache_id, 0)); // 0 bytes for cache hit
             }
         }
 
@@ -786,6 +809,8 @@ impl LogoAssetService {
         let image_bytes = response.bytes().await.map_err(|e| {
             anyhow::anyhow!("Failed to read image bytes from '{}': {}", logo_url, e)
         })?;
+        
+        let raw_bytes_downloaded = image_bytes.len() as u64;
 
         // Convert to PNG
         let png_bytes = self.convert_image_to_png(&image_bytes, logo_url)?;
@@ -817,42 +842,41 @@ impl LogoAssetService {
                 .map_err(|e| anyhow::anyhow!("Failed to save cached logo '{}': {}", cache_id, e))?;
         }
 
+        let bytes_transferred = png_bytes.len() as u64;
         debug!(
-            "Successfully cached logo: {} -> {} ({} bytes)",
+            "Successfully cached logo: {} -> {} (downloaded {} raw bytes, stored {} PNG bytes)",
             logo_url,
             cache_id,
-            png_bytes.len()
+            raw_bytes_downloaded,
+            bytes_transferred
         );
 
         // Generate metadata file if channel info provided
         if channel_name.is_some() || channel_group.is_some() || extra_fields.is_some() {
-            let metadata_result = if self.logo_file_manager.is_some() {
-                self.generate_metadata_for_cached_logo_with_file_manager(
+            if self.logo_file_manager.is_some() {
+                if let Err(e) = self.generate_metadata_for_cached_logo_with_file_manager(
                     &cache_id,
                     logo_url,
                     channel_name,
                     channel_group,
                     extra_fields,
-                )
-                .await
+                ).await {
+                    debug!("Failed to generate metadata for {}: {}", cache_id, e);
+                }
             } else {
-                self.generate_metadata_for_cached_logo(
+                if let Err(e) = self.generate_metadata_for_cached_logo(
                     &cache_id,
                     logo_url,
                     channel_name,
                     channel_group,
                     extra_fields,
-                )
-                .await
-            };
-
-            if let Err(e) = metadata_result {
-                debug!("Failed to generate metadata for {}: {}", cache_id, e);
-                // Don't fail the whole operation for metadata generation issues
+                ).await {
+                    debug!("Failed to generate metadata for {}: {}", cache_id, e);
+                }
             }
         }
 
-        Ok(cache_id)
+        Ok((cache_id, bytes_transferred))
     }
 
     /// Generate metadata .json file for a cached logo
@@ -1004,7 +1028,7 @@ impl LogoAssetService {
             };
 
             let asset = LogoAsset {
-                id: Uuid::parse_str(&row.get::<String, _>("id")).unwrap(),
+                id: parse_uuid_flexible(&row.get::<String, _>("id")).unwrap(),
                 name: row.get("name"),
                 description: row.get("description"),
                 file_name: row.get("file_name"),

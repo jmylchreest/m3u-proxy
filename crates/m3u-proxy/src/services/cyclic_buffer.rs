@@ -344,23 +344,6 @@ impl CyclicBuffer {
         Ok(bytes::Bytes::from(data))
     }
     
-    /// Clean up spilled files for a chunk
-    async fn cleanup_spilled_chunk(&self, chunk: &BufferChunk) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let (Some(spill_path), Some(temp_manager)) = (&chunk.spill_path, &self.temp_manager) {
-            let spill_path_str = spill_path.to_str()
-                .ok_or("Invalid spill path")?;
-            
-            // Get file size before deletion
-            if let Ok(data) = temp_manager.read(spill_path_str).await {
-                let file_size = data.len();
-                if temp_manager.remove_file(spill_path_str).await.is_ok() {
-                    self.spill_size.fetch_sub(file_size, Ordering::Relaxed);
-                    debug!("Cleaned up spilled file: {}", spill_path_str);
-                }
-            }
-        }
-        Ok(())
-    }
 
     /// Start the cleanup task
     fn start_cleanup_task(&self) {
@@ -611,7 +594,7 @@ pub struct ClientStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{sleep, Duration};
+    // Removed unused imports: sleep, Duration
 
     #[tokio::test]
     async fn test_cyclic_buffer_basic_operations() {

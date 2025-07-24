@@ -4,6 +4,7 @@ use tracing::debug;
 #[derive(Debug, Clone)]
 struct QuantifierInfo {
     min: usize,
+    #[allow(dead_code)]
     max: Option<usize>, // None means unbounded
 }
 
@@ -26,6 +27,7 @@ impl Default for RegexPreprocessorConfig {
 }
 
 /// Shared regex preprocessing utility for performance optimization
+#[derive(Clone)]
 pub struct RegexPreprocessor {
     config: RegexPreprocessorConfig,
 }

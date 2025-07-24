@@ -173,7 +173,6 @@ impl FilterEngine {
     ) -> Result<Vec<Channel>> {
         let mut matches = Vec::new();
         let mut sample_non_matches = Vec::new();
-        let mut debug_counter = 0;
 
         for channel in channels {
             let channel_matches = self.evaluate_filter_tree(channel, filter)?;
@@ -184,7 +183,6 @@ impl FilterEngine {
                 sample_non_matches.push(channel);
             }
 
-            debug_counter += 1;
         }
 
         // Log debug info for problematic filters

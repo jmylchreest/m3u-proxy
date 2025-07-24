@@ -379,6 +379,7 @@ pub struct UpdateChannelRelayConfigRequest {
 pub struct RelayMetrics {
     pub total_active_relays: i64,
     pub total_clients: i64,
+    pub total_bytes_upstream: i64,
     pub total_bytes_served: i64,
     pub active_processes: Vec<RelayProcessMetrics>,
 }

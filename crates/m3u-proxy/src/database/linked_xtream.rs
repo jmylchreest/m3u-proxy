@@ -3,6 +3,7 @@ use anyhow::Result;
 use sqlx::Row;
 use tracing::{info, warn};
 use uuid::Uuid;
+use crate::utils::uuid_parser::parse_uuid_flexible;
 
 impl crate::database::Database {
     pub async fn create_linked_xtream_sources(
@@ -27,6 +28,7 @@ impl crate::database::Database {
                 username: Some(request.username.clone()),
                 password: Some(request.password.clone()),
                 field_map: None,
+                ignore_channel_numbers: true, // Default to true for Xtream sources
             };
 
             match self.create_stream_source_tx(&mut tx, &stream_request).await {
@@ -134,7 +136,7 @@ impl crate::database::Database {
 
             // Get stream source if exists
             let stream_source = if let Some(id_str) = stream_source_id_str {
-                if let Ok(id) = Uuid::parse_str(&id_str) {
+                if let Ok(id) = parse_uuid_flexible(&id_str) {
                     self.get_stream_source(id).await.unwrap_or(None)
                 } else {
                     None
@@ -145,7 +147,7 @@ impl crate::database::Database {
 
             // Get EPG source if exists
             let epg_source = if let Some(id_str) = epg_source_id_str {
-                if let Ok(id) = Uuid::parse_str(&id_str) {
+                if let Ok(id) = parse_uuid_flexible(&id_str) {
                     self.get_epg_source(id).await.unwrap_or(None)
                 } else {
                     None
@@ -157,7 +159,7 @@ impl crate::database::Database {
             linked_sources.push(LinkedXtreamSources {
                 stream_source,
                 epg_source,
-                link_id: Uuid::parse_str(&link_id_str)?,
+                link_id: parse_uuid_flexible(&link_id_str)?,
                 created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&created_at)
                     .map_err(|_| anyhow::anyhow!("Failed to parse created_at"))?,
                 updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(&updated_at)
@@ -242,7 +244,7 @@ impl crate::database::Database {
 
         // Update stream source if exists
         if let Some(id_str) = stream_source_id_str {
-            if let Ok(id) = Uuid::parse_str(&id_str) {
+            if let Ok(id) = parse_uuid_flexible(&id_str) {
                 let stream_update = StreamSourceUpdateRequest {
                     name: request.name.clone(),
                     source_type: StreamSourceType::Xtream,
@@ -252,7 +254,9 @@ impl crate::database::Database {
                     username: Some(request.username.clone()),
                     password: Some(request.password.clone()),
                     field_map: None,
+                    ignore_channel_numbers: true, // Default to true for Xtream sources
                     is_active: request.is_active,
+                    update_linked: false, // Don't update linked sources in this legacy context
                 };
 
                 let _ = self
@@ -263,7 +267,7 @@ impl crate::database::Database {
 
         // Update EPG source if exists
         if let Some(id_str) = epg_source_id_str {
-            if let Ok(id) = Uuid::parse_str(&id_str) {
+            if let Ok(id) = parse_uuid_flexible(&id_str) {
                 let epg_update = EpgSourceUpdateRequest {
                     name: request.name.clone(),
                     source_type: EpgSourceType::Xtream,
@@ -274,6 +278,7 @@ impl crate::database::Database {
                     timezone: Some(request.timezone.clone()), // This will be mapped to original_timezone
                     time_offset: Some(request.time_offset.clone()),
                     is_active: request.is_active,
+                    update_linked: false, // Don't update linked sources in this legacy context
                 };
 
                 let _ = self.update_epg_source_tx(&mut tx, id, &epg_update).await;
@@ -324,14 +329,14 @@ impl crate::database::Database {
 
         // Delete stream source if exists
         if let Some(id_str) = stream_source_id_str {
-            if let Ok(id) = Uuid::parse_str(&id_str) {
+            if let Ok(id) = parse_uuid_flexible(&id_str) {
                 let _ = self.delete_stream_source_tx(&mut tx, id).await;
             }
         }
 
         // Delete EPG source if exists
         if let Some(id_str) = epg_source_id_str {
-            if let Ok(id) = Uuid::parse_str(&id_str) {
+            if let Ok(id) = parse_uuid_flexible(&id_str) {
                 let _ = self.delete_epg_source_tx(&mut tx, id).await;
             }
         }
@@ -367,8 +372,8 @@ impl crate::database::Database {
         };
 
         sqlx::query(
-            "INSERT INTO stream_sources (id, name, source_type, url, max_concurrent_streams, update_cron, username, password, field_map, created_at, updated_at, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO stream_sources (id, name, source_type, url, max_concurrent_streams, update_cron, username, password, field_map, ignore_channel_numbers, created_at, updated_at, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&source.name)
@@ -379,6 +384,7 @@ impl crate::database::Database {
         .bind(&source.username)
         .bind(&source.password)
         .bind(&source.field_map)
+        .bind(source.ignore_channel_numbers)
         .bind(now.format("%Y-%m-%d %H:%M:%S").to_string())
         .bind(now.format("%Y-%m-%d %H:%M:%S").to_string())
         .bind(true)
@@ -395,6 +401,7 @@ impl crate::database::Database {
             username: source.username.clone(),
             password: source.password.clone(),
             field_map: source.field_map.clone(),
+            ignore_channel_numbers: source.ignore_channel_numbers,
             created_at: now,
             updated_at: now,
             last_ingested_at: None,
@@ -577,7 +584,7 @@ impl crate::database::Database {
                 .transpose()?;
 
             Ok(Some(crate::models::EpgSource {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
                 name: row.get("name"),
                 source_type: row.get::<String, _>("source_type").parse()?,
                 url: row.get("url"),
@@ -621,7 +628,7 @@ impl crate::database::Database {
 
             // Get stream source if exists
             let stream_source = if let Some(id_str) = stream_source_id_str {
-                if let Ok(id) = Uuid::parse_str(&id_str) {
+                if let Ok(id) = parse_uuid_flexible(&id_str) {
                     self.get_stream_source(id).await.unwrap_or(None)
                 } else {
                     None
@@ -632,7 +639,7 @@ impl crate::database::Database {
 
             // Get EPG source if exists
             let epg_source = if let Some(id_str) = epg_source_id_str {
-                if let Ok(id) = Uuid::parse_str(&id_str) {
+                if let Ok(id) = parse_uuid_flexible(&id_str) {
                     self.get_epg_source(id).await.unwrap_or(None)
                 } else {
                     None
@@ -644,7 +651,7 @@ impl crate::database::Database {
             Ok(Some(LinkedXtreamSources {
                 stream_source,
                 epg_source,
-                link_id: Uuid::parse_str(&row.get::<String, _>("link_id"))?,
+                link_id: parse_uuid_flexible(&row.get::<String, _>("link_id"))?,
                 created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
                     &row.get::<String, _>("created_at")
                 ).map_err(|_| anyhow::anyhow!("Failed to parse created_at"))?,
@@ -746,6 +753,113 @@ impl crate::database::Database {
         }
 
         Ok(false)
+    }
+
+    /// Auto-populate EPG source credentials from existing stream source and create link
+    pub async fn auto_populate_and_link_epg_source(&self, epg_source_id: uuid::Uuid) -> Result<Option<EpgSource>> {
+        // Get the EPG source
+        let epg_source = match self.get_epg_source(epg_source_id).await? {
+            Some(source) => source,
+            None => return Ok(None),
+        };
+
+        // Only handle Xtream sources
+        if epg_source.source_type != EpgSourceType::Xtream {
+            return Ok(Some(epg_source));
+        }
+
+        // If EPG source already has credentials, use existing auto-link logic
+        if epg_source.username.is_some() && epg_source.password.is_some() {
+            self.auto_link_epg_source(&epg_source).await?;
+            return Ok(Some(epg_source));
+        }
+
+        // Look for a stream source with the same URL (or similar URL pattern)
+        let potential_stream_sources = sqlx::query(
+            "SELECT id, name, url, username, password FROM stream_sources 
+             WHERE source_type = 'xtream' AND is_active = 1 
+             AND (url = ? OR url LIKE ? OR ? LIKE CONCAT('%', REPLACE(url, 'https://', ''), '%'))"
+        )
+        .bind(&epg_source.url)
+        .bind(format!("%{}%", epg_source.url.replace("https://", "").replace("http://", "")))
+        .bind(&epg_source.url)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Find the best matching stream source (exact URL match preferred)
+        let matching_stream = potential_stream_sources
+            .iter()
+            .find(|row| {
+                let stream_url: String = row.get("url");
+                stream_url == epg_source.url
+            })
+            .or_else(|| {
+                // Fallback to similar URL match
+                potential_stream_sources.first()
+            });
+
+        if let Some(stream_row) = matching_stream {
+            let stream_id: String = stream_row.get("id");
+            let stream_name: String = stream_row.get("name");
+            let username: Option<String> = stream_row.get("username");
+            let password: Option<String> = stream_row.get("password");
+
+            if let (Some(username), Some(password)) = (username, password) {
+                // Update the EPG source with credentials from stream source
+                let now = chrono::Utc::now();
+                let mut tx = self.pool.begin().await?;
+                
+                sqlx::query(
+                    "UPDATE epg_sources SET username = ?, password = ?, updated_at = ? WHERE id = ?"
+                )
+                .bind(&username)
+                .bind(&password)
+                .bind(now.format("%Y-%m-%d %H:%M:%S").to_string())
+                .bind(epg_source_id.to_string())
+                .execute(&mut *tx)
+                .await?;
+
+                // Create the link
+                let link_id = Uuid::new_v4();
+                let linked_id = Uuid::new_v4();
+                
+                sqlx::query(
+                    "INSERT INTO linked_xtream_sources (id, link_id, name, url, username, password, stream_source_id, epg_source_id, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                .bind(linked_id.to_string())
+                .bind(link_id.to_string())
+                .bind(&epg_source.name)
+                .bind(&epg_source.url)
+                .bind(&username)
+                .bind(&password)
+                .bind(stream_id)
+                .bind(epg_source_id.to_string())
+                .bind(now.format("%Y-%m-%d %H:%M:%S").to_string())
+                .bind(now.format("%Y-%m-%d %H:%M:%S").to_string())
+                .execute(&mut *tx)
+                .await?;
+
+                tx.commit().await?;
+
+                info!(
+                    "Auto-populated EPG source '{}' credentials from stream source '{}' and created link",
+                    epg_source.name, stream_name
+                );
+
+                // Return the updated EPG source
+                let updated_epg = EpgSource {
+                    username: Some(username),
+                    password: Some(password),
+                    updated_at: now,
+                    ..epg_source
+                };
+
+                return Ok(Some(updated_epg));
+            }
+        }
+
+        Ok(Some(epg_source))
     }
 
     /// Automatically link an EPG source to an existing stream source with same credentials  
@@ -871,7 +985,7 @@ impl crate::database::Database {
                 .transpose()?;
 
             Ok(Some(crate::models::StreamSource {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
                 name: row.get("name"),
                 source_type: row.get::<String, _>("source_type").parse()?,
                 url: row.get("url"),
@@ -880,6 +994,7 @@ impl crate::database::Database {
                 username: row.get("username"),
                 password: row.get("password"),
                 field_map: row.get("field_map"),
+                ignore_channel_numbers: row.get("ignore_channel_numbers"),
                 created_at,
                 updated_at,
                 last_ingested_at,

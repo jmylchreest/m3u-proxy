@@ -114,23 +114,43 @@ pub struct WebConfig {
 pub struct StorageConfig {
     #[serde(default = "default_m3u_path")]
     pub m3u_path: PathBuf,
+    #[serde(default = "default_m3u_retention")]
+    pub m3u_retention: String,
+    #[serde(default = "default_m3u_cleanup_interval")]
+    pub m3u_cleanup_interval: String,
+    
     #[serde(default = "default_uploaded_logo_path")]
     pub uploaded_logo_path: PathBuf,
+    
     #[serde(default = "default_cached_logo_path")]
     pub cached_logo_path: PathBuf,
+    #[serde(default = "default_cached_logo_retention")]
+    pub cached_logo_retention: String,
+    #[serde(default = "default_cached_logo_cleanup_interval")]
+    pub cached_logo_cleanup_interval: String,
+    
     #[serde(default = "default_proxy_versions_to_keep")]
     pub proxy_versions_to_keep: u32,
+    
     #[serde(default = "default_temp_path")]
     pub temp_path: Option<String>,
+    #[serde(default = "default_temp_retention")]
+    pub temp_retention: String,
+    #[serde(default = "default_temp_cleanup_interval")]
+    pub temp_cleanup_interval: String,
+    
+    #[serde(default = "default_pipeline_path")]
+    pub pipeline_path: PathBuf,
+    #[serde(default = "default_pipeline_retention")]
+    pub pipeline_retention: String,
+    #[serde(default = "default_pipeline_cleanup_interval")]
+    pub pipeline_cleanup_interval: String,
 
     /// Automatically clean up orphaned logo database entries when uploaded_logo_path changes
     #[serde(default = "default_clean_orphan_logos")]
     pub clean_orphan_logos: bool,
 }
 
-fn default_true() -> bool {
-    true
-}
 
 // Web defaults
 fn default_host() -> String {
@@ -162,8 +182,45 @@ fn default_temp_path() -> Option<String> {
     Some(DEFAULT_TEMP_PATH.to_string())
 }
 
+fn default_pipeline_path() -> PathBuf {
+    PathBuf::from(DEFAULT_PIPELINE_PATH)
+}
+
 fn default_clean_orphan_logos() -> bool {
     DEFAULT_CLEAN_ORPHAN_LOGOS
+}
+
+// Storage retention defaults
+fn default_m3u_retention() -> String {
+    "30d".to_string()
+}
+
+fn default_m3u_cleanup_interval() -> String {
+    "4h".to_string()
+}
+
+fn default_cached_logo_retention() -> String {
+    "90d".to_string()
+}
+
+fn default_cached_logo_cleanup_interval() -> String {
+    "12h".to_string()
+}
+
+fn default_temp_retention() -> String {
+    "5m".to_string()
+}
+
+fn default_temp_cleanup_interval() -> String {
+    "1m".to_string()
+}
+
+fn default_pipeline_retention() -> String {
+    "10m".to_string()  // Slightly longer than temp for pipeline execution
+}
+
+fn default_pipeline_cleanup_interval() -> String {
+    "2m".to_string()   // Less frequent than temp cleanup
 }
 
 // Ingestion defaults
@@ -175,12 +232,19 @@ fn default_run_missed_immediately() -> bool {
     DEFAULT_RUN_MISSED_IMMEDIATELY
 }
 
+fn default_use_new_source_handlers() -> bool {
+    true // Default to new source handlers
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestionConfig {
     #[serde(default = "default_progress_update_interval")]
     pub progress_update_interval: usize,
     #[serde(default = "default_run_missed_immediately")]
     pub run_missed_immediately: bool,
+    /// Whether to use new source handlers instead of legacy ingestors
+    #[serde(default = "default_use_new_source_handlers")]
+    pub use_new_source_handlers: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -462,15 +526,25 @@ impl Default for Config {
             },
             storage: StorageConfig {
                 m3u_path: PathBuf::from("./data/m3u"),
+                m3u_retention: "30d".to_string(),
+                m3u_cleanup_interval: "4h".to_string(),
                 uploaded_logo_path: PathBuf::from("./data/logos/uploaded"),
                 cached_logo_path: PathBuf::from("./data/logos/cached"),
+                cached_logo_retention: "90d".to_string(),
+                cached_logo_cleanup_interval: "12h".to_string(),
                 proxy_versions_to_keep: 3,
                 temp_path: Some("./data/temp".to_string()),
+                temp_retention: "5m".to_string(),
+                temp_cleanup_interval: "1m".to_string(),
+                pipeline_path: PathBuf::from("./data/pipeline"),
+                pipeline_retention: "10m".to_string(),
+                pipeline_cleanup_interval: "2m".to_string(),
                 clean_orphan_logos: true,
             },
             ingestion: IngestionConfig {
                 progress_update_interval: 1000,
                 run_missed_immediately: true,
+                use_new_source_handlers: default_use_new_source_handlers(),
             },
             display: Some(DisplayConfig {
                 local_timezone: "UTC".to_string(),

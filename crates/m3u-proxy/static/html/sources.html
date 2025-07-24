@@ -168,6 +168,25 @@
                                     ></button>
                                 </div>
                             </div>
+
+                            <div class="form-group">
+                                <div class="form-check">
+                                    <input
+                                        type="checkbox"
+                                        id="ignoreChannelNumbers"
+                                        class="form-check-input"
+                                        checked
+                                    />
+                                    <label for="ignoreChannelNumbers" class="form-label"
+                                        >Ignore Channel Numbers</label
+                                    >
+                                </div>
+                                <small class="text-muted">
+                                    When enabled, channel numbers from the Xtream API will be ignored 
+                                    and sequential numbers will be assigned instead. This allows for 
+                                    consistent numbering across different sources.
+                                </small>
+                            </div>
                         </div>
 
                         <!-- M3U Fields -->
@@ -217,6 +236,7 @@
 
         <script src="/static/js/shared-utils.js"></script>
         <script src="/static/js/shared-loader.js"></script>
+        <script src="/static/js/shared-progress-monitor.js"></script>
         <script src="/static/js/channels-viewer.js"></script>
 
         <!-- Load sources.js after channels-viewer -->

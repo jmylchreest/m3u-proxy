@@ -2,6 +2,29 @@ use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use uuid::Uuid;
 
+/// Trait for types that can be converted to UUID flexibly
+pub trait FlexibleUuidSource {
+    fn to_uuid_flexible(&self) -> Result<Uuid>;
+}
+
+impl FlexibleUuidSource for &str {
+    fn to_uuid_flexible(&self) -> Result<Uuid> {
+        parse_uuid_flexible(self)
+    }
+}
+
+impl FlexibleUuidSource for String {
+    fn to_uuid_flexible(&self) -> Result<Uuid> {
+        parse_uuid_flexible(self)
+    }
+}
+
+impl FlexibleUuidSource for Uuid {
+    fn to_uuid_flexible(&self) -> Result<Uuid> {
+        Ok(*self)
+    }
+}
+
 /// Parse a UUID from any supported format to a standard UUID
 /// Supports:
 /// - 36 characters with hyphens: "550e8400-e29b-41d4-a716-446655440000"
@@ -55,6 +78,12 @@ pub fn parse_uuid_flexible(input: &str) -> Result<Uuid> {
             ))
         }
     }
+}
+
+/// Parse UUID from any supported source type (String, &str, or Uuid)
+/// This is the recommended function to use for maximum flexibility
+pub fn parse_uuid_from_any<T: FlexibleUuidSource>(input: T) -> Result<Uuid> {
+    input.to_uuid_flexible()
 }
 
 /// Resolve a proxy ID from any supported format to a standard UUID
@@ -122,5 +151,27 @@ mod tests {
         assert!(resolve_proxy_id("550e8400-e29b-41d4-a716").is_err()); // too short
         assert!(resolve_proxy_id("gggggggggggggggggggggggggggggggg").is_err()); // invalid hex
         assert!(resolve_proxy_id("InvalidBase64!!!!!").is_err()); // invalid base64
+    }
+
+    #[test]
+    fn test_parse_uuid_from_any() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        
+        // Test with Uuid type
+        assert_eq!(parse_uuid_from_any(uuid).unwrap(), uuid);
+        
+        // Test with String
+        let uuid_string = "550e8400-e29b-41d4-a716-446655440000".to_string();
+        assert_eq!(parse_uuid_from_any(uuid_string).unwrap(), uuid);
+        
+        // Test with &str
+        assert_eq!(parse_uuid_from_any("550e8400-e29b-41d4-a716-446655440000").unwrap(), uuid);
+        
+        // Test with 32-char string
+        assert_eq!(parse_uuid_from_any("550e8400e29b41d4a716446655440000").unwrap(), uuid);
+        
+        // Test with base64 string
+        let base64_str = uuid_to_base64(&uuid);
+        assert_eq!(parse_uuid_from_any(base64_str).unwrap(), uuid);
     }
 }

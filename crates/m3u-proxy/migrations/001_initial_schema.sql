@@ -17,6 +17,7 @@ CREATE TABLE stream_sources (
     username TEXT,
     password TEXT,
     field_map TEXT, -- JSON string for M3U field mapping
+    ignore_channel_numbers BOOLEAN NOT NULL DEFAULT TRUE, -- For Xtream sources: ignore channel numbers from API and allow renumbering
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_ingested_at TEXT,
@@ -119,6 +120,7 @@ CREATE TABLE channels (
     source_id TEXT NOT NULL REFERENCES stream_sources(id) ON DELETE CASCADE,
     tvg_id TEXT,
     tvg_name TEXT,
+    tvg_chno TEXT, -- Channel number for M3U (corrected from tvg_channo)
     channel_name TEXT NOT NULL,
     tvg_logo TEXT,
     tvg_shift TEXT, -- Timeshift offset for M3U (e.g., "+1", "+24")
@@ -398,22 +400,7 @@ CREATE TABLE stream_stats_realtime (
 -- SYSTEM MANAGEMENT
 -- =============================================================================
 
--- Proxy Regeneration Queue Table
-CREATE TABLE proxy_regeneration_queue (
-    id TEXT PRIMARY KEY NOT NULL,
-    proxy_id TEXT NOT NULL REFERENCES stream_proxies(id) ON DELETE CASCADE,
-    trigger_source_id TEXT, -- Optional source ID that triggered regeneration
-    trigger_source_type TEXT, -- Type of source that triggered regeneration
-    reason TEXT,
-    priority INTEGER NOT NULL DEFAULT 0,
-    scheduled_at TEXT NOT NULL DEFAULT (datetime('now')),
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    started_at TEXT, -- When processing began
-    completed_at TEXT, -- When processing completed
-    error_message TEXT -- Error message if failed
-);
+-- Proxy Regeneration Queue Table removed - now uses in-memory timers
 
 -- Migration Notes Table
 CREATE TABLE migration_notes (
@@ -542,10 +529,7 @@ CREATE INDEX idx_daily_stats_lookup ON stream_stats_daily(proxy_name, date);
 CREATE INDEX idx_daily_stats_channel ON stream_stats_daily(channel_id, date);
 CREATE INDEX idx_realtime_stats_updated ON stream_stats_realtime(last_updated);
 
--- Proxy Regeneration Queue
-CREATE INDEX idx_proxy_regeneration_queue_scheduled ON proxy_regeneration_queue(scheduled_at, status);
-CREATE INDEX idx_proxy_regeneration_queue_status ON proxy_regeneration_queue(status);
-CREATE INDEX idx_proxy_regeneration_queue_proxy_id ON proxy_regeneration_queue(proxy_id);
+-- Proxy Regeneration Queue indexes removed - now uses in-memory timers
 
 -- Linked Xtream Sources
 CREATE INDEX idx_linked_xtream_sources_link_id ON linked_xtream_sources(link_id);
@@ -648,12 +632,7 @@ CREATE TRIGGER linked_xtream_sources_updated_at
         UPDATE linked_xtream_sources SET updated_at = datetime('now') WHERE id = NEW.id;
     END;
 
-CREATE TRIGGER proxy_regeneration_queue_updated_at
-    AFTER UPDATE ON proxy_regeneration_queue
-    FOR EACH ROW
-    BEGIN
-        UPDATE proxy_regeneration_queue SET updated_at = datetime('now') WHERE id = NEW.id;
-    END;
+-- Proxy regeneration queue trigger removed - now uses in-memory timers
 
 CREATE TRIGGER logo_assets_updated_at
     AFTER UPDATE ON logo_assets

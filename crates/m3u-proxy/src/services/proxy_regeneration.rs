@@ -1,62 +1,31 @@
-//! Proxy Regeneration Queue Service
+//! Proxy Regeneration Service
 //!
 //! This service manages automatic regeneration of stream proxies when their
-//! associated sources (stream or EPG) are updated. It implements smart queuing
-//! to prevent duplicate regenerations and provides configurable delays.
+//! associated sources (stream or EPG) are updated. It uses pure in-memory state
+//! with Tokio timers for delayed execution and deduplication.
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::{Row, SqlitePool};
+use chrono::Utc;
+// Serde imports removed - no longer needed after cleaning up legacy structs
+use sqlx::{SqlitePool, Row};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
-use tokio::time::{Duration, Instant, sleep};
+use tokio::sync::Mutex;
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+use crate::config::Config;
+use crate::utils::uuid_parser::parse_uuid_flexible;
+use crate::services::progress_service::{ProgressService, OperationType, UniversalProgress, UniversalState};
 
-use crate::{
-    config::Config, data_mapping::DataMappingService, database::Database,
-    logo_assets::LogoAssetService, proxy::ProxyService, utils::sqlite::SqliteRowExt,
-};
+// Removed scheduler dependency - now uses pure in-memory Tokio timers
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueueEntry {
-    pub id: Uuid,
-    pub proxy_id: Uuid,
-    pub trigger_source_id: Option<Uuid>,
-    pub trigger_source_type: Option<String>,
-    pub status: QueueStatus,
-    pub scheduled_at: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub error_message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum QueueStatus {
-    Pending,
-    Processing,
-    Completed,
-    Failed,
-}
-
-/// Configuration for the regeneration queue
+/// Configuration for the regeneration service
 #[derive(Debug, Clone)]
 pub struct RegenerationConfig {
     /// Delay in seconds after source updates before triggering regeneration
     pub delay_seconds: u64,
     /// Maximum concurrent regenerations
     pub max_concurrent: usize,
-    /// Cleanup completed entries older than this (in hours)
-    pub cleanup_after_hours: u64,
-    /// Maximum retry attempts for database operations
-    pub max_retry_attempts: u32,
-    /// Base delay for exponential backoff (milliseconds)
-    pub retry_base_delay_ms: u64,
-    /// Database operation timeout (seconds)
-    pub db_timeout_seconds: u64,
 }
 
 impl Default for RegenerationConfig {
@@ -64,102 +33,573 @@ impl Default for RegenerationConfig {
         Self {
             delay_seconds: 15,
             max_concurrent: 2,
-            cleanup_after_hours: 24,
-            max_retry_attempts: 3,
-            retry_base_delay_ms: 100,
-            db_timeout_seconds: 30,
         }
     }
 }
 
-/// Service for managing proxy regeneration queue
+/// Service for managing proxy regeneration with UniversalProgress tracking
 #[derive(Clone)]
 pub struct ProxyRegenerationService {
     pool: SqlitePool,
     config: RegenerationConfig,
-    running_tasks: Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
-    is_processing: Arc<RwLock<bool>>,
+    app_config: Config,
+    /// Active delayed regeneration timers
+    pending_regenerations: Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
+    /// Currently running regeneration tasks
+    active_regenerations: Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
+    /// Universal progress service for tracking
+    progress_service: Arc<ProgressService>,
     temp_file_manager: sandboxed_file_manager::SandboxedManager,
-    last_epg_check: Arc<Mutex<Option<DateTime<Utc>>>>,
-    system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
 impl ProxyRegenerationService {
     pub fn new(
         pool: SqlitePool,
+        app_config: Config,
         config: Option<RegenerationConfig>,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
-        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+        _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+        progress_service: Arc<ProgressService>,
     ) -> Self {
         Self {
             pool,
             config: config.unwrap_or_default(),
-            running_tasks: Arc::new(Mutex::new(HashMap::new())),
-            is_processing: Arc::new(RwLock::new(false)),
+            app_config,
+            pending_regenerations: Arc::new(Mutex::new(HashMap::new())),
+            active_regenerations: Arc::new(Mutex::new(HashMap::new())),
+            progress_service,
             temp_file_manager,
-            last_epg_check: Arc::new(Mutex::new(None)),
-            system,
         }
     }
 
-    /// Queue a proxy for regeneration due to source update
+    /// Queue a proxy for regeneration due to source update (with delay)
     pub async fn queue_proxy_regeneration(
         &self,
         proxy_id: Uuid,
         trigger_source_id: Uuid,
         trigger_source_type: &str,
-    ) -> Result<(), sqlx::Error> {
-        let queue_id = Uuid::new_v4();
-        let scheduled_at = Utc::now() + chrono::Duration::seconds(self.config.delay_seconds as i64);
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // CRITICAL FIX: Check if proxy is already actively regenerating
+        {
+            let active = self.active_regenerations.lock().await;
+            if active.contains_key(&proxy_id) {
+                let message = format!(
+                    "Proxy {} is already actively regenerating, ignoring new {} trigger from source {}",
+                    proxy_id, trigger_source_type, trigger_source_id
+                );
+                debug!("{}", message);
+                return Ok(()); // Silently ignore to avoid error spam
+            }
+        }
+        
+        let mut pending = self.pending_regenerations.lock().await;
+        
+        // Cancel existing timer for this proxy if any (deduplication)
+        if let Some(existing_handle) = pending.remove(&proxy_id) {
+            existing_handle.abort();
+            debug!("Cancelled existing regeneration timer for proxy {}", proxy_id);
+        }
 
-        let proxy_id_str = proxy_id.to_string();
-        let queue_id_str = queue_id.to_string();
-        let trigger_source_id_str = trigger_source_id.to_string();
-        let scheduled_at_str = scheduled_at.to_rfc3339();
-        let created_at_str = Utc::now().to_rfc3339();
+        let _scheduled_at = Utc::now() + chrono::Duration::seconds(self.config.delay_seconds as i64);
+        
+        // Start progress tracking using UniversalProgress
+        let operation_name = format!(
+            "Regenerate Proxy {} (triggered by {} source {})",
+            proxy_id, trigger_source_type, trigger_source_id
+        );
+        let trigger_source_type_owned = trigger_source_type.to_string();
+        let callback = Arc::new(self.progress_service.start_operation(
+            proxy_id,
+            OperationType::ProxyRegeneration,
+            operation_name,
+        ).await);
 
-        // Use INSERT OR REPLACE with retry logic for database locks
-        let max_retries = 3;
-        let mut delay = 50u64; // Start with 50ms for queue operations
-
-        for attempt in 0..max_retries {
-            match sqlx::query(
-                r#"
-                INSERT OR REPLACE INTO proxy_regeneration_queue
-                (id, proxy_id, trigger_source_id, trigger_source_type, status, scheduled_at, created_at)
-                VALUES (?, ?, ?, ?, 'pending', ?, ?)
-                "#,
+        // Create delayed regeneration task
+        let pool = self.pool.clone();
+        let temp_file_manager = self.temp_file_manager.clone();
+        let delay_seconds = self.config.delay_seconds;
+        let pending_clone = self.pending_regenerations.clone();
+        let active_clone = self.active_regenerations.clone();
+        let progress_service = self.progress_service.clone();
+        let service_clone = self.clone();
+        
+        let callback_for_spawn = Arc::clone(&callback);
+        let handle = tokio::spawn(async move {
+            // Update progress: waiting for delay
+            let delay_progress = UniversalProgress::new(
+                proxy_id,
+                OperationType::ProxyRegeneration,
+                format!("Regenerate Proxy {} (triggered by {} source {})", proxy_id, trigger_source_type_owned, trigger_source_id),
             )
-            .bind(&queue_id_str)
-            .bind(&proxy_id_str)
-            .bind(&trigger_source_id_str)
-            .bind(trigger_source_type)
-            .bind(&scheduled_at_str)
-            .bind(&created_at_str)
-            .execute(&self.pool)
-            .await
-            {
-                Ok(_) => break,
-                Err(e) => {
-                    let error_msg = e.to_string();
-                    if (error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY"))
-                        && attempt < max_retries - 1 {
-                        warn!("Database lock during queue insertion, retrying in {}ms (attempt {}/{})",
-                              delay, attempt + 1, max_retries);
-
-                        sleep(Duration::from_millis(delay)).await;
-                        delay = std::cmp::min(delay * 2, 1000); // Cap at 1 second for queue ops
+            .set_state(UniversalState::Preparing)
+            .update_step(format!("Waiting {}s before regeneration", delay_seconds));
+            callback_for_spawn(delay_progress);
+            
+            // Wait for the delay
+            sleep(Duration::from_secs(delay_seconds)).await;
+            
+            // ATOMIC TRANSITION: Remove from pending and add to active in single operation
+            let regen_handle = {
+                let service = service_clone.clone();
+                tokio::spawn(async move {
+                    // Update progress: starting regeneration
+                    let start_progress = UniversalProgress::new(
+                        proxy_id,
+                        OperationType::ProxyRegeneration,
+                        format!("Regenerate Proxy {} (triggered by {} source {})", proxy_id, trigger_source_type_owned, trigger_source_id),
+                    )
+                    .set_state(UniversalState::Processing)
+                    .update_step("Starting proxy regeneration".to_string());
+                    callback_for_spawn(start_progress);
+                    
+                    let error_msg = {
+                        let result = service.execute_regeneration(
+                            pool, 
+                            temp_file_manager, 
+                            Some(proxy_id), 
+                            Some(Arc::clone(&callback_for_spawn)), // Pass the progress callback
+                            false // Automatic trigger - check for active ingestions
+                        ).await;
+                        
+                        // Extract error message if any
+                        match result {
+                            Ok(_) => None,
+                            Err(e) => Some(e.to_string()),
+                        }
+                    }; // result is dropped here
+                    
+                    // Complete or fail the operation
+                    if let Some(error_msg) = error_msg {
+                        progress_service.fail_operation(proxy_id, error_msg).await;
                     } else {
-                        return Err(e);
+                        progress_service.complete_operation(proxy_id).await;
                     }
+                })
+            };
+
+            // CRITICAL FIX: Atomic pending->active transition
+            {
+                let mut pending_guard = pending_clone.lock().await;
+                let mut active_guard = active_clone.lock().await;
+                
+                // Remove from pending and add to active atomically
+                pending_guard.remove(&proxy_id);
+                active_guard.insert(proxy_id, regen_handle);
+                
+                // Drop guards to release both locks simultaneously
+            }
+        });
+
+        pending.insert(proxy_id, handle);
+
+        info!(
+            "Queued proxy {} for regeneration (trigger: {} {}, scheduled in {}s)",
+            proxy_id, trigger_source_type, trigger_source_id, self.config.delay_seconds
+        );
+
+        Ok(())
+    }
+
+    /// Queue a manual proxy regeneration (immediate processing)
+    pub async fn queue_manual_regeneration(
+        &self,
+        proxy_id: Uuid,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // CRITICAL FIX: Check if proxy is already actively regenerating
+        {
+            let active = self.active_regenerations.lock().await;
+            if active.contains_key(&proxy_id) {
+                let message = format!(
+                    "Proxy {} is already actively regenerating, rejecting manual regeneration request",
+                    proxy_id
+                );
+                warn!("{}", message);
+                return Err(message.into()); // Return error for manual requests so user gets feedback
+            }
+        }
+        
+        // Cancel any pending delayed regeneration
+        {
+            let mut pending = self.pending_regenerations.lock().await;
+            if let Some(existing_handle) = pending.remove(&proxy_id) {
+                existing_handle.abort();
+                debug!("Cancelled pending regeneration for manual trigger: {}", proxy_id);
+            }
+        }
+
+        // Start progress tracking for manual regeneration
+        let operation_name = format!("Manual Regeneration: Proxy {}", proxy_id);
+        let callback = Arc::new(self.progress_service.start_operation(
+            proxy_id,
+            OperationType::ProxyRegeneration,
+            operation_name,
+        ).await);
+
+        // Start immediate regeneration
+        let pool = self.pool.clone();
+        let temp_file_manager = self.temp_file_manager.clone();
+        let active_clone = self.active_regenerations.clone();
+        let progress_service = self.progress_service.clone();
+        let service_clone = self.clone();
+        
+        let handle = tokio::spawn(async move {
+            // Update progress: starting manual regeneration
+            let start_progress = UniversalProgress::new(
+                proxy_id,
+                OperationType::ProxyRegeneration,
+                format!("Manual Regeneration: Proxy {}", proxy_id),
+            )
+            .set_state(UniversalState::Processing)
+            .update_step("Starting manual regeneration".to_string());
+            callback(start_progress);
+            
+            let service = service_clone.clone();
+            let error_msg = {
+                let result = service.execute_regeneration(
+                    pool, 
+                    temp_file_manager, 
+                    Some(proxy_id), 
+                    Some(Arc::clone(&callback)), // Pass the progress callback for manual trigger
+                    true // Manual trigger - allow override of active ingestions
+                ).await;
+                
+                // Extract error message if any
+                match result {
+                    Ok(_) => None,
+                    Err(e) => Some(e.to_string()),
+                }
+            }; // result is dropped here
+            
+            // Complete or fail the operation
+            if let Some(error_msg) = error_msg {
+                progress_service.fail_operation(proxy_id, error_msg).await;
+            } else {
+                progress_service.complete_operation(proxy_id).await;
+            }
+            
+            // Cleanup after completion
+            {
+                let mut active_guard = active_clone.lock().await;
+                active_guard.remove(&proxy_id);
+            }
+        });
+
+        // Track as active
+        {
+            let mut active = self.active_regenerations.lock().await;
+            active.insert(proxy_id, handle);
+        }
+
+        info!("Started manual regeneration for proxy {}", proxy_id);
+        Ok(())
+    }
+
+    /// Queue manual regeneration for all active proxies (immediate processing)
+    pub async fn queue_manual_regeneration_all(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // Start progress tracking for manual regeneration of all proxies
+        let placeholder_proxy_id = Uuid::new_v4(); // Placeholder for tracking all proxies
+        let operation_name = "Manual Regeneration: All Active Proxies".to_string();
+        let callback = Arc::new(self.progress_service.start_operation(
+            placeholder_proxy_id,
+            OperationType::ProxyRegeneration,
+            operation_name,
+        ).await);
+
+        // Start immediate regeneration for all proxies
+        let pool = self.pool.clone();
+        let temp_file_manager = self.temp_file_manager.clone();
+        let active_clone = self.active_regenerations.clone();
+        let progress_service = self.progress_service.clone();
+        let service_clone = self.clone();
+        
+        let handle = tokio::spawn(async move {
+            // Update progress: starting batch regeneration
+            let start_progress = UniversalProgress::new(
+                placeholder_proxy_id,
+                OperationType::ProxyRegeneration,
+                "Manual Regeneration: All Active Proxies".to_string(),
+            )
+            .set_state(UniversalState::Processing)
+            .update_step("Starting regeneration for all active proxies".to_string());
+            callback(start_progress);
+            
+            let service = service_clone.clone();
+            let error_msg = {
+                let result = service.execute_regeneration(
+                    pool, 
+                    temp_file_manager, 
+                    None, 
+                    Some(Arc::clone(&callback)), // Pass the progress callback for bulk regeneration
+                    true // Manual trigger - allow override of active ingestions
+                ).await;
+                
+                // Extract error message if any
+                match result {
+                    Ok(_) => None,
+                    Err(e) => Some(e.to_string()),
+                }
+            }; // result is dropped here
+            
+            // Complete or fail the operation
+            if let Some(error_msg) = error_msg {
+                progress_service.fail_operation(placeholder_proxy_id, error_msg).await;
+            } else {
+                progress_service.complete_operation(placeholder_proxy_id).await;
+            }
+            
+            // Cleanup after completion
+            {
+                let mut active_guard = active_clone.lock().await;
+                active_guard.remove(&placeholder_proxy_id);
+            }
+        });
+
+        // Track as active
+        {
+            let mut active = self.active_regenerations.lock().await;
+            active.insert(placeholder_proxy_id, handle);
+        }
+
+        info!("Started manual regeneration for all active proxies");
+        Ok(())
+    }
+
+    /// Execute the actual proxy regeneration using the new pipeline
+    async fn execute_regeneration(
+        &self,
+        pool: SqlitePool, 
+        temp_file_manager: sandboxed_file_manager::SandboxedManager,
+        proxy_id: Option<Uuid>,
+        progress_callback: Option<Arc<crate::services::progress_service::UniversalProgressCallback>>,
+        is_manual_trigger: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // CRITICAL FIX: Check for active ingestions for ALL triggers to prevent resource conflicts
+        if self.has_active_ingestions().await? {
+            let message = if is_manual_trigger {
+                "Manual regeneration blocked: ingestion is in progress. This prevents resource conflicts and ensures data consistency."
+            } else {
+                "Automatic regeneration blocked: ingestion is in progress."
+            };
+            warn!("{}", message);
+            return Err(message.into());
+        }
+
+        match proxy_id {
+            Some(id) => {
+                info!("Starting regeneration for proxy {}", id);
+                if let Some(ref callback) = progress_callback {
+                    let progress = UniversalProgress::new(
+                        id,
+                        OperationType::ProxyRegeneration,
+                        format!("Regenerate Proxy {}", id),
+                    )
+                    .set_state(UniversalState::Processing)
+                    .update_step("Starting pipeline execution".to_string());
+                    callback(progress);
+                }
+                
+                self.regenerate_single_proxy(pool, temp_file_manager, id, progress_callback).await?;
+            }
+            None => {
+                info!("Starting regeneration for all active proxies");
+                self.regenerate_all_proxies(pool, temp_file_manager, progress_callback).await?;
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Regenerate a single proxy using the new pipeline
+    async fn regenerate_single_proxy(
+        &self,
+        pool: SqlitePool,
+        temp_file_manager: sandboxed_file_manager::SandboxedManager,
+        proxy_id: Uuid,
+        progress_callback: Option<Arc<crate::services::progress_service::UniversalProgressCallback>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::pipeline::PipelineOrchestratorFactory;
+
+        // Use the injected app configuration
+        let storage_config = self.app_config.storage.clone();
+
+        // Create factory and orchestrator
+        let factory = PipelineOrchestratorFactory::from_components(
+            pool,
+            self.app_config.clone(),
+            storage_config,
+            temp_file_manager,
+        ).await?;
+
+        info!("Regenerating proxy {} using new pipeline factory", proxy_id);
+        
+        if let Some(ref callback) = progress_callback {
+            let progress = UniversalProgress::new(
+                proxy_id,
+                OperationType::ProxyRegeneration,
+                format!("Regenerate Proxy {}", proxy_id),
+            )
+            .set_state(UniversalState::Processing)
+            .update_step("Creating pipeline orchestrator".to_string());
+            callback(progress);
+        }
+
+        // Create and execute pipeline
+        let mut orchestrator = factory.create_for_proxy(proxy_id).await?;
+        
+        // Store factory reference for cleanup
+        let factory_for_cleanup = factory.clone();
+        
+        if let Some(ref callback) = progress_callback {
+            let progress = UniversalProgress::new(
+                proxy_id,
+                OperationType::ProxyRegeneration,
+                format!("Regenerate Proxy {}", proxy_id),
+            )
+            .set_state(UniversalState::Processing)
+            .update_step("Executing pipeline stages".to_string())
+            .update_percentage(50.0);
+            callback(progress);
+        }
+        
+        let execution_result = orchestrator.execute_pipeline(&progress_callback).await?;
+
+        match execution_result.status {
+            crate::pipeline::models::PipelineStatus::Completed => {
+                info!("Successfully completed regeneration for proxy {}", proxy_id);
+                
+                // CRITICAL FIX: Unregister orchestrator after successful completion
+                factory_for_cleanup.unregister_orchestrator(proxy_id).await;
+                
+                if let Some(ref callback) = progress_callback {
+                    let progress = UniversalProgress::new(
+                        proxy_id,
+                        OperationType::ProxyRegeneration,
+                        format!("Regenerate Proxy {}", proxy_id),
+                    )
+                    .set_state(UniversalState::Completed)
+                    .update_step("Pipeline execution completed successfully".to_string())
+                    .update_percentage(100.0);
+                    callback(progress);
+                }
+            }
+            crate::pipeline::models::PipelineStatus::Failed => {
+                let error_msg = execution_result.error_message
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                error!("Pipeline failed for proxy {}: {}", proxy_id, error_msg);
+                
+                // CRITICAL FIX: Unregister orchestrator after failure
+                factory_for_cleanup.unregister_orchestrator(proxy_id).await;
+                
+                if let Some(ref callback) = progress_callback {
+                    let progress = UniversalProgress::new(
+                        proxy_id,
+                        OperationType::ProxyRegeneration,
+                        format!("Regenerate Proxy {}", proxy_id),
+                    )
+                    .set_error(format!("Pipeline execution failed: {}", error_msg));
+                    callback(progress);
+                }
+                
+                return Err(format!("Pipeline execution failed for proxy {}", proxy_id).into());
+            }
+            _ => {
+                warn!("Pipeline completed with status: {:?} for proxy {}", 
+                    execution_result.status, proxy_id);
+                
+                // CRITICAL FIX: Unregister orchestrator for any completion status
+                factory_for_cleanup.unregister_orchestrator(proxy_id).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Regenerate all active proxies using the new pipeline
+    async fn regenerate_all_proxies(
+        &self,
+        pool: SqlitePool,
+        temp_file_manager: sandboxed_file_manager::SandboxedManager,
+        progress_callback: Option<Arc<crate::services::progress_service::UniversalProgressCallback>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Get all active proxies directly from database
+        let active_proxies = sqlx::query("SELECT id, name FROM stream_proxies WHERE is_active = 1")
+            .fetch_all(&pool)
+            .await?;
+
+        if active_proxies.is_empty() {
+            info!("No active proxies found for regeneration");
+            return Ok(());
+        }
+
+        info!("Found {} active proxies for regeneration", active_proxies.len());
+        let total_proxies = active_proxies.len();
+        let placeholder_id = Uuid::new_v4(); // Use for progress tracking of batch operation
+
+        let mut success_count = 0;
+        let mut failure_count = 0;
+
+        // Regenerate each proxy
+        for (index, proxy) in active_proxies.iter().enumerate() {
+            let proxy_id_str: String = proxy.get("id");
+            let proxy_name: String = proxy.get("name");
+            let proxy_id = parse_uuid_flexible(&proxy_id_str)?;
+            
+            if let Some(ref callback) = progress_callback {
+                let progress = UniversalProgress::new(
+                    placeholder_id,
+                    OperationType::ProxyRegeneration,
+                    "Manual Regeneration: All Active Proxies".to_string(),
+                )
+                .set_state(UniversalState::Processing)
+                .update_step(format!("Regenerating proxy: {} ({}/{})", proxy_name, index + 1, total_proxies))
+                .update_percentage((index as f64 / total_proxies as f64) * 100.0);
+                callback(progress);
+            }
+            
+            info!("Regenerating proxy: {} ({})", proxy_name, proxy_id);
+            
+            match self.regenerate_single_proxy(pool.clone(), temp_file_manager.clone(), proxy_id, None).await {
+                Ok(()) => {
+                    success_count += 1;
+                    info!("Successfully regenerated proxy: {}", proxy_name);
+                }
+                Err(e) => {
+                    failure_count += 1;
+                    error!("Failed to regenerate proxy {}: {}", proxy_name, e);
                 }
             }
         }
 
-        info!(
-            "Queued proxy {} for regeneration (trigger: {} {}, scheduled: {})",
-            proxy_id, trigger_source_type, trigger_source_id, scheduled_at
-        );
+        info!("Regeneration complete: {} succeeded, {} failed", success_count, failure_count);
+        
+        if let Some(ref callback) = progress_callback {
+            if failure_count > 0 {
+                let progress = UniversalProgress::new(
+                    placeholder_id,
+                    OperationType::ProxyRegeneration,
+                    "Manual Regeneration: All Active Proxies".to_string(),
+                )
+                .set_error(format!(
+                    "Completed with {} failures: {} succeeded, {} failed", 
+                    failure_count, success_count, failure_count
+                ));
+                callback(progress);
+            } else {
+                let progress = UniversalProgress::new(
+                    placeholder_id,
+                    OperationType::ProxyRegeneration,
+                    "Manual Regeneration: All Active Proxies".to_string(),
+                )
+                .set_state(UniversalState::Completed)
+                .update_step(format!("All {} proxies regenerated successfully", success_count))
+                .update_percentage(100.0);
+                callback(progress);
+            }
+        }
+
+        if failure_count > 0 {
+            return Err(format!("Failed to regenerate {} out of {} proxies", failure_count, success_count + failure_count).into());
+        }
 
         Ok(())
     }
@@ -174,581 +614,327 @@ impl ProxyRegenerationService {
 
         let query = match source_type {
             "stream" => {
-                r#"
-                SELECT DISTINCT sp.id
-                FROM stream_proxies sp
-                JOIN proxy_sources ps ON sp.id = ps.proxy_id
-                WHERE ps.source_id = ?
-                AND sp.is_active = TRUE
-                AND sp.auto_regenerate = TRUE
-                "#
+                "SELECT DISTINCT sp.id as proxy_id
+                 FROM stream_proxies sp
+                 JOIN proxy_sources ps ON sp.id = ps.proxy_id
+                 WHERE ps.source_id = ? AND sp.is_active = 1 AND sp.auto_regenerate = 1"
             }
             "epg" => {
-                r#"
-                SELECT DISTINCT sp.id
-                FROM stream_proxies sp
-                JOIN proxy_epg_sources pes ON sp.id = pes.proxy_id
-                WHERE pes.epg_source_id = ?
-                AND sp.is_active = TRUE
-                AND sp.auto_regenerate = TRUE
-                "#
+                "SELECT DISTINCT sp.id as proxy_id
+                 FROM stream_proxies sp
+                 JOIN proxy_epg_sources pes ON sp.id = pes.proxy_id  
+                 WHERE pes.epg_source_id = ? AND sp.is_active = 1 AND sp.auto_regenerate = 1"
             }
-            _ => return Ok(vec![]),
+            _ => return Err(sqlx::Error::TypeNotFound { type_name: format!("Invalid source_type: {}", source_type) }),
         };
 
         let rows = sqlx::query(query)
-            .bind(source_id_str)
+            .bind(&source_id_str)
             .fetch_all(&self.pool)
             .await?;
 
         let proxy_ids = rows
             .into_iter()
-            .filter_map(|row| row.get_uuid("id").ok())
+            .filter_map(|row| {
+                let proxy_id_str: String = row.get("proxy_id");
+                proxy_id_str.parse::<Uuid>().ok()
+            })
             .collect();
 
         Ok(proxy_ids)
     }
 
-    /// Start the background processor
-    pub async fn start_processor(
-        &self,
-        database: Database,
-        data_mapping_service: DataMappingService,
-        logo_asset_service: LogoAssetService,
-        config: Config,
-    ) {
-        let pool = self.pool.clone();
-        let regeneration_config = self.config.clone();
-        let is_processing = self.is_processing.clone();
-        let running_tasks = self.running_tasks.clone();
-        let temp_file_manager = self.temp_file_manager.clone();
-        let last_epg_check = self.last_epg_check.clone();
-        let system = self.system.clone();
-        let service_for_cleanup = Self {
-            pool: pool.clone(),
-            config: regeneration_config.clone(),
-            running_tasks: running_tasks.clone(),
-            is_processing: is_processing.clone(),
-            temp_file_manager: temp_file_manager.clone(),
-            last_epg_check: last_epg_check.clone(),
-            system: system.clone(),
-        };
+    /// Queue regeneration for all affected proxies after source update (scheduler-coordinated)
+    /// This version includes additional coordination to prevent conflicts with manual regenerations
+    pub async fn queue_affected_proxies_coordinated(&self, source_id: Uuid, source_type: &str) {
+        // COORDINATION FIX: Check if we have too many active regenerations already
+        let active_count = self.get_active_regeneration_count().await;
+        if active_count >= self.config.max_concurrent {
+            debug!(
+                "Scheduler skipping {} source {} proxy regenerations: {} active regenerations at max capacity ({})",
+                source_type, source_id, active_count, self.config.max_concurrent
+            );
+            return;
+        }
 
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
-
-            loop {
-                interval.tick().await;
-
-                // Check if any processing is already happening
-                {
-                    let processing = is_processing.read().await;
-                    if *processing {
-                        continue;
-                    }
-                }
-
-                // Check for recently completed EPG ingestions that need regeneration
-                Self::check_for_epg_completions(&pool, &last_epg_check).await;
-
-                // Get ready queue entries
-                match Self::get_ready_queue_entries(&pool).await {
-                    Ok(entries) if !entries.is_empty() => {
-                        info!("Processing {} queued proxy regenerations", entries.len());
-
-                        // Set processing flag
-                        {
-                            let mut processing = is_processing.write().await;
-                            *processing = true;
-                        }
-
-                        // Process entries
-                        for entry in entries {
-                            if running_tasks.lock().await.len()
-                                >= regeneration_config.max_concurrent
-                            {
-                                // Wait for a slot
-                                while running_tasks.lock().await.len()
-                                    >= regeneration_config.max_concurrent
-                                {
-                                    sleep(Duration::from_millis(100)).await;
-                                }
-                            }
-
-                            let proxy_id = entry.proxy_id;
-                            let task = Self::spawn_regeneration_task(
-                                pool.clone(),
-                                entry,
-                                database.clone(),
-                                data_mapping_service.clone(),
-                                logo_asset_service.clone(),
-                                config.clone(),
-                                temp_file_manager.clone(),
-                                system.clone(),
-                            );
-
-                            running_tasks.lock().await.insert(proxy_id, task);
-                        }
-
-                        // Clear processing flag
-                        {
-                            let mut processing = is_processing.write().await;
-                            *processing = false;
-                        }
-                    }
-                    Ok(_) => {
-                        // No entries to process
-                    }
-                    Err(e) => {
-                        error!("Failed to get queue entries: {}", e);
-                    }
-                }
-
-                // Cleanup completed tasks
-                Self::cleanup_completed_tasks(&running_tasks).await;
-
-                // Cleanup old queue entries
-                if let Err(e) = service_for_cleanup
-                    .cleanup_old_entries(regeneration_config.cleanup_after_hours)
-                    .await
-                {
-                    error!("Failed to cleanup old queue entries: {}", e);
-                }
-            }
-        });
-    }
-
-    async fn get_ready_queue_entries(pool: &SqlitePool) -> Result<Vec<QueueEntry>, sqlx::Error> {
-        let now = Utc::now().to_rfc3339();
-
-        let rows = sqlx::query(
-            r#"
-            SELECT id, proxy_id, trigger_source_id, trigger_source_type, status,
-                   scheduled_at, created_at, started_at, completed_at, error_message
-            FROM proxy_regeneration_queue
-            WHERE status = 'pending' AND scheduled_at <= ?
-            ORDER BY scheduled_at ASC
-            "#,
-        )
-        .bind(now)
-        .fetch_all(pool)
-        .await?;
-
-        let entries = rows
-            .into_iter()
-            .filter_map(|row| {
-                Some(QueueEntry {
-                    id: row.get_uuid("id").ok()?,
-                    proxy_id: row.get_uuid("proxy_id").ok()?,
-                    trigger_source_id: row
-                        .get::<Option<String>, _>("trigger_source_id")
-                        .and_then(|s| s.parse().ok()),
-                    trigger_source_type: row.get("trigger_source_type"),
-                    status: match row.get::<String, _>("status").as_str() {
-                        "pending" => QueueStatus::Pending,
-                        "processing" => QueueStatus::Processing,
-                        "completed" => QueueStatus::Completed,
-                        "failed" => QueueStatus::Failed,
-                        _ => QueueStatus::Pending,
-                    },
-                    scheduled_at: row.get_datetime("scheduled_at"),
-                    created_at: row.get_datetime("created_at"),
-                    started_at: row.get_datetime_opt("started_at"),
-                    completed_at: row.get_datetime_opt("completed_at"),
-                    error_message: row.get("error_message"),
-                })
-            })
-            .collect();
-
-        Ok(entries)
-    }
-
-    fn spawn_regeneration_task(
-        pool: SqlitePool,
-        entry: QueueEntry,
-        database: Database,
-        data_mapping_service: DataMappingService,
-        logo_asset_service: LogoAssetService,
-        config: Config,
-        temp_file_manager: sandboxed_file_manager::SandboxedManager,
-        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
-    ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            let start_time = Instant::now();
-
-            // Mark as processing
-            if let Err(e) =
-                Self::update_queue_status(&pool, entry.id, QueueStatus::Processing, None).await
-            {
-                error!("Failed to update queue status to processing: {}", e);
-                return;
-            }
-
-            // Get the proxy
-            let proxy = match database.get_stream_proxy(entry.proxy_id).await {
-                Ok(Some(proxy)) => proxy,
-                Ok(None) => {
-                    warn!("Proxy {} not found, removing from queue", entry.proxy_id);
-                    let _ = Self::update_queue_status(
-                        &pool,
-                        entry.id,
-                        QueueStatus::Failed,
-                        Some("Proxy not found".to_string()),
-                    )
-                    .await;
+        match self.find_affected_proxies(source_id, source_type).await {
+            Ok(proxy_ids) => {
+                if proxy_ids.is_empty() {
+                    debug!("No proxies affected by {} source {} update", source_type, source_id);
                     return;
                 }
-                Err(e) => {
-                    error!("Failed to get proxy {}: {}", entry.proxy_id, e);
-                    let _ = Self::update_queue_status(
-                        &pool,
-                        entry.id,
-                        QueueStatus::Failed,
-                        Some(format!("Failed to get proxy: {}", e)),
-                    )
-                    .await;
-                    return;
-                }
-            };
 
-            // Create proxy service with native pipeline
-            let proxy_service = ProxyService::new(
-                config.storage.clone(),
-                temp_file_manager.clone(),
-                system.clone(),
-            );
-
-            // Create config resolver
-            use crate::repositories::{
-                FilterRepository, StreamProxyRepository, StreamSourceRepository,
-            };
-            let proxy_repo = StreamProxyRepository::new(database.pool());
-            let stream_source_repo = StreamSourceRepository::new(database.pool());
-            let filter_repo = FilterRepository::new(database.pool());
-
-            let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
-                proxy_repo,
-                stream_source_repo,
-                filter_repo,
-                database.clone(),
-            );
-
-            // Resolve proxy configuration upfront (single database query)
-            match config_resolver.resolve_config(entry.proxy_id).await {
-                Ok(resolved_config) => {
-                    // Validate configuration
-                    if let Err(e) = config_resolver.validate_config(&resolved_config) {
-                        error!("Invalid proxy configuration for {}: {}", entry.proxy_id, e);
-                        let _ = Self::update_queue_status(
-                            &pool,
-                            entry.id,
-                            QueueStatus::Failed,
-                            Some(format!("Invalid configuration: {}", e)),
-                        )
-                        .await;
-                        return;
-                    }
-
-                    // Create production output destination
-                    // TODO: Get actual proxy_output_file_manager from config
-                    let output = crate::models::GenerationOutput::InMemory; // Fallback for now
-
-                    // Generate using dependency injection
-                    match proxy_service
-                        .generate_proxy_with_config(
-                            resolved_config,
-                            output,
-                            &database,
-                            &data_mapping_service,
-                            &logo_asset_service,
-                            &config.web.base_url,
-                            config.data_mapping_engine.clone(),
-                            &config,
-                        )
-                        .await
-                    {
-                        Ok(generation) => {
-                            // Save the M3U file using the proxy ULID for proper file management
-                            match proxy_service
-                                .save_m3u_file_with_manager(
-                                    &proxy.id.to_string(),
-                                    &generation.m3u_content,
-                                    None,
-                                )
-                                .await
-                            {
-                                Ok(_) => {
-                                    // Update the last_generated_at timestamp for the proxy
-                                    if let Err(e) = database.update_proxy_last_generated(entry.proxy_id).await {
-                                        error!("Failed to update last_generated_at for proxy {}: {}", entry.proxy_id, e);
-                                    }
-                                    
-                                    let duration = start_time.elapsed();
-                                    info!(
-                                        "Successfully auto-regenerated proxy '{}' with {} channels using dependency injection in {:?}",
-                                        proxy.name, generation.channel_count, duration
-                                    );
-                                    let _ = Self::update_queue_status(
-                                        &pool,
-                                        entry.id,
-                                        QueueStatus::Completed,
-                                        None,
-                                    )
-                                    .await;
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to save regenerated M3U for proxy {}: {}",
-                                        entry.proxy_id, e
-                                    );
-                                    let _ = Self::update_queue_status(
-                                        &pool,
-                                        entry.id,
-                                        QueueStatus::Failed,
-                                        Some(format!("Failed to save M3U: {}", e)),
-                                    )
-                                    .await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to regenerate proxy {} using dependency injection: {}",
-                                entry.proxy_id, e
-                            );
-                            let _ = Self::update_queue_status(
-                                &pool,
-                                entry.id,
-                                QueueStatus::Failed,
-                                Some(format!("Generation failed: {}", e)),
-                            )
-                            .await;
-                        }
+                // COORDINATION FIX: Filter out proxies that are already actively regenerating
+                let mut available_proxies = Vec::new();
+                let mut skipped_count = 0;
+                
+                for proxy_id in proxy_ids {
+                    if self.has_active_regeneration(proxy_id).await {
+                        skipped_count += 1;
+                        debug!("Skipping proxy {} - already actively regenerating", proxy_id);
+                    } else {
+                        available_proxies.push(proxy_id);
                     }
                 }
-                Err(e) => {
-                    error!(
-                        "Failed to resolve proxy configuration for {}: {}",
-                        entry.proxy_id, e
+
+                if available_proxies.is_empty() {
+                    debug!(
+                        "All {} proxies affected by {} source {} are already actively regenerating, skipping",
+                        skipped_count, source_type, source_id
                     );
-                    let _ = Self::update_queue_status(
-                        &pool,
-                        entry.id,
-                        QueueStatus::Failed,
-                        Some(format!("Config resolution failed: {}", e)),
-                    )
-                    .await;
+                    return;
+                }
+
+                info!(
+                    "Found {} available proxies affected by {} source {} update, queueing for regeneration (skipped {} already active)",
+                    available_proxies.len(), source_type, source_id, skipped_count
+                );
+
+                for proxy_id in available_proxies {
+                    if let Err(e) = self.queue_proxy_regeneration(proxy_id, source_id, source_type).await {
+                        error!("Failed to queue proxy {} for regeneration: {}", proxy_id, e);
+                    }
                 }
             }
-        })
-    }
-
-    async fn update_queue_status(
-        pool: &SqlitePool,
-        entry_id: Uuid,
-        status: QueueStatus,
-        error_message: Option<String>,
-    ) -> Result<(), sqlx::Error> {
-        let entry_id_str = entry_id.to_string();
-        let status_str = match status {
-            QueueStatus::Pending => "pending",
-            QueueStatus::Processing => "processing",
-            QueueStatus::Completed => "completed",
-            QueueStatus::Failed => "failed",
-        };
-
-        let now = Utc::now().to_rfc3339();
-
-        match status {
-            QueueStatus::Processing => {
-                sqlx::query(
-                    "UPDATE proxy_regeneration_queue SET status = ?, started_at = ? WHERE id = ?",
-                )
-                .bind(status_str)
-                .bind(now)
-                .bind(entry_id_str)
-                .execute(pool)
-                .await?;
-            }
-            QueueStatus::Completed | QueueStatus::Failed => {
-                sqlx::query(
-                    "UPDATE proxy_regeneration_queue SET status = ?, completed_at = ?, error_message = ? WHERE id = ?"
-                )
-                .bind(status_str)
-                .bind(now)
-                .bind(error_message)
-                .bind(entry_id_str)
-                .execute(pool)
-                .await?;
-            }
-            _ => {
-                sqlx::query("UPDATE proxy_regeneration_queue SET status = ? WHERE id = ?")
-                    .bind(status_str)
-                    .bind(entry_id_str)
-                    .execute(pool)
-                    .await?;
+            Err(e) => {
+                error!("Failed to find affected proxies for {} source {}: {}", source_type, source_id, e);
             }
         }
-
-        Ok(())
     }
 
-    async fn cleanup_completed_tasks(
-        running_tasks: &Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
-    ) {
-        let mut tasks = running_tasks.lock().await;
-        let mut completed = Vec::new();
+    /// Queue regeneration for all affected proxies after source update (legacy method)
+    pub async fn queue_affected_proxies(&self, source_id: Uuid, source_type: &str) {
+        match self.find_affected_proxies(source_id, source_type).await {
+            Ok(proxy_ids) => {
+                if proxy_ids.is_empty() {
+                    debug!("No proxies affected by {} source {} update", source_type, source_id);
+                    return;
+                }
 
-        for (proxy_id, task) in tasks.iter() {
-            if task.is_finished() {
-                completed.push(*proxy_id);
-            }
-        }
-
-        for proxy_id in completed {
-            if let Some(task) = tasks.remove(&proxy_id) {
-                let _ = task.await;
-                debug!(
-                    "Cleaned up completed regeneration task for proxy {}",
-                    proxy_id
+                info!(
+                    "Found {} proxies affected by {} source {} update, queueing for regeneration",
+                    proxy_ids.len(), source_type, source_id
                 );
+
+                for proxy_id in proxy_ids {
+                    if let Err(e) = self.queue_proxy_regeneration(proxy_id, source_id, source_type).await {
+                        error!("Failed to queue proxy {} for regeneration: {}", proxy_id, e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to find affected proxies for {} source {}: {}", source_type, source_id, e);
             }
         }
     }
 
-    /// Check for EPG ingestions that completed since our last check and queue regenerations
-    async fn check_for_epg_completions(
-        pool: &SqlitePool,
-        last_epg_check: &Arc<Mutex<Option<DateTime<Utc>>>>,
-    ) {
-        let mut last_check = last_epg_check.lock().await;
-        let now = Utc::now();
-        let check_since = last_check.unwrap_or_else(|| now - chrono::Duration::minutes(5));
-
-        // Check if any EPG sources completed since our last check
-        let completed_sources = sqlx::query(
-            "SELECT DISTINCT es.id as source_id, es.name as source_name
-             FROM epg_sources es
-             WHERE es.last_ingested_at > ? AND es.is_active = 1",
+    /// Monitor for completed EPG ingestions and queue affected proxies
+    pub async fn monitor_epg_completions(&self) {
+        // This would be called by a background task to check for recently completed EPG sources
+        // For now, we'll implement a simple approach that could be enhanced later
+        let pool = &self.pool;
+        
+        // Look for EPG sources that completed ingestion in the last minute
+        match sqlx::query(
+            r#"
+            SELECT id, name, updated_at 
+            FROM epg_sources 
+            WHERE is_active = 1 
+            AND datetime(updated_at) > datetime('now', '-1 minute')
+            ORDER BY updated_at DESC
+            "#
         )
-        .bind(check_since.to_rfc3339())
         .fetch_all(pool)
         .await
-        .unwrap_or_default();
+        {
+            Ok(rows) => {
+                for row in rows {
+                    let id: String = row.get("id");
+                    let name: String = row.get("name");
+                    if let Ok(source_id) = id.parse::<Uuid>() {
+                        debug!("Found recently updated EPG source: {} ({})", name, source_id);
+                        // COORDINATION FIX: Use coordinated method for background monitoring
+                        self.queue_affected_proxies_coordinated(source_id, "epg").await;
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to monitor EPG completions: {}", e);
+            }
+        }
+    }
 
-        if !completed_sources.is_empty() {
-            info!(
-                "Found {} EPG sources completed since last check, triggering proxy regenerations",
-                completed_sources.len()
-            );
 
-            for row in completed_sources {
-                let source_id: String = row.get("source_id");
-                let source_name: String = row.get("source_name");
+    /// Get queue status summary for API compatibility
+    pub async fn get_queue_status(&self) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let pending_count = self.pending_regenerations.lock().await.len();
+        let active_count = self.active_regenerations.lock().await.len();
+        
+        // Get count from ProgressService
+        let progress_operations = self.progress_service.get_progress_by_type(
+            OperationType::ProxyRegeneration
+        ).await;
+        let total_entries = progress_operations.len();
+        
+        Ok(serde_json::json!({
+            "pending": pending_count,
+            "active": active_count,
+            "total_tracked": total_entries,
+            "status": "running"
+        }))
+    }
 
-                // Find all proxies that use this EPG source and queue them for regeneration
-                if let Ok(proxies) = sqlx::query(
-                    "SELECT DISTINCT p.id as proxy_id, p.name as proxy_name
-                     FROM stream_proxies p
-                     JOIN proxy_sources ps ON p.id = ps.proxy_id
-                     WHERE ps.epg_source_id = ? AND p.is_active = 1",
-                )
-                .bind(&source_id)
-                .fetch_all(pool)
-                .await
-                {
-                    for proxy_row in proxies {
-                        let proxy_id: String = proxy_row.get("proxy_id");
-                        let proxy_name: String = proxy_row.get("proxy_name");
+    /// Start the background processor for monitoring EPG completions
+    pub fn start_processor(&self) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60)); // Check every minute
+            loop {
+                interval.tick().await;
+                service.monitor_epg_completions().await;
+            }
+        });
+        info!("Started proxy regeneration background processor");
+    }
 
-                        // Queue the proxy for regeneration
-                        let queue_id = Uuid::new_v4();
-                        let _ = sqlx::query(
-                            "INSERT OR IGNORE INTO proxy_regeneration_queue
-                             (id, proxy_id, trigger_source_id, trigger_source_type, reason, status, scheduled_at)
-                             VALUES (?, ?, ?, 'epg', ?, 'pending', datetime('now'))"
-                        )
-                        .bind(queue_id.to_string())
-                        .bind(&proxy_id)
-                        .bind(&source_id)
-                        .bind(format!("EPG source '{}' completed ingestion", source_name))
-                        .execute(pool)
-                        .await;
+    /// Cancel all pending regenerations (useful for shutdown)
+    pub async fn cancel_all_pending(&self) {
+        let mut pending = self.pending_regenerations.lock().await;
+        let mut active = self.active_regenerations.lock().await;
+        
+        for (proxy_id, handle) in pending.drain() {
+            handle.abort();
+            debug!("Cancelled pending regeneration for proxy {}", proxy_id);
+        }
+        
+        for (proxy_id, handle) in active.drain() {
+            handle.abort();
+            debug!("Cancelled active regeneration for proxy {}", proxy_id);
+        }
+        
+        // Progress entries are managed by ProgressService and will be cleaned up automatically
+        
+        info!("Cancelled all pending and active regenerations");
+    }
 
-                        debug!(
-                            "Queued proxy '{}' for regeneration due to EPG source '{}' completion",
-                            proxy_name, source_name
-                        );
+    /// Check if there are any active regenerations for a specific proxy
+    /// This checks both local active regenerations AND the universal progress service
+    pub async fn has_active_regeneration(&self, proxy_id: Uuid) -> bool {
+        // Check service-level active regenerations
+        let active = self.active_regenerations.lock().await;
+        if active.contains_key(&proxy_id) {
+            return true;
+        }
+        drop(active); // Release lock early
+        
+        // RACE CONDITION FIX: Also check the universal progress service for any ProxyRegeneration
+        // operations for this proxy. This covers both API requests and background regenerations.
+        let progress_operations = self.progress_service.get_progress_by_type(
+            crate::services::progress_service::OperationType::ProxyRegeneration
+        ).await;
+        
+        for (_operation_id, progress) in progress_operations {
+            // Check if this progress operation is for our proxy
+            if let Some(proxy_id_value) = progress.metadata.get("proxy_id") {
+                if let Some(progress_proxy_id_str) = proxy_id_value.as_str() {
+                    if let Ok(progress_proxy_id) = progress_proxy_id_str.parse::<Uuid>() {
+                        if progress_proxy_id == proxy_id {
+                            // Found an active regeneration for this proxy
+                            return true;
+                        }
                     }
                 }
             }
         }
-
-        // Update our last check time
-        *last_check = Some(now);
+        
+        false
     }
 
-    async fn cleanup_old_entries(&self, cleanup_after_hours: u64) -> Result<(), sqlx::Error> {
-        // Check if EPG ingestion is currently active by looking at the state manager
-        // We can proceed with cleanup as long as no EPG is actively running
+    /// Check if there are any active regenerations (any proxy)
+    pub async fn has_any_active_regenerations(&self) -> bool {
+        let active = self.active_regenerations.lock().await;
+        !active.is_empty()
+    }
 
-        let cutoff = Utc::now() - chrono::Duration::hours(cleanup_after_hours as i64);
-        let cutoff_str = cutoff.to_rfc3339();
+    /// Get count of active regenerations
+    pub async fn get_active_regeneration_count(&self) -> usize {
+        let active = self.active_regenerations.lock().await;
+        active.len()
+    }
 
-        // Use shorter retry logic for cleanup to avoid blocking EPG operations
-        let max_retries = 2;
-        let mut delay = 200u64; // Start with 200ms
-
-        for attempt in 0..max_retries {
-            match sqlx::query(
-                "DELETE FROM proxy_regeneration_queue WHERE status IN ('completed', 'failed') AND completed_at < ?"
-            )
-            .bind(cutoff_str.clone())
-            .execute(&self.pool)
-            .await
-            {
-                Ok(result) => {
-                    if result.rows_affected() > 0 {
-                        debug!("Cleaned up {} old regeneration queue entries", result.rows_affected());
-                    }
-                    return Ok(());
+    /// Check if there are any active ingestions in progress
+    async fn has_active_ingestions(&self) -> Result<bool, Box<dyn std::error::Error>> {
+        let all_progress = self.progress_service.get_ingestion_state_manager().get_all_progress().await;
+        
+        for (source_id, progress) in all_progress {
+            match progress.state {
+                crate::models::IngestionState::Connecting | 
+                crate::models::IngestionState::Downloading | 
+                crate::models::IngestionState::Processing | 
+                crate::models::IngestionState::Parsing | 
+                crate::models::IngestionState::Saving => {
+                    info!("Active ingestion found for source {}: state={:?}", source_id, progress.state);
+                    return Ok(true); // Active ingestion found
                 }
-                Err(e) => {
-                    let error_msg = e.to_string();
-                    if (error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY"))
-                        && attempt < max_retries - 1 {
-                        warn!("Database lock during cleanup, retrying in {}ms (attempt {}/{})",
-                              delay, attempt + 1, max_retries);
-
-                        sleep(Duration::from_millis(delay)).await;
-                        delay = std::cmp::min(delay * 2, 2000); // Cap at 2 seconds
-                    } else {
-                        // If we can't clean up due to locks, just skip it this time
-                        warn!("Skipping cleanup due to database lock - will retry later");
-                        return Ok(());
-                    }
-                }
+                _ => continue,
             }
         }
+        Ok(false)
+    }
+}
 
-        Ok(())
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_deduplication() {
+        let state_manager = crate::ingestor::IngestionStateManager::new();
+        let progress_service = Arc::new(ProgressService::new(state_manager));
+        
+        let service = ProxyRegenerationService::new(
+            sqlx::SqlitePool::connect(":memory:").await.unwrap(),
+            Config::default(),
+            Some(RegenerationConfig { delay_seconds: 1, max_concurrent: 1 }),
+            sandboxed_file_manager::SandboxedManager::new("/tmp").unwrap(),
+            Arc::new(tokio::sync::RwLock::new(sysinfo::System::new())),
+            progress_service,
+        );
+
+        let proxy_id = Uuid::new_v4();
+        let source_id = Uuid::new_v4();
+
+        // Queue the same regeneration twice
+        service.queue_proxy_regeneration(proxy_id, source_id, "stream").await.unwrap();
+        service.queue_proxy_regeneration(proxy_id, source_id, "stream").await.unwrap();
+
+        // Should only have one pending regeneration
+        let pending_count = service.pending_regenerations.lock().await.len();
+        assert_eq!(pending_count, 1);
     }
 
-    /// Get current queue status for monitoring
-    pub async fn get_queue_status(&self) -> Result<HashMap<String, usize>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT status, COUNT(*) as count FROM proxy_regeneration_queue GROUP BY status",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+    #[tokio::test] 
+    async fn test_manual_regeneration() {
+        let state_manager = crate::ingestor::IngestionStateManager::new();
+        let progress_service = Arc::new(ProgressService::new(state_manager));
+        
+        let service = ProxyRegenerationService::new(
+            sqlx::SqlitePool::connect(":memory:").await.unwrap(),
+            Config::default(),
+            None,
+            sandboxed_file_manager::SandboxedManager::new("/tmp").unwrap(),
+            Arc::new(tokio::sync::RwLock::new(sysinfo::System::new())),
+            progress_service,
+        );
 
-        let mut status = HashMap::new();
-        for row in rows {
-            let status_name: String = row.get("status");
-            let count: i64 = row.get("count");
-            status.insert(status_name, count as usize);
-        }
-
-        Ok(status)
+        let proxy_id = Uuid::new_v4();
+        
+        let result = service.queue_manual_regeneration(proxy_id).await;
+        assert!(result.is_ok());
+        
+        // Should have one active regeneration
+        let active_count = service.active_regenerations.lock().await.len();
+        assert_eq!(active_count, 1);
     }
 }

@@ -18,6 +18,7 @@ pub mod time;
 pub mod url;
 pub mod uuid_parser;
 pub mod validation;
+pub mod xmltv_parser;
 
 // Re-export commonly used types for convenience
 pub use deterministic_uuid::{generate_channel_uuid, generate_deterministic_uuid, generate_proxy_config_uuid, generate_relay_config_uuid};

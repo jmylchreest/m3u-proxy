@@ -6,18 +6,43 @@ use std::collections::HashMap;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DataMappingRule {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
     pub source_type: DataMappingSourceType,
-    pub scope: DataMappingRuleScope,
     pub sort_order: i32,
     pub is_active: bool,
     pub expression: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl FromRow<'_, sqlx::sqlite::SqliteRow> for DataMappingRule {
+    fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+        use crate::utils::uuid_parser::parse_uuid_flexible;
+        
+        let id_str: String = row.try_get("id")?;
+        let id = parse_uuid_flexible(&id_str)
+            .map_err(|e| sqlx::Error::ColumnDecode {
+                index: "id".to_string(),
+                source: format!("UUID parsing error: {}", e).into(),
+            })?;
+        
+        Ok(DataMappingRule {
+            id,
+            name: row.try_get("name")?,
+            description: row.try_get("description")?,
+            source_type: row.try_get("source_type")?,
+            sort_order: row.try_get("sort_order")?,
+            is_active: row.try_get("is_active")?,
+            expression: row.try_get("expression")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, ToSchema)]
@@ -37,17 +62,6 @@ impl std::fmt::Display for DataMappingSourceType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, ToSchema)]
-#[sqlx(type_name = "data_mapping_rule_scope", rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
-pub enum DataMappingRuleScope {
-    /// Rule applies to individual channels/items
-    Individual,
-    /// Rule applies to all streams within a source (stream-wide)
-    StreamWide,
-    /// Rule applies to all EPG data within a source (epg-wide)
-    EpgWide,
-}
 
 pub struct StreamMappingFields;
 
@@ -58,7 +72,7 @@ impl StreamMappingFields {
             "tvg_name",
             "tvg_logo",
             "tvg_shift",
-            "tvg_channo",
+            "tvg_chno",
             "group_title",
             "channel_name",
         ]
@@ -131,7 +145,7 @@ impl DataMappingFieldInfo {
                     source_type: DataMappingSourceType::Stream,
                 },
                 DataMappingFieldInfo {
-                    field_name: "tvg_channo".to_string(),
+                    field_name: "tvg_chno".to_string(),
                     display_name: "TVG Channel Number".to_string(),
                     field_type: "string".to_string(),
                     nullable: true,
@@ -388,5 +402,31 @@ impl DataMappingRuleUpdateRequest {
             // Add more expression validation logic here as needed
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataMappingStats {
+    pub total_channels: usize,
+    pub channels_modified: usize,
+    pub total_rules_processed: usize,
+    pub processing_time_ms: u128,
+    pub rule_performance: HashMap<String, u128>,
+}
+
+impl DataMappingStats {
+    /// Get the number of rules with performance data
+    pub fn len(&self) -> usize {
+        self.rule_performance.len()
+    }
+
+    /// Check if performance data is empty
+    pub fn is_empty(&self) -> bool {
+        self.rule_performance.is_empty()
+    }
+
+    /// Iterate over rule performance data
+    pub fn iter(&self) -> std::collections::hash_map::Iter<String, u128> {
+        self.rule_performance.iter()
     }
 }

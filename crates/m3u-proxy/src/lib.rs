@@ -3,6 +3,7 @@ pub mod config;
 pub mod data_mapping;
 pub mod database;
 pub mod errors;
+pub mod expression_parser;
 pub mod filter_parser;
 pub mod ingestor;
 pub mod logo_assets;

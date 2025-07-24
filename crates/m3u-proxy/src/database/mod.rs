@@ -1,29 +1,59 @@
 use crate::assets::MigrationAssets;
 use crate::config::{DatabaseBatchConfig, DatabaseConfig, IngestionConfig};
 use crate::models::*;
+use crate::ingestor::scheduler::SchedulerEvent;
 use anyhow::Result;
 use sqlx::{Pool, Row, Sqlite, SqlitePool, migrate::MigrateDatabase};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tracing;
 use uuid::Uuid;
+use crate::utils::uuid_parser::parse_uuid_flexible;
 pub mod channel_mapping;
 pub mod epg_sources;
 pub mod filters;
 pub mod linked_xtream;
 pub mod stream_sources;
+pub mod url_linking;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Database {
     pool: Pool<Sqlite>,
     channel_update_lock: Arc<Mutex<()>>,
     ingestion_config: IngestionConfig,
     batch_config: DatabaseBatchConfig,
+    scheduler_event_tx: Option<mpsc::UnboundedSender<SchedulerEvent>>,
+}
+
+impl std::fmt::Debug for Database {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Database")
+            .field("pool", &"SqlitePool")
+            .field("channel_update_lock", &"Mutex<()>")
+            .field("ingestion_config", &self.ingestion_config)
+            .field("batch_config", &self.batch_config)
+            .field("scheduler_event_tx", &self.scheduler_event_tx.is_some())
+            .finish()
+    }
 }
 
 impl Database {
     pub fn pool(&self) -> Pool<Sqlite> {
         self.pool.clone()
+    }
+
+    /// Set the scheduler event sender for database operations to notify scheduler of changes
+    pub fn set_scheduler_event_sender(&mut self, sender: mpsc::UnboundedSender<SchedulerEvent>) {
+        self.scheduler_event_tx = Some(sender);
+    }
+
+    /// Emit a scheduler event if the sender is available
+    pub fn emit_scheduler_event(&self, event: SchedulerEvent) {
+        if let Some(ref sender) = self.scheduler_event_tx {
+            if let Err(e) = sender.send(event) {
+                tracing::warn!("Failed to send scheduler event: {}", e);
+            }
+        }
     }
 
     pub async fn new(config: &DatabaseConfig, ingestion_config: &IngestionConfig) -> Result<Self> {
@@ -69,6 +99,7 @@ impl Database {
             channel_update_lock: Arc::new(Mutex::new(())),
             ingestion_config: ingestion_config.clone(),
             batch_config,
+            scheduler_event_tx: None,
         })
     }
 
@@ -190,7 +221,7 @@ impl Database {
 
         match row {
             Some(row) => Ok(Some(StreamProxy {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
                 name: row.get("name"),
                 description: None, // Field was added later, not in current schema
                 created_at: row.get("created_at"),
@@ -222,7 +253,7 @@ impl Database {
         .await?;
 
         Ok(StreamProxy {
-            id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+            id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
             name: row.get("name"),
             description: None, // Field was added later, not in current schema
             created_at: row.get("created_at"),
@@ -265,7 +296,7 @@ impl Database {
             };
 
             let source = StreamSource {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
                 name: row.get("name"),
                 source_type,
                 url: row.get("url"),
@@ -274,6 +305,7 @@ impl Database {
                 username: row.get("username"),
                 password: row.get("password"),
                 field_map: row.get("field_map"),
+                ignore_channel_numbers: row.get("ignore_channel_numbers"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
                 last_ingested_at: row.get("last_ingested_at"),
@@ -316,8 +348,8 @@ impl Database {
         let mut result = Vec::new();
         for row in rows {
             let proxy_filter = ProxyFilter {
-                proxy_id: Uuid::parse_str(&row.get::<String, _>("proxy_id"))?,
-                filter_id: Uuid::parse_str(&row.get::<String, _>("filter_id"))?,
+                proxy_id: parse_uuid_flexible(&row.get::<String, _>("proxy_id"))?,
+                filter_id: parse_uuid_flexible(&row.get::<String, _>("filter_id"))?,
                 priority_order: row.get("priority_order"),
                 is_active: row.get("is_active"),
                 created_at: row.get("created_at"),
@@ -352,7 +384,7 @@ impl Database {
         channel_id: Uuid,
     ) -> Result<Option<Channel>> {
         let row = sqlx::query(
-            "SELECT c.id, c.source_id, c.tvg_id, c.tvg_name, c.tvg_logo, c.tvg_shift,
+            "SELECT c.id, c.source_id, c.tvg_id, c.tvg_name, c.tvg_chno, c.tvg_logo, c.tvg_shift,
              c.group_title, c.channel_name, c.stream_url, c.created_at, c.updated_at
              FROM channels c
              JOIN proxy_sources ps ON c.source_id = ps.source_id
@@ -366,10 +398,11 @@ impl Database {
 
         match row {
             Some(row) => Ok(Some(Channel {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
                 tvg_id: row.get("tvg_id"),
                 tvg_name: row.get("tvg_name"),
+                tvg_chno: row.try_get("tvg_chno").unwrap_or(None),
                 tvg_logo: row.get("tvg_logo"),
                 tvg_shift: row.get("tvg_shift"),
                 group_title: row.get("group_title"),
@@ -404,7 +437,7 @@ impl Database {
         let mut proxies = Vec::new();
         for row in rows {
             let proxy = StreamProxy {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
                 name: row.get("name"),
                 description: row.get("description"),
                 proxy_mode: match row.get::<String, _>("proxy_mode").as_str() {
@@ -437,7 +470,7 @@ impl Database {
                 cache_program_logos: row.get("cache_program_logos"),
                 relay_profile_id: row
                     .get::<Option<String>, _>("relay_profile_id")
-                    .map(|s| Uuid::parse_str(&s).ok())
+                    .map(|s| parse_uuid_flexible(&s).ok())
                     .flatten(),
             };
             proxies.push(proxy);
@@ -471,7 +504,7 @@ impl Database {
             };
 
             let source = EpgSource {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
                 name: row.get("name"),
                 source_type,
                 url: row.get("url"),
@@ -516,8 +549,8 @@ impl Database {
         let mut programs = Vec::new();
         for row in rows {
             let program = EpgProgram {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
                 channel_id: row.get("channel_id"),
                 channel_name: row.get("channel_name"),
                 program_title: row.get("program_title"),
@@ -559,8 +592,8 @@ impl Database {
         let mut programs = Vec::new();
         for row in rows {
             let program = EpgProgram {
-                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
-                source_id: Uuid::parse_str(&row.get::<String, _>("source_id"))?,
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
                 channel_id: row.get("channel_id"),
                 channel_name: row.get("channel_name"),
                 program_title: row.get("program_title"),

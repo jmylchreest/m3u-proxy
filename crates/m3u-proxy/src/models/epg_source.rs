@@ -55,12 +55,27 @@ impl EpgSource {
     #[allow(dead_code)]
     pub fn build_epg_url(&self) -> Result<String> {
         match self.source_type {
-            EpgSourceType::Xmltv => Ok(self.url.clone()),
+            EpgSourceType::Xmltv => {
+                // Ensure XMLTV URLs have proper scheme
+                let url = if self.url.starts_with("http://") || self.url.starts_with("https://") {
+                    self.url.clone()
+                } else {
+                    format!("https://{}", self.url)
+                };
+                Ok(url)
+            },
             EpgSourceType::Xtream => {
                 if let (Some(username), Some(password)) = (&self.username, &self.password) {
+                    // Ensure Xtream URLs have proper scheme
+                    let base_url = if self.url.starts_with("http://") || self.url.starts_with("https://") {
+                        self.url.clone()
+                    } else {
+                        format!("https://{}", self.url)
+                    };
+                    
                     Ok(format!(
                         "{}/xmltv.php?username={}&password={}",
-                        self.url.trim_end_matches('/'),
+                        base_url.trim_end_matches('/'),
                         username,
                         password
                     ))

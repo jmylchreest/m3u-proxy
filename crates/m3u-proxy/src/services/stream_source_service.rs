@@ -6,7 +6,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::database::Database;
 use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceUpdateRequest};
@@ -15,6 +15,7 @@ use crate::services::EpgSourceService;
 /// Service for managing stream sources with business logic
 pub struct StreamSourceService {
     database: Database,
+    #[allow(dead_code)]
     epg_service: Arc<EpgSourceService>,
     cache_invalidation_tx: broadcast::Sender<()>,
 }
@@ -67,20 +68,27 @@ impl StreamSourceService {
     ) -> Result<StreamSource> {
         info!("Updating stream source: {}", id);
 
+        // Update linked sources first if requested
+        if request.update_linked {
+            match self.database.update_linked_sources(id, "stream", &request, request.update_linked).await {
+                Ok(count) if count > 0 => {
+                    info!("Updated {} linked sources for stream source {}", count, id);
+                }
+                Ok(_) => {
+                    // No linked sources to update
+                }
+                Err(e) => {
+                    error!("Failed to update linked sources for stream source '{}': {}", id, e);
+                }
+            }
+        }
+
         // Update the stream source
         let source = self
             .database
             .update_stream_source(id, &request)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Stream source not found"))?;
-
-        // If credentials or URL changed and it's an Xtream source, re-check auto-linking
-        if let Err(e) = self.database.auto_link_stream_source(&source).await {
-            error!(
-                "Failed to auto-link updated stream source '{}': {}",
-                source.name, e
-            );
-        }
 
         // Invalidate cache
         let _ = self.cache_invalidation_tx.send(());
@@ -279,6 +287,132 @@ impl StreamSourceService {
             _ => Ok(false),
         }
     }
+
+    /// Refresh a stream source using new source handlers with progress tracking
+    pub async fn refresh_with_progress(
+        &self, 
+        source: &crate::models::StreamSource,
+        progress_service: &crate::services::ProgressService,
+    ) -> Result<usize> {
+        use crate::sources::factory::SourceHandlerFactory;
+        use tracing::info;
+        
+        let start_time = std::time::Instant::now();
+        
+        // Create stream source handler
+        let handler = SourceHandlerFactory::create_handler(&source.source_type)
+            .map_err(|e| anyhow::anyhow!("Failed to create stream handler: {}", e))?;
+        
+        // Start progress tracking
+        let operation_id = source.id;
+        let operation_name = format!("Stream Ingestion: {}", source.name);
+        
+        let _operation_callback = progress_service.start_operation(
+            operation_id,
+            crate::services::progress_service::OperationType::StreamIngestion,
+            operation_name.clone(),
+        ).await;
+        
+        info!(
+            "Starting stream ingestion for source '{}' ({}) using new pipeline",
+            source.name, source.id
+        );
+        
+        // Create universal progress callback via ProgressService
+        let progress_callback = progress_service
+            .start_operation(
+                source.id, 
+                crate::services::progress_service::OperationType::StreamIngestion,
+                format!("Stream Ingestion: {}", source.name)
+            )
+            .await;
+        
+        // Use new stream source handler with universal progress to ingest data
+        let channels = handler
+            .ingest_channels_with_universal_progress(
+                source, 
+                Some(&Box::new(progress_callback))
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Stream source handler failed: {}", e))?;
+        
+        info!("Saving {} channels to database for '{}'", channels.len(), source.name);
+        
+        // Save channels to database 
+        let channels_saved = self.save_channels(source.id, channels).await
+            .map_err(|e| {
+                tracing::error!("Failed to save channels for '{}': {}", source.name, e);
+                anyhow::anyhow!("Failed to save channels: {}", e)
+            })?;
+        
+        info!("Successfully saved {} channels to database for Stream source '{}'", channels_saved, source.name);
+        
+        // Update last ingested timestamp
+        if let Err(e) = self.database.update_source_last_ingested(source.id).await {
+            tracing::warn!("Failed to update last ingested timestamp for stream source '{}': {}", source.name, e);
+        }
+        
+        let duration = start_time.elapsed();
+        info!(
+            "Stream ingestion completed for '{}' in {:?}: {} channels",
+            source.name, duration, channels_saved
+        );
+        
+        progress_service.complete_operation(operation_id).await;
+        
+        // Invalidate cache since we updated channels
+        let _ = self.cache_invalidation_tx.send(());
+        
+        Ok(channels_saved)
+    }
+    
+    /// Save channels to database
+    async fn save_channels(
+        &self,
+        source_id: uuid::Uuid,
+        channels: Vec<crate::models::Channel>,
+    ) -> Result<usize> {
+        use tracing::debug;
+        
+        let mut tx = self.database.pool().begin().await?;
+        
+        // Delete existing channels for this source
+        sqlx::query("DELETE FROM channels WHERE source_id = ?")
+            .bind(source_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        
+        debug!("Deleted existing channels for source {}", source_id);
+        
+        let mut channels_saved = 0;
+        for channel in channels {
+            sqlx::query(
+                "INSERT INTO channels (id, source_id, channel_name, stream_url, tvg_chno, group_title, tvg_id, tvg_name, tvg_logo, tvg_shift, created_at, updated_at) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(channel.id.to_string())
+            .bind(source_id.to_string())
+            .bind(&channel.channel_name)
+            .bind(&channel.stream_url)
+            .bind(channel.tvg_chno.as_deref())
+            .bind(channel.group_title.as_deref())
+            .bind(channel.tvg_id.as_deref())
+            .bind(channel.tvg_name.as_deref())
+            .bind(channel.tvg_logo.as_deref())
+            .bind(channel.tvg_shift.as_deref())
+            .bind(channel.created_at)
+            .bind(channel.updated_at)
+            .execute(&mut *tx)
+            .await?;
+            
+            channels_saved += 1;
+        }
+        
+        tx.commit().await?;
+        debug!("Successfully saved {} channels", channels_saved);
+        
+        Ok(channels_saved)
+    }
 }
 
 /// Stream source with statistics
@@ -314,7 +448,6 @@ pub struct TestConnectionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::StreamSourceType;
 
     #[tokio::test]
     async fn test_create_with_auto_epg() {

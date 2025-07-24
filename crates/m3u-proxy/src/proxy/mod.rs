@@ -3,109 +3,130 @@ use anyhow::Result;
 use tracing::info;
 
 use crate::config::StorageConfig;
-use crate::data_mapping::service::DataMappingService;
+use crate::data_mapping::DataMappingService;
 use crate::database::Database;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 
 pub mod config_resolver;
-pub mod epg_generator;
+// pub mod epg_generator; // ARCHIVED: Moved to /archive/old-proxy-generators/
 pub mod filter_engine;
-pub mod generator;
-pub mod native_pipeline;
+// pub mod generator; // ARCHIVED: Moved to /archive/old-proxy-generators/
 pub mod robust_streaming;
 pub mod session_tracker;
 pub mod stage_strategy;
 
 #[derive(Clone)]
 pub struct ProxyService {
+    #[allow(dead_code)]
     storage_config: StorageConfig,
+    #[allow(dead_code)]
     shared_memory_monitor: Option<crate::utils::SimpleMemoryMonitor>,
-    temp_file_manager: sandboxed_file_manager::SandboxedManager,
+    pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
+    proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
+    #[allow(dead_code)]
     system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
 impl ProxyService {
     pub fn new(
         storage_config: StorageConfig,
-        temp_file_manager: sandboxed_file_manager::SandboxedManager,
+        pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
+        proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
         system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
             storage_config,
             shared_memory_monitor: None,
-            temp_file_manager,
+            pipeline_file_manager,
+            proxy_output_file_manager,
             system,
         }
     }
 
     pub fn with_memory_monitor(
         storage_config: StorageConfig,
-        temp_file_manager: sandboxed_file_manager::SandboxedManager,
+        pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
+        proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
         memory_monitor: crate::utils::SimpleMemoryMonitor,
         system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
             storage_config,
             shared_memory_monitor: Some(memory_monitor),
-            temp_file_manager,
+            pipeline_file_manager,
+            proxy_output_file_manager,
             system,
         }
     }
 
-    /// Generate a proxy using the native pipeline
+    /// Generate a proxy using the new pipeline orchestrator with factory pattern
     pub async fn generate_proxy_with_config(
         &self,
         config: ResolvedProxyConfig,
         output: GenerationOutput,
         database: &Database,
-        data_mapping_service: &DataMappingService,
-        logo_service: &LogoAssetService,
-        base_url: &str,
-        engine_config: Option<crate::config::DataMappingEngineConfig>,
-        app_config: &crate::config::Config,
+        _data_mapping_service: &DataMappingService, // Needed for factory
+        logo_service: &LogoAssetService, // Needed for factory  
+        _base_url: &str, // Deprecated - factory gets from app config
+        _engine_config: Option<crate::config::DataMappingEngineConfig>, // Deprecated
+        app_config: &crate::config::Config, // Needed for factory
     ) -> Result<ProxyGeneration> {
-        use crate::proxy::native_pipeline::NativePipelineBuilder;
+        use crate::pipeline::PipelineOrchestratorFactory;
 
         info!(
-            "Starting generation proxy={} pipeline=native sources={} filters={}",
+            "Starting generation proxy={} pipeline=orchestrator sources={} filters={}",
             config.proxy.name,
             config.sources.len(),
             config.filters.len()
         );
 
-        // Create native pipeline using the managed temp file manager
-        let mut pipeline_builder = NativePipelineBuilder::new()
-            .with_database(database.clone())
-            .with_data_mapping_service(data_mapping_service.clone())
-            .with_logo_service(logo_service.clone())
-            .with_memory_limit(512) // 512MB limit
-            .with_temp_file_manager(self.temp_file_manager.clone())
-            .with_system(self.system.clone());
+        let start_time = std::time::Instant::now();
+        
+        // Create factory with all dependencies
+        let factory = PipelineOrchestratorFactory::new(
+            database.pool(),
+            std::sync::Arc::new(logo_service.clone()),
+            app_config.clone(),
+            self.pipeline_file_manager.clone(),
+            self.proxy_output_file_manager.clone(),
+        );
+        
+        // Create orchestrator using factory pattern
+        let mut orchestrator = factory.create_for_proxy(config.proxy.id).await
+            .map_err(|e| anyhow::anyhow!("Failed to create pipeline orchestrator: {}", e))?;
+        let execution = orchestrator.execute_pipeline(&None).await
+            .map_err(|e| anyhow::anyhow!("Pipeline execution failed: {}", e))?;
 
-        // Add shared memory monitor if available
-        if let Some(memory_monitor) = &self.shared_memory_monitor {
-            pipeline_builder = pipeline_builder.with_shared_memory_monitor(memory_monitor.clone());
-        }
-
-        let mut pipeline = pipeline_builder.build()?;
-
-        // Initialize the pipeline
-        pipeline.initialize().await?;
-
-        // Generate proxy using native pipeline
-        let generation = pipeline
-            .generate_with_dynamic_strategies(config.clone(), base_url, engine_config, app_config)
-            .await?;
+        // Convert pipeline execution to legacy format for compatibility
+        let generation = ProxyGeneration {
+            id: execution.id,
+            proxy_id: config.proxy.id,
+            version: 1,
+            channel_count: 0, // TODO: Extract from execution output files
+            m3u_content: String::new(), // TODO: Read from generated files
+            created_at: execution.started_at,
+            total_channels: 0, // TODO: Extract from execution metrics
+            filtered_channels: 0, // TODO: Extract from execution metrics
+            applied_filters: vec![], // TODO: Extract from config.filters
+            stats: Some({
+                let mut stats = GenerationStats::new("orchestrator".to_string());
+                stats.total_duration_ms = start_time.elapsed().as_millis() as u64;
+                stats.started_at = execution.started_at;
+                stats.completed_at = execution.completed_at.unwrap_or_else(chrono::Utc::now);
+                stats
+            }),
+            processed_channels: None, // TODO: Load from execution output files
+        };
 
         // Handle output
         self.write_output(&generation, &output, &config).await?;
 
         info!(
-            "Generation completed proxy={} pipeline=native channels={} total_time={}ms",
+            "Generation completed proxy={} pipeline=orchestrator status={:?} duration={}",
             config.proxy.name,
-            generation.channel_count,
-            generation.stats.as_ref().map_or(0, |s| s.total_duration_ms)
+            execution.status,
+            crate::utils::human_format::format_duration_precise(start_time.elapsed())
         );
 
         Ok(generation)
@@ -165,6 +186,10 @@ impl ProxyService {
         engine.apply_filters(channels, filters).await
     }
 
+    // TODO: Migrate these methods to use the new pipeline architecture
+    // The old ProxyGenerator has been archived to /archive/old-proxy-generators/
+    
+    /* ARCHIVED - Needs pipeline replacement
     /// Save M3U content to storage
     pub async fn save_m3u_file(
         &self,
@@ -195,4 +220,5 @@ impl ProxyService {
         let generator = generator::ProxyGenerator::new(self.storage_config.clone());
         generator.cleanup_old_versions(proxy_id).await
     }
+    */
 }

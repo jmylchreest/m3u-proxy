@@ -34,6 +34,11 @@ let availableRelayProfiles = [];
 let relaySystemHealth = null;
 let ffmpegAvailable = false;
 
+// Progress tracking variables
+let progressPollingInterval = null;
+let regenerationProgressData = {};
+let lastHadProgress = false;
+
 // Initialize page
 function initializeProxiesPage() {
   console.log("Initializing stream proxies page...");
@@ -45,6 +50,13 @@ function initializeProxiesPage() {
   // Load relay system data
   checkRelaySystemHealth();
   loadRelayProfiles();
+
+  // Start progress polling
+  console.log('About to start regeneration progress polling');
+  // Small delay to ensure all scripts are loaded
+  setTimeout(() => {
+    startRegenerationProgressPolling();
+  }, 100);
 
   // Setup standard modal close handlers
   SharedUtils.setupStandardModalCloseHandlers("proxyModal");
@@ -59,6 +71,166 @@ if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", initializeProxiesPage);
 } else {
   initializeProxiesPage();
+}
+
+// Progress monitoring using shared utility
+let progressMonitor = null;
+
+async function startRegenerationProgressPolling() {
+  // Stop any existing monitoring
+  stopRegenerationProgressPolling();
+  
+  // Check if ProgressMonitor is available
+  if (typeof ProgressMonitor === 'undefined') {
+    console.error('ProgressMonitor class not found, falling back to legacy polling');
+    startPollingProgressMonitoring();
+    return;
+  }
+  
+  console.log('Starting progress monitoring with SSE support');
+  
+  // Initialize progress monitor for proxy regeneration operations
+  progressMonitor = new ProgressMonitor(
+    'proxy_regeneration',
+    handleProgressUpdate,
+    (error) => console.debug("Progress monitoring error:", error)
+  );
+  
+  // Enable debug logging by default for now
+  progressMonitor.enableDebug();
+  
+  progressMonitor.start();
+}
+
+// Legacy polling fallback function
+function startPollingProgressMonitoring() {
+  console.log('Using legacy polling for progress updates');
+  if (progressPollingInterval) {
+    clearInterval(progressPollingInterval);
+  }
+  progressPollingInterval = setInterval(async () => {
+    await loadRegenerationProgress();
+  }, 2000);
+}
+
+function handleProgressUpdate(operation) {
+  // Handle single progress update (works for both SSE and polling)
+  const proxyId = operation.id;
+  const oldProgress = regenerationProgressData[proxyId];
+  
+  // Convert to internal format
+  const newProgress = {
+    proxy_id: proxyId,
+    proxy_name: operation.operation_name.replace('Proxy Regeneration: ', ''),
+    status: operation.state,
+    progress_percentage: operation.progress.percentage || 0,
+    current_step: operation.current_step,
+    started_at: operation.timing.started_at,
+    updated_at: operation.timing.updated_at,
+    completed_at: operation.timing.completed_at,
+    error_message: operation.error
+  };
+  
+  // Check if proxy just completed
+  const justCompleted = oldProgress && 
+    isActiveProcessing(oldProgress.status) && 
+    newProgress.status === "completed";
+  
+  // Update progress data
+  regenerationProgressData[proxyId] = newProgress;
+  
+  // Reload proxies if just completed (to refresh last_generated_at, etc.)
+  if (justCompleted) {
+    console.log("Regeneration completed for proxy:", proxyId);
+    loadProxies();
+  } else {
+    // Just re-render without full reload for intermediate updates
+    renderProxies();
+  }
+}
+
+// Check if a unified state represents active processing
+function isActiveProcessing(state) {
+  return [
+    'preparing',
+    'connecting', 
+    'downloading',
+    'processing',
+    'saving',
+    'cleanup'
+  ].includes(state);
+}
+
+async function loadRegenerationProgress() {
+  try {
+    const response = await fetch("/api/v1/progress/proxies");
+    if (!response.ok) return;
+
+    const data = await response.json();
+    const operations = data.operations || [];
+
+    const newProgressData = {};
+    // Use unified progress format directly
+    operations.forEach(operation => {
+      // The operation_id should be the proxy_id for regeneration operations
+      const proxyId = operation.id;
+      
+      // Use unified progress format directly
+      newProgressData[proxyId] = {
+        proxy_id: proxyId,
+        proxy_name: operation.operation_name.replace('Proxy Regeneration: ', ''),
+        status: operation.state, // Use unified state directly
+        progress_percentage: operation.progress.percentage || 0,
+        current_step: operation.current_step,
+        started_at: operation.timing.started_at,
+        updated_at: operation.timing.updated_at,
+        completed_at: operation.timing.completed_at,
+        error_message: operation.error
+      };
+    });
+
+    // Check if any proxies just completed
+    const justCompleted = Object.keys(newProgressData).filter(proxyId => {
+      const oldProgress = regenerationProgressData[proxyId];
+      const newProgress = newProgressData[proxyId];
+      return oldProgress && 
+        isActiveProcessing(oldProgress.status) && 
+        newProgress && newProgress.status === "completed";
+    });
+
+    regenerationProgressData = newProgressData;
+
+    // Reload proxies if any just completed (to refresh last_generated_at, etc.)
+    if (justCompleted.length > 0) {
+      console.log("Regeneration completed for proxies:", justCompleted);
+      await loadProxies();
+    }
+
+    // Only re-render if there's actual progress to show or if we previously had progress
+    const hasActiveProgress = Object.values(regenerationProgressData).some(p => 
+      isActiveProcessing(p.status) || p.status === "idle"
+    );
+
+    if (hasActiveProgress || lastHadProgress) {
+      renderProxies(); // This will update the UI with current progress
+      lastHadProgress = hasActiveProgress;
+    }
+  } catch (error) {
+    console.debug("Regeneration progress polling error:", error);
+  }
+}
+
+function stopRegenerationProgressPolling() {
+  if (progressMonitor) {
+    progressMonitor.stop();
+    progressMonitor = null;
+  }
+  
+  // Fallback cleanup for any remaining intervals (legacy support)
+  if (progressPollingInterval) {
+    clearInterval(progressPollingInterval);
+    progressPollingInterval = null;
+  }
 }
 
 // Load all stream proxies
@@ -308,7 +480,64 @@ function renderFiltersList(filters) {
 
 // Helper function to render proxy status
 function renderProxyStatusCell(proxy) {
-  // More robust active status check to handle different data types
+  // Check if this proxy has regeneration progress
+  const progress = regenerationProgressData[proxy.id];
+  
+  if (progress) {
+    const statusColors = {
+      idle: "warning",
+      preparing: "primary",
+      connecting: "primary",
+      downloading: "primary",
+      processing: "primary",
+      saving: "primary",
+      cleanup: "primary",
+      completed: "success",
+      error: "danger",
+      cancelled: "warning"
+    };
+    
+    const color = statusColors[progress.status] || "secondary";
+    let statusBadge = `<span class="badge badge-${color}">${progress.status.toUpperCase()}</span>`;
+    
+    // Add progress bar for active processing states
+    if (isActiveProcessing(progress.status)) {
+      const overallProgress = progress.progress?.percentage || 0;
+      const stageProgress = progress.metadata?.stage_percentage;
+      const currentStage = progress.metadata?.current_stage;
+      
+      statusBadge += `
+        <div style="margin-top: 4px;">
+          <div class="progress" style="height: 6px;">
+            <div class="progress-bar" style="width: ${overallProgress}%"></div>
+          </div>
+          <small class="text-muted">${progress.current_step || "Processing..."}</small>`;
+      
+      // Add stage-specific progress if available
+      if (stageProgress !== undefined && currentStage) {
+        statusBadge += `
+          <div class="progress mt-1" style="height: 4px;">
+            <div class="progress-bar bg-info" style="width: ${stageProgress}%"></div>
+          </div>
+          <small class="text-info" style="font-size: 0.75em;">${currentStage.replace('_', ' ')}: ${Math.round(stageProgress)}%</small>`;
+      }
+      
+      statusBadge += `
+        </div>
+      `;
+    } else if (progress.status === "idle") {
+      statusBadge += `<br><small class="text-muted">Queued for processing</small>`;
+    } else if (progress.status === "completed") {
+      statusBadge += `<br><small class="text-success">✓ Regeneration completed</small>`;
+    } else if (progress.status === "error" || progress.status === "cancelled") {
+      const errorMsg = progress.error_message ? ` - ${progress.error_message.substring(0, 40)}${progress.error_message.length > 40 ? '...' : ''}` : '';
+      statusBadge += `<br><small class="text-danger">✗ Regeneration failed${errorMsg}</small>`;
+    }
+    
+    return statusBadge;
+  }
+  
+  // Original status logic for non-processing proxies
   const isActive =
     proxy.is_active === true ||
     proxy.is_active === "true" ||
@@ -347,6 +576,27 @@ function renderProxyStatusCell(proxy) {
 function renderProxyActionsCell(proxy) {
   // Convert UUID to base64 for shorter URLs
   const base64Id = uuidToBase64(proxy.id);
+  
+  // Check if this proxy has regeneration progress
+  const progress = regenerationProgressData[proxy.id];
+  
+  // Customize regenerate button based on progress status
+  let regenerateButton = '';
+  if (progress) {
+    if (progress.status === "idle") {
+      regenerateButton = `<button class="btn btn-sm btn-warning" disabled title="Queued for processing">⏳ Queued</button>`;
+    } else if (isActiveProcessing(progress.status)) {
+      regenerateButton = `<button class="btn btn-sm btn-primary" disabled title="Currently processing">⚙️ Processing</button>`;
+    } else if (progress.status === "completed") {
+      regenerateButton = `<button class="btn btn-sm btn-success" onclick="regenerateProxy('${proxy.id}')" title="Regenerate (last completed successfully)">✅ Regenerate</button>`;
+    } else if (progress.status === "error" || progress.status === "cancelled") {
+      regenerateButton = `<button class="btn btn-sm btn-danger" onclick="regenerateProxy('${proxy.id}')" title="Regenerate (last attempt failed)">⚠️ Retry</button>`;
+    } else {
+      regenerateButton = `<button class="btn btn-sm btn-outline-success" onclick="regenerateProxy('${proxy.id}')" title="Regenerate">🔄</button>`;
+    }
+  } else {
+    regenerateButton = `<button class="btn btn-sm btn-outline-success" onclick="regenerateProxy('${proxy.id}')" title="Regenerate">🔄</button>`;
+  }
 
   return `
         <div class="btn-group-vertical" role="group">
@@ -357,9 +607,7 @@ function renderProxyActionsCell(proxy) {
                 <button class="btn btn-sm btn-outline-secondary" onclick="editProxy('${proxy.id}')" title="Edit">
                     ✏️
                 </button>
-                <button class="btn btn-sm btn-outline-success" onclick="regenerateProxy('${proxy.id}')" title="Regenerate">
-                    🔄
-                </button>
+                ${regenerateButton}
                 <button class="btn btn-sm btn-outline-danger" onclick="deleteProxy('${proxy.id}')" title="Delete">
                     🗑️
                 </button>
@@ -629,24 +877,28 @@ async function deleteProxy(proxyId) {
 // Regenerate proxy
 async function regenerateProxy(proxyId) {
   try {
-    SharedUtils.showInfo("Regenerating proxy...");
+    SharedUtils.showInfo("Queuing proxy for regeneration...");
 
     const response = await fetch(`/api/v1/proxies/${proxyId}/regenerate`, {
       method: "POST",
     });
 
-    if (!response.ok) throw new Error("Failed to regenerate proxy");
+    if (!response.ok) throw new Error("Failed to queue proxy for regeneration");
 
     const result = await response.json();
-    SharedUtils.showSuccess(
-      `Proxy regenerated successfully. Generated ${result.channel_count} channels.`,
-    );
-
-    // Reload proxies to get updated info
-    loadProxies();
+    
+    if (result.success) {
+      SharedUtils.showSuccess(
+        `Proxy queued for regeneration. Check progress below.`,
+      );
+      // Immediately load progress to show the queued status
+      await loadRegenerationProgress();
+    } else {
+      throw new Error(result.message || "Failed to queue proxy for regeneration");
+    }
   } catch (error) {
     console.error("Error regenerating proxy:", error);
-    SharedUtils.showError("Failed to regenerate proxy");
+    SharedUtils.showError("Failed to queue proxy for regeneration");
   }
 }
 

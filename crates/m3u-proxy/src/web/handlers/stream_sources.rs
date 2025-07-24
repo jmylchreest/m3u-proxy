@@ -15,7 +15,6 @@ use uuid::Uuid;
 
 use crate::{
     models::{StreamSource, StreamSourceType},
-    services::stream_source::StreamSourceServiceQuery,
     sources::SourceHandlerFactory,
 };
 
@@ -25,6 +24,16 @@ use crate::web::{
     responses::ok,
     utils::{extract_uuid_param, log_request},
 };
+
+/// Default value for ignore_channel_numbers field (defaults to true for new sources)
+fn default_ignore_channel_numbers() -> bool {
+    true
+}
+
+/// Default value for update_linked field (defaults to true)
+fn default_update_linked() -> bool {
+    true
+}
 
 /// Request DTO for creating a stream source
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -37,6 +46,9 @@ pub struct CreateStreamSourceRequest {
     pub username: Option<String>,
     pub password: Option<String>,
     pub field_map: Option<String>,
+    /// For Xtream sources: ignore channel numbers from API and allow renumbering
+    #[serde(default = "default_ignore_channel_numbers")]
+    pub ignore_channel_numbers: bool,
 }
 
 impl CreateStreamSourceRequest {
@@ -57,12 +69,13 @@ impl CreateStreamSourceRequest {
             username: self.username,
             password: self.password,
             field_map: self.field_map,
+            ignore_channel_numbers: self.ignore_channel_numbers,
         })
     }
 }
 
 /// Request DTO for updating a stream source
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UpdateStreamSourceRequest {
     pub name: String,
     pub source_type: String,
@@ -72,6 +85,12 @@ pub struct UpdateStreamSourceRequest {
     pub username: Option<String>,
     pub password: Option<String>,
     pub field_map: Option<String>,
+    /// For Xtream sources: ignore channel numbers from API and allow renumbering
+    #[serde(default = "default_ignore_channel_numbers")]
+    pub ignore_channel_numbers: bool,
+    /// Whether to update linked sources with the same URL (defaults to true)
+    #[serde(default = "default_update_linked")]
+    pub update_linked: bool,
 }
 
 impl UpdateStreamSourceRequest {
@@ -92,7 +111,9 @@ impl UpdateStreamSourceRequest {
             username: self.username,
             password: self.password,
             field_map: self.field_map,
+            ignore_channel_numbers: self.ignore_channel_numbers,
             is_active: true, // Default to active for updates
+            update_linked: self.update_linked,
         })
     }
 }

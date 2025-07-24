@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use reqwest::Client;
 use sqlx::Row;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 // Helper function to check if an Xtream server provides stream data
@@ -315,6 +315,7 @@ impl crate::database::Database {
                         username: Some(username.clone()),
                         password: Some(password.clone()),
                         field_map: None,
+                        ignore_channel_numbers: true, // Default to true for Xtream sources
                     };
 
                     match self
@@ -379,6 +380,9 @@ impl crate::database::Database {
             }
         }
 
+        // Emit scheduler event for source creation
+        self.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::SourceCreated(epg_source.id));
+
         Ok(epg_source)
     }
 
@@ -392,27 +396,55 @@ impl crate::database::Database {
             EpgSourceType::Xtream => "xtream",
         };
 
-        let result = sqlx::query(
-            "UPDATE epg_sources
-             SET name = ?, source_type = ?, url = ?, update_cron = ?, username = ?, password = ?, original_timezone = ?, time_offset = ?, is_active = ?
-             WHERE id = ?",
-        )
-        .bind(&source.name)
-        .bind(source_type_str)
-        .bind(&source.url)
-        .bind(&source.update_cron)
-        .bind(&source.username)
-        .bind(&source.password)
-        .bind(&source.timezone)
-        .bind(&source.time_offset)
-        .bind(source.is_active)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?;
+        // Conditionally update password - only if provided and non-empty
+        let should_update_password = source.password.as_ref().map_or(false, |p| !p.is_empty());
+        
+        let result = if should_update_password {
+            // Password provided and non-empty - update it
+            info!("Updating password for EPG source '{}' ({})", source.name, id);
+            sqlx::query(
+                "UPDATE epg_sources
+                 SET name = ?, source_type = ?, url = ?, update_cron = ?, username = ?, password = ?, original_timezone = ?, time_offset = ?, is_active = ?
+                 WHERE id = ?",
+            )
+            .bind(&source.name)
+            .bind(source_type_str)
+            .bind(&source.url)
+            .bind(&source.update_cron)
+            .bind(&source.username)
+            .bind(source.password.as_ref().unwrap())
+            .bind(&source.timezone)
+            .bind(&source.time_offset)
+            .bind(source.is_active)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+        } else {
+            // Password not provided or empty - preserve existing password
+            debug!("Preserving existing password for EPG source '{}' ({})", source.name, id);
+            sqlx::query(
+                "UPDATE epg_sources
+                 SET name = ?, source_type = ?, url = ?, update_cron = ?, username = ?, original_timezone = ?, time_offset = ?, is_active = ?
+                 WHERE id = ?",
+            )
+            .bind(&source.name)
+            .bind(source_type_str)
+            .bind(&source.url)
+            .bind(&source.update_cron)
+            .bind(&source.username)
+            .bind(&source.timezone)
+            .bind(&source.time_offset)
+            .bind(source.is_active)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+        }?;
 
         let updated = result.rows_affected() > 0;
         if updated {
             info!("Updated EPG source: {} ({})", source.name, id);
+            // Emit scheduler event for source update
+            self.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::SourceUpdated(id));
         } else {
             warn!("EPG source not found for update: {}", id);
         }
@@ -431,6 +463,8 @@ impl crate::database::Database {
         let deleted = result.rows_affected() > 0;
         if deleted {
             info!("Deleted EPG source: {}", id);
+            // Emit scheduler event for source deletion
+            self.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::SourceDeleted(id));
         } else {
             warn!("EPG source not found for deletion: {}", id);
         }
@@ -477,7 +511,6 @@ impl crate::database::Database {
         F: Fn(usize, usize) + Send + Sync,
     {
         // Use shorter transaction timeout to reduce deadlock risk
-        let timeout_duration = std::time::Duration::from_secs(120); // 2 minutes max per operation
 
         // Step 1: Clear existing data in a separate, quick transaction
         let clear_result = tokio::time::timeout(Duration::from_secs(30), async {
@@ -738,6 +771,73 @@ impl crate::database::Database {
         }
 
         Ok(channels)
+    }
+    
+    /// Get EPG source channels with all their display names (multilingual support)
+    pub async fn get_epg_source_channels_with_display_names(&self, source_id: Uuid) -> Result<Vec<crate::models::EpgChannelWithDisplayNames>> {
+        // First get all channels for the source
+        let channel_rows = sqlx::query(
+            "SELECT id, source_id, channel_id, channel_name, channel_logo, channel_group, language, created_at, updated_at
+             FROM epg_channels WHERE source_id = ? ORDER BY channel_name",
+        )
+        .bind(source_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut channels_with_display_names = Vec::new();
+        
+        for channel_row in channel_rows {
+            let created_at = channel_row.get::<String, _>("created_at");
+            let updated_at = channel_row.get::<String, _>("updated_at");
+            let id_str = channel_row.get::<String, _>("id");
+            let channel_uuid = Uuid::parse_str(&id_str)?;
+
+            // Build the main channel
+            let channel = crate::models::EpgChannel {
+                id: channel_uuid,
+                source_id,
+                channel_id: channel_row.get("channel_id"),
+                channel_name: channel_row.get("channel_name"),
+                channel_logo: channel_row.get("channel_logo"),
+                channel_group: channel_row.get("channel_group"),
+                language: channel_row.get("language"),
+                created_at: parse_datetime(&created_at)?,
+                updated_at: parse_datetime(&updated_at)?,
+            };
+
+            // Get all display names for this channel
+            let display_name_rows = sqlx::query(
+                "SELECT id, epg_channel_id, display_name, language, is_primary, created_at, updated_at
+                 FROM epg_channel_display_names WHERE epg_channel_id = ? ORDER BY is_primary DESC, display_name",
+            )
+            .bind(channel_uuid.to_string())
+            .fetch_all(&self.pool)
+            .await?;
+
+            let mut display_names = Vec::new();
+            for display_row in display_name_rows {
+                let display_created_at = display_row.get::<String, _>("created_at");
+                let display_updated_at = display_row.get::<String, _>("updated_at");
+                let display_id_str = display_row.get::<String, _>("id");
+                
+                display_names.push(crate::models::EpgChannelDisplayName {
+                    id: Uuid::parse_str(&display_id_str)?,
+                    epg_channel_id: channel_uuid,
+                    display_name: display_row.get("display_name"),
+                    language: display_row.get("language"),
+                    is_primary: display_row.get("is_primary"),
+                    created_at: parse_datetime(&display_created_at)?,
+                    updated_at: parse_datetime(&display_updated_at)?,
+                });
+            }
+
+            channels_with_display_names.push(crate::models::EpgChannelWithDisplayNames {
+                channel,
+                display_names,
+            });
+        }
+
+        Ok(channels_with_display_names)
     }
 
     pub async fn get_epg_data_for_viewer(

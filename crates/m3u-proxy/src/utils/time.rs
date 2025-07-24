@@ -1,6 +1,6 @@
 //! Time utilities for timezone detection and offset parsing
 
-use chrono::{DateTime, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use regex::Regex;
 
@@ -342,6 +342,164 @@ pub fn log_timezone_detection(source_name: &str, detected_tz: Option<&str>, fina
     }
 }
 
+/// Parse various time string formats to Unix epoch timestamp
+/// Supports multiple formats commonly used in filtering and data mapping
+pub fn parse_time_string(time_str: &str) -> Result<i64, String> {
+    // Try different common formats
+    let formats = [
+        "%Y-%m-%d %H:%M:%S",     // 2024-01-01 12:00:00
+        "%Y-%m-%dT%H:%M:%S",     // 2024-01-01T12:00:00
+        "%Y-%m-%dT%H:%M:%SZ",    // 2024-01-01T12:00:00Z
+        "%Y-%m-%d",              // 2024-01-01 (midnight)
+        "%d/%m/%Y %H:%M:%S",     // 01/01/2024 12:00:00
+        "%d/%m/%Y",              // 01/01/2024 (midnight)
+        "%m/%d/%Y %H:%M:%S",     // 01/01/2024 12:00:00 (US format)
+        "%m/%d/%Y",              // 01/01/2024 (US format, midnight)
+        "%Y%m%d%H%M%S",          // XMLTV format: 20240101120000
+        "%Y%m%d",                // XMLTV date only: 20240101
+    ];
+    
+    // Try parsing with UTC timezone first
+    for format in &formats {
+        if let Ok(dt) = DateTime::parse_from_str(&format!("{}+00:00", time_str), &format!("{}%z", format)) {
+            return Ok(dt.timestamp());
+        }
+    }
+    
+    // Try parsing as naive datetime and assume UTC
+    for format in &formats {
+        if let Ok(naive_dt) = NaiveDateTime::parse_from_str(time_str, format) {
+            return Ok(naive_dt.and_utc().timestamp());
+        }
+    }
+    
+    // Try parsing as RFC3339/ISO8601
+    if let Ok(dt) = DateTime::parse_from_rfc3339(time_str) {
+        return Ok(dt.timestamp());
+    }
+    
+    // Try parsing as Unix timestamp
+    if let Ok(epoch) = time_str.parse::<i64>() {
+        return Ok(epoch);
+    }
+    
+    Err(format!("Unable to parse time string: '{}'. Supported formats include YYYY-MM-DD HH:MM:SS, ISO8601, Unix timestamps, and XMLTV format", time_str))
+}
+
+/// Resolve @time: functions in expressions to their numeric epoch values
+/// Supports @time:now(), @time:parse("datestring"), @time:<epoch>, and @time:now() +/- offset
+pub fn resolve_time_functions(expression: &str) -> Result<String, String> {
+    let mut resolved = expression.to_string();
+    let now_epoch = Utc::now().timestamp();
+    
+    // Replace @time:now() with current epoch
+    resolved = resolved.replace("@time:now()", &now_epoch.to_string());
+    
+    // Handle @time:parse("datestring") patterns
+    let parse_regex = Regex::new(r#"@time:parse\("([^"]+)"\)"#)
+        .map_err(|e| format!("Regex compilation error: {}", e))?;
+    resolved = parse_regex.replace_all(&resolved, |caps: &regex::Captures| {
+        let date_string = &caps[1];
+        match parse_time_string(date_string) {
+            Ok(epoch) => epoch.to_string(),
+            Err(e) => {
+                warn!("Failed to parse time string '{}': {}", date_string, e);
+                "0".to_string() // Fallback to epoch 0 on parse error
+            }
+        }
+    }).to_string();
+    
+    // Handle @time:<epoch> patterns (direct epoch timestamps)
+    let epoch_regex = Regex::new(r"@time:(\d+)")
+        .map_err(|e| format!("Regex compilation error: {}", e))?;
+    resolved = epoch_regex.replace_all(&resolved, |caps: &regex::Captures| {
+        let epoch_str = &caps[1];
+        // Validate the epoch is a valid number
+        match epoch_str.parse::<i64>() {
+            Ok(epoch) => epoch.to_string(),
+            Err(_) => {
+                warn!("Invalid epoch timestamp in @time:{}", epoch_str);
+                "0".to_string()
+            }
+        }
+    }).to_string();
+    
+    // Handle @time:now()+offset and @time:now()-offset patterns
+    let offset_regex = Regex::new(r"@time:now\(\)\s*([+-])\s*(\d+)")
+        .map_err(|e| format!("Regex compilation error: {}", e))?;
+    resolved = offset_regex.replace_all(&resolved, |caps: &regex::Captures| {
+        let operator = &caps[1];
+        let offset_str = &caps[2];
+        match offset_str.parse::<i64>() {
+            Ok(offset) => {
+                let result_epoch = if operator == "+" {
+                    now_epoch + offset
+                } else {
+                    now_epoch - offset
+                };
+                result_epoch.to_string()
+            },
+            Err(_) => {
+                warn!("Invalid offset in @time:now(){}{}", operator, offset_str);
+                now_epoch.to_string()
+            }
+        }
+    }).to_string();
+    
+    Ok(resolved)
+}
+
+/// Validate time function syntax for use in expression validators
+/// Returns an error message if the syntax is invalid, None if valid
+pub fn validate_time_function_syntax(expression: &str) -> Option<String> {
+    // Check for invalid @time function patterns
+    let invalid_patterns = [
+        (r#"@time:[^()\d\s\+\-"]+"#, "Invalid @time function syntax"),
+        (r#"@time:parse\([^)]*[^"]\)"#, "@time:parse() must contain quoted string"),
+        (r#"@time:parse\(\)"#, "@time:parse() requires a date string parameter"),
+        (r#"@time:now\(\)\s*[+\-]\s*[^\d]"#, "@time:now() offset must be a number"),
+        (r#"@time:\s"#, "@time function cannot have space after colon"),
+    ];
+    
+    for (pattern, error_msg) in &invalid_patterns {
+        if let Ok(regex) = Regex::new(pattern) {
+            if regex.is_match(expression) {
+                return Some(error_msg.to_string());
+            }
+        }
+    }
+    
+    // Validate specific @time function formats
+    let time_functions = [
+        r#"@time:now\(\)"#,                           // @time:now()
+        r#"@time:parse\("[^"]+"\)"#,              // @time:parse("datestring")
+        r#"@time:\d+"#,                              // @time:1234567890
+        r#"@time:now\(\)\s*[+\-]\s*\d+"#,           // @time:now() + 3600
+    ];
+    
+    // Find all @time: patterns in the expression
+    if let Ok(at_time_regex) = Regex::new(r#"@time:[^,\s)]+"#) {
+        for at_time_match in at_time_regex.find_iter(expression) {
+            let time_func = at_time_match.as_str();
+            
+            // Check if this matches any valid pattern
+            let is_valid = time_functions.iter().any(|pattern| {
+                if let Ok(regex) = Regex::new(&format!("^{}$", pattern)) {
+                    regex.is_match(time_func)
+                } else {
+                    false
+                }
+            });
+            
+            if !is_valid {
+                return Some(format!("Invalid time function syntax: {}", time_func));
+            }
+        }
+    }
+    
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,5 +554,81 @@ mod tests {
 
         let detected = detect_timezone_from_xmltv(xmltv_content);
         assert!(detected.is_some());
+    }
+
+    #[test]
+    fn test_parse_time_string() {
+        // Test various date formats
+        assert!(parse_time_string("2024-01-01 12:00:00").is_ok());
+        assert!(parse_time_string("2024-01-01T12:00:00").is_ok());
+        assert!(parse_time_string("2024-01-01T12:00:00Z").is_ok());
+        assert!(parse_time_string("2024-01-01").is_ok());
+        assert!(parse_time_string("01/01/2024 12:00:00").is_ok());
+        assert!(parse_time_string("01/01/2024").is_ok());
+        assert!(parse_time_string("20240101120000").is_ok()); // XMLTV format
+        assert!(parse_time_string("20240101").is_ok());       // XMLTV date only
+        
+        // Test Unix timestamp
+        assert_eq!(parse_time_string("1704110400").unwrap(), 1704110400); // 2024-01-01 12:00:00 UTC
+        
+        // Test RFC3339
+        assert!(parse_time_string("2024-01-01T12:00:00Z").is_ok());
+        assert!(parse_time_string("2024-01-01T12:00:00+01:00").is_ok());
+        
+        // Test invalid formats
+        assert!(parse_time_string("invalid-date").is_err());
+        assert!(parse_time_string("").is_err());
+    }
+
+    #[test]
+    fn test_resolve_time_functions() {
+        // Test @time:now() replacement
+        let result = resolve_time_functions("@time:now()").unwrap();
+        assert!(result.parse::<i64>().is_ok());
+        
+        // Test @time:parse() replacement
+        let result = resolve_time_functions(r#"@time:parse("2024-01-01 12:00:00")"#).unwrap();
+        assert_eq!(result, "1704110400");
+        
+        // Test @time:<epoch> replacement
+        let result = resolve_time_functions("@time:1704110400").unwrap();
+        assert_eq!(result, "1704110400");
+        
+        // Test @time:now() with offset
+        let now = Utc::now().timestamp();
+        let result = resolve_time_functions("@time:now() + 3600").unwrap();
+        let expected = now + 3600;
+        assert_eq!(result, expected.to_string());
+        
+        let result = resolve_time_functions("@time:now() - 1800").unwrap();
+        let expected = now - 1800;
+        assert_eq!(result, expected.to_string());
+        
+        // Test complex expression
+        let result = resolve_time_functions(r#"field > @time:parse("2024-01-01") AND field < @time:now()"#).unwrap();
+        assert!(result.contains("1704067200")); // 2024-01-01 00:00:00 UTC
+        assert!(result.contains(" AND field < "));
+        assert!(result.parse::<i64>().is_err()); // Should not be a single number
+    }
+
+    #[test]
+    fn test_validate_time_function_syntax() {
+        // Valid functions
+        assert!(validate_time_function_syntax("@time:now()").is_none());
+        assert!(validate_time_function_syntax(r#"@time:parse("2024-01-01")"#).is_none());
+        assert!(validate_time_function_syntax("@time:1704110400").is_none());
+        assert!(validate_time_function_syntax("@time:now() + 3600").is_none());
+        assert!(validate_time_function_syntax("@time:now() - 1800").is_none());
+        
+        // Invalid functions
+        assert!(validate_time_function_syntax("@time:invalid").is_some());
+        assert!(validate_time_function_syntax("@time:parse()").is_some());
+        assert!(validate_time_function_syntax("@time:parse(unquoted)").is_some());
+        assert!(validate_time_function_syntax("@time:now() + invalid").is_some());
+        assert!(validate_time_function_syntax("@time: ").is_some());
+        
+        // Complex expressions
+        assert!(validate_time_function_syntax(r#"field > @time:parse("2024-01-01") AND field < @time:now()"#).is_none());
+        assert!(validate_time_function_syntax("@time:invalid AND @time:now()").is_some());
     }
 }

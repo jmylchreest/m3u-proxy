@@ -74,6 +74,7 @@ Check the endpoints below to see the complete API surface.
         (name = "stream-sources", description = "Stream source management - M3U playlists and Xtream Codes APIs"),
         (name = "epg-sources", description = "Electronic Program Guide (EPG) source management"),  
         (name = "proxies", description = "Proxy configuration and M3U playlist generation"),
+        (name = "streaming", description = "Live IPTV streaming endpoints"),
         (name = "filters", description = "Channel filtering and rules management"),
         (name = "data-mapping", description = "Channel metadata transformation rules"),
         (name = "logos", description = "Logo asset management and optimization"),
@@ -102,6 +103,8 @@ Check the endpoints below to see the complete API surface.
             crate::web::handlers::epg_sources::CreateEpgSourceRequest,
             crate::web::handlers::epg_sources::UpdateEpgSourceRequest,
             crate::web::handlers::epg_sources::EpgSourceResponse,
+            crate::web::handlers::epg_sources::EpgChannelResponse,
+            crate::web::handlers::epg_sources::EpgChannelDisplayNameResponse,
             
             // Response wrappers
             crate::web::responses::ApiResponse<crate::web::handlers::stream_sources::StreamSourceResponse>,
@@ -135,6 +138,7 @@ Check the endpoints below to see the complete API surface.
         // Progress endpoints
         crate::web::api::get_sources_progress,
         crate::web::api::get_epg_progress,
+        crate::web::api::get_proxy_regeneration_progress,
         
         // EPG Sources endpoints
         crate::web::handlers::epg_sources::list_epg_sources,
@@ -143,6 +147,7 @@ Check the endpoints below to see the complete API surface.
         crate::web::handlers::epg_sources::update_epg_source,
         crate::web::handlers::epg_sources::delete_epg_source,
         crate::web::handlers::epg_sources::validate_epg_source,
+        crate::web::handlers::epg_sources::get_epg_source_channels,
         
         // Logo endpoints
         crate::web::api::list_logo_assets,
@@ -181,6 +186,10 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::apply_data_mapping_rules,
         crate::web::api::apply_data_mapping_rules_post,
         
+        // Generalized pipeline validation
+        crate::web::api::validate_pipeline_expression,
+        crate::web::api::get_pipeline_stage_fields,
+        
         // EPG viewer
         crate::web::api::get_epg_viewer_data,
         
@@ -191,6 +200,14 @@ Check the endpoints below to see the complete API surface.
         crate::web::handlers::proxies::update_proxy,
         crate::web::handlers::proxies::delete_proxy,
         crate::web::handlers::proxies::serve_proxy_m3u,
+        
+        // Streaming endpoints
+        crate::web::handlers::proxies::proxy_stream,
+        crate::web::handlers::proxies::serve_proxy_xmltv,
+        
+        // Proxy regeneration endpoints
+        crate::web::api::regenerate_proxy,
+        crate::web::api::get_regeneration_queue_status,
         
         // Relay endpoints
         crate::web::api::relay::list_profiles,

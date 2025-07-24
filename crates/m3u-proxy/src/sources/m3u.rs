@@ -215,6 +215,7 @@ impl M3uSourceHandler {
             source_id: source.id,
             tvg_id: partial.tvg_id,
             tvg_name: partial.tvg_name,
+            tvg_chno: partial.attributes.get("tvg-channo").cloned(),
             tvg_logo: partial.tvg_logo,
             tvg_shift: None,
             group_title: partial.group_title,
@@ -244,6 +245,7 @@ impl M3uSourceHandler {
             source_id: source.id,
             tvg_id: None,
             tvg_name: None,
+            tvg_chno: None,
             tvg_logo: None,
             tvg_shift: None,
             group_title: None,
@@ -477,6 +479,93 @@ impl ChannelIngestor for M3uSourceHandler {
 
     async fn estimate_channel_count(&self, source: &StreamSource) -> AppResult<Option<u32>> {
         self.estimate_channels(source).await
+    }
+
+    async fn ingest_channels_with_universal_progress(
+        &self,
+        source: &StreamSource,
+        progress_callback: Option<&crate::sources::traits::UniversalCallback>,
+    ) -> AppResult<Vec<Channel>> {
+        use crate::services::progress_service::{UniversalProgress, OperationType, UniversalState};
+        use uuid::Uuid;
+
+        info!("Starting M3U channel ingestion with universal progress for source: {}", source.name);
+        let source_id = Uuid::new_v4(); // Generate operation ID
+        
+        // Report initial progress
+        if let Some(callback) = progress_callback {
+            let progress = UniversalProgress::new(
+                source_id,
+                OperationType::StreamIngestion, 
+                format!("M3U Ingestion: {}", source.name)
+            )
+            .set_state(UniversalState::Connecting)
+            .update_step("Connecting to M3U source".to_string());
+            callback(progress);
+        }
+
+        // Download the M3U content
+        let response = self.client.get(&source.url).send().await
+            .map_err(|e| AppError::source_error(format!("Failed to fetch M3U: {}", e)))?;
+
+        if !response.status().is_success() {
+            if let Some(callback) = progress_callback {
+                let progress = UniversalProgress::new(
+                    source_id,
+                    OperationType::StreamIngestion,
+                    format!("M3U Ingestion: {}", source.name)
+                )
+                .set_error(format!("HTTP error: {}", response.status()));
+                callback(progress);
+            }
+            return Err(AppError::source_error(format!("HTTP error: {}", response.status())));
+        }
+
+        if let Some(callback) = progress_callback {
+            let progress = UniversalProgress::new(
+                source_id,
+                OperationType::StreamIngestion,
+                format!("M3U Ingestion: {}", source.name)
+            )
+            .set_state(UniversalState::Downloading)
+            .update_step("Downloading playlist".to_string())
+            .update_percentage(25.0);
+            callback(progress);
+        }
+
+        let content = response.text().await
+            .map_err(|e| AppError::source_error(format!("Failed to read M3U content: {}", e)))?;
+
+        if let Some(callback) = progress_callback {
+            let progress = UniversalProgress::new(
+                source_id,
+                OperationType::StreamIngestion,
+                format!("M3U Ingestion: {}", source.name)
+            )
+            .set_state(UniversalState::Processing)
+            .update_step("Parsing channels".to_string())
+            .update_percentage(50.0);
+            callback(progress);
+        }
+
+        // Parse the content
+        let channels = self.parse_m3u_content(&content, source).await?;
+
+        if let Some(callback) = progress_callback {
+            let progress = UniversalProgress::new(
+                source_id,
+                OperationType::StreamIngestion,
+                format!("M3U Ingestion: {}", source.name)
+            )
+            .set_state(UniversalState::Completed)
+            .update_step("Ingestion complete".to_string())
+            .update_percentage(100.0)
+            .update_items(channels.len(), Some(channels.len()));
+            callback(progress);
+        }
+
+        info!("Successfully ingested {} channels from M3U source: {}", channels.len(), source.name);
+        Ok(channels)
     }
 }
 

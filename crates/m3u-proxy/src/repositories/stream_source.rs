@@ -125,6 +125,10 @@ impl StreamSourceRepository {
             username: row.try_get("username").ok(),
             password: row.try_get("password").ok(),
             field_map: row.try_get("field_map").ok(),
+            ignore_channel_numbers: row.try_get("ignore_channel_numbers").map_err(|e| RepositoryError::QueryFailed {
+                query: "SELECT ignore_channel_numbers".to_string(),
+                message: e.to_string(),
+            })?,
             created_at,
             updated_at,
             last_ingested_at: row.get_datetime_opt("last_ingested_at"),
@@ -250,8 +254,8 @@ impl Repository<StreamSource, Uuid> for StreamSourceRepository {
         let source_type_str = format!("{:?}", request.source_type).to_lowercase();
 
         let query = r#"
-            INSERT INTO stream_sources (id, name, source_type, url, max_concurrent_streams, update_cron, username, password, field_map, created_at, updated_at, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO stream_sources (id, name, source_type, url, max_concurrent_streams, update_cron, username, password, field_map, ignore_channel_numbers, created_at, updated_at, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#;
 
         sqlx::query(query)
@@ -264,6 +268,7 @@ impl Repository<StreamSource, Uuid> for StreamSourceRepository {
             .bind(&request.username)
             .bind(&request.password)
             .bind(&request.field_map)
+            .bind(request.ignore_channel_numbers)
             .bind(&now_str)
             .bind(&now_str)
             .bind(true) // Default is_active to true for new sources
@@ -284,6 +289,7 @@ impl Repository<StreamSource, Uuid> for StreamSourceRepository {
             username: request.username,
             password: request.password,
             field_map: request.field_map,
+            ignore_channel_numbers: request.ignore_channel_numbers,
             created_at: now,
             updated_at: now,
             last_ingested_at: None,
@@ -395,8 +401,8 @@ impl BulkRepository<StreamSource, Uuid> for StreamSourceRepository {
             let source_type_str = format!("{:?}", request.source_type).to_lowercase();
 
             let query = r#"
-                INSERT INTO stream_sources (id, name, source_type, url, max_concurrent_streams, update_cron, username, password, field_map, created_at, updated_at, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO stream_sources (id, name, source_type, url, max_concurrent_streams, update_cron, username, password, field_map, ignore_channel_numbers, created_at, updated_at, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#;
 
             sqlx::query(query)
@@ -409,6 +415,7 @@ impl BulkRepository<StreamSource, Uuid> for StreamSourceRepository {
                 .bind(&request.username)
                 .bind(&request.password)
                 .bind(&request.field_map)
+                .bind(request.ignore_channel_numbers)
                 .bind(&now_str)
                 .bind(&now_str)
                 .bind(true)
@@ -429,6 +436,7 @@ impl BulkRepository<StreamSource, Uuid> for StreamSourceRepository {
                 username: request.username,
                 password: request.password,
                 field_map: request.field_map,
+                ignore_channel_numbers: request.ignore_channel_numbers,
                 created_at: now,
                 updated_at: now,
                 last_ingested_at: None,
@@ -500,6 +508,7 @@ impl BulkRepository<StreamSource, Uuid> for StreamSourceRepository {
                 username: request.username,
                 password: request.password,
                 field_map: request.field_map,
+                ignore_channel_numbers: request.ignore_channel_numbers,
                 created_at: DateTimeParser::now_utc(), // This would need to be preserved from original
                 updated_at: now,
                 last_ingested_at: None, // This would need to be preserved from original

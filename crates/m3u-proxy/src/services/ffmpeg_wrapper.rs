@@ -15,14 +15,13 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use futures::stream::StreamExt;
 
 use crate::metrics::MetricsLogger;
 use crate::models::relay::*;
 use crate::services::relay_manager::RelayMetricsExt;
 use crate::services::cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient};
 use crate::services::error_fallback::{ErrorFallbackGenerator, StreamHealthMonitor};
-use crate::services::stream_prober::{StreamProber, StreamMappingStrategy};
+use crate::services::stream_prober::StreamProber;
 use crate::models::relay::ErrorFallbackConfig;
 use crate::config::BufferConfig;
 use sandboxed_file_manager::SandboxedManager;
@@ -361,7 +360,6 @@ impl FFmpegProcessWrapper {
         if let Some(stdout) = child.stdout.take() {
             let buffer = cyclic_buffer.clone();
             let config_id = config.config.id;
-            let metrics = self.metrics.clone();
             
             tokio::spawn(async move {
                 let mut reader = tokio::io::BufReader::new(stdout);
@@ -493,7 +491,7 @@ impl FFmpegProcess {
     
     /// Create a streaming response that continuously reads from the cyclic buffer
     async fn create_streaming_response(&self, client: Arc<crate::services::cyclic_buffer::BufferClient>) -> Result<RelayContent, RelayError> {
-        use futures::stream::{self, StreamExt};
+        
         
         let buffer = self.cyclic_buffer.clone();
         let client_id = client.id;
@@ -521,7 +519,7 @@ impl FFmpegProcess {
 
 
     /// Serve HLS content (playlist or segments)
-    async fn serve_hls_content(&self, path: &str, _session_id: &str, _client_info: &ClientInfo) -> Result<RelayContent, RelayError> {
+    async fn serve_hls_content(&self, _path: &str, _session_id: &str, _client_info: &ClientInfo) -> Result<RelayContent, RelayError> {
         // HLS support not implemented for cyclic buffer mode
         Err(RelayError::UnsupportedFormat(RelayOutputFormat::HLS))
     }
@@ -539,51 +537,6 @@ impl FFmpegProcess {
         Err(RelayError::UnsupportedFormat(RelayOutputFormat::Copy))
     }
 
-    /// Wrap a stream with metrics tracking
-    async fn wrap_stream_with_metrics<S>(&self, stream: S, session_id: &str) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>>
-    where
-        S: Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static,
-    {
-        use futures::StreamExt;
-        
-        let metrics = self.metrics.clone();
-        let session_id = session_id.to_string();
-        let config_id = self.config.config.id;
-        
-        stream.map(move |chunk_result| {
-            match chunk_result {
-                Ok(chunk) => {
-                    let bytes_len = chunk.len();
-                    let metrics_clone = metrics.clone();
-                    let session_clone = session_id.clone();
-                    
-                    tokio::spawn(async move {
-                        // Track bytes served in metrics
-                        // This would integrate with your existing metrics system
-                        debug!("Relay {} served {} bytes to session {}", config_id, bytes_len, session_clone);
-                    });
-                    
-                    Ok(chunk)
-                }
-                Err(e) => {
-                    let metrics_clone = metrics.clone();
-                    let session_clone = session_id.clone();
-                    let error_msg = e.to_string();
-                    
-                    tokio::spawn(async move {
-                        // Log error event
-                        metrics_clone.log_relay_event(
-                            config_id,
-                            RelayEventType::Error,
-                            Some(&error_msg)
-                        ).await.ok();
-                    });
-                    
-                    Err(e)
-                }
-            }
-        })
-    }
 
 
     /// Increment client count
@@ -677,7 +630,7 @@ impl FFmpegProcess {
                     
                     tokio::spawn(async move {
                         // Record the error in health monitor
-                        let health = health_monitor.record_error(&error_message).await;
+                        health_monitor.record_error(&error_message).await;
                         
                         // Always trigger fallback on process exit
                         warn!("Activating error fallback for relay {} due to process exit: {:?}", config_id, status);
@@ -721,7 +674,7 @@ impl FFmpegProcess {
                 
                 tokio::spawn(async move {
                     // Record the error and check if fallback should be triggered
-                    let health = health_monitor.record_error(&error_message).await;
+                    health_monitor.record_error(&error_message).await;
                     if health_monitor.should_activate_fallback() {
                         warn!("Activating error fallback for relay {} due to process monitoring error", config_id);
                         
@@ -796,9 +749,7 @@ impl Drop for FFmpegProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::relay::*;
     use chrono::Utc;
-    use std::collections::HashMap;
     use uuid::Uuid;
 
     fn create_test_config() -> ResolvedRelayConfig {

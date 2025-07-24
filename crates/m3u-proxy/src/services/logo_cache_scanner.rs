@@ -508,7 +508,6 @@ impl LogoCacheScanner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
     fn test_is_supported_image_extension() {

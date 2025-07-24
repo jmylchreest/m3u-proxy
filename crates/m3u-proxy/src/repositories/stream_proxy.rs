@@ -30,7 +30,6 @@ impl StreamProxyRepository {
     /// Helper function to construct a StreamProxy from a database row
     fn stream_proxy_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<StreamProxy> {
         let proxy_mode_str = row.get::<String, _>("proxy_mode");
-        tracing::info!("DEBUG: Raw proxy_mode from database: '{}'", proxy_mode_str);
         let proxy_mode = StreamProxyMode::from_str(&proxy_mode_str);
 
         Ok(StreamProxy {

@@ -11,7 +11,6 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
-use utoipa::ToSchema;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -256,7 +255,7 @@ async fn create_channel_relay_config(
 /// Delete channel relay configuration
 async fn delete_channel_relay_config(
     State(state): State<AppState>,
-    Path((proxy_id, channel_id)): Path<(String, Uuid)>,
+    Path((proxy_id, _channel_id)): Path<(String, Uuid)>,
 ) -> impl IntoResponse {
     let proxy_uuid = match proxy_id.parse::<Uuid>() {
         Ok(uuid) => uuid,

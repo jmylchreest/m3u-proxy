@@ -45,6 +45,8 @@
 pub mod traits;
 pub mod m3u;
 pub mod xtream;
+pub mod xmltv_epg;
+pub mod xtream_epg;
 pub mod factory;
 
 pub use traits::*;

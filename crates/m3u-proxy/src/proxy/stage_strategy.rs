@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::models::*;
 use crate::database::Database;
-use crate::pipeline::IteratorRegistry;
+// use crate::pipeline::IteratorRegistry; // Removed with old pipeline architecture
 
 /// Memory pressure levels for fine-grained strategy selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -41,7 +41,7 @@ pub struct StageContext {
     pub stats: GenerationStats,
     pub database: Option<Arc<Database>>,
     pub logo_service: Option<Arc<crate::logo_assets::service::LogoAssetService>>,
-    pub iterator_registry: Option<Arc<IteratorRegistry>>,
+    // pub iterator_registry: Option<Arc<IteratorRegistry>>, // Removed with old pipeline architecture
 }
 
 /// Input data for a stage

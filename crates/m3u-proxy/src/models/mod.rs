@@ -27,6 +27,8 @@ pub struct StreamSource {
     pub username: Option<String>,
     pub password: Option<String>,
     pub field_map: Option<String>, // JSON string for M3U field mapping
+    /// For Xtream sources: ignore channel numbers from API and allow renumbering
+    pub ignore_channel_numbers: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_ingested_at: Option<DateTime<Utc>>,
@@ -90,6 +92,10 @@ fn default_cache_channel_logos() -> bool {
 
 fn default_cache_program_logos() -> bool {
     false
+}
+
+fn default_update_linked() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -197,12 +203,13 @@ pub struct ProxyFilterCreateRequest {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
 pub struct Channel {
     pub id: Uuid,
     pub source_id: Uuid,
     pub tvg_id: Option<String>,
     pub tvg_name: Option<String>,
+    pub tvg_chno: Option<String>, // Channel number from M3U (e.g., "1", "12")
     pub tvg_logo: Option<String>,
     pub tvg_shift: Option<String>, // Timeshift offset for M3U (e.g., "+1", "+24")
     pub group_title: Option<String>,
@@ -261,6 +268,7 @@ pub struct StreamSourceCreateRequest {
     pub username: Option<String>,
     pub password: Option<String>,
     pub field_map: Option<String>,
+    pub ignore_channel_numbers: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,7 +281,11 @@ pub struct StreamSourceUpdateRequest {
     pub username: Option<String>,
     pub password: Option<String>,
     pub field_map: Option<String>,
+    pub ignore_channel_numbers: bool,
     pub is_active: bool,
+    /// Whether to update linked sources with the same URL (defaults to true)
+    #[serde(default = "default_update_linked")]
+    pub update_linked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1010,6 +1022,25 @@ pub struct EpgChannel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct EpgChannelDisplayName {
+    pub id: Uuid,
+    pub epg_channel_id: Uuid,
+    pub display_name: String,
+    pub language: Option<String>,
+    pub is_primary: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Extended EPG channel with all display names
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgChannelWithDisplayNames {
+    #[serde(flatten)]
+    pub channel: EpgChannel,
+    pub display_names: Vec<EpgChannelDisplayName>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ChannelEpgMapping {
     pub id: Uuid,
     pub stream_channel_id: Uuid,
@@ -1050,6 +1081,9 @@ pub struct EpgSourceUpdateRequest {
     pub timezone: Option<String>,
     pub time_offset: Option<String>,
     pub is_active: bool,
+    /// Whether to update linked sources with the same URL (defaults to true)
+    #[serde(default = "default_update_linked")]
+    pub update_linked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1239,6 +1273,7 @@ impl UnifiedSourceWithStats {
                 username: stream_with_stats.source.username,
                 password: stream_with_stats.source.password,
                 field_map: stream_with_stats.source.field_map,
+                ignore_channel_numbers: stream_with_stats.source.ignore_channel_numbers,
                 created_at: stream_with_stats.source.created_at,
                 updated_at: stream_with_stats.source.updated_at,
                 last_ingested_at: stream_with_stats.source.last_ingested_at,

@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::errors::AppResult;
-use crate::models::{StreamSource, Channel, StreamSourceType};
+use crate::models::{StreamSource, Channel, StreamSourceType, EpgSource, EpgProgram, EpgSourceType};
+use crate::services::progress_service::UniversalProgressCallback;
 
 /// Source validation result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,7 +156,11 @@ impl IngestionProgress {
 }
 
 /// Progress callback type for reporting ingestion progress
+/// DEPRECATED: Use UniversalProgressCallback instead
 pub type ProgressCallback = dyn Fn(IngestionProgress) + Send + Sync;
+
+/// Universal progress callback type (preferred)
+pub type UniversalCallback = Box<UniversalProgressCallback>;
 
 /// Core source handler trait
 ///
@@ -194,6 +199,13 @@ pub trait ChannelIngestor: Send + Sync {
         &self,
         source: &StreamSource,
         progress_callback: Option<&ProgressCallback>,
+    ) -> AppResult<Vec<Channel>>;
+
+    /// Ingest channels with universal progress callback (preferred)
+    async fn ingest_channels_with_universal_progress(
+        &self,
+        source: &StreamSource,
+        progress_callback: Option<&UniversalCallback>,
     ) -> AppResult<Vec<Channel>>;
 
     /// Estimate the number of channels available (for progress reporting)
@@ -361,4 +373,188 @@ pub enum SourceError {
     
     #[error("Health check failed: {0}")]
     HealthCheckFailed(String),
+}
+
+// ============================================================================
+// EPG-Specific Traits
+// ============================================================================
+
+/// Core EPG source handler trait
+///
+/// This trait defines the essential operations that all EPG source handlers must implement.
+/// It follows the Single Responsibility Principle by focusing solely on EPG source-specific
+/// operations.
+#[async_trait]
+pub trait EpgSourceHandler: Send + Sync {
+    /// Get the EPG source type this handler supports
+    fn epg_source_type(&self) -> EpgSourceType;
+
+    /// Validate an EPG source configuration
+    async fn validate_epg_source(&self, source: &EpgSource) -> AppResult<SourceValidationResult>;
+
+    /// Get capabilities for a specific EPG source
+    async fn get_epg_capabilities(&self, source: &EpgSource) -> AppResult<EpgSourceCapabilities>;
+
+    /// Test connectivity to an EPG source
+    async fn test_epg_connectivity(&self, source: &EpgSource) -> AppResult<bool>;
+
+    /// Get EPG source metadata (version, server info, etc.)
+    async fn get_epg_source_info(&self, source: &EpgSource) -> AppResult<HashMap<String, String>>;
+}
+
+/// EPG program ingestion trait
+///
+/// Separated from EpgSourceHandler to follow the Interface Segregation Principle.
+/// EPG sources that support program ingestion implement this trait.
+#[async_trait]
+pub trait EpgProgramIngestor: Send + Sync {
+    /// Ingest EPG programs from a source (programs-only mode)
+    async fn ingest_epg_programs(&self, source: &EpgSource) -> AppResult<Vec<EpgProgram>>;
+
+    /// Ingest EPG programs with progress callback (programs-only mode)
+    async fn ingest_epg_programs_with_progress(
+        &self,
+        source: &EpgSource,
+        progress_callback: Option<&EpgProgressCallback>,
+    ) -> AppResult<Vec<EpgProgram>>;
+
+    /// Ingest EPG programs with universal progress callback (preferred)
+    async fn ingest_epg_programs_with_universal_progress(
+        &self,
+        source: &EpgSource,
+        progress_callback: Option<&UniversalCallback>,
+    ) -> AppResult<Vec<EpgProgram>>;
+
+    /// Estimate the number of programs available (for progress reporting)
+    async fn estimate_program_count(&self, source: &EpgSource) -> AppResult<Option<u32>>;
+}
+
+/// EPG source capability information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgSourceCapabilities {
+    /// Whether the source supports live EPG data
+    pub supports_live_epg: bool,
+    /// Whether the source supports historical EPG data
+    pub supports_historical_epg: bool,
+    /// Whether the source supports channel information
+    pub supports_channel_info: bool,
+    /// Whether the source supports program categories
+    pub supports_categories: bool,
+    /// Whether the source requires authentication
+    pub requires_authentication: bool,
+    /// Maximum days of EPG data available
+    pub max_days_available: Option<u32>,
+    /// Supported EPG formats
+    pub supported_formats: Vec<String>,
+    /// Additional capability metadata
+    pub metadata: HashMap<String, String>,
+}
+
+impl EpgSourceCapabilities {
+    /// Create basic capabilities for XMLTV sources
+    pub fn xmltv_basic() -> Self {
+        Self {
+            supports_live_epg: true,
+            supports_historical_epg: true,
+            supports_channel_info: true,
+            supports_categories: true,
+            requires_authentication: false,
+            max_days_available: None,
+            supported_formats: vec!["xmltv".to_string(), "xml".to_string()],
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Create capabilities for Xtream EPG sources
+    pub fn xtream_epg() -> Self {
+        Self {
+            supports_live_epg: true,
+            supports_historical_epg: true,
+            supports_channel_info: true,
+            supports_categories: true,
+            requires_authentication: true,
+            max_days_available: Some(7), // Typical Xtream EPG retention
+            supported_formats: vec!["xmltv".to_string(), "xtream".to_string()],
+            metadata: HashMap::new(),
+        }
+    }
+}
+
+/// EPG progress information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgIngestionProgress {
+    /// Current processing step
+    pub current_step: String,
+    /// Total bytes to download (if known)
+    pub total_bytes: Option<u64>,
+    /// Bytes downloaded so far
+    pub downloaded_bytes: Option<u64>,
+    /// Channels parsed so far
+    pub channels_parsed: Option<u32>,
+    /// Programs parsed so far
+    pub programs_parsed: Option<u32>,
+    /// Programs successfully saved
+    pub programs_saved: Option<u32>,
+    /// Overall progress percentage (0-100)
+    pub percentage: Option<f32>,
+    /// Additional progress metadata
+    pub metadata: HashMap<String, String>,
+}
+
+impl EpgIngestionProgress {
+    /// Create initial progress state
+    pub fn starting<S: Into<String>>(step: S) -> Self {
+        Self {
+            current_step: step.into(),
+            total_bytes: None,
+            downloaded_bytes: None,
+            channels_parsed: None,
+            programs_parsed: None,
+            programs_saved: None,
+            percentage: Some(0.0),
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Update progress with new step
+    pub fn update_step<S: Into<String>>(mut self, step: S, percentage: Option<f32>) -> Self {
+        self.current_step = step.into();
+        self.percentage = percentage;
+        self
+    }
+}
+
+/// EPG progress callback type for reporting ingestion progress
+/// DEPRECATED: Use UniversalProgressCallback instead
+pub type EpgProgressCallback = dyn Fn(EpgIngestionProgress) + Send + Sync;
+
+/// Composite trait for full-featured EPG source handlers
+///
+/// This trait combines all the individual EPG traits for sources that support
+/// all EPG functionality. Implementing this trait indicates a fully-featured EPG source.
+pub trait FullEpgSourceHandler: 
+    EpgSourceHandler + 
+    EpgProgramIngestor + 
+    Send + 
+    Sync 
+{
+    /// Get a comprehensive EPG source summary
+    fn get_epg_handler_summary(&self) -> EpgSourceHandlerSummary {
+        EpgSourceHandlerSummary {
+            epg_source_type: self.epg_source_type(),
+            supports_program_ingestion: true,
+            supports_authentication: false, // Default, can be overridden
+        }
+    }
+}
+
+/// Summary of EPG source handler capabilities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgSourceHandlerSummary {
+    /// EPG source type this handler supports
+    pub epg_source_type: EpgSourceType,
+    /// Whether the handler supports program ingestion
+    pub supports_program_ingestion: bool,
+    /// Whether the handler supports authentication
+    pub supports_authentication: bool,
 }

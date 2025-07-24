@@ -8,6 +8,7 @@ Cargo.lock
 config.toml
 
 # Data directories
+crates/m3u-proxy/data/
 /data/
 *.db
 *.db-wal

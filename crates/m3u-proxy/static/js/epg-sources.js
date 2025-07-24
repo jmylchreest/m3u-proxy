@@ -5,6 +5,7 @@ class EpgSourcesManager {
     this.sources = [];
     this.editingSource = null;
     this.progressPollingInterval = null;
+    this.progressMonitor = null;
     this.progressData = {};
     this.processingInfo = {};
     this.lastHadProgress = false;
@@ -121,15 +122,11 @@ class EpgSourcesManager {
                         <small>${this.escapeHtml(source.url)}</small>
                     </div>
                     ${
-                      source.original_timezone && source.timezone_detected
+                      source.original_timezone && source.original_timezone !== "UTC"
                         ? `<div class="source-timezone text-muted">
                             <small>🌍 ${source.original_timezone} (detected) → UTC</small>
                         </div>`
-                        : source.timezone !== "UTC"
-                          ? `<div class="source-timezone text-muted">
-                            <small>🌍 ${source.timezone} (manual)</small>
-                        </div>`
-                          : ""
+                        : ""
                     }
                     ${
                       source.time_offset !== "0"
@@ -194,13 +191,15 @@ class EpgSourcesManager {
     if (progress && this.isActivelyProcessing(progress.state)) {
       const stateColors = {
         idle: "secondary",
+        preparing: "primary",
         connecting: "primary",
         downloading: "primary",
-        parsing: "primary",
-        saving: "primary",
         processing: "primary",
+        saving: "primary",
+        cleanup: "primary",
         completed: "success",
         error: "danger",
+        cancelled: "warning",
       };
 
       const badgeColor = stateColors[progress.state] || "secondary";
@@ -408,7 +407,7 @@ class EpgSourcesManager {
       document.getElementById("epgSourceType").value = source.source_type;
       document.getElementById("epgSourceUrl").value = source.url;
       document.getElementById("updateCron").value = source.update_cron;
-      document.getElementById("timezone").value = source.timezone || "UTC";
+      document.getElementById("timezone").value = source.original_timezone || "UTC";
       document.getElementById("timeOffset").value = source.time_offset || "0";
       document.getElementById("isActive").checked = source.is_active;
 
@@ -441,7 +440,7 @@ class EpgSourcesManager {
     const detectedGroup = document.getElementById("detectedTimezoneGroup");
     const detectedText = document.getElementById("detectedTimezoneText");
 
-    if (source && source.timezone_detected && source.original_timezone) {
+    if (source && source.original_timezone && source.original_timezone !== "UTC") {
       detectedGroup.style.display = "block";
       detectedText.innerHTML = `
         <strong>${source.original_timezone}</strong> was auto-detected from EPG source.<br>
@@ -449,8 +448,8 @@ class EpgSourcesManager {
       `;
     } else if (
       source &&
-      source.timezone_detected &&
-      source.timezone !== "UTC"
+      source.original_timezone &&
+      source.original_timezone !== "UTC"
     ) {
       detectedGroup.style.display = "block";
       detectedText.innerHTML = `
@@ -518,7 +517,7 @@ class EpgSourcesManager {
       await this.loadSources();
 
       this.showAlert(
-        `EPG source "${result.name}" ${isEditing ? "updated" : "created"} successfully`,
+        `EPG source "${result.data.name}" ${isEditing ? "updated" : "created"} successfully`,
         "success",
       );
     } catch (error) {
@@ -539,7 +538,7 @@ class EpgSourcesManager {
       url: document.getElementById("epgSourceUrl").value.trim(),
       update_cron:
         document.getElementById("updateCron").value.trim() || "0 0 */6 * * * *",
-      timezone: document.getElementById("timezone").value || "UTC",
+      original_timezone: document.getElementById("timezone").value || "UTC",
       time_offset: document.getElementById("timeOffset").value.trim() || "0",
     };
 
@@ -594,8 +593,8 @@ class EpgSourcesManager {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const source = await response.json();
-      this.showSourceModal(source);
+      const result = await response.json();
+      this.showSourceModal(result.data);
     } catch (error) {
       console.error("Error loading EPG source for editing:", error);
       this.showAlert("Failed to load EPG source for editing", "error");
@@ -693,20 +692,40 @@ class EpgSourcesManager {
       if (!response.ok) return;
 
       const data = await response.json();
-      const sourcesData = data.sources || [];
+      const operations = data.operations || [];
 
-      // Extract progress and processing info from API response
+      // Use unified progress format directly
       const extractedProgress = {};
       const extractedProcessingInfo = {};
 
-      sourcesData.forEach((sourceData) => {
-        const sourceId = sourceData.source_id;
-        if (sourceData.progress) {
-          extractedProgress[sourceId] = sourceData.progress;
-        }
-        if (sourceData.processing_info) {
-          extractedProcessingInfo[sourceId] = sourceData.processing_info;
-        }
+      operations.forEach(operation => {
+        // The operation_id should be the source_id for EPG ingestion operations
+        const sourceId = operation.id;
+        
+        // Use unified progress format directly
+        extractedProgress[sourceId] = {
+          source_id: sourceId,
+          state: operation.state, // Use unified state directly
+          current_step: operation.current_step,
+          total_bytes: operation.progress.bytes?.total,
+          downloaded_bytes: operation.progress.bytes?.processed,
+          channels_parsed: operation.progress.items?.processed,
+          programs_parsed: operation.progress.items?.total, // EPG uses programs instead of channels_saved
+          programs_saved: operation.progress.items?.total,
+          percentage: operation.progress.percentage,
+          started_at: operation.timing.started_at,
+          updated_at: operation.timing.updated_at,
+          completed_at: operation.timing.completed_at,
+          error: operation.error
+        };
+        
+        // Map timing info to processing info format
+        extractedProcessingInfo[sourceId] = {
+          started_at: operation.timing.started_at,
+          triggered_by: operation.metadata.triggered_by || "manual",
+          failure_count: 0, // Not available in unified format
+          next_retry_after: null
+        };
       });
 
       // Check if any sources just completed
@@ -749,7 +768,32 @@ class EpgSourcesManager {
 
   startProgressPolling() {
     this.stopProgressPolling(); // Clear any existing interval
+    
+    // Check if ProgressMonitor is available
+    if (typeof ProgressMonitor === 'undefined') {
+      console.error('ProgressMonitor class not found, falling back to legacy polling');
+      this.startLegacyPolling();
+      return;
+    }
+    
+    console.log('Starting progress monitoring with SSE support for EPG sources');
+    
+    // Initialize progress monitor for EPG ingestion operations
+    this.progressMonitor = new ProgressMonitor(
+      'epg_ingestion',
+      (operation) => this.handleProgressUpdate(operation),
+      (error) => console.debug("EPG progress monitoring error:", error)
+    );
+    
+    // Enable debug logging
+    this.progressMonitor.enableDebug();
+    
+    this.progressMonitor.start();
+  }
 
+  // Legacy polling fallback
+  startLegacyPolling() {
+    console.log('Using legacy polling for EPG progress updates');
     // Load progress immediately
     this.loadProgress();
 
@@ -760,21 +804,81 @@ class EpgSourcesManager {
   }
 
   stopProgressPolling() {
+    // Stop SSE progress monitor if active
+    if (this.progressMonitor) {
+      this.progressMonitor.stop();
+      this.progressMonitor = null;
+    }
+    
+    // Stop legacy polling if active
     if (this.progressPollingInterval) {
       clearInterval(this.progressPollingInterval);
       this.progressPollingInterval = null;
     }
   }
 
-  isActivelyProcessing(state) {
+  // Handle individual progress update from SSE
+  handleProgressUpdate(operation) {
+    const sourceId = operation.id;
+    const oldProgress = this.progressData[sourceId];
+    
+    // Convert to internal format (same as loadProgress)
+    const newProgress = {
+      source_id: sourceId,
+      state: operation.state,
+      current_step: operation.current_step,
+      total_bytes: operation.progress.bytes?.total,
+      downloaded_bytes: operation.progress.bytes?.processed,
+      programs_parsed: operation.progress.items?.processed,
+      programs_saved: operation.progress.items?.total,
+      percentage: operation.progress.percentage,
+      started_at: operation.timing.started_at,
+      updated_at: operation.timing.updated_at,
+      completed_at: operation.timing.completed_at,
+      error_message: operation.error
+    };
+    
+    // Update progress data
+    this.progressData[sourceId] = newProgress;
+    
+    // Check if source just completed
+    const justCompleted = oldProgress && 
+      this.isActiveProcessing(oldProgress.state) && 
+      (newProgress.state === "completed" || newProgress.state === "error");
+    
+    // Reload sources if just completed (to refresh UI)
+    if (justCompleted) {
+      console.log("EPG ingestion completed for source:", sourceId);
+      this.loadSources();
+    } else {
+      // Just re-render without full reload for intermediate updates
+      this.renderSources();
+    }
+  }
+
+  // Check if a unified state represents active processing
+  isActiveProcessing(state) {
     return [
-      "connecting",
-      "downloading",
-      "parsing",
-      "saving",
-      "processing",
+      'preparing',
+      'connecting', 
+      'downloading',
+      'processing',
+      'saving',
+      'cleanup'
     ].includes(state);
   }
+
+  isActivelyProcessing(state) {
+    return [
+      "preparing",
+      "connecting",
+      "downloading",
+      "processing",
+      "saving",
+      "cleanup",
+    ].includes(state);
+  }
+
 
   async deleteSource(sourceId, sourceName) {
     if (

@@ -7,10 +7,12 @@
 use std::sync::Arc;
 
 use crate::errors::{AppError, AppResult};
-use crate::models::StreamSourceType;
-use super::traits::{SourceHandler, FullSourceHandler};
+use crate::models::{StreamSourceType, EpgSourceType};
+use super::traits::{SourceHandler, FullSourceHandler, EpgSourceHandler, FullEpgSourceHandler, EpgSourceHandlerSummary};
 use super::m3u::M3uSourceHandler;
 use super::xtream::XtreamSourceHandler;
+use super::xmltv_epg::XmltvEpgHandler;
+use super::xtream_epg::XtreamEpgHandler;
 
 /// Factory for creating source handlers
 ///
@@ -117,6 +119,91 @@ impl SourceHandlerFactory {
                 supports_ingestion: true,
                 supports_health_check: true,
                 supports_url_generation: true,
+                supports_authentication: true,
+            }),
+        }
+    }
+
+    // ============================================================================
+    // EPG Source Factory Methods
+    // ============================================================================
+
+    /// Create an EPG source handler for the specified EPG source type
+    ///
+    /// # Arguments
+    /// * `epg_source_type` - The type of EPG source to create a handler for
+    ///
+    /// # Returns
+    /// A boxed EPG source handler that implements all relevant EPG traits
+    ///
+    /// # Errors
+    /// Returns an error if the EPG source type is not supported
+    pub fn create_epg_handler(epg_source_type: &EpgSourceType) -> AppResult<Arc<dyn FullEpgSourceHandler>> {
+        match epg_source_type {
+            EpgSourceType::Xmltv => {
+                let handler = XmltvEpgHandler::new();
+                Ok(Arc::new(handler))
+            }
+            EpgSourceType::Xtream => {
+                let handler = XtreamEpgHandler::new();
+                Ok(Arc::new(handler))
+            }
+        }
+    }
+
+    /// Create a basic EPG source handler (without full functionality)
+    ///
+    /// This method creates EPG handlers that only implement the core EpgSourceHandler trait,
+    /// useful for validation and capability checking without full ingestion support.
+    pub fn create_basic_epg_handler(epg_source_type: &EpgSourceType) -> AppResult<Arc<dyn EpgSourceHandler>> {
+        match epg_source_type {
+            EpgSourceType::Xmltv => {
+                let handler = XmltvEpgHandler::new();
+                Ok(Arc::new(handler))
+            }
+            EpgSourceType::Xtream => {
+                let handler = XtreamEpgHandler::new();
+                Ok(Arc::new(handler))
+            }
+        }
+    }
+
+    /// Get all supported EPG source types
+    ///
+    /// This method returns a list of all EPG source types that have registered handlers.
+    /// Useful for UI generation and capability discovery.
+    pub fn get_supported_epg_types() -> Vec<EpgSourceType> {
+        vec![
+            EpgSourceType::Xmltv,
+            EpgSourceType::Xtream,
+        ]
+    }
+
+    /// Check if an EPG source type is supported
+    ///
+    /// # Arguments  
+    /// * `epg_source_type` - The EPG source type to check
+    ///
+    /// # Returns
+    /// True if the EPG source type has a registered handler, false otherwise
+    pub fn is_epg_supported(epg_source_type: &EpgSourceType) -> bool {
+        matches!(epg_source_type, EpgSourceType::Xmltv | EpgSourceType::Xtream)
+    }
+
+    /// Get EPG handler capabilities summary for an EPG source type
+    ///
+    /// This method provides information about what capabilities an EPG handler supports
+    /// without actually creating the handler instance.
+    pub fn get_epg_handler_capabilities(epg_source_type: &EpgSourceType) -> AppResult<EpgSourceHandlerSummary> {
+        match epg_source_type {
+            EpgSourceType::Xmltv => Ok(EpgSourceHandlerSummary {
+                epg_source_type: EpgSourceType::Xmltv,
+                supports_program_ingestion: true,
+                supports_authentication: false,
+            }),
+            EpgSourceType::Xtream => Ok(EpgSourceHandlerSummary {
+                epg_source_type: EpgSourceType::Xtream,
+                supports_program_ingestion: true,
                 supports_authentication: true,
             }),
         }

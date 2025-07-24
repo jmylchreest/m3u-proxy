@@ -3,6 +3,7 @@ use clap::Parser;
 use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use serde_json::Value;
 
 // Use the library instead of redeclaring modules
 use m3u_proxy::{
@@ -25,11 +26,73 @@ use m3u_proxy::{
 // use std::{collections::HashMap, sync::Arc};
 use sandboxed_file_manager::SandboxedManager;
 
+/// Get dependencies from SBOM
+fn get_dependencies() -> Result<Value, Box<dyn std::error::Error>> {
+    let sbom_str = include_str!(concat!(env!("OUT_DIR"), "/sbom.json"));
+    let sbom: Value = serde_json::from_str(sbom_str)?;
+    Ok(sbom)
+}
+
+/// Print detailed version information including dependency versions
+fn print_version_info() {
+    println!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+    println!("{}", env!("CARGO_PKG_DESCRIPTION"));
+    println!();
+    println!("Build Information:");
+    println!("  Target: {}-{}", std::env::consts::ARCH, std::env::consts::OS);
+    if let Ok(rustc_version) = std::env::var("RUSTC_VERSION") {
+        println!("  Rust: {}", rustc_version);
+    }
+    println!();
+    println!("Software Bill of Materials:");
+    
+    match get_dependencies() {
+        Ok(sbom) => {
+            let mut dependencies = Vec::new();
+            
+            // Parse SPDX JSON format
+            if let Some(packages) = sbom["packages"].as_array() {
+                for package in packages {
+                    if let (Some(name), Some(version)) = (
+                        package["name"].as_str(),
+                        package["versionInfo"].as_str()
+                    ) {
+                        // Skip our own package and path dependencies
+                        if name != env!("CARGO_PKG_NAME") && !version.contains("path+") {
+                            dependencies.push((name.to_string(), version.to_string()));
+                        }
+                    }
+                }
+            }
+            
+            // Sort dependencies alphabetically for consistent output
+            dependencies.sort_by(|a, b| a.0.cmp(&b.0));
+            
+            if dependencies.is_empty() {
+                println!("  (No external components found in SBOM)");
+            } else {
+                for (name, version) in dependencies {
+                    println!("  {}: {}", name, version);
+                }
+            }
+        }
+        Err(_) => {
+            println!("  (Unable to read SBOM data)");
+        }
+    }
+    
+    println!();
+    println!("Repository: {}", env!("CARGO_PKG_REPOSITORY"));
+    println!("License: {}", env!("CARGO_PKG_LICENSE"));
+    println!("Authors: {}", env!("CARGO_PKG_AUTHORS"));
+}
+
 #[derive(Parser)]
 #[command(name = "m3u-proxy")]
-#[command(version = "0.1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "A modern M3U proxy service with filtering and source management")]
 #[command(long_about = None)]
+#[command(disable_version_flag = true)]
 struct Cli {
     /// Configuration file path
     #[arg(short, long, default_value = "config.toml")]
@@ -48,7 +111,7 @@ struct Cli {
     database_url: Option<String>,
 
     /// Log level
-    #[arg(short = 'v', long, default_value = "info")]
+    #[arg(short = 'l', long, default_value = "info")]
     log_level: String,
 
     /// Memory monitoring verbosity (silent, minimal, normal, verbose, debug)
@@ -58,11 +121,21 @@ struct Cli {
     /// Memory limit in MB
     #[arg(long, value_name = "MB")]
     memory_limit: Option<usize>,
+
+    /// Print version information including dependency versions
+    #[arg(short = 'v', long)]
+    version: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Handle version flag
+    if cli.version {
+        print_version_info();
+        return Ok(());
+    }
 
     // Initialize logging with specified level
     let log_filter = if cli.log_level == "trace" {

@@ -180,7 +180,24 @@ pub async fn delete_profile(
 }
 
 /// Get channel relay configuration
-async fn get_channel_relay_config(
+#[utoipa::path(
+    get,
+    path = "/proxies/{proxy_id}/channels/{channel_id}/relay",
+    tag = "relay",
+    summary = "Get channel relay configuration",
+    description = "Retrieve relay configuration for a specific channel in a proxy",
+    params(
+        ("proxy_id" = String, Path, description = "Proxy ID (UUID)"),
+        ("channel_id" = String, Path, description = "Channel ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Channel relay configuration"),
+        (status = 400, description = "Invalid proxy or channel ID"),
+        (status = 404, description = "Proxy has no relay profile configured"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_channel_relay_config(
     State(state): State<AppState>,
     Path((proxy_id, channel_id)): Path<(String, Uuid)>,
 ) -> impl IntoResponse {
@@ -213,7 +230,23 @@ async fn get_channel_relay_config(
 }
 
 /// Create channel relay configuration
-async fn create_channel_relay_config(
+#[utoipa::path(
+    post,
+    path = "/proxies/{proxy_id}/channels/{channel_id}/relay",
+    tag = "relay",
+    summary = "Create channel relay configuration",
+    description = "Create relay configuration for a specific channel in a proxy",
+    params(
+        ("proxy_id" = String, Path, description = "Proxy ID (UUID)"),
+        ("channel_id" = String, Path, description = "Channel ID (UUID)"),
+    ),
+    responses(
+        (status = 201, description = "Channel relay configuration created successfully"),
+        (status = 400, description = "Invalid request or profile not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn create_channel_relay_config(
     State(state): State<AppState>,
     Path((proxy_id, channel_id)): Path<(String, Uuid)>,
     Json(request): Json<CreateChannelRelayConfigRequest>,
@@ -253,7 +286,24 @@ async fn create_channel_relay_config(
 }
 
 /// Delete channel relay configuration
-async fn delete_channel_relay_config(
+#[utoipa::path(
+    delete,
+    path = "/proxies/{proxy_id}/channels/{channel_id}/relay",
+    tag = "relay",
+    summary = "Delete channel relay configuration",
+    description = "Remove relay configuration from a proxy (affects all channels)",
+    params(
+        ("proxy_id" = String, Path, description = "Proxy ID (UUID)"),
+        ("channel_id" = String, Path, description = "Channel ID (UUID)"),
+    ),
+    responses(
+        (status = 204, description = "Channel relay configuration deleted successfully"),
+        (status = 400, description = "Invalid proxy ID"),
+        (status = 404, description = "Proxy has no relay profile configured"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn delete_channel_relay_config(
     State(state): State<AppState>,
     Path((proxy_id, _channel_id)): Path<(String, Uuid)>,
 ) -> impl IntoResponse {
@@ -271,7 +321,22 @@ async fn delete_channel_relay_config(
 }
 
 /// Serve HLS playlist (playlist.m3u8)
-async fn serve_relay_playlist(
+#[utoipa::path(
+    get,
+    path = "/relay/{config_id}/playlist.m3u8",
+    tag = "relay",
+    summary = "Serve relay HLS playlist",
+    description = "Serve the HLS master playlist for a relay configuration",
+    params(
+        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "HLS playlist content", content_type = "application/vnd.apple.mpegurl"),
+        (status = 404, description = "Playlist not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn serve_relay_playlist(
     State(state): State<AppState>,
     Path(config_id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -299,7 +364,23 @@ async fn serve_relay_playlist(
 }
 
 /// Serve relay segment (for HLS)
-async fn serve_relay_segment(
+#[utoipa::path(
+    get,
+    path = "/relay/{config_id}/segments/{segment_name}",
+    tag = "relay",
+    summary = "Serve relay HLS segment",
+    description = "Serve HLS video segments for a relay configuration",
+    params(
+        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
+        ("segment_name" = String, Path, description = "Segment filename"),
+    ),
+    responses(
+        (status = 200, description = "Video segment data", content_type = "video/mp2t"),
+        (status = 404, description = "Segment not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn serve_relay_segment(
     State(state): State<AppState>,
     Path((config_id, segment_name)): Path<(Uuid, String)>,
 ) -> impl IntoResponse {
@@ -340,7 +421,22 @@ async fn serve_relay_segment(
 
 
 /// Get relay status
-async fn get_relay_status(
+#[utoipa::path(
+    get,
+    path = "/relay/{config_id}/status",
+    tag = "relay",
+    summary = "Get relay status",
+    description = "Retrieve runtime status information for a relay configuration",
+    params(
+        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Relay runtime status"),
+        (status = 404, description = "Relay not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_relay_status(
     State(state): State<AppState>,
     Path(config_id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -352,7 +448,24 @@ async fn get_relay_status(
 }
 
 /// Start relay process (now uses proxy_id and channel_id instead of config_id)
-async fn start_relay(
+#[utoipa::path(
+    post,
+    path = "/proxy/{proxy_id}/relay/{channel_id}/start",
+    tag = "relay",
+    summary = "Start relay process",
+    description = "Start a relay process for a specific channel in a proxy",
+    params(
+        ("proxy_id" = String, Path, description = "Proxy ID (UUID)"),
+        ("channel_id" = String, Path, description = "Channel ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Relay started successfully"),
+        (status = 400, description = "Invalid proxy ID"),
+        (status = 404, description = "Proxy has no relay profile configured or channel not found"),
+        (status = 500, description = "Failed to start relay")
+    )
+)]
+pub async fn start_relay(
     State(state): State<AppState>,
     Path((proxy_id, channel_id)): Path<(String, Uuid)>,
 ) -> impl IntoResponse {
@@ -389,7 +502,21 @@ async fn start_relay(
 }
 
 /// Stop relay process
-async fn stop_relay(
+#[utoipa::path(
+    post,
+    path = "/relay/{config_id}/stop",
+    tag = "relay",
+    summary = "Stop relay process",
+    description = "Stop a running relay process",
+    params(
+        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Relay stopped successfully"),
+        (status = 500, description = "Failed to stop relay")
+    )
+)]
+pub async fn stop_relay(
     State(state): State<AppState>,
     Path(config_id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -400,7 +527,18 @@ async fn stop_relay(
 }
 
 /// Get relay metrics
-async fn get_relay_metrics(State(state): State<AppState>) -> impl IntoResponse {
+#[utoipa::path(
+    get,
+    path = "/relay/metrics",
+    tag = "relay",
+    summary = "Get relay metrics",
+    description = "Retrieve overall relay system metrics",
+    responses(
+        (status = 200, description = "Relay system metrics"),
+        (status = 500, description = "Failed to get metrics")
+    )
+)]
+pub async fn get_relay_metrics(State(state): State<AppState>) -> impl IntoResponse {
     match state.relay_manager.get_relay_status().await {
         Ok(metrics) => Json(metrics).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get metrics: {}", e)).into_response(),
@@ -408,7 +546,22 @@ async fn get_relay_metrics(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// Get relay metrics for specific config
-async fn get_relay_metrics_for_config(
+#[utoipa::path(
+    get,
+    path = "/relay/metrics/{config_id}",
+    tag = "relay",
+    summary = "Get relay metrics for configuration",
+    description = "Retrieve metrics for a specific relay configuration",
+    params(
+        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Relay configuration metrics"),
+        (status = 501, description = "Not implemented yet"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_relay_metrics_for_config(
     State(_state): State<AppState>,
     Path(_config_id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -417,7 +570,18 @@ async fn get_relay_metrics_for_config(
 }
 
 /// Get overall relay system health
-async fn get_relay_health(State(state): State<AppState>) -> impl IntoResponse {
+#[utoipa::path(
+    get,
+    path = "/relay/health",
+    tag = "relay",
+    summary = "Get relay system health",
+    description = "Retrieve overall health status of the relay system",
+    responses(
+        (status = 200, description = "Relay system health status"),
+        (status = 500, description = "Failed to get health status")
+    )
+)]
+pub async fn get_relay_health(State(state): State<AppState>) -> impl IntoResponse {
     match state.relay_manager.get_relay_health().await {
         Ok(health) => Json(health).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get health: {}", e)).into_response(),
@@ -425,7 +589,22 @@ async fn get_relay_health(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// Get health for specific relay config
-async fn get_relay_health_for_config(
+#[utoipa::path(
+    get,
+    path = "/relay/health/{config_id}",
+    tag = "relay",
+    summary = "Get relay configuration health",
+    description = "Retrieve health status for a specific relay configuration",
+    params(
+        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Relay configuration health status"),
+        (status = 404, description = "Relay config not found"),
+        (status = 500, description = "Failed to get health status")
+    )
+)]
+pub async fn get_relay_health_for_config(
     State(state): State<AppState>,
     Path(config_id): Path<Uuid>,
 ) -> impl IntoResponse {

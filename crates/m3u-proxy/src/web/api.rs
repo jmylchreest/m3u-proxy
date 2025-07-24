@@ -3786,6 +3786,27 @@ pub async fn preview_proxies(
 }
 
 /// Regenerate all active proxies
+#[utoipa::path(
+    post,
+    path = "/proxies/regenerate-all",
+    tag = "proxies",
+    summary = "Regenerate all active proxies",
+    description = "Queue all active proxies for background regeneration.
+
+This endpoint:
+- Queues all proxies with `is_active = true` for regeneration
+- Uses the proxy regeneration service to avoid conflicts
+- Prevents duplicate batch regeneration requests
+- Returns immediately with queuing status (regeneration happens in background)
+- Updates proxy files with fresh data from all sources
+
+Note: This operation may take several minutes depending on the number of proxies and source response times.",
+    responses(
+        (status = 200, description = "Batch regeneration queued successfully"),
+        (status = 409, description = "Another batch regeneration is already in progress"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn regenerate_all_proxies(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {

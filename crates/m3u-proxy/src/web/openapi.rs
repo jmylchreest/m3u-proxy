@@ -201,12 +201,17 @@ Check the endpoints below to see the complete API surface.
         crate::web::handlers::proxies::delete_proxy,
         crate::web::handlers::proxies::serve_proxy_m3u,
         
+        // Proxy preview endpoints
+        crate::web::handlers::proxies::preview_proxy_config,
+        crate::web::handlers::proxies::preview_existing_proxy,
+        
         // Streaming endpoints
         crate::web::handlers::proxies::proxy_stream,
         crate::web::handlers::proxies::serve_proxy_xmltv,
         
         // Proxy regeneration endpoints
         crate::web::api::regenerate_proxy,
+        crate::web::api::regenerate_all_proxies,
         crate::web::api::get_regeneration_queue_status,
         
         // Relay endpoints
@@ -215,6 +220,26 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::relay::create_profile,
         crate::web::api::relay::update_profile,
         crate::web::api::relay::delete_profile,
+        
+        // Relay channel configuration
+        crate::web::api::relay::get_channel_relay_config,
+        crate::web::api::relay::create_channel_relay_config,
+        crate::web::api::relay::delete_channel_relay_config,
+        
+        // Relay content serving
+        crate::web::api::relay::serve_relay_playlist,
+        crate::web::api::relay::serve_relay_segment,
+        
+        // Relay status and control
+        crate::web::api::relay::get_relay_status,
+        crate::web::api::relay::start_relay,
+        crate::web::api::relay::stop_relay,
+        
+        // Relay metrics and health
+        crate::web::api::relay::get_relay_metrics,
+        crate::web::api::relay::get_relay_metrics_for_config,
+        crate::web::api::relay::get_relay_health,
+        crate::web::api::relay::get_relay_health_for_config,
         
         // Active relay monitoring
         crate::web::api::active_relays::get_active_relays,

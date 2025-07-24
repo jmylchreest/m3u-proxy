@@ -420,7 +420,7 @@ impl Default for SessionTracker {
         Self::new(
             Duration::from_secs(30),  // Stats every 30 seconds
             Duration::from_secs(60),  // Cleanup every minute
-            Duration::from_secs(300), // 5 minute session timeout
+            Duration::from_secs(120), // 2 minute session timeout (backup for stale connections)
         )
     }
 }

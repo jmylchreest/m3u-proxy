@@ -356,7 +356,7 @@ pub struct UpdateRelayProfileRequest {
 }
 
 /// Request to create a channel relay configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CreateChannelRelayConfigRequest {
     pub profile_id: Uuid,
     pub name: String,

@@ -253,7 +253,7 @@ pub struct PreviewProxyRequest {
 }
 
 /// Response DTO for proxy preview
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PreviewProxyResponse {
     pub channels: Vec<PreviewChannel>,
     pub stats: PreviewStats,
@@ -263,7 +263,7 @@ pub struct PreviewProxyResponse {
 }
 
 /// Channel information in preview
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PreviewChannel {
     pub channel_name: String,
     pub group_title: Option<String>,
@@ -282,7 +282,7 @@ pub struct PreviewChannel {
 }
 
 /// Statistics for preview
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PreviewStats {
     pub total_sources: usize,
     pub total_channels_before_filters: usize,
@@ -315,7 +315,7 @@ pub struct PreviewStats {
 }
 
 /// Pipeline stage detail
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PipelineStageDetail {
     pub name: String,
     pub duration: u64,
@@ -324,7 +324,7 @@ pub struct PipelineStageDetail {
 }
 
 /// Processing event for timeline
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProcessingEvent {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub description: String,
@@ -719,6 +719,28 @@ pub async fn delete_proxy(
 }
 
 /// Preview a proxy configuration without saving
+#[utoipa::path(
+    post,
+    path = "/proxies/preview",
+    tag = "proxies",
+    summary = "Preview proxy configuration",
+    description = "Generate a preview of a proxy configuration without saving it to the database.
+
+This endpoint allows you to:
+- Test proxy configurations before creating them
+- Preview the generated M3U playlist and channel count
+- Validate source connections and filter rules
+- See metadata transformations and logo assignments
+
+The preview uses the same pipeline as actual proxy generation but stores results temporarily.",
+    request_body = PreviewProxyRequest,
+    responses(
+        (status = 200, description = "Proxy preview generated successfully", body = PreviewProxyResponse),
+        (status = 400, description = "Invalid proxy configuration"),
+        (status = 422, description = "Validation errors in request"),
+        (status = 500, description = "Internal server error during preview generation")
+    )
+)]
 #[axum::debug_handler]
 pub async fn preview_proxy_config(
     State(state): State<AppState>,
@@ -772,6 +794,30 @@ pub async fn preview_proxy_config(
 }
 
 /// Preview an existing proxy by ID
+#[utoipa::path(
+    get,
+    path = "/proxies/{id}/preview",
+    tag = "proxies",
+    summary = "Preview existing proxy",
+    description = "Generate a preview of an existing proxy using its current configuration.
+
+This endpoint:
+- Loads the existing proxy configuration from the database
+- Regenerates the preview using current sources and filters
+- Shows what the proxy would look like if regenerated now
+- Useful for testing changes to sources/filters before regenerating
+
+The ID can be provided in any supported format (UUID, base64-encoded UUID, etc.).",
+    params(
+        ("id" = String, Path, description = "Proxy identifier (UUID, base64, or other supported format)")
+    ),
+    responses(
+        (status = 200, description = "Proxy preview generated successfully", body = PreviewProxyResponse),
+        (status = 404, description = "Proxy not found"),
+        (status = 400, description = "Invalid proxy ID format"),
+        (status = 500, description = "Internal server error during preview generation")
+    )
+)]
 #[axum::debug_handler]
 pub async fn preview_existing_proxy(
     State(state): State<AppState>,
@@ -1907,6 +1953,88 @@ async fn proxy_http_stream(
     let completion_bytes = total_bytes_served.clone();
     let completion_ended = stream_ended.clone();
 
+    // Create a cancellation token to coordinate cleanup
+    let cancellation_token = tokio_util::sync::CancellationToken::new();
+    let token_for_heartbeat = cancellation_token.clone();
+
+    // Start a heartbeat task to detect truly stale connections
+    let heartbeat_state = completion_state.clone();
+    let heartbeat_session_id = completion_session_id.clone();
+    let heartbeat_session = completion_session.clone();
+    let heartbeat_bytes = completion_bytes.clone();
+    let heartbeat_ended = completion_ended.clone();
+    
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut last_bytes = 0u64;
+        let mut stale_count = 0u8;
+        
+        loop {
+            tokio::select! {
+                _ = token_for_heartbeat.cancelled() => {
+                    debug!("Heartbeat cancelled for session: {}", heartbeat_session_id);
+                    break;
+                }
+                _ = interval.tick() => {
+                    let current_bytes = heartbeat_bytes.load(std::sync::atomic::Ordering::Relaxed);
+                    
+                    // Check if bytes are still increasing (stream is active)
+                    if current_bytes == last_bytes {
+                        stale_count += 1;
+                        debug!(
+                            "Session {} stale check {}/3: {} bytes (no progress)",
+                            heartbeat_session_id, stale_count, current_bytes
+                        );
+                        
+                        if stale_count >= 3 {
+                            // No progress for 90 seconds - client likely disconnected
+                            if !heartbeat_ended.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                warn!(
+                                    "Detected stale connection for session {} - no progress for {}s, cleaning up",
+                                    heartbeat_session_id, stale_count * 30
+                                );
+                                
+                                // Handle cleanup asynchronously
+                                let cleanup_state = heartbeat_state.clone();
+                                let cleanup_session = heartbeat_session.clone();
+                                let cleanup_session_id = heartbeat_session_id.clone();
+                                tokio::spawn(async move {
+                                    // Finish metrics tracking
+                                    cleanup_session
+                                        .finish(&cleanup_state.metrics_logger, current_bytes)
+                                        .await;
+
+                                    // Complete the active session
+                                    if let Err(e) = cleanup_state
+                                        .metrics_logger
+                                        .complete_active_session(&cleanup_session_id)
+                                        .await
+                                    {
+                                        error!("Failed to complete stale session: {}", e);
+                                    }
+
+                                    // End session tracking
+                                    cleanup_state
+                                        .session_tracker
+                                        .end_session(&cleanup_session_id)
+                                        .await;
+                                });
+                            }
+                            break;
+                        }
+                    } else {
+                        stale_count = 0; // Reset counter if bytes are increasing
+                        debug!(
+                            "Session {} active: {} bytes (+{} since last check)",
+                            heartbeat_session_id, current_bytes, current_bytes - last_bytes
+                        );
+                    }
+                    last_bytes = current_bytes;
+                }
+            }
+        }
+    });
+
     let stream_with_completion =
         futures::stream::unfold((tracked_stream, false), move |(mut stream, completed)| {
             let state_ref = completion_state.clone();
@@ -1914,6 +2042,7 @@ async fn proxy_http_stream(
             let session_id_ref = completion_session_id.clone();
             let bytes_ref = completion_bytes.clone();
             let ended_ref = completion_ended.clone();
+            let cancel_token = cancellation_token.clone();
 
             async move {
                 use futures::StreamExt;
@@ -1922,6 +2051,8 @@ async fn proxy_http_stream(
                     Some(result) => Some((result, (stream, completed))),
                     None => {
                         // Stream completed (either successfully or client disconnected)
+                        cancel_token.cancel(); // Cancel heartbeat task
+                        
                         if !completed && !ended_ref.swap(true, std::sync::atomic::Ordering::Relaxed)
                         {
                             let final_bytes = bytes_ref.load(std::sync::atomic::Ordering::Relaxed);

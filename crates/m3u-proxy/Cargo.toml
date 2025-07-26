@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"
@@ -50,6 +50,7 @@ sqlx = { version = "0.8", features = [
 thiserror = "2.0"
 tokio = { version = "1.46", features = ["full"] }
 tokio-util = "0.7.15"
+tokio-stream = { version = "0.1", features = ["sync"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 tracing = "0.1.41"

@@ -1134,7 +1134,7 @@ pub struct EpgRefreshResponse {
 }
 
 // Xtream Codes Integration Models
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct XtreamCodesCreateRequest {
     pub name: String,
     pub url: String,
@@ -1157,7 +1157,7 @@ pub struct XtreamCodesCreateResponse {
     pub epg_source: Option<EpgSource>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct XtreamCodesUpdateRequest {
     pub name: String,
     pub url: String,

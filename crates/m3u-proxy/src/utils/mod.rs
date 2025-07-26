@@ -6,6 +6,7 @@
 pub mod datetime;
 pub mod deterministic_uuid;
 pub mod human_format;
+pub mod log_capture;
 pub mod logo;
 pub mod memory_cleanup;
 pub mod memory_config;

@@ -85,6 +85,8 @@ Check the endpoints below to see the complete API surface.
         (name = "sources", description = "Unified source management operations"),
         (name = "epg", description = "Electronic Program Guide operations"),
         (name = "active-relays", description = "Active relay process monitoring"),
+        (name = "logs", description = "Real-time log streaming and monitoring"),
+        (name = "settings", description = "Runtime server settings management"),
     ),
     components(
         schemas(
@@ -116,6 +118,24 @@ Check the endpoints below to see the complete API surface.
             crate::web::extractors::PaginationParams,
             crate::web::extractors::StreamSourceFilterParams,
             crate::web::extractors::EpgSourceFilterParams,
+            
+            // Log streaming schemas
+            crate::web::api::log_streaming::LogEvent,
+            crate::web::api::log_streaming::SpanInfo,
+            
+            // Settings schemas
+            crate::web::api::settings::RuntimeSettings,
+            crate::web::api::settings::UpdateSettingsRequest,
+            crate::web::api::settings::SettingsResponse,
+            
+            // Unified progress schemas
+            crate::web::api::unified_progress::ProgressOperationResponse,
+            crate::web::api::unified_progress::ProgressDetails,
+            crate::web::api::unified_progress::ItemProgress,
+            crate::web::api::unified_progress::ByteProgress,
+            crate::web::api::unified_progress::TimingDetails,
+            crate::web::api::unified_progress::ProgressSummary,
+            crate::web::api::unified_progress::UnifiedProgressResponse,
         )
     ),
     paths(
@@ -139,6 +159,22 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::get_sources_progress,
         crate::web::api::get_epg_progress,
         crate::web::api::get_proxy_regeneration_progress,
+        crate::web::api::get_all_progress,
+        crate::web::api::get_all_source_progress,
+        crate::web::api::get_operation_progress,
+        crate::web::api::get_epg_source_progress,
+        crate::web::api::get_stream_source_progress,
+        
+        // Unified progress endpoints
+        crate::web::api::unified_progress::get_unified_progress,
+        crate::web::api::unified_progress::progress_events_stream,
+        crate::web::api::unified_progress::get_operation_progress,
+        crate::web::api::unified_progress::get_stream_progress,
+        crate::web::api::unified_progress::get_epg_progress,
+        crate::web::api::unified_progress::get_proxy_progress,
+        crate::web::api::unified_progress::get_stream_source_progress,
+        crate::web::api::unified_progress::get_epg_source_progress,
+        crate::web::api::unified_progress::get_proxy_regeneration_progress,
         
         // EPG Sources endpoints
         crate::web::handlers::epg_sources::list_epg_sources,
@@ -171,6 +207,14 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::test_filter,
         crate::web::api::validate_filter,
         crate::web::api::get_filter_fields,
+        crate::web::api::list_stream_source_filters,
+        crate::web::api::create_stream_source_filter,
+        crate::web::api::list_epg_source_filters,
+        crate::web::api::create_epg_source_filter,
+        crate::web::api::list_stream_filters,
+        crate::web::api::list_epg_filters,
+        crate::web::api::get_stream_filter_fields,
+        crate::web::api::get_epg_filter_fields,
         
         // Data mapping endpoints
         crate::web::api::list_data_mapping_rules,
@@ -185,6 +229,8 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::test_data_mapping_rule,
         crate::web::api::apply_data_mapping_rules,
         crate::web::api::apply_data_mapping_rules_post,
+        crate::web::api::apply_stream_source_data_mapping,
+        crate::web::api::apply_epg_source_data_mapping,
         
         // Generalized pipeline validation
         crate::web::api::validate_pipeline_expression,
@@ -252,10 +298,42 @@ Check the endpoints below to see the complete API surface.
         crate::web::handlers::health::readiness_check,
         crate::web::handlers::health::liveness_check,
         
+        // Stream source management
+        crate::web::api::cancel_stream_source_ingestion,
+        crate::web::api::get_stream_source_processing_info,
+        
+        // Linked sources and channel mapping
+        crate::web::api::list_linked_xtream_sources,
+        crate::web::api::create_linked_xtream_source,
+        crate::web::api::get_linked_xtream_source,
+        crate::web::api::update_linked_xtream_source,
+        crate::web::api::delete_linked_xtream_source,
+        crate::web::api::list_channel_mappings,
+        crate::web::api::create_channel_mapping,
+        crate::web::api::delete_channel_mapping,
+        crate::web::api::auto_map_channels,
+        
+        // Proxy management
+        crate::web::api::preview_proxies,
+        
+        // Legacy health endpoint
+        crate::web::api::health_check,
+
         // Metrics endpoints
         crate::web::api::get_dashboard_metrics,
         crate::web::api::get_realtime_metrics,
         crate::web::api::get_usage_metrics,
+        crate::web::api::get_popular_channels,
+        
+        // Log streaming endpoints
+        crate::web::api::log_streaming::stream_logs,
+        crate::web::api::log_streaming::get_log_stats,
+        crate::web::api::log_streaming::send_test_log,
+        
+        // Settings endpoints
+        crate::web::api::settings::get_settings,
+        crate::web::api::settings::update_settings,
+        crate::web::api::settings::get_settings_info,
     )
 )]
 pub struct ApiDoc;

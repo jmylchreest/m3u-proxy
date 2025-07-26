@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{debug, error, info, warn};
-use utoipa::ToSchema;
+use utoipa::{ToSchema, IntoParams};
 use uuid::Uuid;
 
 use super::AppState;
@@ -19,6 +19,8 @@ use super::AppState;
 pub mod relay;
 pub mod active_relays;
 pub mod unified_progress;
+pub mod log_streaming;
+pub mod settings;
 
 use crate::data_mapping::DataMappingService;
 use crate::pipeline::engines::validation::StageValidator;
@@ -95,6 +97,18 @@ fn mapped_channel_to_frontend_format(
 
 // Progress API
 
+/// Get all source progress information
+#[utoipa::path(
+    get,
+    path = "/progress/all",
+    tag = "progress",
+    summary = "Get all source progress",
+    description = "Retrieve progress information for all sources with enhanced processing details",
+    responses(
+        (status = 200, description = "All source progress retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_all_progress(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -124,6 +138,18 @@ pub async fn get_all_progress(
     Ok(Json(result))
 }
 
+/// Get source progress information
+#[utoipa::path(
+    get,
+    path = "/progress/sources",
+    tag = "progress",
+    summary = "Get source progress",
+    description = "Retrieve progress information for all sources with processing details",
+    responses(
+        (status = 200, description = "Source progress retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_all_source_progress(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -153,6 +179,18 @@ pub async fn get_all_source_progress(
     Ok(Json(result))
 }
 
+/// Get active operation progress
+#[utoipa::path(
+    get,
+    path = "/progress/operations",
+    tag = "progress",
+    summary = "Get active operation progress",
+    description = "Retrieve progress information for currently active operations only",
+    responses(
+        (status = 200, description = "Active operation progress retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_operation_progress(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -182,6 +220,22 @@ pub async fn get_operation_progress(
     Ok(Json(result))
 }
 
+/// Get EPG source progress by ID
+#[utoipa::path(
+    get,
+    path = "/progress/epg/{id}",
+    tag = "progress",
+    summary = "Get EPG source progress",
+    description = "Retrieve progress information for a specific EPG source",
+    params(
+        ("id" = Uuid, Path, description = "EPG source ID")
+    ),
+    responses(
+        (status = 200, description = "EPG source progress retrieved"),
+        (status = 404, description = "EPG source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_epg_source_progress(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -671,6 +725,22 @@ pub async fn validate_filter(
 }
 
 // Source-specific filter endpoints
+/// List filters for a specific stream source
+#[utoipa::path(
+    get,
+    path = "/sources/stream/{source_id}/filters",
+    tag = "filters",
+    summary = "List stream source filters",
+    description = "Get all filters applicable to a specific stream source",
+    params(
+        ("source_id" = Uuid, Path, description = "Stream source ID")
+    ),
+    responses(
+        (status = 200, description = "Stream source filters retrieved"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_stream_source_filters(
     Path(source_id): Path<Uuid>,
     State(state): State<AppState>,
@@ -711,6 +781,24 @@ pub async fn list_stream_source_filters(
     }
 }
 
+/// Create a filter for a specific stream source
+#[utoipa::path(
+    post,
+    path = "/sources/stream/{source_id}/filters",
+    tag = "filters",
+    summary = "Create stream source filter",
+    description = "Create a new filter for a specific stream source",
+    params(
+        ("source_id" = Uuid, Path, description = "Stream source ID")
+    ),
+    request_body = FilterCreateRequest,
+    responses(
+        (status = 201, description = "Filter created successfully"),
+        (status = 404, description = "Stream source not found"),
+        (status = 400, description = "Invalid filter data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn create_stream_source_filter(
     Path(source_id): Path<Uuid>,
     State(state): State<AppState>,
@@ -748,6 +836,22 @@ pub async fn create_stream_source_filter(
     }
 }
 
+/// List filters for a specific EPG source
+#[utoipa::path(
+    get,
+    path = "/sources/epg/{source_id}/filters",
+    tag = "filters",
+    summary = "List EPG source filters",
+    description = "Get all filters applicable to a specific EPG source",
+    params(
+        ("source_id" = Uuid, Path, description = "EPG source ID")
+    ),
+    responses(
+        (status = 200, description = "EPG source filters retrieved"),
+        (status = 404, description = "EPG source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_epg_source_filters(
     Path(source_id): Path<Uuid>,
     State(state): State<AppState>,
@@ -788,6 +892,24 @@ pub async fn list_epg_source_filters(
     }
 }
 
+/// Create a filter for a specific EPG source
+#[utoipa::path(
+    post,
+    path = "/sources/epg/{source_id}/filters",
+    tag = "filters",
+    summary = "Create EPG source filter",
+    description = "Create a new filter for a specific EPG source",
+    params(
+        ("source_id" = Uuid, Path, description = "EPG source ID")
+    ),
+    request_body = FilterCreateRequest,
+    responses(
+        (status = 201, description = "Filter created successfully"),
+        (status = 404, description = "EPG source not found"),
+        (status = 400, description = "Invalid filter data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn create_epg_source_filter(
     Path(source_id): Path<Uuid>,
     State(state): State<AppState>,
@@ -826,6 +948,18 @@ pub async fn create_epg_source_filter(
 }
 
 // Cross-source filter operations
+/// List all stream filters
+#[utoipa::path(
+    get,
+    path = "/filters/stream",
+    tag = "filters",
+    summary = "List stream filters",
+    description = "Get all filters that apply to stream sources",
+    responses(
+        (status = 200, description = "Stream filters retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_stream_filters(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -853,6 +987,18 @@ pub async fn list_stream_filters(
     }
 }
 
+/// List all EPG filters
+#[utoipa::path(
+    get,
+    path = "/filters/epg",
+    tag = "filters",
+    summary = "List EPG filters",
+    description = "Get all filters that apply to EPG sources",
+    responses(
+        (status = 200, description = "EPG filters retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_epg_filters(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -880,6 +1026,18 @@ pub async fn list_epg_filters(
     }
 }
 
+/// Get available filter fields for stream sources
+#[utoipa::path(
+    get,
+    path = "/filters/fields/stream",
+    tag = "filters",
+    summary = "Get stream filter fields",
+    description = "Get available fields that can be used in stream source filters",
+    responses(
+        (status = 200, description = "Stream filter fields retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_stream_filter_fields(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -907,6 +1065,18 @@ pub async fn get_stream_filter_fields(
     }
 }
 
+/// Get available filter fields for EPG sources
+#[utoipa::path(
+    get,
+    path = "/filters/fields/epg",
+    tag = "filters",
+    summary = "Get EPG filter fields",
+    description = "Get available fields that can be used in EPG source filters",
+    responses(
+        (status = 200, description = "EPG filter fields retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_epg_filter_fields(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -1639,6 +1809,22 @@ pub async fn test_data_mapping_rule(
     }
 }
 
+/// Apply data mapping to stream source
+#[utoipa::path(
+    post,
+    path = "/sources/stream/{source_id}/data-mapping/apply",
+    tag = "data-mapping",
+    summary = "Apply data mapping to stream source",
+    description = "Apply all active data mapping rules to a specific stream source",
+    params(
+        ("source_id" = String, Path, description = "Stream source ID")
+    ),
+    responses(
+        (status = 200, description = "Data mapping applied successfully"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn apply_stream_source_data_mapping(
     State(state): State<AppState>,
     Path(source_id): Path<String>,
@@ -1873,6 +2059,22 @@ pub async fn apply_stream_source_data_mapping(
     Ok(Json(result))
 }
 
+/// Apply data mapping to EPG source
+#[utoipa::path(
+    post,
+    path = "/sources/epg/{source_id}/data-mapping/apply",
+    tag = "data-mapping",
+    summary = "Apply data mapping to EPG source",
+    description = "Apply all active data mapping rules to a specific EPG source",
+    params(
+        ("source_id" = String, Path, description = "EPG source ID")
+    ),
+    responses(
+        (status = 200, description = "Data mapping applied successfully"),
+        (status = 404, description = "EPG source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn apply_epg_source_data_mapping(
     State(state): State<AppState>,
     Path(source_id): Path<String>,
@@ -2844,6 +3046,17 @@ pub async fn get_cached_logo_asset(
     Ok((headers, file_data))
 }
 
+/// Legacy health check endpoint
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "health",
+    summary = "Legacy health check",
+    description = "Simple health check endpoint (deprecated - use /health instead)",
+    responses(
+        (status = 200, description = "Service is healthy")
+    )
+)]
 pub async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(json!({
         "status": "healthy",
@@ -2908,6 +3121,22 @@ pub async fn refresh_stream_source(
 }
 
 /// Cancel stream source ingestion
+/// Cancel stream source ingestion
+#[utoipa::path(
+    post,
+    path = "/sources/stream/{id}/cancel",
+    tag = "stream-sources",
+    summary = "Cancel stream source ingestion",
+    description = "Cancel an ongoing ingestion operation for a stream source",
+    params(
+        ("id" = Uuid, Path, description = "Stream source ID")
+    ),
+    responses(
+        (status = 200, description = "Ingestion cancelled successfully"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn cancel_stream_source_ingestion(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -2917,6 +3146,22 @@ pub async fn cancel_stream_source_ingestion(
 }
 
 /// Get stream source progress
+/// Get stream source progress
+#[utoipa::path(
+    get,
+    path = "/sources/stream/{id}/progress",
+    tag = "progress",
+    summary = "Get stream source progress",
+    description = "Get ingestion progress for a specific stream source",
+    params(
+        ("id" = Uuid, Path, description = "Stream source ID")
+    ),
+    responses(
+        (status = 200, description = "Stream source progress retrieved"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_stream_source_progress(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -2936,6 +3181,22 @@ pub async fn get_stream_source_progress(
 }
 
 /// Get stream source processing info
+/// Get stream source processing info
+#[utoipa::path(
+    get,
+    path = "/sources/stream/{id}/processing-info",
+    tag = "stream-sources",
+    summary = "Get stream source processing info",
+    description = "Get detailed processing information for a stream source",
+    params(
+        ("id" = Uuid, Path, description = "Stream source ID")
+    ),
+    responses(
+        (status = 200, description = "Processing info retrieved"),
+        (status = 404, description = "Stream source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_stream_source_processing_info(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
@@ -3403,6 +3664,18 @@ pub async fn get_epg_viewer_data(
 }
 
 // Linked Xtream Sources API
+/// List linked Xtream sources
+#[utoipa::path(
+    get,
+    path = "/sources/linked-xtream",
+    tag = "sources",
+    summary = "List linked Xtream sources",
+    description = "Get all linked Xtream Codes sources",
+    responses(
+        (status = 200, description = "Linked Xtream sources retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_linked_xtream_sources(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<LinkedXtreamSources>>, StatusCode> {
@@ -3415,6 +3688,20 @@ pub async fn list_linked_xtream_sources(
     }
 }
 
+/// Create linked Xtream source
+#[utoipa::path(
+    post,
+    path = "/sources/linked-xtream",
+    tag = "sources",
+    summary = "Create linked Xtream source",
+    description = "Create a new linked Xtream Codes source",
+    request_body = XtreamCodesCreateRequest,
+    responses(
+        (status = 201, description = "Linked Xtream source created"),
+        (status = 400, description = "Invalid request data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn create_linked_xtream_source(
     State(state): State<AppState>,
     Json(payload): Json<XtreamCodesCreateRequest>,
@@ -3434,6 +3721,22 @@ pub async fn create_linked_xtream_source(
     }
 }
 
+/// Get linked Xtream source by ID
+#[utoipa::path(
+    get,
+    path = "/sources/linked-xtream/{link_id}",
+    tag = "sources",
+    summary = "Get linked Xtream source",
+    description = "Get a specific linked Xtream Codes source by ID",
+    params(
+        ("link_id" = String, Path, description = "Linked Xtream source ID")
+    ),
+    responses(
+        (status = 200, description = "Linked Xtream source retrieved"),
+        (status = 404, description = "Linked Xtream source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_linked_xtream_source(
     Path(link_id): Path<String>,
     State(state): State<AppState>,
@@ -3448,6 +3751,24 @@ pub async fn get_linked_xtream_source(
     }
 }
 
+/// Update linked Xtream source
+#[utoipa::path(
+    put,
+    path = "/sources/linked-xtream/{link_id}",
+    tag = "sources",
+    summary = "Update linked Xtream source",
+    description = "Update an existing linked Xtream Codes source",
+    params(
+        ("link_id" = String, Path, description = "Linked Xtream source ID")
+    ),
+    request_body = XtreamCodesUpdateRequest,
+    responses(
+        (status = 200, description = "Linked Xtream source updated"),
+        (status = 404, description = "Linked Xtream source not found"),
+        (status = 400, description = "Invalid request data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn update_linked_xtream_source(
     Path(link_id): Path<String>,
     State(state): State<AppState>,
@@ -3471,6 +3792,22 @@ pub async fn update_linked_xtream_source(
     }
 }
 
+/// Delete linked Xtream source
+#[utoipa::path(
+    delete,
+    path = "/sources/linked-xtream/{link_id}",
+    tag = "sources",
+    summary = "Delete linked Xtream source",
+    description = "Delete a linked Xtream Codes source",
+    params(
+        ("link_id" = String, Path, description = "Linked Xtream source ID")
+    ),
+    responses(
+        (status = 200, description = "Linked Xtream source deleted"),
+        (status = 404, description = "Linked Xtream source not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn delete_linked_xtream_source(
     Path(link_id): Path<String>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -3496,20 +3833,35 @@ pub async fn delete_linked_xtream_source(
 }
 
 // Channel Mapping API Endpoints
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateChannelMappingRequest {
     pub stream_channel_id: Uuid,
     pub epg_channel_id: Uuid,
     pub mapping_type: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 pub struct ChannelMappingQueryParams {
     pub stream_channel_id: Option<Uuid>,
     pub epg_channel_id: Option<Uuid>,
     pub mapping_type: Option<String>,
 }
 
+/// List channel mappings
+#[utoipa::path(
+    get,
+    path = "/channel-mappings",
+    tag = "channel-mapping",
+    summary = "List channel mappings",
+    description = "Get all channel to EPG mappings with optional filtering",
+    params(
+        ChannelMappingQueryParams
+    ),
+    responses(
+        (status = 200, description = "Channel mappings retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn list_channel_mappings(
     Query(params): Query<ChannelMappingQueryParams>,
     State(state): State<AppState>,
@@ -3531,6 +3883,20 @@ pub async fn list_channel_mappings(
     }
 }
 
+/// Create channel mapping
+#[utoipa::path(
+    post,
+    path = "/channel-mappings",
+    tag = "channel-mapping",
+    summary = "Create channel mapping",
+    description = "Create a new channel to EPG mapping",
+    request_body = CreateChannelMappingRequest,
+    responses(
+        (status = 201, description = "Channel mapping created"),
+        (status = 400, description = "Invalid request data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn create_channel_mapping(
     State(state): State<AppState>,
     Json(request): Json<CreateChannelMappingRequest>,
@@ -3565,6 +3931,22 @@ pub async fn create_channel_mapping(
     }
 }
 
+/// Delete channel mapping
+#[utoipa::path(
+    delete,
+    path = "/channel-mappings/{mapping_id}",
+    tag = "channel-mapping",
+    summary = "Delete channel mapping",
+    description = "Delete a channel to EPG mapping",
+    params(
+        ("mapping_id" = Uuid, Path, description = "Channel mapping ID")
+    ),
+    responses(
+        (status = 204, description = "Channel mapping deleted"),
+        (status = 404, description = "Channel mapping not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn delete_channel_mapping(
     Path(mapping_id): Path<Uuid>,
     State(state): State<AppState>,
@@ -3582,13 +3964,27 @@ pub async fn delete_channel_mapping(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct AutoMapChannelsRequest {
     pub source_id: Option<Uuid>,
     pub mapping_type: String,
     pub dry_run: Option<bool>,
 }
 
+/// Auto-map channels
+#[utoipa::path(
+    post,
+    path = "/channel-mappings/auto-map",
+    tag = "channel-mapping",
+    summary = "Auto-map channels",
+    description = "Automatically create channel to EPG mappings based on matching criteria",
+    request_body = AutoMapChannelsRequest,
+    responses(
+        (status = 200, description = "Auto-mapping completed"),
+        (status = 400, description = "Invalid request data"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn auto_map_channels(
     State(state): State<AppState>,
     Json(request): Json<AutoMapChannelsRequest>,
@@ -3775,6 +4171,18 @@ pub async fn get_epg_progress(
 
 
 /// Preview proxies (placeholder implementation)
+/// Preview proxy configurations
+#[utoipa::path(
+    get,
+    path = "/proxies/preview",
+    tag = "proxies",
+    summary = "Preview proxy configurations",
+    description = "Get a preview of all proxy configurations",
+    responses(
+        (status = 200, description = "Proxy preview data retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn preview_proxies(
     _state: State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -3941,7 +4349,7 @@ pub struct DailyUsage {
     pub bytes_served: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct UsageQuery {
     pub proxy_id: Option<String>,
     pub days: Option<u32>,
@@ -4047,6 +4455,21 @@ pub async fn get_usage_metrics(
 }
 
 /// Get popular channels
+/// Get popular channels
+#[utoipa::path(
+    get,
+    path = "/metrics/channels/popular",
+    tag = "metrics",
+    summary = "Get popular channels",
+    description = "Get most popular channels based on usage metrics",
+    params(
+        UsageQuery
+    ),
+    responses(
+        (status = 200, description = "Popular channels retrieved"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn get_popular_channels(
     Query(_params): Query<UsageQuery>,
     State(_state): State<AppState>,

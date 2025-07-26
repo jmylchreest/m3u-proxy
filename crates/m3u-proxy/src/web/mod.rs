@@ -25,7 +25,7 @@
 use anyhow::Result;
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use std::net::SocketAddr;
 use std::collections::HashSet;
@@ -45,6 +45,7 @@ use crate::{
 };
 use tokio::sync::mpsc;
 use sandboxed_file_manager::SandboxedManager;
+use tokio::sync::broadcast;
 
 pub mod api;
 pub mod extractors;
@@ -82,6 +83,7 @@ impl WebServer {
         relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
         system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
         progress_service: std::sync::Arc<ProgressService>,
+        log_broadcaster: broadcast::Sender<crate::web::api::log_streaming::LogEvent>,
     ) -> Result<Self> {
         tracing::info!("WebServer using native pipeline");
 
@@ -122,6 +124,9 @@ impl WebServer {
             system.clone(),
         );
 
+        // Use the log broadcaster passed from main.rs (already wired to tracing subscriber)
+        let log_broadcaster = Some(log_broadcaster);
+
         let app = Self::create_router(AppState {
             database: database.clone(),
             config: config.clone(),
@@ -150,6 +155,7 @@ impl WebServer {
             proxy_service,
             progress_service,
             active_regeneration_requests: Arc::new(Mutex::new(HashSet::new())),
+            log_broadcaster,
         })
         .await;
 
@@ -390,6 +396,14 @@ impl WebServer {
             .route("/metrics/realtime", get(api::get_realtime_metrics))
             .route("/metrics/usage", get(api::get_usage_metrics))
             .route("/metrics/channels/popular", get(api::get_popular_channels))
+            // Log streaming endpoints
+            .route("/logs/stream", get(api::log_streaming::stream_logs))
+            .route("/logs/stats", get(api::log_streaming::get_log_stats))
+            .route("/logs/test", post(api::log_streaming::send_test_log))
+            // Runtime settings endpoints
+            .route("/settings", get(api::settings::get_settings))
+            .route("/settings", put(api::settings::update_settings))
+            .route("/settings/info", get(api::settings::get_settings_info))
     }
 
     /// Start the web server
@@ -470,6 +484,8 @@ pub struct AppState {
     pub progress_service: std::sync::Arc<ProgressService>,
     /// CONCURRENCY FIX: Track active API regeneration requests to prevent duplicates
     pub active_regeneration_requests: Arc<Mutex<HashSet<Uuid>>>,
+    /// Log broadcaster for SSE streaming
+    pub log_broadcaster: Option<broadcast::Sender<crate::web::api::log_streaming::LogEvent>>,
 }
 
 impl AppState {}

@@ -103,7 +103,7 @@ pub struct UnifiedProgressResponse {
 /// Get all active operations
 #[utoipa::path(
     get,
-    path = "/api/v1/progress",
+    path = "/progress",
     params(ProgressQuery),
     responses(
         (status = 200, description = "All progress operations retrieved", body = UnifiedProgressResponse),
@@ -257,7 +257,7 @@ pub async fn get_unified_progress(
 /// Get specific operation progress
 #[utoipa::path(
     get,
-    path = "/api/v1/progress/operations/{operation_id}",
+    path = "/progress/operations/{operation_id}",
     responses(
         (status = 200, description = "Operation progress retrieved", body = ProgressOperationResponse),
         (status = 404, description = "Operation not found"),
@@ -357,7 +357,7 @@ fn universal_state_to_string(state: &UniversalState) -> String {
 /// Get progress for all stream sources  
 #[utoipa::path(
     get,
-    path = "/api/v1/progress/streams",
+    path = "/progress/streams",
     params(ProgressQuery),
     responses(
         (status = 200, description = "Stream source progress retrieved", body = UnifiedProgressResponse),
@@ -377,7 +377,7 @@ pub async fn get_stream_progress(
 /// Get progress for all EPG sources
 #[utoipa::path(
     get,
-    path = "/api/v1/progress/epg",
+    path = "/progress/epg",
     params(ProgressQuery),
     responses(
         (status = 200, description = "EPG source progress retrieved", body = UnifiedProgressResponse),
@@ -397,7 +397,7 @@ pub async fn get_epg_progress(
 /// Get progress for all proxy regeneration operations
 #[utoipa::path(
     get,
-    path = "/api/v1/progress/proxies", 
+    path = "/progress/proxies", 
     params(ProgressQuery),
     responses(
         (status = 200, description = "Proxy regeneration progress retrieved", body = UnifiedProgressResponse),
@@ -417,7 +417,7 @@ pub async fn get_proxy_progress(
 /// Get progress for a specific stream source
 #[utoipa::path(
     get,
-    path = "/api/v1/progress/resources/streams/{source_id}",
+    path = "/progress/resources/streams/{source_id}",
     responses(
         (status = 200, description = "Stream source progress retrieved", body = UnifiedProgressResponse),
         (status = 404, description = "No progress found for stream source"),
@@ -444,7 +444,7 @@ pub async fn get_stream_source_progress(
 /// Get progress for a specific EPG source
 #[utoipa::path(
     get,
-    path = "/api/v1/progress/resources/epg/{source_id}",
+    path = "/progress/resources/epg/{source_id}",
     responses(
         (status = 200, description = "EPG source progress retrieved", body = UnifiedProgressResponse),
         (status = 404, description = "No progress found for EPG source"),
@@ -471,7 +471,7 @@ pub async fn get_epg_source_progress(
 /// Get progress for a specific proxy
 #[utoipa::path(
     get,
-    path = "/api/v1/progress/resources/proxies/{proxy_id}",
+    path = "/progress/resources/proxies/{proxy_id}",
     responses(
         (status = 200, description = "Proxy regeneration progress retrieved", body = UnifiedProgressResponse),
         (status = 404, description = "No progress found for proxy"),
@@ -498,7 +498,7 @@ pub async fn get_proxy_regeneration_progress(
 /// SSE endpoint for real-time progress updates
 #[utoipa::path(
     get,
-    path = "/api/v1/progress/events",
+    path = "/progress/events",
     params(ProgressQuery),
     responses(
         (status = 200, 

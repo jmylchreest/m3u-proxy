@@ -137,18 +137,23 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Initialize logging with specified level
+    // Initialize logging with specified level and log capture for SSE streaming
     let log_filter = if cli.log_level == "trace" {
         format!("m3u_proxy={},tower_http=trace", cli.log_level)
     } else {
         format!("m3u_proxy={}", cli.log_level)
     };
+    
+    // Set up log capture layer for SSE streaming
+    let (log_capture_layer, log_broadcaster) = m3u_proxy::utils::log_capture::setup_log_capture_with_subscriber();
+    
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| log_filter.into()),
         )
         .with(tracing_subscriber::fmt::layer())
+        .with(log_capture_layer) // Add log capture for SSE streaming
         .init();
 
     // Parse memory verbosity from CLI or environment
@@ -180,6 +185,9 @@ async fn main() -> Result<()> {
         memory_config.verbosity.as_str(),
         memory_config.memory_limit_mb
     );
+    
+    // Test log capture is working
+    info!("Log capture initialized for SSE streaming");
 
     // Initialize global memory configuration
     init_global_memory_config(memory_config.clone());
@@ -389,6 +397,7 @@ async fn main() -> Result<()> {
         relay_manager,
         system_manager.get_system(),
         progress_service.clone(),
+        log_broadcaster,
     )
     .await?;
     

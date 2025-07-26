@@ -2,11 +2,26 @@ use crate::models::*;
 use crate::utils::url::UrlUtils;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use cron::Schedule;
 use reqwest::Client;
 use sqlx::Row;
+use std::str::FromStr;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+
+/// Calculate the next scheduled update time for an EPG source based on its cron expression
+fn calculate_next_scheduled_update(update_cron: &str) -> Option<DateTime<Utc>> {
+    match Schedule::from_str(update_cron) {
+        Ok(schedule) => {
+            schedule.upcoming(Utc).take(1).next()
+        }
+        Err(e) => {
+            warn!("Failed to parse cron expression '{}': {}", update_cron, e);
+            None
+        }
+    }
+}
 
 // Helper function to check if an Xtream server provides stream data
 async fn check_xtream_stream_availability(base_url: &str, username: &str, password: &str) -> bool {
@@ -121,8 +136,7 @@ impl crate::database::Database {
 
             // Calculate next scheduled update (if active)
             let next_scheduled_update = if source.is_active {
-                // TODO: Implement cron calculation for EPG sources
-                None
+                calculate_next_scheduled_update(&source.update_cron)
             } else {
                 None
             };

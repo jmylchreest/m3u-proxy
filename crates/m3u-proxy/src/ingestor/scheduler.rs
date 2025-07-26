@@ -261,7 +261,7 @@ impl SchedulerService {
         }
 
         *self.last_cache_refresh.write().await = now;
-        info!(
+        debug!(
             "Cached {} active sources with schedules (stream + EPG)",
             cache.len()
         );

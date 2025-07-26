@@ -4,14 +4,14 @@
 //! like logging, metrics, and request processing.
 
 use axum::http::{HeaderMap, Method, Uri};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use super::extractors::RequestContext;
 
 /// Log an incoming HTTP request
 pub fn log_request(method: &Method, uri: &Uri, context: &RequestContext) {
-    info!(
+    debug!(
         method = %method,
         uri = %uri,
         request_id = %context.request_id,
@@ -39,7 +39,7 @@ pub fn log_response(
             "HTTP request completed with error"
         );
     } else {
-        info!(
+        debug!(
             method = %method,
             uri = %uri,
             status = status,

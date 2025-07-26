@@ -103,7 +103,7 @@ pub struct UpdateStreamProxyRequest {
 }
 
 /// Response DTO for stream proxy
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct StreamProxyResponse {
     pub id: Uuid,
     pub name: String,
@@ -124,10 +124,12 @@ pub struct StreamProxyResponse {
     pub stream_sources: Vec<ProxySourceResponse>,
     pub epg_sources: Vec<ProxyEpgSourceResponse>,
     pub filters: Vec<ProxyFilterResponse>,
+    pub m3u8_url: String,
+    pub xmltv_url: String,
 }
 
 /// Stream source in proxy response
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProxySourceResponse {
     pub source_id: Uuid,
     pub source_name: String,
@@ -135,7 +137,7 @@ pub struct ProxySourceResponse {
 }
 
 /// EPG source in proxy response
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProxyEpgSourceResponse {
     pub epg_source_id: Uuid,
     pub epg_source_name: String,
@@ -143,7 +145,7 @@ pub struct ProxyEpgSourceResponse {
 }
 
 /// Filter in proxy response
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProxyFilterResponse {
     pub filter_id: Uuid,
     pub filter_name: String,
@@ -206,8 +208,14 @@ impl CreateStreamProxyRequest {
     }
 }
 
-impl From<StreamProxy> for StreamProxyResponse {
-    fn from(proxy: StreamProxy) -> Self {
+impl StreamProxyResponse {
+    /// Create a response from a StreamProxy with the provided base URL
+    pub fn from_proxy_with_base_url(proxy: StreamProxy, base_url: &str) -> Self {
+        use crate::utils::uuid_parser::uuid_to_base64;
+        
+        let trimmed_base_url = base_url.trim_end_matches('/');
+        let proxy_id_b64 = uuid_to_base64(&proxy.id);
+        
         Self {
             id: proxy.id,
             name: proxy.name,
@@ -232,6 +240,41 @@ impl From<StreamProxy> for StreamProxyResponse {
             stream_sources: vec![], // Will be populated by service layer
             epg_sources: vec![],    // Will be populated by service layer
             filters: vec![],        // Will be populated by service layer
+            m3u8_url: format!("{}/proxy/{}/m3u8", trimmed_base_url, proxy_id_b64),
+            xmltv_url: format!("{}/proxy/{}/xmltv", trimmed_base_url, proxy_id_b64),
+        }
+    }
+}
+
+impl From<StreamProxy> for StreamProxyResponse {
+    fn from(proxy: StreamProxy) -> Self {
+        // Fallback implementation without base URL - URLs will be empty
+        Self {
+            id: proxy.id,
+            name: proxy.name,
+            description: proxy.description,
+            proxy_mode: match proxy.proxy_mode {
+                StreamProxyMode::Redirect => "redirect".to_string(),
+                StreamProxyMode::Proxy => "proxy".to_string(),
+                StreamProxyMode::Relay => "relay".to_string(),
+            },
+            upstream_timeout: proxy.upstream_timeout,
+            buffer_size: proxy.buffer_size,
+            max_concurrent_streams: proxy.max_concurrent_streams,
+            starting_channel_number: proxy.starting_channel_number,
+            created_at: proxy.created_at,
+            updated_at: proxy.updated_at,
+            last_generated_at: proxy.last_generated_at,
+            is_active: proxy.is_active,
+            auto_regenerate: proxy.auto_regenerate,
+            cache_channel_logos: proxy.cache_channel_logos,
+            cache_program_logos: proxy.cache_program_logos,
+            relay_profile_id: proxy.relay_profile_id,
+            stream_sources: vec![], // Will be populated by service layer
+            epg_sources: vec![],    // Will be populated by service layer
+            filters: vec![],        // Will be populated by service layer
+            m3u8_url: String::new(),
+            xmltv_url: String::new(),
         }
     }
 }
@@ -1277,9 +1320,16 @@ pub async fn proxy_stream(
     {
         Ok(Some(channel)) => channel,
         Ok(None) => {
+            // Let's provide better diagnostics by checking what's actually wrong
+            let diagnostic_info = diagnose_channel_proxy_issue(
+                &state.database, 
+                resolved_proxy_uuid, 
+                channel_id
+            ).await;
+            
             warn!(
-                "Channel {} not found in proxy {} or proxy not active",
-                channel_id, resolved_proxy_uuid
+                "Channel {} not accessible in proxy {}: {}",
+                channel_id, resolved_proxy_uuid, diagnostic_info
             );
             return (
                 StatusCode::NOT_FOUND,
@@ -2181,6 +2231,175 @@ async fn get_relay_profile_by_id_internal(
         Ok(Some(profile))
     } else {
         Ok(None)
+    }
+}
+
+/// Diagnose why a channel is not accessible in a proxy
+async fn diagnose_channel_proxy_issue(
+    database: &crate::database::Database,
+    proxy_id: Uuid,
+    channel_id: Uuid,
+) -> String {
+    // Check if channel exists at all and get additional info
+    let channel_info = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT c.channel_name, ss.name as source_name 
+         FROM channels c 
+         LEFT JOIN stream_sources ss ON c.source_id = ss.id 
+         WHERE c.id = ?"
+    )
+    .bind(channel_id.to_string())
+    .fetch_optional(&database.pool())
+    .await;
+
+    let (channel_name, source_name) = match channel_info {
+        Ok(Some((channel_name, source_name))) => {
+            // Channel exists - continue with other checks
+            (channel_name, source_name)
+        }
+        Ok(None) => {
+            // Channel doesn't exist - this suggests stale M3U
+            let last_generated = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT last_generated_at FROM stream_proxies WHERE id = ?"
+            )
+            .bind(proxy_id.to_string())
+            .fetch_optional(&database.pool())
+            .await
+            .unwrap_or(None)
+            .flatten();
+            
+            let timing_info = match last_generated {
+                Some(generated_at) => format!(" (proxy last generated: {})", generated_at),
+                None => " (proxy never generated)".to_string(),
+            };
+            
+            return format!("channel does not exist - M3U may be stale{}", timing_info);
+        }
+        Err(_) => {
+            return "database error checking channel".to_string();
+        }
+    };
+
+    // Check if proxy exists and is active
+    let proxy_status = sqlx::query_as::<_, (bool,)>(
+        "SELECT is_active FROM stream_proxies WHERE id = ?"
+    )
+    .bind(proxy_id.to_string())
+    .fetch_optional(&database.pool())
+    .await;
+
+    match proxy_status {
+        Ok(Some((is_active,))) => {
+            if !is_active {
+                return "proxy is not active".to_string();
+            }
+        }
+        Ok(None) => {
+            return "proxy does not exist".to_string();
+        }
+        Err(_) => {
+            return "database error checking proxy".to_string();
+        }
+    }
+
+    // Check if channel's source is linked to the proxy
+    let source_linked = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM channels c 
+         JOIN proxy_sources ps ON c.source_id = ps.source_id 
+         WHERE c.id = ? AND ps.proxy_id = ?"
+    )
+    .bind(channel_id.to_string())
+    .bind(proxy_id.to_string())
+    .fetch_one(&database.pool())
+    .await
+    .unwrap_or(0) > 0;
+
+    if !source_linked {
+        let source_info = source_name.unwrap_or_else(|| "unknown source".to_string());
+        return format!(
+            "channel '{}' from source '{}' is not linked to this proxy", 
+            channel_name, source_info
+        );
+    }
+
+    format!(
+        "unknown reason for channel '{}' (this should not happen)", 
+        channel_name
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::StreamProxyMode;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_stream_proxy_response_url_generation() {
+        use crate::utils::uuid_parser::uuid_to_base64;
+        
+        let proxy_id = Uuid::new_v4();
+        let base_url = "https://example.com:8080";
+        
+        let proxy = StreamProxy {
+            id: proxy_id,
+            name: "Test Proxy".to_string(),
+            description: Some("Test Description".to_string()),
+            proxy_mode: StreamProxyMode::Proxy,
+            upstream_timeout: Some(30),
+            buffer_size: Some(1024),
+            max_concurrent_streams: Some(100),
+            starting_channel_number: 1,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            last_generated_at: None,
+            is_active: true,
+            auto_regenerate: false,
+            cache_channel_logos: true,
+            cache_program_logos: false,
+            relay_profile_id: None,
+        };
+
+        let response = StreamProxyResponse::from_proxy_with_base_url(proxy, base_url);
+        let expected_proxy_id_b64 = uuid_to_base64(&proxy_id);
+
+        assert_eq!(response.m3u8_url, format!("https://example.com:8080/proxy/{}/m3u8", expected_proxy_id_b64));
+        assert_eq!(response.xmltv_url, format!("https://example.com:8080/proxy/{}/xmltv", expected_proxy_id_b64));
+        assert_eq!(response.name, "Test Proxy");
+        assert_eq!(response.id, proxy_id);
+    }
+
+    #[test]
+    fn test_stream_proxy_response_url_generation_with_trailing_slash() {
+        use crate::utils::uuid_parser::uuid_to_base64;
+        
+        let proxy_id = Uuid::new_v4();
+        let base_url = "https://example.com:8080/"; // Note the trailing slash
+        
+        let proxy = StreamProxy {
+            id: proxy_id,
+            name: "Test Proxy".to_string(),
+            description: Some("Test Description".to_string()),
+            proxy_mode: StreamProxyMode::Proxy,
+            upstream_timeout: Some(30),
+            buffer_size: Some(1024),
+            max_concurrent_streams: Some(100),
+            starting_channel_number: 1,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            last_generated_at: None,
+            is_active: true,
+            auto_regenerate: false,
+            cache_channel_logos: true,
+            cache_program_logos: false,
+            relay_profile_id: None,
+        };
+
+        let response = StreamProxyResponse::from_proxy_with_base_url(proxy, base_url);
+        let expected_proxy_id_b64 = uuid_to_base64(&proxy_id);
+
+        // Should properly handle trailing slash
+        assert_eq!(response.m3u8_url, format!("https://example.com:8080/proxy/{}/m3u8", expected_proxy_id_b64));
+        assert_eq!(response.xmltv_url, format!("https://example.com:8080/proxy/{}/xmltv", expected_proxy_id_b64));
     }
 }
 

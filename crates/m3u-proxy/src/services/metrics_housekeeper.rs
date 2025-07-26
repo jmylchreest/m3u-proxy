@@ -4,7 +4,7 @@ use humantime::parse_duration;
 use sqlx::SqlitePool;
 use std::time::Duration;
 use tokio::time::{interval, MissedTickBehavior};
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace};
 
 use crate::config::MetricsConfig;
 
@@ -81,7 +81,7 @@ impl MetricsHousekeeper {
         // Only log if something was actually done or if it took longer than 10 seconds
         let total_work = stale_sessions + hourly_aggregated + daily_aggregated + pruned_logs + pruned_hourly + pruned_daily;
         if total_work > 0 || duration_ms > 10_000 {
-            info!(
+            debug!(
                 "Metrics housekeeper completed in {}ms: {} stale sessions, {} hourly aggregated, {} daily aggregated, {} logs pruned, {} hourly pruned, {} daily pruned",
                 duration_ms,
                 stale_sessions,

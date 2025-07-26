@@ -648,8 +648,8 @@ impl StreamProxyService {
             }
         }
 
-        // Build the response with populated relationships
-        let mut response = StreamProxyResponse::from(proxy);
+        // Build the response with populated relationships and URLs
+        let mut response = StreamProxyResponse::from_proxy_with_base_url(proxy, &self.app_config.web.base_url);
         response.stream_sources = stream_sources;
         response.epg_sources = epg_sources;
         response.filters = filters;

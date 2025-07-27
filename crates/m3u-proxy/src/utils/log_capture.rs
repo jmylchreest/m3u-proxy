@@ -115,9 +115,21 @@ where
         let span_info = self.try_extract_span_info(ctx);
         
 
+        // Derive event ID from operation context or span
+        let event_id = if let Some(operation_id) = fields.get("operation_id") {
+            // Use operation_id from structured fields if available
+            operation_id.clone()
+        } else if let Some(span_info) = &span_info {
+            // Use span ID to group events from the same operation
+            span_info.id.clone()
+        } else {
+            // Fallback to unique event ID
+            Uuid::new_v4().to_string()
+        };
+
         // Create log event
         let log_event = LogEvent {
-            id: Uuid::new_v4().to_string(),
+            id: event_id,
             timestamp: chrono::Utc::now().to_rfc3339(),
             level,
             target: target.to_string(),

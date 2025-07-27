@@ -1008,55 +1008,6 @@ pub struct EpgProgram {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct EpgChannel {
-    pub id: Uuid,
-    pub source_id: Uuid,
-    pub channel_id: String,
-    pub channel_name: String,
-    pub channel_logo: Option<String>,
-    pub channel_group: Option<String>,
-    pub language: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct EpgChannelDisplayName {
-    pub id: Uuid,
-    pub epg_channel_id: Uuid,
-    pub display_name: String,
-    pub language: Option<String>,
-    pub is_primary: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// Extended EPG channel with all display names
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EpgChannelWithDisplayNames {
-    #[serde(flatten)]
-    pub channel: EpgChannel,
-    pub display_names: Vec<EpgChannelDisplayName>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct ChannelEpgMapping {
-    pub id: Uuid,
-    pub stream_channel_id: Uuid,
-    pub epg_channel_id: Uuid,
-    pub mapping_type: EpgMappingType,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "epg_mapping_type", rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
-pub enum EpgMappingType {
-    Manual,
-    AutoName,
-    AutoTvgId,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgSourceCreateRequest {
@@ -1113,16 +1064,9 @@ pub struct EpgViewerRequestParsed {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgViewerResponse {
-    pub channels: Vec<EpgChannelWithPrograms>,
+    pub programs: Vec<EpgProgram>,
     pub start_time: DateTime<Utc>,
     pub end_time: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EpgChannelWithPrograms {
-    #[serde(flatten)]
-    pub channel: EpgChannel,
-    pub programs: Vec<EpgProgram>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

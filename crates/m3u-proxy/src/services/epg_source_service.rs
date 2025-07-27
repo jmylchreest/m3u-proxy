@@ -9,6 +9,7 @@ use tracing::{error, info, warn};
 
 use crate::database::Database;
 use crate::models::{EpgSource, EpgSourceCreateRequest, EpgSourceUpdateRequest};
+use crate::utils::DatabaseOperations;
 
 /// Service for managing EPG sources with business logic
 pub struct EpgSourceService {
@@ -444,54 +445,54 @@ impl EpgSourceService {
     }
 
 
-    /// Save EPG programs to database
+    /// Save EPG programs to database with robust batching and retry logic
     async fn save_epg_programs(
         &self,
         source_id: uuid::Uuid,
         programs: Vec<crate::models::EpgProgram>,
     ) -> Result<usize> {
-        use tracing::debug;
+        use tracing::{debug, info};
         
-        debug!("Saving {} EPG programs to database", programs.len());
-        
-        // Start a transaction for atomicity
-        let mut tx = self.database.pool().begin().await?;
-        
-        // Delete existing programs for this source
-        sqlx::query("DELETE FROM epg_programs WHERE source_id = ?")
-            .bind(source_id.to_string())
-            .execute(&mut *tx)
-            .await?;
-        
-        let mut programs_saved = 0;
-        
-        for program in programs {
-            sqlx::query(
-                "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, language, created_at, updated_at) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(program.id.to_string())
-            .bind(program.source_id.to_string())
-            .bind(&program.channel_id)
-            .bind(&program.channel_name)
-            .bind(&program.program_title)
-            .bind(&program.program_description)
-            .bind(&program.program_category)
-            .bind(program.start_time)
-            .bind(program.end_time)
-            .bind(&program.language)
-            .bind(program.created_at)
-            .bind(program.updated_at)
-            .execute(&mut *tx)
-            .await?;
-            
-            programs_saved += 1;
+        if programs.is_empty() {
+            debug!("No EPG programs to save for source: {}", source_id);
+            return Ok(0);
         }
-        
-        tx.commit().await?;
-        debug!("Successfully saved {} EPG programs", programs_saved);
-        
-        Ok(programs_saved)
+
+
+        // Optimize database for bulk operations
+        DatabaseOperations::optimize_for_bulk_operations(&self.database.pool()).await?;
+
+        // Delete existing programs for this source first (separate transaction)
+        let deleted_count = DatabaseOperations::delete_epg_programs_for_source(
+            source_id,
+            &self.database.pool(),
+        ).await?;
+
+        info!("Deleted {} existing EPG programs for source: {}", deleted_count, source_id);
+
+        // Determine optimal batch size (default to 1800, but can be configured)
+        let batch_size = std::env::var("EPG_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1800);
+
+        debug!("Using batch size: {} for EPG program insertion", batch_size);
+
+        // Insert programs in batches with retry logic
+        let total_saved = DatabaseOperations::save_epg_programs_in_batches(
+            &self.database.pool(),
+            source_id,
+            programs,
+            batch_size,
+        ).await?;
+
+        // Perform WAL checkpoint after large operation
+        if total_saved > 5000 {
+            DatabaseOperations::checkpoint_wal(&self.database.pool()).await?;
+        }
+
+        info!("Successfully saved {} EPG programs for source: {}", total_saved, source_id);
+        Ok(total_saved)
     }
 }
 

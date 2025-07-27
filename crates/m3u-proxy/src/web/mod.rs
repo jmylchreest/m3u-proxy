@@ -156,6 +156,7 @@ impl WebServer {
             progress_service,
             active_regeneration_requests: Arc::new(Mutex::new(HashSet::new())),
             log_broadcaster,
+            start_time: chrono::Utc::now(),
         })
         .await;
 
@@ -169,10 +170,6 @@ impl WebServer {
         Router::new()
             // Health check endpoints (no auth required)
             .route("/health", get(handlers::health::health_check))
-            .route(
-                "/health/detailed",
-                get(handlers::health::detailed_health_check),
-            )
             .route("/ready", get(handlers::health::readiness_check))
             .route("/live", get(handlers::health::liveness_check))
             // OpenAPI documentation
@@ -486,6 +483,8 @@ pub struct AppState {
     pub active_regeneration_requests: Arc<Mutex<HashSet<Uuid>>>,
     /// Log broadcaster for SSE streaming
     pub log_broadcaster: Option<broadcast::Sender<crate::web::api::log_streaming::LogEvent>>,
+    /// Application start time for uptime calculation
+    pub start_time: chrono::DateTime<chrono::Utc>,
 }
 
 impl AppState {}

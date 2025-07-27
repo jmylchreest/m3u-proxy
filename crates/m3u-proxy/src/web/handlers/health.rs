@@ -10,19 +10,20 @@ use crate::database::Database;
 use crate::web::{
     AppState,
     extractors::RequestContext,
-    responses::{HealthResponse, ok},
+    responses::ok,
     utils::log_request,
 };
 
-/// Health check endpoint
+/// Health check endpoint with comprehensive system status
 ///
-/// Returns basic application health status including database connectivity
+/// Returns detailed application health status including database connectivity,
+/// uptime, and component status
 #[utoipa::path(
     get,
     path = "/health",
     tag = "health",
     summary = "Health check",
-    description = "Basic health check endpoint for monitoring application status",
+    description = "Comprehensive health check endpoint for monitoring application status",
     responses(
         (status = 200, description = "Health status"),
         (status = 503, description = "Service unhealthy")
@@ -38,44 +39,19 @@ pub async fn health_check(
         &context,
     );
 
+    // Calculate uptime
+    let uptime_seconds = chrono::Utc::now()
+        .signed_duration_since(state.start_time)
+        .num_seconds()
+        .max(0) as u64;
+
     // Check database connectivity
     let db_health = check_database_health(&state.database).await;
 
-    let response = if db_health.status == "connected" {
-        HealthResponse::healthy()
-    } else {
-        HealthResponse::unhealthy("Database connection failed".to_string())
-    };
-
-    ok(response)
-}
-
-/// Detailed health check with more comprehensive status
-#[utoipa::path(
-    get,
-    path = "/health/detailed",
-    tag = "health",
-    summary = "Detailed health check",
-    description = "Comprehensive health check with detailed component status",
-    responses(
-        (status = 200, description = "Detailed health status"),
-        (status = 503, description = "Service unhealthy")
-    )
-)]
-pub async fn detailed_health_check(
-    State(state): State<AppState>,
-    context: RequestContext,
-) -> impl IntoResponse {
-    log_request(
-        &axum::http::Method::GET,
-        &"/health/detailed".parse().unwrap(),
-        &context,
-    );
-
+    // Gather detailed component status
     let mut health_details = std::collections::HashMap::new();
 
     // Database health
-    let db_health = check_database_health(&state.database).await;
     health_details.insert(
         "database".to_string(),
         serde_json::to_value(&db_health).unwrap_or_default(),
@@ -115,6 +91,7 @@ pub async fn detailed_health_check(
             "status": "healthy",
             "timestamp": chrono::Utc::now(),
             "version": env!("CARGO_PKG_VERSION"),
+            "uptime_seconds": uptime_seconds,
             "components": health_details
         })
     } else {
@@ -122,12 +99,14 @@ pub async fn detailed_health_check(
             "status": "unhealthy",
             "timestamp": chrono::Utc::now(),
             "version": env!("CARGO_PKG_VERSION"),
+            "uptime_seconds": uptime_seconds,
             "components": health_details
         })
     };
 
     ok(response)
 }
+
 
 /// Readiness check (for Kubernetes probes)
 #[utoipa::path(

@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{StreamSource, StreamSourceType, Channel};
+use crate::utils::{DecompressingHttpClient, StandardHttpClient};
 use super::traits::*;
 
 /// M3U source handler
@@ -21,26 +22,28 @@ use super::traits::*;
 /// It supports both standard M3U files and extended M3U8 playlists with metadata.
 ///
 /// # Features
-/// - HTTP/HTTPS playlist fetching
+/// - HTTP/HTTPS playlist fetching with automatic decompression
 /// - EXTINF metadata parsing
 /// - Custom field mapping support
 /// - Progress reporting during ingestion
 /// - Health checking with response time metrics
 /// - URL validation and connectivity testing
 pub struct M3uSourceHandler {
-    client: Client,
+    http_client: StandardHttpClient,
+    raw_client: Client,
 }
 
 impl M3uSourceHandler {
     /// Create a new M3U source handler
     pub fn new() -> Self {
-        let client = Client::builder()
+        let http_client = StandardHttpClient::with_timeout(Duration::from_secs(30));
+        let raw_client = Client::builder()
             .timeout(Duration::from_secs(30))
             .user_agent("M3U-Proxy/1.0")
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self { client }
+        Self { http_client, raw_client }
     }
 
     /// Parse M3U content into channels
@@ -272,7 +275,7 @@ impl M3uSourceHandler {
         }
 
         // Test connectivity
-        match self.client.head(url).send().await {
+        match self.raw_client.head(url).send().await {
             Ok(response) => {
                 if !response.status().is_success() {
                     result.errors.push(format!("HTTP error: {}", response.status()));
@@ -302,19 +305,17 @@ impl M3uSourceHandler {
 
     /// Estimate channel count by doing a partial download and analysis
     async fn estimate_channels(&self, source: &StreamSource) -> AppResult<Option<u32>> {
-        // Download first 64KB to estimate channel count
-        let response = self.client.get(&source.url)
-            .header("Range", "bytes=0-65535")
-            .send()
-            .await
-            .map_err(|e| AppError::from(e))?;
+        // Download first 64KB to estimate channel count with automatic decompression
+        let partial_content = self.http_client.fetch_text_with_headers(&source.url, &[("Range", "bytes=0-65535")]).await
+            .map_err(|e| {
+                debug!("Failed to fetch partial M3U content for estimation: {}", e);
+                e
+            });
 
-        if !response.status().is_success() {
-            return Ok(None);
-        }
-
-        let partial_content = response.text().await
-            .map_err(|e| AppError::from(e))?;
+        let partial_content = match partial_content {
+            Ok(content) => content,
+            Err(_) => return Ok(None), // If partial download fails, return None instead of error
+        };
 
         // Count EXTINF lines as rough estimate
         let extinf_count = partial_content.lines()
@@ -394,16 +395,13 @@ impl SourceHandler for M3uSourceHandler {
     }
 
     async fn test_connectivity(&self, source: &StreamSource) -> AppResult<bool> {
-        match self.client.head(&source.url).send().await {
-            Ok(response) => Ok(response.status().is_success()),
-            Err(_) => Ok(false),
-        }
+        self.http_client.test_connectivity(&source.url).await
     }
 
     async fn get_source_info(&self, source: &StreamSource) -> AppResult<HashMap<String, String>> {
         let mut info = HashMap::new();
         
-        match self.client.head(&source.url).send().await {
+        match self.raw_client.head(&source.url).send().await {
             Ok(response) => {
                 info.insert("status".to_string(), response.status().to_string());
                 
@@ -447,20 +445,13 @@ impl ChannelIngestor for M3uSourceHandler {
             callback(IngestionProgress::starting("Connecting to M3U source"));
         }
 
-        // Download the M3U content
-        let response = self.client.get(&source.url).send().await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch M3U: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AppError::source_error(format!("HTTP error: {}", response.status())));
-        }
-
         if let Some(callback) = progress_callback {
             callback(IngestionProgress::starting("Downloading playlist").update_step("Downloading playlist", Some(25.0)));
         }
 
-        let content = response.text().await
-            .map_err(|e| AppError::source_error(format!("Failed to read M3U content: {}", e)))?;
+        // Download the M3U content with automatic decompression
+        let content = self.http_client.fetch_text(&source.url).await
+            .map_err(|e| AppError::source_error(format!("Failed to fetch M3U: {}", e)))?;
 
         if let Some(callback) = progress_callback {
             callback(IngestionProgress::starting("Parsing channels").update_step("Parsing channels", Some(50.0)));
@@ -504,23 +495,6 @@ impl ChannelIngestor for M3uSourceHandler {
             callback(progress);
         }
 
-        // Download the M3U content
-        let response = self.client.get(&source.url).send().await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch M3U: {}", e)))?;
-
-        if !response.status().is_success() {
-            if let Some(callback) = progress_callback {
-                let progress = UniversalProgress::new(
-                    source_id,
-                    OperationType::StreamIngestion,
-                    format!("M3U Ingestion: {}", source.name)
-                )
-                .set_error(format!("HTTP error: {}", response.status()));
-                callback(progress);
-            }
-            return Err(AppError::source_error(format!("HTTP error: {}", response.status())));
-        }
-
         if let Some(callback) = progress_callback {
             let progress = UniversalProgress::new(
                 source_id,
@@ -533,8 +507,22 @@ impl ChannelIngestor for M3uSourceHandler {
             callback(progress);
         }
 
-        let content = response.text().await
-            .map_err(|e| AppError::source_error(format!("Failed to read M3U content: {}", e)))?;
+        // Download the M3U content with automatic decompression
+        let content = match self.http_client.fetch_text(&source.url).await {
+            Ok(content) => content,
+            Err(e) => {
+                if let Some(callback) = progress_callback {
+                    let progress = UniversalProgress::new(
+                        source_id,
+                        OperationType::StreamIngestion,
+                        format!("M3U Ingestion: {}", source.name)
+                    )
+                    .set_error(format!("Failed to fetch M3U: {}", e));
+                    callback(progress);
+                }
+                return Err(e);
+            }
+        };
 
         if let Some(callback) = progress_callback {
             let progress = UniversalProgress::new(
@@ -575,7 +563,7 @@ impl HealthChecker for M3uSourceHandler {
         let start_time = std::time::Instant::now();
         let checked_at = Utc::now();
 
-        match self.client.head(&source.url).send().await {
+        match self.raw_client.head(&source.url).send().await {
             Ok(response) => {
                 let response_time_ms = start_time.elapsed().as_millis() as u64;
                 let is_healthy = response.status().is_success();
@@ -663,7 +651,7 @@ impl StreamUrlGenerator for M3uSourceHandler {
         _source: &StreamSource,
         url: &str,
     ) -> AppResult<bool> {
-        match self.client.head(url).send().await {
+        match self.raw_client.head(url).send().await {
             Ok(response) => Ok(response.status().is_success()),
             Err(_) => Ok(false),
         }

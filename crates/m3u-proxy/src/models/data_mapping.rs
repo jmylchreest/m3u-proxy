@@ -1,4 +1,4 @@
-use crate::models::{EpgChannel, EpgProgram};
+use crate::models::EpgProgram;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -232,20 +232,6 @@ pub struct MappedChannel {
     pub capture_group_values: HashMap<String, HashMap<String, String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MappedEpgChannel {
-    #[serde(flatten)]
-    pub original: EpgChannel,
-    pub mapped_channel_id: String,
-    pub mapped_channel_name: String,
-    pub mapped_channel_logo: Option<String>,
-    pub mapped_channel_group: Option<String>,
-    pub mapped_language: Option<String>,
-    pub applied_rules: Vec<String>,
-    pub clone_group_id: Option<String>,
-    pub is_primary_clone: bool,
-    pub timeshift_offset: Option<i32>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MappedEpgProgram {
@@ -303,33 +289,7 @@ pub struct DataMappingTestChannel {
     pub applied_actions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataMappingTestEpgChannel {
-    pub channel_name: String,
-    pub channel_group: Option<String>,
-    pub original_values: serde_json::Value,
-    pub mapped_values: serde_json::Value,
-    pub applied_actions: Vec<String>,
-    pub clone_group_info: Option<CloneGroupInfo>,
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CloneGroupInfo {
-    pub clone_group_id: String,
-    pub is_primary: bool,
-    pub clone_count: i32,
-    pub timeshift_offset: Option<i32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EpgDataMappingResult {
-    pub mapped_channels: Vec<MappedEpgChannel>,
-    pub mapped_programs: Vec<MappedEpgProgram>,
-    pub clone_groups: std::collections::HashMap<String, Vec<MappedEpgChannel>>,
-    pub total_mutations: i32,
-    pub channels_affected: i32,
-    pub programs_affected: i32,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DataMappingPreviewRequest {
@@ -342,7 +302,6 @@ pub struct DataMappingPreviewRequest {
 pub struct DataMappingPreviewResponse {
     pub source_type: DataMappingSourceType,
     pub stream_preview: Option<StreamDataMappingPreview>,
-    pub epg_preview: Option<EpgDataMappingPreview>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -353,16 +312,6 @@ pub struct StreamDataMappingPreview {
     pub applied_rules: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EpgDataMappingPreview {
-    pub total_channels: i32,
-    pub total_programs: i32,
-    pub affected_channels: i32,
-    pub affected_programs: i32,
-    pub preview_channels: Vec<MappedEpgChannel>,
-    pub clone_groups: std::collections::HashMap<String, Vec<MappedEpgChannel>>,
-    pub applied_rules: Vec<String>,
-}
 
 impl DataMappingRuleCreateRequest {
     pub fn from_expression(

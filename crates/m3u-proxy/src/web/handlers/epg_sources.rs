@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::models::{EpgSource, EpgSourceType, EpgChannelWithDisplayNames, EpgChannelDisplayName};
+use crate::models::{EpgSource, EpgSourceType};
 
 use crate::web::{
     AppState,
@@ -148,65 +148,6 @@ impl From<EpgSource> for EpgSourceResponse {
     }
 }
 
-/// Response DTO for EPG channel display name  
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct EpgChannelDisplayNameResponse {
-    pub id: Uuid,
-    pub display_name: String,
-    pub language: Option<String>,
-    pub is_primary: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl From<EpgChannelDisplayName> for EpgChannelDisplayNameResponse {
-    fn from(display_name: EpgChannelDisplayName) -> Self {
-        Self {
-            id: display_name.id,
-            display_name: display_name.display_name,
-            language: display_name.language,
-            is_primary: display_name.is_primary,
-            created_at: display_name.created_at,
-            updated_at: display_name.updated_at,
-        }
-    }
-}
-
-/// Response DTO for EPG channel with multilingual display names
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct EpgChannelResponse {
-    pub id: Uuid,
-    pub source_id: Uuid,
-    pub channel_id: String,
-    pub channel_name: String,
-    pub channel_logo: Option<String>,
-    pub channel_group: Option<String>,
-    pub language: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-    /// All display names for this channel in different languages
-    pub display_names: Vec<EpgChannelDisplayNameResponse>,
-}
-
-impl From<EpgChannelWithDisplayNames> for EpgChannelResponse {
-    fn from(channel_with_names: EpgChannelWithDisplayNames) -> Self {
-        Self {
-            id: channel_with_names.channel.id,
-            source_id: channel_with_names.channel.source_id,
-            channel_id: channel_with_names.channel.channel_id,
-            channel_name: channel_with_names.channel.channel_name,
-            channel_logo: channel_with_names.channel.channel_logo,
-            channel_group: channel_with_names.channel.channel_group,
-            language: channel_with_names.channel.language,
-            created_at: channel_with_names.channel.created_at,
-            updated_at: channel_with_names.channel.updated_at,
-            display_names: channel_with_names.display_names
-                .into_iter()
-                .map(|dn| dn.into())
-                .collect(),
-        }
-    }
-}
 
 /// List all EPG sources with utoipa automatic discovery
 #[utoipa::path(
@@ -553,60 +494,3 @@ pub async fn validate_epg_source(
     }
 }
 
-/// Get EPG source channels with multilingual display names
-#[utoipa::path(
-    get,
-    path = "/sources/epg/{id}/channels",
-    tag = "epg-sources",
-    summary = "Get EPG source channels",
-    description = "Retrieve channels for a specific EPG source with all display names",
-    params(
-        ("id" = String, Path, description = "EPG source ID (UUID)", example = "550e8400-e29b-41d4-a716-446655440000"),
-    ),
-    responses(
-        (status = 200, description = "List of EPG channels with display names", body = ApiResponse<Vec<EpgChannelResponse>>),
-        (status = 400, description = "Invalid UUID format"),
-        (status = 404, description = "EPG source not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_epg_source_channels(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    context: RequestContext,
-) -> impl IntoResponse {
-    log_request(
-        &axum::http::Method::GET,
-        &format!("/api/v1/sources/epg/{}/channels", id).parse().unwrap(),
-        &context,
-    );
-
-    let uuid = match extract_uuid_param(&id) {
-        Ok(uuid) => uuid,
-        Err(error) => return crate::web::responses::bad_request(&error).into_response(),
-    };
-
-    // First verify the EPG source exists
-    match state.epg_source_service.get(uuid).await {
-        Ok(_) => {
-            // EPG source exists, fetch channels with display names
-            match state.database.get_epg_source_channels_with_display_names(uuid).await {
-                Ok(channels_with_names) => {
-                    let response: Vec<EpgChannelResponse> = channels_with_names
-                        .into_iter()
-                        .map(|ch| ch.into())
-                        .collect();
-                    ok(response).into_response()
-                }
-                Err(e) => {
-                    tracing::error!("Failed to get EPG channels for source {}: {}", uuid, e);
-                    crate::web::responses::internal_error(&format!("Failed to get EPG channels: {}", e))
-                        .into_response()
-                }
-            }
-        }
-        Err(_) => {
-            crate::web::responses::not_found("epg_source", &id).into_response()
-        }
-    }
-}

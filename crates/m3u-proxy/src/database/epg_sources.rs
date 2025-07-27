@@ -123,7 +123,7 @@ impl crate::database::Database {
 
             // Get stats for this source
             let channel_count: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM epg_channels WHERE source_id = ?")
+                sqlx::query_scalar("SELECT COUNT(DISTINCT channel_id) FROM epg_programs WHERE source_id = ?")
                     .bind(&source_id_str)
                     .fetch_one(&self.pool)
                     .await?;
@@ -486,237 +486,6 @@ impl crate::database::Database {
         Ok(deleted)
     }
 
-    pub async fn update_epg_source_data(
-        &self,
-        source_id: Uuid,
-        channels: Vec<EpgChannel>,
-        programs: Vec<EpgProgram>,
-    ) -> Result<(usize, usize)> {
-        self.update_epg_source_data_with_cancellation(source_id, channels, programs, None)
-            .await
-    }
-
-    pub async fn update_epg_source_data_with_cancellation(
-        &self,
-        source_id: Uuid,
-        channels: Vec<EpgChannel>,
-        programs: Vec<EpgProgram>,
-        cancellation_rx: Option<tokio::sync::broadcast::Receiver<()>>,
-    ) -> Result<(usize, usize)> {
-        self.update_epg_source_data_with_cancellation_and_progress(
-            source_id,
-            channels,
-            programs,
-            cancellation_rx,
-            None::<fn(usize, usize)>,
-        )
-        .await
-    }
-
-    pub async fn update_epg_source_data_with_cancellation_and_progress<F>(
-        &self,
-        source_id: Uuid,
-        channels: Vec<EpgChannel>,
-        programs: Vec<EpgProgram>,
-        mut cancellation_rx: Option<tokio::sync::broadcast::Receiver<()>>,
-        progress_callback: Option<F>,
-    ) -> Result<(usize, usize)>
-    where
-        F: Fn(usize, usize) + Send + Sync,
-    {
-        // Use shorter transaction timeout to reduce deadlock risk
-
-        // Step 1: Clear existing data in a separate, quick transaction
-        let clear_result = tokio::time::timeout(Duration::from_secs(30), async {
-            let mut tx = self.pool.begin().await?;
-
-            // Set shorter busy timeout for cleanup operations
-            sqlx::query("PRAGMA busy_timeout = 10000") // 10 seconds
-                .execute(&mut *tx)
-                .await?;
-
-            // Check for cancellation before starting
-            if let Some(ref mut rx) = cancellation_rx {
-                if rx.try_recv().is_ok() {
-                    return Err(anyhow::anyhow!(
-                        "Operation cancelled before database cleanup"
-                    ));
-                }
-            }
-
-            // Clear existing data for this source
-            sqlx::query("DELETE FROM epg_programs WHERE source_id = ?")
-                .bind(source_id.to_string())
-                .execute(&mut *tx)
-                .await?;
-
-            sqlx::query("DELETE FROM epg_channels WHERE source_id = ?")
-                .bind(source_id.to_string())
-                .execute(&mut *tx)
-                .await?;
-
-            tx.commit().await?;
-            Ok::<(), anyhow::Error>(())
-        })
-        .await;
-
-        match clear_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                return Err(anyhow::anyhow!(
-                    "Database cleanup timed out after 30 seconds"
-                ));
-            }
-        }
-
-        // Check for cancellation after cleanup
-        if let Some(ref mut rx) = cancellation_rx {
-            if rx.try_recv().is_ok() {
-                return Err(anyhow::anyhow!("Operation cancelled after cleanup"));
-            }
-        }
-
-        // Step 2: Insert channels in smaller transactions
-        let channel_batch_size = self.batch_config.safe_epg_channel_batch_size();
-        let channel_chunks: Vec<_> = channels.chunks(channel_batch_size).collect();
-
-        for (i, chunk) in channel_chunks.iter().enumerate() {
-            if !chunk.is_empty() {
-                let insert_result = tokio::time::timeout(Duration::from_secs(60), async {
-                    let mut tx = self.pool.begin().await?;
-
-                    // Set busy timeout for individual transactions
-                    sqlx::query("PRAGMA busy_timeout = 15000") // 15 seconds
-                        .execute(&mut *tx)
-                        .await?;
-
-                    // Prepare bulk insert statement
-                    let mut query_builder = sqlx::QueryBuilder::new(
-                        "INSERT INTO epg_channels (id, source_id, channel_id, channel_name, channel_logo, channel_group, language, created_at, updated_at) "
-                    );
-
-                    query_builder.push_values(*chunk, |mut b, channel| {
-                        b.push_bind(channel.id.to_string())
-                            .push_bind(source_id.to_string())
-                            .push_bind(&channel.channel_id)
-                            .push_bind(&channel.channel_name)
-                            .push_bind(&channel.channel_logo)
-                            .push_bind(&channel.channel_group)
-                            .push_bind(&channel.language)
-                            .push_bind(channel.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
-                            .push_bind(channel.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
-                    });
-
-                    // Execute bulk insert
-                    let query = query_builder.build();
-                    query.execute(&mut *tx).await?;
-                    tx.commit().await?;
-                    Ok::<(), anyhow::Error>(())
-                }).await;
-
-                match insert_result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => return Err(e),
-                    Err(_) => {
-                        return Err(anyhow::anyhow!(
-                            "Channel insertion timed out for batch {}",
-                            i + 1
-                        ));
-                    }
-                }
-
-                // Check for cancellation after each chunk
-                if let Some(ref mut rx) = cancellation_rx {
-                    if rx.try_recv().is_ok() {
-                        return Err(anyhow::anyhow!(
-                            "Operation cancelled during channel insertion"
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Step 3: Insert programs in smaller transactions with progress tracking
-        let program_batch_size = self.batch_config.safe_epg_program_batch_size();
-        let total_programs = programs.len();
-        let mut programs_saved = 0;
-        let program_chunks: Vec<_> = programs.chunks(program_batch_size).collect();
-
-        for (i, chunk) in program_chunks.iter().enumerate() {
-            if !chunk.is_empty() {
-                let insert_result = tokio::time::timeout(Duration::from_secs(90), async {
-                    let mut tx = self.pool.begin().await?;
-
-                    // Set busy timeout for individual transactions
-                    sqlx::query("PRAGMA busy_timeout = 15000") // 15 seconds
-                        .execute(&mut *tx)
-                        .await?;
-
-                    // Prepare bulk insert statement
-                    let mut query_builder = sqlx::QueryBuilder::new(
-                        "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, program_icon, created_at, updated_at) "
-                    );
-
-                    query_builder.push_values(*chunk, |mut b, program| {
-                        b.push_bind(program.id.to_string())
-                            .push_bind(source_id.to_string())
-                            .push_bind(&program.channel_id)
-                            .push_bind(&program.channel_name)
-                            .push_bind(&program.program_title)
-                            .push_bind(&program.program_description)
-                            .push_bind(&program.program_category)
-                            .push_bind(program.start_time.to_rfc3339())
-                            .push_bind(program.end_time.to_rfc3339())
-                            .push_bind(&program.episode_num)
-                            .push_bind(&program.season_num)
-                            .push_bind(&program.rating)
-                            .push_bind(&program.language)
-                            .push_bind(&program.subtitles)
-                            .push_bind(&program.aspect_ratio)
-                            .push_bind(&program.program_icon)
-                            .push_bind(program.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
-                            .push_bind(program.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
-                    });
-
-                    // Execute bulk insert
-                    let query = query_builder.build();
-                    query.execute(&mut *tx).await?;
-                    tx.commit().await?;
-                    Ok::<(), anyhow::Error>(())
-                }).await;
-
-                match insert_result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => return Err(e),
-                    Err(_) => {
-                        return Err(anyhow::anyhow!(
-                            "Program insertion timed out for batch {}",
-                            i + 1
-                        ));
-                    }
-                }
-
-                programs_saved += chunk.len();
-
-                // Report progress if callback is provided
-                if let Some(ref callback) = progress_callback {
-                    callback(programs_saved, total_programs);
-                }
-
-                // Check for cancellation after each batch
-                if let Some(ref mut rx) = cancellation_rx {
-                    if rx.try_recv().is_ok() {
-                        return Err(anyhow::anyhow!(
-                            "Operation cancelled during program insertion"
-                        ));
-                    }
-                }
-            }
-        }
-
-        Ok((channels.len(), programs.len()))
-    }
 
     pub async fn update_epg_source_last_ingested(&self, source_id: Uuid) -> Result<DateTime<Utc>> {
         let now = chrono::Utc::now();
@@ -755,114 +524,15 @@ impl crate::database::Database {
         Ok(count)
     }
 
-    #[allow(dead_code)]
-    pub async fn get_epg_source_channels(&self, source_id: Uuid) -> Result<Vec<EpgChannel>> {
-        let rows = sqlx::query(
-            "SELECT id, source_id, channel_id, channel_name, channel_logo, channel_group, language, created_at, updated_at
-             FROM epg_channels WHERE source_id = ? ORDER BY channel_name",
-        )
-        .bind(source_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut channels = Vec::new();
-        for row in rows {
-            let created_at = row.get::<String, _>("created_at");
-            let updated_at = row.get::<String, _>("updated_at");
-            let id_str = row.get::<String, _>("id");
-
-            channels.push(EpgChannel {
-                id: Uuid::parse_str(&id_str)?,
-                source_id,
-                channel_id: row.get("channel_id"),
-                channel_name: row.get("channel_name"),
-                channel_logo: row.get("channel_logo"),
-                channel_group: row.get("channel_group"),
-                language: row.get("language"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
-            });
-        }
-
-        Ok(channels)
-    }
-    
-    /// Get EPG source channels with all their display names (multilingual support)
-    pub async fn get_epg_source_channels_with_display_names(&self, source_id: Uuid) -> Result<Vec<crate::models::EpgChannelWithDisplayNames>> {
-        // First get all channels for the source
-        let channel_rows = sqlx::query(
-            "SELECT id, source_id, channel_id, channel_name, channel_logo, channel_group, language, created_at, updated_at
-             FROM epg_channels WHERE source_id = ? ORDER BY channel_name",
-        )
-        .bind(source_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut channels_with_display_names = Vec::new();
-        
-        for channel_row in channel_rows {
-            let created_at = channel_row.get::<String, _>("created_at");
-            let updated_at = channel_row.get::<String, _>("updated_at");
-            let id_str = channel_row.get::<String, _>("id");
-            let channel_uuid = Uuid::parse_str(&id_str)?;
-
-            // Build the main channel
-            let channel = crate::models::EpgChannel {
-                id: channel_uuid,
-                source_id,
-                channel_id: channel_row.get("channel_id"),
-                channel_name: channel_row.get("channel_name"),
-                channel_logo: channel_row.get("channel_logo"),
-                channel_group: channel_row.get("channel_group"),
-                language: channel_row.get("language"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
-            };
-
-            // Get all display names for this channel
-            let display_name_rows = sqlx::query(
-                "SELECT id, epg_channel_id, display_name, language, is_primary, created_at, updated_at
-                 FROM epg_channel_display_names WHERE epg_channel_id = ? ORDER BY is_primary DESC, display_name",
-            )
-            .bind(channel_uuid.to_string())
-            .fetch_all(&self.pool)
-            .await?;
-
-            let mut display_names = Vec::new();
-            for display_row in display_name_rows {
-                let display_created_at = display_row.get::<String, _>("created_at");
-                let display_updated_at = display_row.get::<String, _>("updated_at");
-                let display_id_str = display_row.get::<String, _>("id");
-                
-                display_names.push(crate::models::EpgChannelDisplayName {
-                    id: Uuid::parse_str(&display_id_str)?,
-                    epg_channel_id: channel_uuid,
-                    display_name: display_row.get("display_name"),
-                    language: display_row.get("language"),
-                    is_primary: display_row.get("is_primary"),
-                    created_at: parse_datetime(&display_created_at)?,
-                    updated_at: parse_datetime(&display_updated_at)?,
-                });
-            }
-
-            channels_with_display_names.push(crate::models::EpgChannelWithDisplayNames {
-                channel,
-                display_names,
-            });
-        }
-
-        Ok(channels_with_display_names)
-    }
 
     pub async fn get_epg_data_for_viewer(
         &self,
         request: &EpgViewerRequestParsed,
     ) -> Result<EpgViewerResponse> {
         let mut query = String::from(
-            "SELECT DISTINCT c.id, c.source_id, c.channel_id, c.channel_name, c.channel_logo, c.channel_group, c.language, c.created_at, c.updated_at
-             FROM epg_channels c
-             INNER JOIN epg_programs p ON c.source_id = p.source_id AND c.channel_id = p.channel_id
-             WHERE p.start_time <= ? AND p.end_time >= ?"
+            "SELECT id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, program_icon, created_at, updated_at
+             FROM epg_programs
+             WHERE start_time <= ? AND end_time >= ?"
         );
 
         let mut bind_values: Vec<String> = vec![
@@ -874,7 +544,7 @@ impl crate::database::Database {
         if let Some(source_ids) = &request.source_ids {
             if !source_ids.is_empty() {
                 let placeholders = source_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                query.push_str(&format!(" AND c.source_id IN ({})", placeholders));
+                query.push_str(&format!(" AND source_id IN ({})", placeholders));
                 bind_values.extend(source_ids.iter().map(|id| id.to_string()));
             }
         }
@@ -882,90 +552,54 @@ impl crate::database::Database {
         // Add channel filter if specified
         if let Some(filter) = &request.channel_filter {
             if !filter.trim().is_empty() {
-                query.push_str(" AND c.channel_name LIKE ?");
+                query.push_str(" AND channel_name LIKE ?");
                 bind_values.push(format!("%{}%", filter));
             }
         }
 
-        query.push_str(" ORDER BY c.channel_name");
+        query.push_str(" ORDER BY channel_name, start_time");
 
-        // Execute channel query
+        // Execute program query
         let mut query_builder = sqlx::query(&query);
         for value in &bind_values {
             query_builder = query_builder.bind(value);
         }
 
-        let channel_rows = query_builder.fetch_all(&self.pool).await?;
+        let program_rows = query_builder.fetch_all(&self.pool).await?;
 
-        let mut channels_with_programs = Vec::new();
+        let mut programs = Vec::new();
+        for program_row in program_rows {
+            let program_created_at = program_row.get::<String, _>("created_at");
+            let program_updated_at = program_row.get::<String, _>("updated_at");
+            let program_id_str = program_row.get::<String, _>("id");
+            let source_id_str = program_row.get::<String, _>("source_id");
+            let start_time_str = program_row.get::<String, _>("start_time");
+            let end_time_str = program_row.get::<String, _>("end_time");
 
-        for row in channel_rows {
-            let created_at = row.get::<String, _>("created_at");
-            let updated_at = row.get::<String, _>("updated_at");
-            let id_str = row.get::<String, _>("id");
-            let source_id_str = row.get::<String, _>("source_id");
-
-            let channel = EpgChannel {
-                id: Uuid::parse_str(&id_str)?,
+            programs.push(EpgProgram {
+                id: Uuid::parse_str(&program_id_str)?,
                 source_id: Uuid::parse_str(&source_id_str)?,
-                channel_id: row.get("channel_id"),
-                channel_name: row.get("channel_name"),
-                channel_logo: row.get("channel_logo"),
-                channel_group: row.get("channel_group"),
-                language: row.get("language"),
-                created_at: parse_datetime(&created_at)?,
-                updated_at: parse_datetime(&updated_at)?,
-            };
-
-            // Get programs for this channel
-            let program_rows = sqlx::query(
-                "SELECT id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, program_icon, created_at, updated_at
-                 FROM epg_programs
-                 WHERE source_id = ? AND channel_id = ? AND start_time <= ? AND end_time >= ?
-                 ORDER BY start_time",
-            )
-            .bind(&source_id_str)
-            .bind(&channel.channel_id)
-            .bind(request.end_time.to_rfc3339())
-            .bind(request.start_time.to_rfc3339())
-            .fetch_all(&self.pool)
-            .await?;
-
-            let mut programs = Vec::new();
-            for program_row in program_rows {
-                let program_created_at = program_row.get::<String, _>("created_at");
-                let program_updated_at = program_row.get::<String, _>("updated_at");
-                let program_id_str = program_row.get::<String, _>("id");
-                let start_time_str = program_row.get::<String, _>("start_time");
-                let end_time_str = program_row.get::<String, _>("end_time");
-
-                programs.push(EpgProgram {
-                    id: Uuid::parse_str(&program_id_str)?,
-                    source_id: channel.source_id,
-                    channel_id: program_row.get("channel_id"),
-                    channel_name: program_row.get("channel_name"),
-                    program_title: program_row.get("program_title"),
-                    program_description: program_row.get("program_description"),
-                    program_category: program_row.get("program_category"),
-                    start_time: DateTime::parse_from_rfc3339(&start_time_str)?.with_timezone(&Utc),
-                    end_time: DateTime::parse_from_rfc3339(&end_time_str)?.with_timezone(&Utc),
-                    episode_num: program_row.get("episode_num"),
-                    season_num: program_row.get("season_num"),
-                    rating: program_row.get("rating"),
-                    language: program_row.get("language"),
-                    subtitles: program_row.get("subtitles"),
-                    aspect_ratio: program_row.get("aspect_ratio"),
-                    program_icon: program_row.get("program_icon"),
-                    created_at: parse_datetime(&program_created_at)?,
-                    updated_at: parse_datetime(&program_updated_at)?,
-                });
-            }
-
-            channels_with_programs.push(EpgChannelWithPrograms { channel, programs });
+                channel_id: program_row.get("channel_id"),
+                channel_name: program_row.get("channel_name"),
+                program_title: program_row.get("program_title"),
+                program_description: program_row.get("program_description"),
+                program_category: program_row.get("program_category"),
+                start_time: DateTime::parse_from_rfc3339(&start_time_str)?.with_timezone(&Utc),
+                end_time: DateTime::parse_from_rfc3339(&end_time_str)?.with_timezone(&Utc),
+                episode_num: program_row.get("episode_num"),
+                season_num: program_row.get("season_num"),
+                rating: program_row.get("rating"),
+                language: program_row.get("language"),
+                subtitles: program_row.get("subtitles"),
+                aspect_ratio: program_row.get("aspect_ratio"),
+                program_icon: program_row.get("program_icon"),
+                created_at: parse_datetime(&program_created_at)?,
+                updated_at: parse_datetime(&program_updated_at)?,
+            });
         }
 
         Ok(EpgViewerResponse {
-            channels: channels_with_programs,
+            programs,
             start_time: request.start_time,
             end_time: request.end_time,
         })

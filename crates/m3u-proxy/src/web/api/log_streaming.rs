@@ -253,8 +253,9 @@ pub async fn get_log_stats(
 pub async fn send_test_log(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    let operation_id = Uuid::new_v4().to_string();
     let test_event = LogEvent {
-        id: Uuid::new_v4().to_string(),
+        id: operation_id.clone(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         level: "INFO".to_string(),
         target: "m3u_proxy::test".to_string(),
@@ -263,6 +264,7 @@ pub async fn send_test_log(
             let mut fields = HashMap::new();
             fields.insert("test".to_string(), "true".to_string());
             fields.insert("source".to_string(), "api".to_string());
+            fields.insert("operation_id".to_string(), operation_id);
             fields
         },
         span: Some(SpanInfo {

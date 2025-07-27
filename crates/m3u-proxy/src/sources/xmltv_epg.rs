@@ -25,6 +25,7 @@ use crate::sources::traits::{
 };
 use crate::utils::time::{detect_timezone_from_xmltv, log_timezone_detection};
 use crate::utils::url::UrlUtils;
+use crate::utils::{CompressionFormat, DecompressionService};
 
 /// XMLTV EPG source handler implementation
 pub struct XmltvEpgHandler {
@@ -42,7 +43,7 @@ impl XmltvEpgHandler {
         }
     }
 
-    /// Fetch XMLTV content from URL
+    /// Fetch XMLTV content from URL with automatic decompression support
     async fn fetch_xmltv_content(&self, url: &str) -> AppResult<String> {
         debug!("Fetching XMLTV content from: {}", url);
         
@@ -61,12 +62,36 @@ impl XmltvEpgHandler {
             )));
         }
 
-        let content = response
-            .text()
+        // Get raw bytes instead of text to detect compression
+        let bytes = response
+            .bytes()
             .await
             .map_err(|e| AppError::source_error(format!("Failed to read XMLTV response: {}", e)))?;
 
-        debug!("Fetched {} bytes of XMLTV content", content.len());
+        debug!("Fetched {} bytes of raw XMLTV content", bytes.len());
+
+        // Detect compression format and decompress if needed
+        let compression_format = DecompressionService::detect_compression_format(&bytes);
+        debug!("Detected compression format: {:?}", compression_format);
+
+        let decompressed_bytes = match compression_format {
+            CompressionFormat::Uncompressed => {
+                debug!("Content is uncompressed, using as-is");
+                bytes.to_vec()
+            }
+            _ => {
+                debug!("Content is compressed, decompressing...");
+                DecompressionService::decompress(bytes)
+                    .map_err(|e| AppError::source_error(format!("Failed to decompress XMLTV content: {}", e)))?
+            }
+        };
+
+        // Convert decompressed bytes to UTF-8 string
+        let content = String::from_utf8(decompressed_bytes)
+            .map_err(|e| AppError::source_error(format!("Failed to decode XMLTV content as UTF-8: {}", e)))?;
+
+        debug!("Successfully processed {} bytes of XMLTV content (compression: {:?})", 
+               content.len(), compression_format);
         Ok(content)
     }
 

@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sqlx::Row;
 use tracing::{debug, error, info, warn};
 use utoipa::{ToSchema, IntoParams};
 use uuid::Uuid;
@@ -2102,22 +2103,22 @@ pub async fn apply_epg_source_data_mapping(
         }
     };
 
-    // Get EPG channels (this will be different from stream channels)
-    let channels = match state.database.get_epg_source_channels(source_uuid).await {
-        Ok(channels) => channels,
+    // Check if the source has programs (this is our primary EPG data now)
+    let program_count = match state.database.get_epg_source_channel_count(source_uuid).await {
+        Ok(count) => count,
         Err(e) => {
             error!(
-                "Failed to get EPG channels for source {}: {}",
+                "Failed to check EPG program count for source {}: {}",
                 source_uuid, e
             );
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
 
-    if channels.is_empty() {
+    if program_count == 0 {
         return Ok(Json(serde_json::json!({
             "success": true,
-            "message": "No EPG channels found for preview",
+            "message": "No EPG programs found for preview",
             "original_count": 0,
             "mapped_count": 0,
             "preview_channels": []
@@ -2130,15 +2131,15 @@ pub async fn apply_epg_source_data_mapping(
         "message": "EPG data mapping preview completed",
         "source_name": source.name,
         "source_type": "epg",
-        "original_count": channels.len(),
-        "mapped_count": channels.len(),
-        "preview_channels": channels
+        "original_count": program_count,
+        "mapped_count": program_count,
+        "preview_programs": program_count
     });
 
     info!(
-        "EPG data mapping preview completed for source '{}': {} channels",
+        "EPG data mapping preview completed for source '{}': {} programs available",
         source.name,
-        channels.len()
+        program_count
     );
 
     Ok(Json(result))
@@ -3330,33 +3331,27 @@ pub async fn get_epg_source_channels_unified(
     let _limit = params.limit.unwrap_or(50);
     let _filter = params.filter;
 
-    match state.database.get_epg_source_channels_with_display_names(id).await {
-        Ok(channels_with_names) => {
-            // Convert to enhanced response format with display names
-            let enhanced_channels: Vec<_> = channels_with_names.into_iter().map(|ch| {
+    // Since we've moved to a programs-only approach, return channel information derived from programs
+    match sqlx::query(
+        "SELECT DISTINCT channel_id, channel_name, COUNT(*) as program_count
+         FROM epg_programs 
+         WHERE source_id = ? 
+         GROUP BY channel_id, channel_name 
+         ORDER BY channel_name"
+    )
+    .bind(id.to_string())
+    .fetch_all(&state.database.pool())
+    .await {
+        Ok(rows) => {
+            let channel_summary: Vec<_> = rows.into_iter().map(|row| {
                 serde_json::json!({
-                    "id": ch.channel.id,
-                    "source_id": ch.channel.source_id,
-                    "channel_id": ch.channel.channel_id,
-                    "channel_name": ch.channel.channel_name,
-                    "channel_logo": ch.channel.channel_logo,
-                    "channel_group": ch.channel.channel_group,
-                    "language": ch.channel.language,
-                    "created_at": ch.channel.created_at,
-                    "updated_at": ch.channel.updated_at,
-                    "display_names": ch.display_names.into_iter().map(|dn| {
-                        serde_json::json!({
-                            "id": dn.id,
-                            "display_name": dn.display_name,
-                            "language": dn.language,
-                            "is_primary": dn.is_primary,
-                            "created_at": dn.created_at,
-                            "updated_at": dn.updated_at
-                        })
-                    }).collect::<Vec<_>>()
+                    "channel_id": row.get::<String, _>("channel_id"),
+                    "channel_name": row.get::<String, _>("channel_name"),
+                    "program_count": row.get::<i64, _>("program_count"),
+                    "source_id": id
                 })
             }).collect();
-            Ok(Json(json!(enhanced_channels)))
+            Ok(Json(json!(channel_summary)))
         },
         Err(e) => {
             error!("Failed to get channels for EPG source {}: {}", id, e);
@@ -3832,194 +3827,6 @@ pub async fn delete_linked_xtream_source(
     }
 }
 
-// Channel Mapping API Endpoints
-#[derive(Deserialize, ToSchema)]
-pub struct CreateChannelMappingRequest {
-    pub stream_channel_id: Uuid,
-    pub epg_channel_id: Uuid,
-    pub mapping_type: String,
-}
-
-#[derive(Deserialize, IntoParams)]
-pub struct ChannelMappingQueryParams {
-    pub stream_channel_id: Option<Uuid>,
-    pub epg_channel_id: Option<Uuid>,
-    pub mapping_type: Option<String>,
-}
-
-/// List channel mappings
-#[utoipa::path(
-    get,
-    path = "/channel-mappings",
-    tag = "channel-mapping",
-    summary = "List channel mappings",
-    description = "Get all channel to EPG mappings with optional filtering",
-    params(
-        ChannelMappingQueryParams
-    ),
-    responses(
-        (status = 200, description = "Channel mappings retrieved"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn list_channel_mappings(
-    Query(params): Query<ChannelMappingQueryParams>,
-    State(state): State<AppState>,
-) -> Result<Json<Vec<ChannelEpgMapping>>, StatusCode> {
-    match state
-        .database
-        .get_channel_mappings(
-            params.stream_channel_id,
-            params.epg_channel_id,
-            params.mapping_type.as_deref(),
-        )
-        .await
-    {
-        Ok(mappings) => Ok(Json(mappings)),
-        Err(e) => {
-            error!("Failed to get channel mappings: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Create channel mapping
-#[utoipa::path(
-    post,
-    path = "/channel-mappings",
-    tag = "channel-mapping",
-    summary = "Create channel mapping",
-    description = "Create a new channel to EPG mapping",
-    request_body = CreateChannelMappingRequest,
-    responses(
-        (status = 201, description = "Channel mapping created"),
-        (status = 400, description = "Invalid request data"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn create_channel_mapping(
-    State(state): State<AppState>,
-    Json(request): Json<CreateChannelMappingRequest>,
-) -> Result<Json<ChannelEpgMapping>, StatusCode> {
-    let mapping_type = match request.mapping_type.as_str() {
-        "manual" => EpgMappingType::Manual,
-        "auto_name" => EpgMappingType::AutoName,
-        "auto_tvg_id" => EpgMappingType::AutoTvgId,
-        _ => return Err(StatusCode::BAD_REQUEST),
-    };
-
-    match state
-        .database
-        .create_channel_mapping(
-            request.stream_channel_id,
-            request.epg_channel_id,
-            mapping_type,
-        )
-        .await
-    {
-        Ok(mapping) => {
-            info!(
-                "Created channel mapping: {} -> {}",
-                request.stream_channel_id, request.epg_channel_id
-            );
-            Ok(Json(mapping))
-        }
-        Err(e) => {
-            error!("Failed to create channel mapping: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Delete channel mapping
-#[utoipa::path(
-    delete,
-    path = "/channel-mappings/{mapping_id}",
-    tag = "channel-mapping",
-    summary = "Delete channel mapping",
-    description = "Delete a channel to EPG mapping",
-    params(
-        ("mapping_id" = Uuid, Path, description = "Channel mapping ID")
-    ),
-    responses(
-        (status = 204, description = "Channel mapping deleted"),
-        (status = 404, description = "Channel mapping not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn delete_channel_mapping(
-    Path(mapping_id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    match state.database.delete_channel_mapping(mapping_id).await {
-        Ok(true) => {
-            info!("Deleted channel mapping: {}", mapping_id);
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to delete channel mapping: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct AutoMapChannelsRequest {
-    pub source_id: Option<Uuid>,
-    pub mapping_type: String,
-    pub dry_run: Option<bool>,
-}
-
-/// Auto-map channels
-#[utoipa::path(
-    post,
-    path = "/channel-mappings/auto-map",
-    tag = "channel-mapping",
-    summary = "Auto-map channels",
-    description = "Automatically create channel to EPG mappings based on matching criteria",
-    request_body = AutoMapChannelsRequest,
-    responses(
-        (status = 200, description = "Auto-mapping completed"),
-        (status = 400, description = "Invalid request data"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn auto_map_channels(
-    State(state): State<AppState>,
-    Json(request): Json<AutoMapChannelsRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let mapping_type = match request.mapping_type.as_str() {
-        "name" => EpgMappingType::AutoName,
-        "tvg_id" => EpgMappingType::AutoTvgId,
-        _ => return Err(StatusCode::BAD_REQUEST),
-    };
-
-    let dry_run = request.dry_run.unwrap_or(false);
-
-    match state
-        .database
-        .auto_map_channels(request.source_id, mapping_type, dry_run)
-        .await
-    {
-        Ok(result) => {
-            info!(
-                "Auto-mapped channels: {} matches found, {} created",
-                result.potential_matches, result.mappings_created
-            );
-            Ok(Json(serde_json::json!({
-                "success": true,
-                "potential_matches": result.potential_matches,
-                "mappings_created": result.mappings_created,
-                "dry_run": dry_run
-            })))
-        }
-        Err(e) => {
-            error!("Failed to auto-map channels: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
 
 /// Count conditions in a condition tree
 fn count_conditions_in_tree(tree: &crate::models::ConditionTree) -> usize {

@@ -9,7 +9,6 @@ use tokio::sync::{Mutex, mpsc};
 use tracing;
 use uuid::Uuid;
 use crate::utils::uuid_parser::parse_uuid_flexible;
-pub mod channel_mapping;
 pub mod epg_sources;
 pub mod filters;
 pub mod linked_xtream;

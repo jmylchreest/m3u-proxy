@@ -263,49 +263,10 @@ pub fn validation_error(errors: Vec<ValidationErrorResponse>) -> impl IntoRespon
     )
 }
 
-/// Health check response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthResponse {
-    pub status: String,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub version: String,
-    pub uptime: u64,
-    pub database: DatabaseHealth,
-}
-
+/// Database health status
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseHealth {
     pub status: String,
     pub connection_pool_size: u32,
     pub active_connections: u32,
-}
-
-impl HealthResponse {
-    pub fn healthy() -> Self {
-        Self {
-            status: "healthy".to_string(),
-            timestamp: chrono::Utc::now(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            uptime: 0, // Would be calculated from actual uptime
-            database: DatabaseHealth {
-                status: "connected".to_string(),
-                connection_pool_size: 10,
-                active_connections: 1,
-            },
-        }
-    }
-
-    pub fn unhealthy(reason: String) -> Self {
-        Self {
-            status: format!("unhealthy: {}", reason),
-            timestamp: chrono::Utc::now(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            uptime: 0,
-            database: DatabaseHealth {
-                status: "disconnected".to_string(),
-                connection_pool_size: 0,
-                active_connections: 0,
-            },
-        }
-    }
 }

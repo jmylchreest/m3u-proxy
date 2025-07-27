@@ -139,7 +139,7 @@ function handleProgressUpdate(operation) {
   // Update progress data
   regenerationProgressData[proxyId] = newProgress;
   
-  // Reload proxies if just completed (to refresh last_generated_at, etc.)
+  // Reload proxies if just completed (to refresh updated_at, etc.)
   if (justCompleted) {
     console.log("Regeneration completed for proxy:", proxyId);
     loadProxies();
@@ -200,7 +200,7 @@ async function loadRegenerationProgress() {
 
     regenerationProgressData = newProgressData;
 
-    // Reload proxies if any just completed (to refresh last_generated_at, etc.)
+    // Reload proxies if any just completed (to refresh updated_at, etc.)
     if (justCompleted.length > 0) {
       console.log("Regeneration completed for proxies:", justCompleted);
       await loadProxies();
@@ -547,8 +547,8 @@ function renderProxyStatusCell(proxy) {
   );
   let statusBadge = `<span class="badge badge-${isActive ? "success" : "secondary"}">${isActive ? "Active" : "Inactive"}</span>`;
 
-  if (proxy.last_generated_at) {
-    const lastGenerated = new Date(proxy.last_generated_at);
+  if (proxy.updated_at) {
+    const lastGenerated = new Date(proxy.updated_at);
     const now = new Date();
     const timeDiff = now - lastGenerated;
     const daysDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));

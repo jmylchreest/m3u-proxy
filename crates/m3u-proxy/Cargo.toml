@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"
@@ -79,6 +79,12 @@ include_dir = "0.7"
 utoipa = { version = "5.4.0", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-axum = { version = "0.2.0" }
 utoipa-rapidoc = { version = "6.0.0", features = ["axum"] }
+infer = "0.16"
+flate2 = "1.0"
+bzip2 = "0.4"
+xz2 = "0.1"
+zip = "2.1"
+lz4 = "1.24"
 
 [build-dependencies]
 toml = "0.9"

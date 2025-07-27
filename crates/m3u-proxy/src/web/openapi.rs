@@ -105,8 +105,6 @@ Check the endpoints below to see the complete API surface.
             crate::web::handlers::epg_sources::CreateEpgSourceRequest,
             crate::web::handlers::epg_sources::UpdateEpgSourceRequest,
             crate::web::handlers::epg_sources::EpgSourceResponse,
-            crate::web::handlers::epg_sources::EpgChannelResponse,
-            crate::web::handlers::epg_sources::EpgChannelDisplayNameResponse,
             
             // Response wrappers
             crate::web::responses::ApiResponse<crate::web::handlers::stream_sources::StreamSourceResponse>,
@@ -183,7 +181,6 @@ Check the endpoints below to see the complete API surface.
         crate::web::handlers::epg_sources::update_epg_source,
         crate::web::handlers::epg_sources::delete_epg_source,
         crate::web::handlers::epg_sources::validate_epg_source,
-        crate::web::handlers::epg_sources::get_epg_source_channels,
         
         // Logo endpoints
         crate::web::api::list_logo_assets,
@@ -294,7 +291,6 @@ Check the endpoints below to see the complete API surface.
         
         // Health endpoints
         crate::web::handlers::health::health_check,
-        crate::web::handlers::health::detailed_health_check,
         crate::web::handlers::health::readiness_check,
         crate::web::handlers::health::liveness_check,
         
@@ -302,16 +298,12 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::cancel_stream_source_ingestion,
         crate::web::api::get_stream_source_processing_info,
         
-        // Linked sources and channel mapping
+        // Linked sources
         crate::web::api::list_linked_xtream_sources,
         crate::web::api::create_linked_xtream_source,
         crate::web::api::get_linked_xtream_source,
         crate::web::api::update_linked_xtream_source,
         crate::web::api::delete_linked_xtream_source,
-        crate::web::api::list_channel_mappings,
-        crate::web::api::create_channel_mapping,
-        crate::web::api::delete_channel_mapping,
-        crate::web::api::auto_map_channels,
         
         // Proxy management
         crate::web::api::preview_proxies,

@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{StreamSource, StreamSourceType, Channel};
+use crate::utils::{DecompressingHttpClient, StandardHttpClient};
 use super::traits::*;
 
 /// Xtream source handler
@@ -23,26 +24,28 @@ use super::traits::*;
 ///
 /// # Features
 /// - User/password authentication
-/// - Live TV channel retrieval
+/// - Live TV channel retrieval with automatic decompression
 /// - VOD content support (future)
 /// - EPG data integration (future)
 /// - Server information and capabilities detection
 /// - Health monitoring with detailed metrics
 /// - Stream URL generation with authentication
 pub struct XtreamSourceHandler {
-    client: Client,
+    http_client: StandardHttpClient,
+    raw_client: Client,
 }
 
 impl XtreamSourceHandler {
     /// Create a new Xtream source handler
     pub fn new() -> Self {
-        let client = Client::builder()
+        let http_client = StandardHttpClient::with_timeout(Duration::from_secs(30));
+        let raw_client = Client::builder()
             .timeout(Duration::from_secs(30))
             .user_agent("Xtream-Proxy/1.0")
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self { client }
+        Self { http_client, raw_client }
     }
 
     /// Get the base API URL for an Xtream source
@@ -94,7 +97,7 @@ impl XtreamSourceHandler {
         }
 
         // Quick connection test with shorter timeout
-        let response = self.client
+        let response = self.raw_client
             .get(url)
             .timeout(Duration::from_secs(5))
             .send()
@@ -137,15 +140,8 @@ impl XtreamSourceHandler {
 
         debug!("Testing Xtream authentication for: {}", source.name);
 
-        let response = self.client.get(url).send().await
-            .map_err(|e| AppError::source_error(format!("Failed to connect to Xtream server: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AppError::source_error(format!("Xtream server returned HTTP {}", response.status())));
-        }
-
-        let server_info: XtreamServerInfo = response.json().await
-            .map_err(|e| AppError::source_error(format!("Failed to parse Xtream server response: {}", e)))?;
+        let server_info: XtreamServerInfo = self.http_client.fetch_json(url.as_str()).await
+            .map_err(|e| AppError::source_error(format!("Failed to fetch or parse Xtream server response: {}", e)))?;
 
         // Check if authentication was successful
         if let Some(ref auth) = server_info.user_info {
@@ -175,15 +171,8 @@ impl XtreamSourceHandler {
 
         debug!("Fetching live channels from Xtream source: {}", source.name);
 
-        let response = self.client.get(url).send().await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch Xtream channels: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AppError::source_error(format!("Xtream server returned HTTP {}", response.status())));
-        }
-
-        let channels: Vec<XtreamChannel> = response.json().await
-            .map_err(|e| AppError::source_error(format!("Failed to parse Xtream channels: {}", e)))?;
+        let channels: Vec<XtreamChannel> = self.http_client.fetch_json(url.as_str()).await
+            .map_err(|e| AppError::source_error(format!("Failed to fetch or parse Xtream channels: {}", e)))?;
 
         info!("Retrieved {} live channels from Xtream source: {}", channels.len(), source.name);
         Ok(channels)
@@ -274,15 +263,8 @@ impl XtreamSourceHandler {
         }
         url.query_pairs_mut().append_pair("action", "get_live_categories");
 
-        let response = self.client.get(url).send().await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch categories: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AppError::source_error(format!("Failed to fetch categories: HTTP {}", response.status())));
-        }
-
-        let categories: Vec<XtreamCategory> = response.json().await
-            .map_err(|e| AppError::source_error(format!("Failed to parse categories: {}", e)))?;
+        let categories: Vec<XtreamCategory> = self.http_client.fetch_json(url.as_str()).await
+            .map_err(|e| AppError::source_error(format!("Failed to fetch or parse categories: {}", e)))?;
 
         Ok(categories)
     }
@@ -923,7 +905,7 @@ impl StreamUrlGenerator for XtreamSourceHandler {
         _source: &StreamSource,
         url: &str,
     ) -> AppResult<bool> {
-        match self.client.head(url).send().await {
+        match self.raw_client.head(url).send().await {
             Ok(response) => Ok(response.status().is_success()),
             Err(_) => Ok(false),
         }

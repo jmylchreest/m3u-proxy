@@ -357,8 +357,10 @@ impl Database {
             let filter = Filter {
                 id: proxy_filter.filter_id,
                 name: row.get("name"),
-                source_type: FilterSourceType::Stream,
-                starting_channel_number: row.get("starting_channel_number"),
+                source_type: match row.get::<String, _>("source_type").as_str() {
+                    "epg" => FilterSourceType::Epg,
+                    _ => FilterSourceType::Stream,
+                },
                 is_inverse: row.get("is_inverse"),
                 is_system_default: row.get("is_system_default"),
                 condition_tree: row.get("condition_tree"),

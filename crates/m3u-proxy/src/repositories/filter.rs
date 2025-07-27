@@ -83,7 +83,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         let id_str = id.to_string();
         let row = sqlx::query(
             r#"
-            SELECT id, name, source_type, starting_channel_number, is_inverse, is_system_default, condition_tree, created_at, updated_at
+            SELECT id, name, source_type, is_inverse, is_system_default, condition_tree, created_at, updated_at
             FROM filters
             WHERE id = ?
             "#
@@ -111,7 +111,6 @@ impl Repository<Filter, Uuid> for FilterRepository {
                         "epg" => FilterSourceType::Epg,
                         _ => FilterSourceType::Stream, // Default fallback
                     },
-                    starting_channel_number: row.get("starting_channel_number"),
                     is_inverse: row.get("is_inverse"),
                     is_system_default: row.get("is_system_default"),
                     condition_tree: row.get("condition_tree"),
@@ -125,7 +124,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
     }
 
     async fn find_all(&self, query: Self::Query) -> RepositoryResult<Vec<Filter>> {
-        let mut sql = "SELECT id, name, source_type, starting_channel_number, is_inverse, is_system_default, condition_tree, created_at, updated_at FROM filters WHERE 1=1".to_string();
+        let mut sql = "SELECT id, name, source_type, is_inverse, is_system_default, condition_tree, created_at, updated_at FROM filters WHERE 1=1".to_string();
         let mut params: Vec<String> = Vec::new();
 
         if let Some(source_type) = &query.source_type {
@@ -172,7 +171,6 @@ impl Repository<Filter, Uuid> for FilterRepository {
                     "epg" => FilterSourceType::Epg,
                     _ => FilterSourceType::Stream,
                 },
-                starting_channel_number: row.get("starting_channel_number"),
                 is_inverse: row.get("is_inverse"),
                 is_system_default: row.get("is_system_default"),
                 condition_tree: row.get("condition_tree"),
@@ -207,14 +205,13 @@ impl Repository<Filter, Uuid> for FilterRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO filters (id, name, source_type, starting_channel_number, is_inverse, condition_tree, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO filters (id, name, source_type, is_inverse, condition_tree, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             "#
         )
         .bind(id_str)
         .bind(request.name.clone())
         .bind(source_type_str)
-        .bind(request.starting_channel_number)
         .bind(request.is_inverse)
         .bind(condition_tree_json.clone())
         .bind(now_str.clone())
@@ -230,9 +227,8 @@ impl Repository<Filter, Uuid> for FilterRepository {
             id,
             name: request.name,
             source_type: request.source_type,
-            starting_channel_number: request.starting_channel_number,
             is_inverse: request.is_inverse,
-            is_system_default: request.is_system_default,
+            is_system_default: false, // Always false for user-created filters
             condition_tree: request.filter_expression,
             created_at: now,
             updated_at: now,
@@ -261,13 +257,12 @@ impl Repository<Filter, Uuid> for FilterRepository {
         sqlx::query(
             r#"
             UPDATE filters
-            SET name = ?, source_type = ?, starting_channel_number = ?, is_inverse = ?, condition_tree = ?, updated_at = ?
+            SET name = ?, source_type = ?, is_inverse = ?, condition_tree = ?, updated_at = ?
             WHERE id = ?
             "#
         )
         .bind(request.name.clone())
         .bind(source_type_str)
-        .bind(request.starting_channel_number)
         .bind(request.is_inverse)
         .bind(condition_tree_json)
         .bind(now_str)

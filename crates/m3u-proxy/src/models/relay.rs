@@ -322,6 +322,9 @@ pub struct CreateRelayProfileRequest {
     pub segment_duration: Option<i32>,
     pub max_segments: Option<i32>,
     pub input_timeout: Option<i32>,
+    
+    // System default flag (ignored by API handlers)
+    pub is_system_default: Option<bool>,
 }
 
 /// Request to update an existing relay profile
@@ -353,6 +356,9 @@ pub struct UpdateRelayProfileRequest {
     pub max_segments: Option<i32>,
     pub input_timeout: Option<i32>,
     pub is_active: Option<bool>,
+    
+    // System default flag (ignored by API handlers)
+    pub is_system_default: Option<bool>,
 }
 
 /// Request to create a channel relay configuration

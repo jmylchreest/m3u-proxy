@@ -295,7 +295,6 @@ class FiltersManager {
                                     ${filter.is_inverse ? "Exclude" : "Include"}
                                 </span>
                                 ${filter.is_system_default ? '<span class="badge badge-info">System Default</span>' : ""}
-                                <span class="filter-starting-number">Start: ${filter.starting_channel_number}</span>
                                 <span class="badge ${usageCount > 0 ? "badge-primary" : "badge-secondary"}">
                                     ${usageCount} ${usageCount === 1 ? "proxy" : "proxies"}
                                 </span>
@@ -366,8 +365,6 @@ class FiltersManager {
     if (filter) {
       document.getElementById("filterName").value = filter.name;
       document.getElementById("isInverse").checked = filter.is_inverse;
-      document.getElementById("startingChannelNumber").value =
-        filter.starting_channel_number;
 
       // Populate the pattern field with text representation from filter data
       this.populatePatternFromFilter(filter);
@@ -460,9 +457,6 @@ class FiltersManager {
     return {
       name: document.getElementById("filterName").value.trim(),
       source_type: "stream", // Filters only apply to stream sources
-      starting_channel_number: parseInt(
-        document.getElementById("startingChannelNumber").value,
-      ),
       is_inverse: document.getElementById("isInverse").checked,
       filter_expression: document.getElementById("filterPattern").value.trim(),
     };

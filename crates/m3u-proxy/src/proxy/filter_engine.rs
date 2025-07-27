@@ -150,8 +150,7 @@ impl FilterEngine {
                 );
             }
 
-            // Update current channel number for next filter
-            _current_channel_number = filter.starting_channel_number + result_channels.len() as i32;
+            // Channel numbers are now handled by the proxy itself, not by filters
         }
 
         let final_channel_count = result_channels.len();

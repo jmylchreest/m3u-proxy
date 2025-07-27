@@ -643,7 +643,6 @@ impl StreamProxyService {
                     is_active: proxy_filter.is_active,
                     is_inverse: filter.is_inverse,
                     source_type: filter.source_type,
-                    starting_channel_number: filter.starting_channel_number,
                 });
             }
         }

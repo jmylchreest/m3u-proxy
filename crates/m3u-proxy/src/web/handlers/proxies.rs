@@ -152,7 +152,6 @@ pub struct ProxyFilterResponse {
     pub is_active: bool,
     pub is_inverse: bool,
     pub source_type: crate::models::FilterSourceType,
-    pub starting_channel_number: i32,
 }
 
 impl CreateStreamProxyRequest {

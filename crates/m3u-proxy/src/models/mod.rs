@@ -120,7 +120,6 @@ pub struct Filter {
     pub id: Uuid,
     pub name: String,
     pub source_type: FilterSourceType,
-    pub starting_channel_number: i32,
     pub is_inverse: bool,
     pub is_system_default: bool,
     pub condition_tree: String, // JSON tree structure for complex nested conditions
@@ -359,9 +358,7 @@ pub struct ChannelListResponse {
 pub struct FilterCreateRequest {
     pub name: String,
     pub source_type: FilterSourceType,
-    pub starting_channel_number: i32,
     pub is_inverse: bool,
-    pub is_system_default: bool,
     pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
 }
 
@@ -369,7 +366,6 @@ pub struct FilterCreateRequest {
 pub struct FilterUpdateRequest {
     pub name: String,
     pub source_type: FilterSourceType,
-    pub starting_channel_number: i32,
     pub is_inverse: bool,
     pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
 }

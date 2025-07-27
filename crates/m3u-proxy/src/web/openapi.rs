@@ -126,6 +126,19 @@ Check the endpoints below to see the complete API surface.
             crate::web::api::settings::UpdateSettingsRequest,
             crate::web::api::settings::SettingsResponse,
             
+            // Filter schemas
+            crate::models::Filter,
+            crate::models::FilterSourceType,
+            crate::models::FilterCreateRequest,
+            crate::models::FilterUpdateRequest,
+            crate::models::FilterTestRequest,
+            crate::models::FilterValidateRequest,
+            crate::models::FilterTestResult,
+            crate::models::FilterValidateResult,
+            crate::models::FilterTestChannel,
+            crate::models::FilterWithUsage,
+            crate::models::FilterFieldInfo,
+            
             // Unified progress schemas
             crate::web::api::unified_progress::ProgressOperationResponse,
             crate::web::api::unified_progress::ProgressDetails,

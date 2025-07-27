@@ -370,7 +370,7 @@ pub struct FilterUpdateRequest {
     pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterWithUsage {
     #[serde(flatten)]
     pub filter: Filter,
@@ -386,12 +386,37 @@ pub struct FilterTestRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FilterValidateRequest {
+    #[schema(example = "channel_name contains \"HD\" OR (group_title = \"Movies\" AND stream_url starts_with \"https\")")]
+    pub filter_expression: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterTestResult {
     pub is_valid: bool,
     pub error: Option<String>,
     pub matching_channels: Vec<FilterTestChannel>,
     pub total_channels: usize,
     pub matched_count: usize,
+    pub expression_tree: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FilterValidateResult {
+    #[schema(example = true)]
+    pub is_valid: bool,
+    
+    #[schema(example = "Syntax error: Expected value after '=' operator, found 'AND'")]
+    pub error: Option<String>,
+    
+    #[schema(example = json!({
+        "type": "condition",
+        "field": "channel_name", 
+        "operator": "Contains",
+        "value": "Sports",
+        "case_sensitive": false,
+        "negate": false
+    }))]
     pub expression_tree: Option<serde_json::Value>,
 }
 
@@ -728,7 +753,7 @@ impl Filter {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterFieldInfo {
     pub name: String,
     pub display_name: String,

@@ -658,8 +658,9 @@ pub async fn delete_filter(
     tag = "filters",
     summary = "Test filter expression",
     description = "Test a filter expression against sample data to validate functionality",
+    request_body = FilterTestRequest,
     responses(
-        (status = 200, description = "Filter test result"),
+        (status = 200, description = "Filter test result", body = FilterTestResult),
         (status = 400, description = "Invalid filter expression"),
         (status = 500, description = "Internal server error")
     )
@@ -686,27 +687,69 @@ pub async fn test_filter(
     path = "/filters/validate",
     tag = "filters",
     summary = "Validate filter expression",
-    description = "Validate filter expression syntax without testing against data",
+    description = "
+Validates filter expression syntax without testing against actual data. This is a lightweight operation 
+that only checks if the filter syntax is correct and returns a parsed expression tree.
+
+## Available Fields
+- `channel_name` - Channel display name
+- `group_title` - Channel group/category  
+- `stream_url` - Stream URL
+- `tvg_id` - TV guide ID
+- `tvg_name` - TV guide name
+- `tvg_logo` - TV guide logo URL
+
+## Available Operators
+- `contains` - Text contains substring
+- `starts_with` - Text starts with value
+- `ends_with` - Text ends with value
+- `equals` - Exact text match
+- `not_equals` - Text does not match
+- `matches_regex` - Regular expression match
+
+## Logical Operators
+- `AND` - Both conditions must be true
+- `OR` - Either condition can be true
+- Parentheses `()` for grouping expressions
+
+## Examples
+- Simple: `channel_name contains \"Sports\"`
+- Complex: `(channel_name contains \"HD\" OR group_title = \"Movies\") AND stream_url starts_with \"https\"`
+",
+    request_body = FilterValidateRequest,
     responses(
-        (status = 200, description = "Filter validation result"),
-        (status = 400, description = "Invalid filter syntax"),
-        (status = 500, description = "Internal server error")
+        (
+            status = 200, 
+            description = "Validation result with syntax status and optional expression tree",
+            body = FilterValidateResult,
+            example = json!({
+                "is_valid": true,
+                "error": null,
+                "expression_tree": {
+                    "type": "condition",
+                    "field": "channel_name",
+                    "operator": "Contains", 
+                    "value": "Sports",
+                    "case_sensitive": false,
+                    "negate": false
+                }
+            })
+        ),
+        (status = 400, description = "Bad request - malformed JSON or missing required fields"),
+        (status = 500, description = "Internal server error during validation")
     )
 )]
 pub async fn validate_filter(
-    Json(payload): Json<FilterTestRequest>,
-) -> Result<Json<FilterTestResult>, StatusCode> {
+    Json(payload): Json<FilterValidateRequest>,
+) -> Result<Json<FilterValidateResult>, StatusCode> {
     // Parse the filter expression to validate syntax and generate expression tree
     let parser = crate::filter_parser::FilterParser::new();
     let condition_tree = match parser.parse(&payload.filter_expression) {
         Ok(tree) => tree,
         Err(e) => {
-            return Ok(Json(FilterTestResult {
+            return Ok(Json(FilterValidateResult {
                 is_valid: false,
                 error: Some(format!("Syntax error: {}", e)),
-                matching_channels: vec![],
-                total_channels: 0,
-                matched_count: 0,
                 expression_tree: None,
             }));
         }
@@ -715,12 +758,9 @@ pub async fn validate_filter(
     // Generate expression tree for frontend
     let expression_tree = generate_expression_tree_json(&condition_tree);
 
-    Ok(Json(FilterTestResult {
+    Ok(Json(FilterValidateResult {
         is_valid: true,
         error: None,
-        matching_channels: vec![], // No actual testing for validation
-        total_channels: 0,
-        matched_count: 0,
         expression_tree: Some(expression_tree),
     }))
 }

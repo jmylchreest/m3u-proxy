@@ -59,7 +59,7 @@ impl super::Database {
     #[allow(dead_code)]
     pub async fn list_filters(&self) -> Result<Vec<Filter>> {
         let rows = sqlx::query(
-            "SELECT id, name, starting_channel_number, is_inverse, is_system_default, condition_tree, created_at, updated_at
+            "SELECT id, name, source_type, is_inverse, is_system_default, condition_tree, created_at, updated_at
              FROM filters
              ORDER BY name",
         )
@@ -126,7 +126,7 @@ impl super::Database {
 
     pub async fn get_filter(&self, id: Uuid) -> Result<Option<Filter>> {
         let row = sqlx::query(
-            "SELECT id, name, starting_channel_number, is_inverse, is_system_default, condition_tree, created_at, updated_at
+            "SELECT id, name, source_type, is_inverse, is_system_default, condition_tree, created_at, updated_at
              FROM filters
              WHERE id = ?",
         )

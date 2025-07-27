@@ -4,7 +4,8 @@
 
 use crate::models::{
     Action, ActionOperator, ActionValue, ConditionNode, ConditionTree, ExtendedExpression,
-    FilterOperator, LogicalOperator,
+    FilterOperator, LogicalOperator, ExpressionErrorCategory, ExpressionValidationError,
+    ExpressionValidateResult,
 };
 use anyhow::{Result, anyhow};
 use tracing::{trace, warn};
@@ -179,6 +180,698 @@ impl ExpressionParser {
             trace!("Expression parsed successfully");
             Ok(ExtendedExpression::ConditionOnly(condition))
         }
+    }
+
+    /// Validate expression and return structured results with position information
+    /// This provides detailed validation results suitable for UI display and API responses
+    /// Returns structured validation result with multiple detailed errors
+    pub fn validate(&self, expression: &str) -> ExpressionValidateResult {
+        trace!("Performing structured validation of expression: '{}'", expression);
+        
+        let mut errors = Vec::new();
+        let mut expression_tree = None;
+        
+        // Step 1: Parse the expression and collect syntax errors
+        match self.parse_extended_with_errors(expression) {
+            Ok(parsed) => {
+                // Step 2: Validate semantic correctness and collect semantic errors
+                let semantic_errors = self.validate_extended_with_errors(&parsed);
+                errors.extend(semantic_errors);
+                
+                // If we successfully parsed, serialize the expression tree for display
+                if let Ok(tree_json) = serde_json::to_value(&parsed) {
+                    expression_tree = Some(tree_json);
+                }
+            }
+            Err(syntax_errors) => {
+                // Collect syntax errors from parsing phase
+                errors.extend(syntax_errors);
+            }
+        }
+        
+        let is_valid = errors.is_empty();
+        
+        ExpressionValidateResult {
+            is_valid,
+            errors,
+            expression_tree,
+        }
+    }
+
+    /// Internal parsing method that collects structured errors instead of failing fast
+    fn parse_extended_with_errors(&self, expression: &str) -> Result<ExtendedExpression, Vec<ExpressionValidationError>> {
+        let mut errors = Vec::new();
+        
+        // Tokenization with error collection
+        let tokens = match self.tokenize_with_errors(expression) {
+            Ok(tokens) => tokens,
+            Err(tokenize_errors) => {
+                errors.extend(tokenize_errors);
+                return Err(errors);
+            }
+        };
+        
+        // Expression parsing with error collection
+        match self.parse_extended_from_tokens(&tokens) {
+            Ok(expr) => Ok(expr),
+            Err(parse_errors) => {
+                errors.extend(parse_errors);
+                Err(errors)
+            }
+        }
+    }
+
+    /// Internal tokenization method that collects structured errors
+    fn tokenize_with_errors(&self, expression: &str) -> Result<Vec<Token>, Vec<ExpressionValidationError>> {
+        let mut tokens = Vec::new();
+        let mut errors = Vec::new();
+        let mut current_pos = 0;
+        let expr = expression.trim();
+
+        while current_pos < expr.len() {
+            let remaining = &expr[current_pos..];
+
+            // Skip whitespace
+            if remaining.starts_with(char::is_whitespace) {
+                current_pos += 1;
+                continue;
+            }
+
+            // Handle parentheses
+            if remaining.starts_with('(') {
+                tokens.push(Token::LeftParen);
+                current_pos += 1;
+                continue;
+            }
+            if remaining.starts_with(')') {
+                tokens.push(Token::RightParen);
+                current_pos += 1;
+                continue;
+            }
+
+            // Handle quoted strings with better error reporting
+            if remaining.starts_with('"') || remaining.starts_with('\'') {
+                let quote_char = remaining.chars().next().unwrap();
+                match remaining[1..].find(quote_char) {
+                    Some(end_pos) => {
+                        let value = remaining[1..end_pos + 1].to_string();
+                        tokens.push(Token::Value(value));
+                        current_pos += end_pos + 2;
+                        continue;
+                    }
+                    None => {
+                        let context = if remaining.len() > 20 {
+                            format!("{}...", &remaining[..20])
+                        } else {
+                            remaining.to_string()
+                        };
+                        
+                        errors.push(ExpressionValidationError {
+                            category: ExpressionErrorCategory::Syntax,
+                            error_type: "unclosed_quote".to_string(),
+                            message: format!("Unclosed {} quote", if quote_char == '"' { "double" } else { "single" }),
+                            details: Some(format!("String literal starting at position {} is not properly closed", current_pos)),
+                            position: Some(current_pos),
+                            context: Some(context),
+                            suggestion: Some(format!("Add closing {} quote: {}...{}", quote_char, quote_char, quote_char)),
+                        });
+                        return Err(errors);
+                    }
+                }
+            }
+
+            // Handle logical operators with suggestions for common mistakes
+            let mut found_logical = false;
+            for logical_op in &self.logical_operators {
+                if remaining.to_uppercase().starts_with(logical_op) {
+                    let end_pos = logical_op.len();
+                    if end_pos == remaining.len()
+                        || remaining
+                            .chars()
+                            .nth(end_pos)
+                            .map_or(true, |c| c.is_whitespace() || c == '(' || c == ')')
+                    {
+                        let operator = match logical_op.as_str() {
+                            "AND" | "ALL" => LogicalOperator::And,
+                            "OR" | "ANY" => LogicalOperator::Or,
+                            _ => {
+                                errors.push(ExpressionValidationError {
+                                    category: ExpressionErrorCategory::Operator,
+                                    error_type: "unknown_logical_operator".to_string(),
+                                    message: format!("Unknown logical operator: {}", logical_op),
+                                    details: Some("This logical operator is not supported".to_string()),
+                                    position: Some(current_pos),
+                                    context: Some(logical_op.clone()),
+                                    suggestion: Some("Use AND or OR".to_string()),
+                                });
+                                return Err(errors);
+                            }
+                        };
+                        tokens.push(Token::LogicalOp(operator));
+                        current_pos += end_pos;
+                        found_logical = true;
+                        break;
+                    }
+                }
+            }
+            if found_logical {
+                continue;
+            }
+
+            // Check for common logical operator mistakes
+            let common_mistakes = [
+                ("&&", "AND"), ("||", "OR"), ("and", "AND"), ("or", "OR"),
+                ("&", "AND"), ("|", "OR"), ("AND and", "AND"), ("OR or", "OR")
+            ];
+            
+            for (mistake, correct) in &common_mistakes {
+                if remaining.to_uppercase().starts_with(&mistake.to_uppercase()) {
+                    let context = if remaining.len() > 10 {
+                        format!("{}...", &remaining[..10])
+                    } else {
+                        remaining.to_string()
+                    };
+                    
+                    errors.push(ExpressionValidationError {
+                        category: ExpressionErrorCategory::Operator,
+                        error_type: "invalid_logical_operator".to_string(),
+                        message: format!("Invalid logical operator: {}", mistake),
+                        details: Some(format!("'{}' is not a valid logical operator", mistake)),
+                        position: Some(current_pos),
+                        context: Some(context),
+                        suggestion: Some(format!("Use '{}' instead", correct)),
+                    });
+                    return Err(errors);
+                }
+            }
+
+            // Handle modifiers
+            if remaining.to_uppercase().starts_with("NOT") {
+                let end_pos = 3;
+                if end_pos == remaining.len()
+                    || remaining
+                        .chars()
+                        .nth(end_pos)
+                        .map_or(true, |c| c.is_whitespace())
+                {
+                    tokens.push(Token::Modifier("not".to_string()));
+                    current_pos += end_pos;
+                    continue;
+                }
+            }
+
+            if remaining.to_uppercase().starts_with("CASE_SENSITIVE") {
+                let end_pos = 14;
+                if end_pos == remaining.len()
+                    || remaining
+                        .chars()
+                        .nth(end_pos)
+                        .map_or(true, |c| c.is_whitespace())
+                {
+                    tokens.push(Token::Modifier("case_sensitive".to_string()));
+                    current_pos += end_pos;
+                    continue;
+                }
+            }
+
+            // Handle SET keyword
+            if remaining.to_uppercase().starts_with("SET") {
+                let end_pos = 3;
+                if end_pos == remaining.len()
+                    || remaining
+                        .chars()
+                        .nth(end_pos)
+                        .map_or(true, |c| c.is_whitespace())
+                {
+                    tokens.push(Token::SetKeyword);
+                    current_pos += end_pos;
+                    continue;
+                }
+            }
+
+            // Handle assignment operators
+            if remaining.starts_with("+=") {
+                tokens.push(Token::AssignmentOp(ActionOperator::Append));
+                current_pos += 2;
+                continue;
+            }
+            if remaining.starts_with("-=") {
+                tokens.push(Token::AssignmentOp(ActionOperator::Remove));
+                current_pos += 2;
+                continue;
+            }
+            if remaining.starts_with("?=") {
+                tokens.push(Token::AssignmentOp(ActionOperator::SetIfEmpty));
+                current_pos += 2;
+                continue;
+            }
+            if remaining.starts_with("=") {
+                tokens.push(Token::AssignmentOp(ActionOperator::Set));
+                current_pos += 1;
+                continue;
+            }
+
+            // Handle comma separator
+            if remaining.starts_with(",") {
+                tokens.push(Token::Comma);
+                current_pos += 1;
+                continue;
+            }
+
+            // Handle filter operators with suggestions for typos
+            let mut found_operator = false;
+            for op in &self.operators {
+                if remaining.starts_with(op) {
+                    let end_pos = op.len();
+                    if end_pos == remaining.len()
+                        || remaining
+                            .chars()
+                            .nth(end_pos)
+                            .map_or(true, |c| c.is_whitespace() || c == '"' || c == '\'')
+                    {
+                        let filter_op = match op.as_str() {
+                            "contains" => FilterOperator::Contains,
+                            "equals" => FilterOperator::Equals,
+                            "matches" => FilterOperator::Matches,
+                            "starts_with" => FilterOperator::StartsWith,
+                            "ends_with" => FilterOperator::EndsWith,
+                            "not_contains" => FilterOperator::NotContains,
+                            "not_equals" => FilterOperator::NotEquals,
+                            "not_matches" => FilterOperator::NotMatches,
+                            "not_starts_with" => FilterOperator::NotStartsWith,
+                            "not_ends_with" => FilterOperator::NotEndsWith,
+                            _ => {
+                                errors.push(ExpressionValidationError {
+                                    category: ExpressionErrorCategory::Operator,
+                                    error_type: "unknown_filter_operator".to_string(),
+                                    message: format!("Unknown filter operator: {}", op),
+                                    details: Some("This filter operator is not supported".to_string()),
+                                    position: Some(current_pos),
+                                    context: Some(op.clone()),
+                                    suggestion: Some("Available operators: contains, equals, matches, starts_with, ends_with".to_string()),
+                                });
+                                return Err(errors);
+                            }
+                        };
+                        tokens.push(Token::Operator(filter_op));
+                        current_pos += end_pos;
+                        found_operator = true;
+                        break;
+                    }
+                }
+            }
+
+            if found_operator {
+                continue;
+            }
+
+            // Check for common operator typos and suggest corrections
+            let common_operator_typos = [
+                ("containz", "contains"), ("contians", "contains"), ("contain", "contains"),
+                ("equal", "equals"), ("equls", "equals"), ("=", "equals"),
+                ("match", "matches"), ("matche", "matches"), ("regex", "matches"),
+                ("start_with", "starts_with"), ("begin_with", "starts_with"),
+                ("end_with", "ends_with"), ("finish_with", "ends_with"),
+                ("!=", "not_equals"), ("not_equal", "not_equals"),
+                ("!", "not_"), ("~", "not_"), ("does_not", "not_"),
+            ];
+
+            for (typo, correct) in &common_operator_typos {
+                if remaining.starts_with(typo) {
+                    let end_pos = typo.len();
+                    if end_pos == remaining.len()
+                        || remaining
+                            .chars()
+                            .nth(end_pos)
+                            .map_or(true, |c| c.is_whitespace() || c == '"' || c == '\'')
+                    {
+                        let context = if remaining.len() > 15 {
+                            format!("{}...", &remaining[..15])
+                        } else {
+                            remaining.to_string()
+                        };
+                        
+                        errors.push(ExpressionValidationError {
+                            category: ExpressionErrorCategory::Operator,
+                            error_type: "operator_typo".to_string(),
+                            message: format!("Unknown operator: {}", typo),
+                            details: Some(format!("'{}' is not a valid operator. Did you mean '{}'?", typo, correct)),
+                            position: Some(current_pos),
+                            context: Some(context),
+                            suggestion: Some(format!("Use '{}' instead", correct)),
+                        });
+                        return Err(errors);
+                    }
+                }
+            }
+
+            // Handle field names
+            let word_end = remaining
+                .find(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == '"' || c == '\'')
+                .unwrap_or(remaining.len());
+
+            if word_end > 0 {
+                let word = remaining[..word_end].to_string();
+                tokens.push(Token::Field(word));
+                current_pos += word_end;
+            } else {
+                let context = if remaining.len() > 10 {
+                    format!("{}...", &remaining[..10])
+                } else {
+                    remaining.to_string()
+                };
+                
+                errors.push(ExpressionValidationError {
+                    category: ExpressionErrorCategory::Syntax,
+                    error_type: "unexpected_character".to_string(),
+                    message: format!("Unexpected character at position {}", current_pos),
+                    details: Some(format!("Character '{}' is not valid in this context", remaining.chars().next().unwrap_or('?'))),
+                    position: Some(current_pos),
+                    context: Some(context),
+                    suggestion: Some("Remove the invalid character or check your syntax".to_string()),
+                });
+                return Err(errors);
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(tokens)
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Internal parsing method that works with pre-tokenized input
+    fn parse_extended_from_tokens(&self, tokens: &[Token]) -> Result<ExtendedExpression, Vec<ExpressionValidationError>> {
+        let mut errors = Vec::new();
+        
+        // Check for empty token list
+        if tokens.is_empty() {
+            errors.push(ExpressionValidationError {
+                category: ExpressionErrorCategory::Syntax,
+                error_type: "empty_expression".to_string(),
+                message: "Expression cannot be empty".to_string(),
+                details: Some("An expression must contain at least one condition".to_string()),
+                position: Some(0),
+                context: None,
+                suggestion: Some("Example: channel_name contains \"value\"".to_string()),
+            });
+            return Err(errors);
+        }
+
+        // Check for balanced parentheses
+        let mut paren_stack = Vec::new();
+        for (i, token) in tokens.iter().enumerate() {
+            match token {
+                Token::LeftParen => paren_stack.push(i),
+                Token::RightParen => {
+                    if paren_stack.is_empty() {
+                        errors.push(ExpressionValidationError {
+                            category: ExpressionErrorCategory::Syntax,
+                            error_type: "unmatched_closing_parenthesis".to_string(),
+                            message: "Unmatched closing parenthesis".to_string(),
+                            details: Some(format!("Closing parenthesis at position {} has no matching opening parenthesis", i)),
+                            position: Some(i),
+                            context: Some(")".to_string()),
+                            suggestion: Some("Add opening parenthesis or remove this closing parenthesis".to_string()),
+                        });
+                    } else {
+                        paren_stack.pop();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check for unclosed parentheses
+        for &open_pos in &paren_stack {
+            errors.push(ExpressionValidationError {
+                category: ExpressionErrorCategory::Syntax,
+                error_type: "unclosed_parenthesis".to_string(),
+                message: "Unclosed parenthesis".to_string(),
+                details: Some(format!("Opening parenthesis at position {} is never closed", open_pos)),
+                position: Some(open_pos),
+                context: Some("(".to_string()),
+                suggestion: Some("Add closing parenthesis: (...) or remove the opening parenthesis".to_string()),
+            });
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        // Proceed with normal parsing if syntax is valid
+        // For now, fall back to original parsing and convert errors
+        match self.parse_extended_from_tokens_original(tokens) {
+            Ok(expr) => Ok(expr),
+            Err(e) => {
+                // Convert anyhow errors to structured errors
+                errors.push(ExpressionValidationError {
+                    category: ExpressionErrorCategory::Syntax,
+                    error_type: "parse_error".to_string(),
+                    message: "Failed to parse expression".to_string(),
+                    details: Some(e.to_string()),
+                    position: None,
+                    context: None,
+                    suggestion: Some("Check your expression syntax".to_string()),
+                });
+                Err(errors)
+            }
+        }
+    }
+
+    /// Original parsing logic wrapped for error conversion
+    fn parse_extended_from_tokens_original(&self, tokens: &[Token]) -> Result<ExtendedExpression> {
+        // This is essentially the same as the original parse_extended logic
+        // but working with pre-tokenized input instead of tokenizing again
+        let mut pos = 0;
+
+        // Try to parse as conditional action groups first
+        if let Ok(groups) = self.parse_conditional_action_groups(tokens, &mut 0) {
+            return Ok(ExtendedExpression::ConditionalActionGroups(groups));
+        }
+
+        // Fall back to original parsing
+        let condition_root = self.parse_expression(tokens, &mut pos)?;
+        let condition = ConditionTree {
+            root: condition_root,
+        };
+
+        // Check for SET keyword
+        if pos < tokens.len() && matches!(tokens[pos], Token::SetKeyword) {
+            pos += 1; // consume SET
+            let actions = self.parse_action_list(tokens, &mut pos)?;
+
+            // Ensure we've consumed all tokens
+            if pos < tokens.len() {
+                return Err(anyhow!(
+                    "Unexpected tokens after actions at position {}",
+                    pos
+                ));
+            }
+
+            Ok(ExtendedExpression::ConditionWithActions { condition, actions })
+        } else {
+            // Ensure we've consumed all tokens
+            if pos < tokens.len() {
+                return Err(anyhow!(
+                    "Unexpected tokens after condition at position {}",
+                    pos
+                ));
+            }
+
+            Ok(ExtendedExpression::ConditionOnly(condition))
+        }
+    }
+
+    /// Internal validation method that collects structured errors instead of failing fast
+    fn validate_extended_with_errors(&self, expression: &ExtendedExpression) -> Vec<ExpressionValidationError> {
+        let mut errors = Vec::new();
+
+        match expression {
+            ExtendedExpression::ConditionOnly(condition) => {
+                errors.extend(self.validate_condition_tree_with_errors(condition));
+            }
+            ExtendedExpression::ConditionWithActions { condition, actions } => {
+                errors.extend(self.validate_condition_tree_with_errors(condition));
+                errors.extend(self.validate_actions_with_errors(actions));
+            }
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                for (i, group) in groups.iter().enumerate() {
+                    errors.extend(self.validate_condition_tree_with_errors(&group.conditions));
+                    errors.extend(self.validate_actions_with_errors(&group.actions));
+                }
+            }
+        }
+
+        errors
+    }
+
+    /// Validate condition tree and collect structured errors
+    fn validate_condition_tree_with_errors(&self, condition_tree: &ConditionTree) -> Vec<ExpressionValidationError> {
+        self.validate_condition_node_with_errors(&condition_tree.root)
+    }
+
+    /// Validate condition nodes recursively and collect structured errors
+    fn validate_condition_node_with_errors(&self, condition: &ConditionNode) -> Vec<ExpressionValidationError> {
+        let mut errors = Vec::new();
+
+        match condition {
+            ConditionNode::Condition { field, operator, value, .. } => {
+                // Validate field name
+                if let Some(field_error) = self.validate_field_name_with_error(field) {
+                    errors.push(field_error);
+                }
+
+                // Validate regex patterns for matches operators
+                if matches!(operator, FilterOperator::Matches | FilterOperator::NotMatches) {
+                    if let Some(regex_error) = self.validate_regex_pattern(value) {
+                        errors.push(regex_error);
+                    }
+                }
+            }
+            ConditionNode::Group { children, .. } => {
+                for child in children {
+                    errors.extend(self.validate_condition_node_with_errors(child));
+                }
+            }
+        }
+
+        errors
+    }
+
+    /// Validate field name and return structured error if invalid
+    fn validate_field_name_with_error(&self, field: &str) -> Option<ExpressionValidationError> {
+        if self.valid_fields.is_empty() {
+            return None; // Skip validation if no fields configured
+        }
+
+        if !self.valid_fields.iter().any(|f| f == field) {
+            // Find similar field names for suggestions
+            let suggestion = self.find_similar_field_name(field);
+            
+            Some(ExpressionValidationError {
+                category: ExpressionErrorCategory::Field,
+                error_type: "unknown_field".to_string(),
+                message: format!("Unknown field '{}'", field),
+                details: if let Some(ref similar) = suggestion {
+                    Some(format!("Field '{}' is not available. Did you mean '{}'?", field, similar))
+                } else {
+                    Some(format!("Field '{}' is not available for this expression type", field))
+                },
+                position: None, // Would need additional tracking to provide position
+                context: Some(field.to_string()),
+                suggestion: suggestion.or_else(|| Some(format!("Available fields: {}", self.valid_fields.join(", ")))),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Find similar field name using simple edit distance
+    fn find_similar_field_name(&self, field: &str) -> Option<String> {
+        let mut best_match = None;
+        let mut best_score = 0;
+
+        for valid_field in &self.valid_fields {
+            let score = self.calculate_similarity(field, valid_field);
+            if score > best_score && score >= 60 { // 60% similarity threshold
+                best_score = score;
+                best_match = Some(valid_field.clone());
+            }
+        }
+
+        best_match
+    }
+
+    /// Calculate similarity percentage between two strings
+    fn calculate_similarity(&self, a: &str, b: &str) -> u32 {
+        if a == b {
+            return 100;
+        }
+
+        let a_lower = a.to_lowercase();
+        let b_lower = b.to_lowercase();
+
+        // Check if one contains the other
+        if a_lower.contains(&b_lower) || b_lower.contains(&a_lower) {
+            return 80;
+        }
+
+        // Simple character-based similarity
+        let max_len = a.len().max(b.len());
+        if max_len == 0 {
+            return 100;
+        }
+
+        let mut common_chars = 0;
+        let a_chars: Vec<char> = a_lower.chars().collect();
+        let b_chars: Vec<char> = b_lower.chars().collect();
+
+        for (i, &char_a) in a_chars.iter().enumerate() {
+            if i < b_chars.len() && char_a == b_chars[i] {
+                common_chars += 1;
+            } else if b_chars.contains(&char_a) {
+                common_chars += 1;
+            }
+        }
+
+        (common_chars * 100 / max_len).min(100) as u32
+    }
+
+    /// Validate regex pattern in matches operators
+    fn validate_regex_pattern(&self, pattern: &str) -> Option<ExpressionValidationError> {
+        // Try to compile the regex pattern
+        match regex::Regex::new(pattern) {
+            Ok(_) => None, // Valid regex
+            Err(e) => Some(ExpressionValidationError {
+                category: ExpressionErrorCategory::Value,
+                error_type: "invalid_regex".to_string(),
+                message: "Invalid regular expression".to_string(),
+                details: Some(format!("Regex pattern '{}' is invalid: {}", pattern, e)),
+                position: None,
+                context: Some(format!("matches \"{}\"", pattern)),
+                suggestion: Some("Use valid regex syntax. Example: channel_name matches \"^[a-zA-Z]+$\"".to_string()),
+            }),
+        }
+    }
+
+    /// Validate actions list and collect structured errors
+    fn validate_actions_with_errors(&self, actions: &[Action]) -> Vec<ExpressionValidationError> {
+        let mut errors = Vec::new();
+
+        for action in actions {
+            if let Some(action_error) = self.validate_action_with_error(action) {
+                errors.push(action_error);
+            }
+        }
+
+        errors
+    }
+
+    /// Validate single action and return structured error if invalid
+    fn validate_action_with_error(&self, action: &Action) -> Option<ExpressionValidationError> {
+        // Validate field name
+        if let Some(field_error) = self.validate_field_name_with_error(&action.field) {
+            return Some(field_error);
+        }
+
+        // Validate value length
+        if let ActionValue::Literal(literal) = &action.value {
+            if literal.len() > 255 {
+                return Some(ExpressionValidationError {
+                    category: ExpressionErrorCategory::Value,
+                    error_type: "value_too_long".to_string(),
+                    message: format!("Value for field '{}' is too long", action.field),
+                    details: Some(format!("Value is {} characters long, maximum allowed is 255", literal.len())),
+                    position: None,
+                    context: Some(format!("{} = \"{}...\"", action.field, &literal[..20.min(literal.len())])),
+                    suggestion: Some("Shorten the value to 255 characters or less".to_string()),
+                });
+            }
+        }
+
+        None
     }
 
     /// Parse conditional action groups
@@ -1475,21 +2168,21 @@ mod tests {
         assert!(
             parser
                 .parse_extended("channel_name contains \"sport\" SET")
-                .is_err()
+                .is_valid == false
         );
 
         // Missing assignment operator
         assert!(
             parser
                 .parse_extended("channel_name contains \"sport\" SET group_title \"Sports\"")
-                .is_err()
+                .is_valid == false
         );
 
         // Missing value
         assert!(
             parser
                 .parse_extended("channel_name contains \"sport\" SET group_title =")
-                .is_err()
+                .is_valid == false
         );
 
         // Missing comma between actions
@@ -1498,14 +2191,14 @@ mod tests {
                 .parse_extended(
                     "channel_name contains \"sport\" SET group_title = \"Sports\" category = \"TV\""
                 )
-                .is_err()
+                .is_valid == false
         );
 
         // Unquoted value
         assert!(
             parser
                 .parse_extended("channel_name contains \"sport\" SET group_title = Sports")
-                .is_err()
+                .is_valid == false
         );
     }
 
@@ -1517,13 +2210,13 @@ mod tests {
         let result = parser
             .parse_extended("channel_name contains \"sport\" SET group_title = \"Sports\"")
             .unwrap();
-        assert!(parser.validate_extended(&result).is_ok());
+        assert!(parser.validate_extended(&result).is_valid);
 
         // Invalid field should fail validation
         let result = parser
             .parse_extended("channel_name contains \"sport\" SET invalid_field = \"value\"")
             .unwrap();
-        assert!(parser.validate_extended(&result).is_err());
+        assert!(parser.validate_extended(&result).is_valid == false);
 
         // Too long value should fail validation
         let long_value = "a".repeat(300);
@@ -1532,7 +2225,7 @@ mod tests {
             long_value
         );
         let result = parser.parse_extended(&expr).unwrap();
-        assert!(parser.validate_extended(&result).is_err());
+        assert!(parser.validate_extended(&result).is_valid == false);
     }
 
     #[test]
@@ -1712,21 +2405,21 @@ mod tests {
         assert!(
             parser
                 .parse_extended("(channel_name contains \"test\" group_title = \"Test\")")
-                .is_err()
+                .is_valid == false
         );
 
         // Missing closing parenthesis
         assert!(
             parser
                 .parse_extended("(channel_name contains \"test\" SET group_title = \"Test\"")
-                .is_err()
+                .is_valid == false
         );
 
         // Missing opening parenthesis
         assert!(
             parser
                 .parse_extended("channel_name contains \"test\" SET group_title = \"Test\")")
-                .is_err()
+                .is_valid == false
         );
 
         // Empty group
@@ -1735,14 +2428,14 @@ mod tests {
                 .parse_extended(
                     "() AND (channel_name contains \"test\" SET group_title = \"Test\")"
                 )
-                .is_err()
+                .is_valid == false
         );
 
         // Missing action after SET
         assert!(
             parser
                 .parse_extended("(channel_name contains \"test\" SET)")
-                .is_err()
+                .is_valid == false
         );
     }
 
@@ -2088,34 +2781,346 @@ mod tests {
         assert!(
             parser
                 .parse_extended("channel_name matches \"[unclosed\" SET group_title = \"Test\"")
-                .is_err()
+                .is_valid == false
         );
 
         // Test missing SET keyword
         assert!(
             parser
                 .parse_extended("channel_name contains \"test\" group_title = \"Test\"")
-                .is_err()
+                .is_valid == false
         );
 
         // Test unbalanced parentheses in conditional groups
         assert!(
             parser
                 .parse_extended("(channel_name contains \"test\" SET group_title = \"Test\" AND")
-                .is_err()
+                .is_valid == false
         );
 
         // Test empty action value
         assert!(
             parser
                 .parse_extended("channel_name contains \"test\" SET group_title = \"\"")
-                .is_ok()
+                .is_valid
         );
 
         // Test invalid field reference
         let result =
             parser.parse_extended("invalid_field contains \"test\" SET group_title = \"Test\"");
         // This should parse syntactically but fail validation if field validation is enabled
-        assert!(result.is_ok());
+        assert!(result.is_valid);
+    }
+
+    #[test]
+    fn test_validate_method_comprehensive() {
+        let valid_fields = vec![
+            "channel_name".to_string(),
+            "group_title".to_string(),
+            "stream_url".to_string(),
+            "tvg_id".to_string(),
+        ];
+        let parser = ExpressionParser::new().with_fields(valid_fields);
+
+        // Test valid simple expressions
+        assert!(parser.validate("channel_name contains \"HD\"").is_valid);
+        assert!(parser.validate("group_title equals \"Sports\"").is_valid);
+        assert!(parser.validate("stream_url starts_with \"https\"").is_valid);
+
+        // Test valid complex expressions  
+        assert!(parser.validate("(channel_name contains \"HD\" OR group_title = \"Movies\") AND stream_url starts_with \"https\"").is_valid);
+        assert!(parser.validate("channel_name not_contains \"SD\" AND tvg_id matches \"^[0-9]+$\"").is_valid);
+
+        // Test invalid field names (should fail with proper field validation)
+        assert!(parser.validate("invalid_field contains \"test\"").is_valid == false);
+        assert!(parser.validate("chanxnlname contains \"sport\"").is_valid == false);
+        assert!(parser.validate("group_tittle equals \"Movies\"").is_valid == false);
+
+        // Test syntax errors
+        assert!(parser.validate("channel_name contains").is_valid == false);
+        assert!(parser.validate("channel_name \"HD\"").is_valid == false);
+        assert!(parser.validate("(channel_name contains \"HD\"").is_valid == false);
+        assert!(parser.validate("channel_name contains \"HD\" AND").is_valid == false);
+
+        // Test invalid operators
+        assert!(parser.validate("channel_name invalid_op \"HD\"").is_valid == false);
+        assert!(parser.validate("channel_name == \"HD\"").is_valid == false); // Should use 'equals'
+
+        // Test empty expressions
+        assert!(parser.validate("").is_valid == false);
+        assert!(parser.validate("   ").is_valid == false);
+    }
+
+    #[test]
+    fn test_field_validation_edge_cases() {
+        let valid_fields = vec![
+            "channel_name".to_string(),
+            "group_title".to_string(),
+        ];
+        let parser = ExpressionParser::new().with_fields(valid_fields);
+
+        // Test case sensitivity in field names
+        assert!(parser.validate("CHANNEL_NAME contains \"HD\"").is_valid == false);
+        assert!(parser.validate("Channel_Name contains \"HD\"").is_valid == false);
+        
+        // Test partial field name matches (should fail)
+        assert!(parser.validate("channel contains \"HD\"").is_valid == false);
+        assert!(parser.validate("name contains \"HD\"").is_valid == false);
+        
+        // Test field names with special characters (valid fields should work)
+        let special_parser = ExpressionParser::new().with_fields(vec![
+            "field-with-dash".to_string(),
+            "field_with_underscore".to_string(),
+            "field123".to_string(),
+        ]);
+        assert!(special_parser.validate("field-with-dash contains \"test\"").is_valid);
+        assert!(special_parser.validate("field_with_underscore contains \"test\"").is_valid);
+        assert!(special_parser.validate("field123 contains \"test\"").is_valid);
+        
+        // Test completely empty field list (should skip validation)
+        let no_fields_parser = ExpressionParser::new().with_fields(vec![]);
+        assert!(no_fields_parser.validate("any_field contains \"test\"").is_valid);
+    }
+
+    #[test]
+    fn test_expression_validation_with_actions() {
+        let valid_fields = vec![
+            "channel_name".to_string(),
+            "group_title".to_string(),
+            "stream_url".to_string(),
+        ];
+        let parser = ExpressionParser::new().with_fields(valid_fields);
+
+        // Test valid expressions with actions
+        assert!(parser.validate("channel_name contains \"HD\" SET group_title = \"High Definition\"").is_valid);
+        assert!(parser.validate("stream_url starts_with \"http\" SET stream_url = \"https\" + SUBSTRING(stream_url, 4)").is_valid);
+
+        // Test invalid field in condition
+        assert!(parser.validate("invalid_field contains \"test\" SET group_title = \"Test\"").is_valid == false);
+        
+        // Test invalid field in action
+        assert!(parser.validate("channel_name contains \"test\" SET invalid_field = \"Test\"").is_valid == false);
+        
+        // Test valid condition with invalid action field
+        assert!(parser.validate("channel_name contains \"HD\" SET unknown_field = \"Test\"").is_valid == false);
+    }
+
+    #[test] 
+    fn test_validation_error_messages() {
+        let valid_fields = vec![
+            "channel_name".to_string(),
+            "group_title".to_string(),
+        ];
+        let parser = ExpressionParser::new().with_fields(valid_fields);
+
+        // Test that error messages contain helpful information
+        let result = parser.validate("invalid_field contains \"test\"");
+        assert!(!result.is_valid, "Expected validation to fail for invalid field");
+        assert!(!result.errors.is_empty());
+        let error_msg = result.errors[0].message.clone();
+        assert!(error_msg.contains("Unknown field") || error_msg.contains("Field"));
+
+        // Test syntax error messages
+        let result = parser.validate("channel_name contains");
+        assert!(!result.is_valid, "Expected validation to fail for incomplete expression");
+        assert!(!result.errors.is_empty());
+        let error_msg = result.errors[0].message.clone();
+        // Should contain some indication of syntax error
+        assert!(!error_msg.is_empty());
+    }
+
+    #[test]
+    fn test_complex_nested_expressions() {
+        let valid_fields = vec![
+            "channel_name".to_string(),
+            "group_title".to_string(),
+            "stream_url".to_string(),
+            "tvg_id".to_string(),
+        ];
+        let parser = ExpressionParser::new().with_fields(valid_fields);
+
+        // Test deeply nested valid expressions
+        assert!(parser.validate("((channel_name contains \"HD\" OR channel_name contains \"4K\") AND (group_title equals \"Movies\" OR group_title equals \"Sports\")) OR (stream_url starts_with \"https\" AND tvg_id matches \"^[0-9]+$\")").is_valid);
+
+        // Test nested expression with invalid field
+        assert!(parser.validate("((channel_name contains \"HD\" OR invalid_field contains \"4K\") AND group_title equals \"Movies\")").is_valid == false);
+
+        // Test multiple logical operators
+        assert!(parser.validate("channel_name contains \"HD\" AND group_title equals \"Sports\" OR stream_url starts_with \"https\"").is_valid);
+    }
+
+    #[test]
+    fn test_structured_validation_basic() {
+        let valid_fields = vec![
+            "channel_name".to_string(),
+            "group_title".to_string(),
+            "stream_url".to_string(),
+            "tvg_id".to_string(),
+        ];
+        let parser = ExpressionParser::new().with_fields(valid_fields);
+
+        // Test valid expression
+        let result = parser.validate_structured("channel_name contains \"HD\"");
+        assert!(result.is_valid);
+        assert!(result.errors.is_empty());
+        assert!(result.expression_tree.is_some());
+
+        // Test invalid field
+        let result = parser.validate_structured("invalid_field contains \"HD\"");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Field);
+        assert_eq!(result.errors[0].error_type, "unknown_field");
+        assert!(result.errors[0].message.contains("invalid_field"));
+    }
+
+    #[test]
+    fn test_structured_validation_syntax_errors() {
+        let parser = ExpressionParser::new();
+
+        // Test unclosed quote
+        let result = parser.validate_structured("channel_name contains \"unclosed");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Syntax);
+        assert_eq!(result.errors[0].error_type, "unclosed_quote");
+        assert!(result.errors[0].position.is_some());
+
+        // Test unbalanced parentheses
+        let result = parser.validate_structured("(channel_name contains \"value\"");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Syntax);
+        assert_eq!(result.errors[0].error_type, "unclosed_parenthesis");
+
+        // Test empty expression
+        let result = parser.validate_structured("");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].error_type, "empty_expression");
+    }
+
+    #[test]
+    fn test_structured_validation_operator_errors() {
+        let parser = ExpressionParser::new();
+
+        // Test invalid logical operator
+        let result = parser.validate_structured("channel_name contains \"test\" && group_title equals \"value\"");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Operator);
+        assert_eq!(result.errors[0].error_type, "invalid_logical_operator");
+        assert!(result.errors[0].suggestion.as_ref().unwrap().contains("AND"));
+
+        // Test operator typo
+        let result = parser.validate_structured("channel_name containz \"test\"");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Operator);
+        assert_eq!(result.errors[0].error_type, "operator_typo");
+        assert!(result.errors[0].suggestion.as_ref().unwrap().contains("contains"));
+    }
+
+    #[test]
+    fn test_structured_validation_regex_errors() {
+        let parser = ExpressionParser::new();
+
+        // Test invalid regex pattern
+        let result = parser.validate_structured("channel_name matches \"[unclosed\"");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Value);
+        assert_eq!(result.errors[0].error_type, "invalid_regex");
+        assert!(result.errors[0].message.contains("Invalid regular expression"));
+    }
+
+    #[test]
+    fn test_structured_validation_field_suggestions() {
+        let valid_fields = vec![
+            "channel_name".to_string(),
+            "group_title".to_string(),
+            "stream_url".to_string(),
+        ];
+        let parser = ExpressionParser::new().with_fields(valid_fields);
+
+        // Test field name with typo
+        let result = parser.validate_structured("channe_name contains \"test\"");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Field);
+        
+        // Should suggest similar field name
+        let suggestion = result.errors[0].suggestion.as_ref().unwrap();
+        assert!(suggestion.contains("channel_name") || suggestion.contains("Available fields"));
+
+        // Test completely unknown field
+        let result = parser.validate_structured("unknown_field contains \"test\"");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        let suggestion = result.errors[0].suggestion.as_ref().unwrap();
+        assert!(suggestion.contains("Available fields"));
+    }
+
+    #[test]
+    fn test_structured_validation_multiple_errors() {
+        let valid_fields = vec!["channel_name".to_string()];
+        let parser = ExpressionParser::new().with_fields(valid_fields);
+
+        // Expression with multiple errors: invalid field + invalid operator
+        let result = parser.validate_structured("invalid_field containz \"test\"");
+        assert!(!result.is_valid);
+        // Should catch the operator typo first during tokenization
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Operator);
+    }
+
+    #[test]
+    fn test_structured_validation_actions() {
+        let valid_fields = vec![
+            "channel_name".to_string(),
+            "group_title".to_string(),
+        ];
+        let parser = ExpressionParser::new().with_fields(valid_fields);
+
+        // Test valid action expression
+        let result = parser.validate_structured("channel_name contains \"HD\" SET group_title = \"High Definition\"");
+        assert!(result.is_valid);
+        assert!(result.errors.is_empty());
+        assert!(result.expression_tree.is_some());
+
+        // Test action with invalid field
+        let result = parser.validate_structured("channel_name contains \"HD\" SET invalid_field = \"value\"");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Field);
+
+        // Test action with value too long
+        let long_value = "a".repeat(300);
+        let expression = format!("channel_name contains \"HD\" SET group_title = \"{}\"", long_value);
+        let result = parser.validate_structured(&expression);
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].category, ExpressionErrorCategory::Value);
+        assert_eq!(result.errors[0].error_type, "value_too_long");
+    }
+
+    #[test]
+    fn test_structured_validation_context_and_suggestions() {
+        let parser = ExpressionParser::new();
+
+        // Test that context and suggestions are provided
+        let result = parser.validate_structured("channel_name containz");
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        
+        let error = &result.errors[0];
+        assert!(error.context.is_some());
+        assert!(error.suggestion.is_some());
+        assert!(error.details.is_some());
+        
+        // Position should be provided for tokenization errors
+        if error.error_type == "operator_typo" {
+            assert!(error.position.is_some());
+        }
     }
 }

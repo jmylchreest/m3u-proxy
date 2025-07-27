@@ -95,7 +95,7 @@ impl super::Database {
         let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
 
         // Parse the filter expression using the proper parser
-        let parser = crate::filter_parser::FilterParser::new().with_fields(field_names);
+        let parser = crate::expression_parser::ExpressionParser::new().with_fields(field_names);
         let condition_tree = parser.parse(&request.filter_expression)?;
 
         // Start a transaction to insert filter
@@ -164,7 +164,7 @@ impl super::Database {
         let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
 
         // Parse the filter expression using the proper parser
-        let parser = crate::filter_parser::FilterParser::new().with_fields(field_names);
+        let parser = crate::expression_parser::ExpressionParser::new().with_fields(field_names);
         let condition_tree = parser.parse(&request.filter_expression)?;
 
         let mut tx = self.pool.begin().await?;
@@ -265,7 +265,7 @@ impl super::Database {
         let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
 
         // Parse the filter expression using the proper parser
-        let parser = crate::filter_parser::FilterParser::new().with_fields(field_names);
+        let parser = crate::expression_parser::ExpressionParser::new().with_fields(field_names);
         let condition_tree = match parser.parse(&request.filter_expression) {
             Ok(tree) => tree,
             Err(e) => {
@@ -501,7 +501,7 @@ impl super::Database {
         let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
 
         // Parse the filter expression using the proper parser
-        let parser = crate::filter_parser::FilterParser::new().with_fields(field_names);
+        let parser = crate::expression_parser::ExpressionParser::new().with_fields(field_names);
         let condition_tree = parser.parse(&request.filter_expression)?;
 
         // Start a transaction to insert filter

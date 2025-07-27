@@ -385,11 +385,13 @@ pub struct FilterTestRequest {
     pub is_inverse: bool,
 }
 
+// New generalized models
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct FilterValidateRequest {
+pub struct ExpressionValidateRequest {
     #[schema(example = "channel_name contains \"HD\" OR (group_title = \"Movies\" AND stream_url starts_with \"https\")")]
-    pub filter_expression: String,
+    pub expression: String,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterTestResult {
@@ -401,13 +403,88 @@ pub struct FilterTestResult {
     pub expression_tree: Option<serde_json::Value>,
 }
 
+// New generalized error category
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ExpressionErrorCategory {
+    Syntax,   // General syntax issues, unclosed parentheses, missing operators
+    Field,    // Invalid or unknown field names
+    Operator, // Invalid or unknown operators/modifiers
+    Value,    // Invalid values, unparseable regex, type mismatches
+}
+
+
+// New generalized validation error
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct FilterValidateResult {
+pub struct ExpressionValidationError {
+    #[schema(example = "field")]
+    pub category: ExpressionErrorCategory,
+    
+    #[schema(example = "unknown_field")]
+    pub error_type: String,
+    
+    #[schema(example = "Unknown field 'channe_name'")]
+    pub message: String,
+    
+    #[schema(example = "Field 'channe_name' is not available. Did you mean 'channel_name'?")]
+    pub details: Option<String>,
+    
+    #[schema(example = 25)]
+    pub position: Option<usize>,
+    
+    #[schema(example = "channe_name contains")]
+    pub context: Option<String>,
+    
+    #[schema(example = "Available fields: channel_name, group_title, stream_url, tvg_id, tvg_name, tvg_logo")]
+    pub suggestion: Option<String>,
+}
+
+
+// New generalized validation result
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ExpressionValidateResult {
     #[schema(example = true)]
     pub is_valid: bool,
     
-    #[schema(example = "Syntax error: Expected value after '=' operator, found 'AND'")]
-    pub error: Option<String>,
+    #[schema(example = json!([
+        {
+            "category": "field",
+            "error_type": "unknown_field",
+            "message": "Unknown field 'channe_name'",
+            "details": "Field 'channe_name' is not available. Did you mean 'channel_name'?",
+            "position": 0,
+            "context": "channe_name contains",
+            "suggestion": "Available fields: channel_name, group_title, stream_url, tvg_id, tvg_name, tvg_logo"
+        },
+        {
+            "category": "operator",
+            "error_type": "unknown_operator",
+            "message": "Unknown operator 'containz'",
+            "details": "Operator 'containz' is not supported. Did you mean 'contains'?",
+            "position": 13,
+            "context": "channel_name containz",
+            "suggestion": "Available operators: contains, starts_with, ends_with, equals, not_equals, matches_regex"
+        },
+        {
+            "category": "value",
+            "error_type": "invalid_regex",
+            "message": "Invalid regular expression",
+            "details": "Regex pattern '[unclosed' has unclosed bracket",
+            "position": 35,
+            "context": "matches_regex '[unclosed'",
+            "suggestion": "Use valid regex syntax: channel_name matches_regex '^[a-zA-Z]+$'"
+        },
+        {
+            "category": "syntax",
+            "error_type": "unclosed_parentheses",
+            "message": "Unclosed parentheses",
+            "details": "Opening parenthesis at position 45 is never closed",
+            "position": 45,
+            "context": "(group_title equals",
+            "suggestion": "Add closing parenthesis: (group_title equals \"value\")"
+        }
+    ]))]
+    pub errors: Vec<ExpressionValidationError>,
     
     #[schema(example = json!({
         "type": "condition",
@@ -419,6 +496,7 @@ pub struct FilterValidateResult {
     }))]
     pub expression_tree: Option<serde_json::Value>,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterTestChannel {

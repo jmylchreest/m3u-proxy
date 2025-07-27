@@ -194,7 +194,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         };
 
         // Parse the filter expression into a proper ConditionTree
-        let parser = crate::filter_parser::FilterParser::new();
+        let parser = crate::expression_parser::ExpressionParser::new();
         let condition_tree = parser.parse(&request.filter_expression)
             .map_err(|e| RepositoryError::QueryFailed { 
                 query: "filter expression parsing".to_string(), 
@@ -245,7 +245,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         };
 
         // Parse the filter expression into a proper ConditionTree
-        let parser = crate::filter_parser::FilterParser::new();
+        let parser = crate::expression_parser::ExpressionParser::new();
         let condition_tree = parser.parse(&request.filter_expression)
             .map_err(|e| RepositoryError::QueryFailed { 
                 query: "filter expression parsing".to_string(), 

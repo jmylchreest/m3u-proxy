@@ -114,7 +114,7 @@ impl StreamRuleProcessor {
                 "stream_url".to_string(),
             ];
             
-            let parser = ExpressionParser::for_data_mapping(channel_fields);
+            let parser = ExpressionParser::new().with_fields(channel_fields);
             match parser.parse_extended(&expression) {
                 Ok(parsed) => {
                     trace!("Successfully pre-parsed expression for rule {}", rule_id);

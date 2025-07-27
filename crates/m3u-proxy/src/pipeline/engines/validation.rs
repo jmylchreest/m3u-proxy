@@ -48,7 +48,7 @@ impl DataMappingValidator {
     
     fn validate_expression_impl(&self, expression: &str) -> RuleValidationResult {
         let available_fields = self.get_available_fields();
-        let parser = ExpressionParser::for_data_mapping(available_fields.clone());
+        let parser = ExpressionParser::new().with_fields(available_fields.clone());
         
         match parser.parse_extended(expression) {
             Ok(_parsed_expression) => {
@@ -159,7 +159,7 @@ impl FilteringValidator {
         }
         
         let available_fields = self.get_available_fields();
-        let parser = ExpressionParser::for_data_mapping(available_fields.clone());
+        let parser = ExpressionParser::new().with_fields(available_fields.clone());
         
         match parser.parse_extended(expression) {
             Ok(_parsed_expression) => {
@@ -251,7 +251,7 @@ impl NumberingValidator {
     
     fn validate_expression_impl(&self, expression: &str) -> RuleValidationResult {
         let available_fields = self.get_available_fields();
-        let parser = ExpressionParser::for_data_mapping(available_fields.clone());
+        let parser = ExpressionParser::new().with_fields(available_fields.clone());
         
         match parser.parse_extended(expression) {
             Ok(_parsed_expression) => {
@@ -336,7 +336,7 @@ impl GenerationValidator {
     
     fn validate_expression_impl(&self, expression: &str) -> RuleValidationResult {
         let available_fields = self.get_available_fields();
-        let parser = ExpressionParser::for_data_mapping(available_fields.clone());
+        let parser = ExpressionParser::new().with_fields(available_fields.clone());
         
         match parser.parse_extended(expression) {
             Ok(_parsed_expression) => {

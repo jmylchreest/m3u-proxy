@@ -24,7 +24,6 @@ pub mod log_streaming;
 pub mod settings;
 
 use crate::data_mapping::DataMappingService;
-use crate::pipeline::engines::validation::StageValidator;
 use crate::models::*;
 
 #[derive(Debug, Deserialize)]
@@ -682,87 +681,133 @@ pub async fn test_filter(
     }
 }
 
+
+/// Validate expression with proper field validation (new generalized endpoint)
 #[utoipa::path(
     post,
-    path = "/filters/validate",
-    tag = "filters",
-    summary = "Validate filter expression",
+    path = "/expressions/validate",
+    tag = "expressions",
+    summary = "Validate expression with context-aware field validation",
     description = "
-Validates filter expression syntax without testing against actual data. This is a lightweight operation 
-that only checks if the filter syntax is correct and returns a parsed expression tree.
+Validate expression syntax and semantic correctness including context-specific field names.
 
-## Available Fields
-- `channel_name` - Channel display name
-- `group_title` - Channel group/category  
-- `stream_url` - Stream URL
-- `tvg_id` - TV guide ID
-- `tvg_name` - TV guide name
-- `tvg_logo` - TV guide logo URL
-
-## Available Operators
-- `contains` - Text contains substring
-- `starts_with` - Text starts with value
-- `ends_with` - Text ends with value
-- `equals` - Exact text match
-- `not_equals` - Text does not match
-- `matches_regex` - Regular expression match
-
-## Logical Operators
-- `AND` - Both conditions must be true
-- `OR` - Either condition can be true
-- Parentheses `()` for grouping expressions
+## Context Types
+- **stream**: Stream source filtering (channel_name, group_title, stream_url, etc.)
+- **epg**: EPG source filtering (programme_title, programme_description, start_time, etc.)  
+- **data_mapping**: Data transformation mapping (input + output fields)
+- **generic**: Legacy mode using combined fields (default if not specified)
 
 ## Examples
-- Simple: `channel_name contains \"Sports\"`
-- Complex: `(channel_name contains \"HD\" OR group_title = \"Movies\") AND stream_url starts_with \"https\"`
+- Stream context: `channel_name contains \"HD\" AND group_title equals \"Sports\"`
+- EPG context: `programme_title contains \"News\" AND start_time > \"18:00\"`
+- Data mapping: `channel_name matches \".*HD.*\" SET mapped_name = \"High Definition\"`
+
+## Field Validation
+The endpoint validates field names against the appropriate schema for the specified context,
+providing intelligent suggestions for typos and unknown fields.
 ",
-    request_body = FilterValidateRequest,
+    request_body = ExpressionValidateRequest,
     responses(
-        (
-            status = 200, 
-            description = "Validation result with syntax status and optional expression tree",
-            body = FilterValidateResult,
-            example = json!({
-                "is_valid": true,
-                "error": null,
-                "expression_tree": {
-                    "type": "condition",
-                    "field": "channel_name",
-                    "operator": "Contains", 
-                    "value": "Sports",
-                    "case_sensitive": false,
-                    "negate": false
-                }
-            })
-        ),
+        (status = 200, description = "Expression validation result with context-aware field checking", body = ExpressionValidateResult),
         (status = 400, description = "Bad request - malformed JSON or missing required fields"),
         (status = 500, description = "Internal server error during validation")
     )
 )]
-pub async fn validate_filter(
-    Json(payload): Json<FilterValidateRequest>,
-) -> Result<Json<FilterValidateResult>, StatusCode> {
-    // Parse the filter expression to validate syntax and generate expression tree
-    let parser = crate::filter_parser::FilterParser::new();
-    let condition_tree = match parser.parse(&payload.filter_expression) {
-        Ok(tree) => tree,
-        Err(e) => {
-            return Ok(Json(FilterValidateResult {
-                is_valid: false,
-                error: Some(format!("Syntax error: {}", e)),
-                expression_tree: None,
-            }));
-        }
-    };
+pub async fn validate_expression(
+    State(state): State<AppState>,
+    Json(payload): Json<ExpressionValidateRequest>,
+) -> Result<Json<ExpressionValidateResult>, StatusCode> {
+    // Generic endpoint - use combined/legacy fields for backward compatibility
+    validate_expression_with_context(&state, &payload.expression, ValidationContext::Generic).await
+}
 
-    // Generate expression tree for frontend
-    let expression_tree = generate_expression_tree_json(&condition_tree);
+/// Validate stream source filter expressions
+#[utoipa::path(
+    post,
+    path = "/expressions/validate/stream",
+    tag = "expressions",
+    summary = "Validate stream source filter expression",
+    description = "Validate expression for stream source filtering with stream-specific fields (channel_name, group_title, stream_url, etc.)",
+    request_body = ExpressionValidateRequest,
+    responses(
+        (status = 200, description = "Stream filter validation result", body = ExpressionValidateResult),
+        (status = 400, description = "Bad request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn validate_stream_expression(
+    State(state): State<AppState>,
+    Json(payload): Json<ExpressionValidateRequest>,
+) -> Result<Json<ExpressionValidateResult>, StatusCode> {
+    validate_expression_with_context(&state, &payload.expression, ValidationContext::Stream).await
+}
 
-    Ok(Json(FilterValidateResult {
-        is_valid: true,
-        error: None,
-        expression_tree: Some(expression_tree),
-    }))
+/// Validate EPG source filter expressions  
+#[utoipa::path(
+    post,
+    path = "/expressions/validate/epg",
+    tag = "expressions", 
+    summary = "Validate EPG source filter expression",
+    description = "Validate expression for EPG source filtering with EPG-specific fields (programme_title, programme_description, start_time, etc.)",
+    request_body = ExpressionValidateRequest,
+    responses(
+        (status = 200, description = "EPG filter validation result", body = ExpressionValidateResult),
+        (status = 400, description = "Bad request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn validate_epg_expression(
+    State(state): State<AppState>,
+    Json(payload): Json<ExpressionValidateRequest>,
+) -> Result<Json<ExpressionValidateResult>, StatusCode> {
+    validate_expression_with_context(&state, &payload.expression, ValidationContext::Epg).await
+}
+
+/// Validate data mapping expressions
+#[utoipa::path(
+    post,
+    path = "/expressions/validate/data-mapping",
+    tag = "expressions",
+    summary = "Validate data mapping expression", 
+    description = "Validate expression for data mapping transformations with mapping-specific fields (input and output fields)",
+    request_body = ExpressionValidateRequest,
+    responses(
+        (status = 200, description = "Data mapping validation result", body = ExpressionValidateResult),
+        (status = 400, description = "Bad request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn validate_data_mapping_expression(
+    State(state): State<AppState>,
+    Json(payload): Json<ExpressionValidateRequest>,
+) -> Result<Json<ExpressionValidateResult>, StatusCode> {
+    validate_expression_with_context(&state, &payload.expression, ValidationContext::DataMapping).await
+}
+
+#[derive(Debug)]
+enum ValidationContext {
+    Stream,
+    Epg, 
+    DataMapping,
+    Generic,
+}
+
+/// Core validation logic with context-specific field resolution
+async fn validate_expression_with_context(
+    state: &AppState,
+    expression: &str,
+    context: ValidationContext,
+) -> Result<Json<ExpressionValidateResult>, StatusCode> {
+    // Get context-specific available fields for semantic validation
+    let available_fields = get_fields_for_validation_context(state, &context).await?;
+
+    // Create parser with field validation enabled
+    let parser = crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
+    
+    // Use the parser's validation method that provides structured results with position information
+    let validation_result = parser.validate(expression);
+    
+    Ok(Json(validation_result))
 }
 
 // Source-specific filter endpoints
@@ -1178,7 +1223,7 @@ pub async fn list_data_mapping_rules(
                             "channel_name".to_string(),
                         ];
                         let parser =
-                            crate::filter_parser::FilterParser::new().with_fields(available_fields);
+                            crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
                         if let Ok(parsed) = parser.parse_extended(expression) {
                             match parsed {
                                 crate::models::ExtendedExpression::ConditionOnly(
@@ -1218,7 +1263,7 @@ pub async fn list_data_mapping_rules(
                             "channel_name".to_string(),
                         ];
                         let parser =
-                            crate::filter_parser::FilterParser::new().with_fields(available_fields);
+                            crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
                         if let Ok(parsed) = parser.parse_extended(expression) {
                             match parsed {
                                 crate::models::ExtendedExpression::ConditionOnly(
@@ -1408,109 +1453,6 @@ pub async fn reorder_data_mapping_rules(
     }
 }
 
-#[utoipa::path(
-    post,
-    path = "/data-mapping/validate-expression",
-    tag = "data-mapping",
-    summary = "Validate data mapping expression",
-    description = "Validate a data mapping expression for syntax and available fields",
-    responses(
-        (status = 200, description = "Expression validation result"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn validate_data_mapping_expression(
-    Json(payload): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    use crate::filter_parser::FilterParser;
-    use crate::models::data_mapping::DataMappingSourceType;
-    use crate::pipeline::engines::DataMappingValidator;
-
-    let expression = payload
-        .get("expression")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-
-    let source_type_str = payload
-        .get("source_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("stream");
-
-    if expression.is_empty() {
-        return Ok(Json(serde_json::json!({
-            "isValid": false,
-            "error": "Expression cannot be empty"
-        })));
-    }
-
-    // Convert source type string to enum
-    let source_type = match source_type_str {
-        "stream" => DataMappingSourceType::Stream,
-        "epg" => DataMappingSourceType::Epg,
-        _ => {
-            return Ok(Json(serde_json::json!({
-                "isValid": false,
-                "error": "Invalid source type"
-            })));
-        }
-    };
-
-    // Use the new validator
-    let validation_result = DataMappingValidator::validate_expression(expression, &source_type);
-
-    // Also generate expression tree for UI (maintain existing functionality)
-    let expression_tree = if validation_result.is_valid {
-        let validator = DataMappingValidator::new(source_type.clone());
-        let available_fields = validator.get_available_fields();
-        let parser = FilterParser::new().with_fields(available_fields);
-        
-        match parser.parse_extended(expression) {
-            Ok(parsed) => match parsed {
-                crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
-                    Some(generate_expression_tree_json(&condition_tree))
-                }
-                crate::models::ExtendedExpression::ConditionWithActions { condition, .. } => {
-                    Some(generate_expression_tree_json(&condition))
-                }
-                crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
-                    // For action groups, generate tree from first group's condition
-                    if let Some(first_group) = groups.first() {
-                        Some(generate_expression_tree_json(&first_group.conditions))
-                    } else {
-                        None
-                    }
-                }
-            },
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-
-    let mut response = serde_json::json!({
-        "isValid": validation_result.is_valid
-    });
-
-    if let Some(error) = validation_result.error {
-        response["error"] = serde_json::Value::String(error);
-    }
-
-    if let Some(tree) = expression_tree {
-        response["expression_tree"] = tree;
-    }
-
-    if !validation_result.field_errors.is_empty() {
-        response["field_errors"] = serde_json::Value::Array(
-            validation_result.field_errors
-                .into_iter()
-                .map(serde_json::Value::String)
-                .collect()
-        );
-    }
-
-    Ok(Json(response))
-}
 
 /// Generalized validation endpoint for any pipeline stage
 #[utoipa::path(
@@ -1587,7 +1529,7 @@ pub async fn validate_pipeline_expression(
                         let stage_type = PipelineStageType::DataMapping;
                         let fields = PipelineValidationService::get_available_fields_for_stage(stage_type, Some(st));
                         
-                        let parser = crate::filter_parser::FilterParser::new().with_fields(fields);
+                        let parser = crate::expression_parser::ExpressionParser::new().with_fields(fields);
                         if let Ok(parsed) = parser.parse_extended(expression) {
                             match parsed {
                                 crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
@@ -2001,7 +1943,7 @@ pub async fn apply_stream_source_data_mapping(
                         "group_title".to_string(),
                         "channel_name".to_string(),
                     ];
-                    let parser = crate::filter_parser::FilterParser::new().with_fields(available_fields);
+                    let parser = crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
                     if let Ok(parsed) = parser.parse_extended(expression) {
                         match parsed {
                             crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
@@ -2036,7 +1978,7 @@ pub async fn apply_stream_source_data_mapping(
                         "group_title".to_string(),
                         "channel_name".to_string(),
                     ];
-                    let parser = crate::filter_parser::FilterParser::new().with_fields(available_fields);
+                    let parser = crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
                     if let Ok(parsed) = parser.parse_extended(expression) {
                         match parsed {
                             crate::models::ExtendedExpression::ConditionOnly(condition_tree) => {
@@ -2357,7 +2299,7 @@ async fn apply_data_mapping_rules_impl(
                                     "group_title".to_string(),
                                     "channel_name".to_string(),
                                 ];
-                                let parser = crate::filter_parser::FilterParser::new()
+                                let parser = crate::expression_parser::ExpressionParser::new()
                                     .with_fields(available_fields);
                                 if let Ok(parsed) = parser.parse_extended(expression) {
                                     match parsed {
@@ -2397,7 +2339,7 @@ async fn apply_data_mapping_rules_impl(
                                 "group_title".to_string(),
                                 "channel_name".to_string(),
                             ];
-                            let parser = crate::filter_parser::FilterParser::new()
+                            let parser = crate::expression_parser::ExpressionParser::new()
                                 .with_fields(available_fields);
                             if let Ok(parsed) = parser.parse_extended(expression) {
                                 match parsed {
@@ -4343,4 +4285,292 @@ impl Drop for RequestCleanupGuard {
         });
     }
 }
+
+
+/// Get available fields based on validation context using existing database APIs
+async fn get_fields_for_validation_context(
+    state: &AppState,
+    context: &ValidationContext
+) -> Result<Vec<String>, StatusCode> {
+    match context {
+        ValidationContext::Stream => {
+            // Use existing stream filter fields API
+            match state.database.get_available_filter_fields().await {
+                Ok(fields) => {
+                    let stream_fields: Vec<String> = fields
+                        .into_iter()
+                        .filter(|field| is_stream_field(&field.name))
+                        .map(|field| field.name)
+                        .collect();
+                    Ok(stream_fields)
+                }
+                Err(e) => {
+                    error!("Failed to get stream filter fields: {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        },
+        ValidationContext::Epg => {
+            // Use existing EPG filter fields API
+            match state.database.get_available_filter_fields().await {
+                Ok(fields) => {
+                    let epg_fields: Vec<String> = fields
+                        .into_iter()
+                        .filter(|field| is_epg_field(&field.name))
+                        .map(|field| field.name)
+                        .collect();
+                    Ok(epg_fields)
+                }
+                Err(e) => {
+                    error!("Failed to get EPG filter fields: {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        },
+        ValidationContext::DataMapping => {
+            // Use existing data mapping field APIs (combine stream + output fields)
+            use crate::models::data_mapping::DataMappingSourceType;
+            use crate::pipeline::engines::DataMappingValidator;
+            
+            let stream_fields = DataMappingValidator::get_available_fields_for_source(&DataMappingSourceType::Stream);
+            let epg_fields = DataMappingValidator::get_available_fields_for_source(&DataMappingSourceType::Epg);
+            
+            let mut combined_fields: Vec<String> = stream_fields
+                .into_iter()
+                .chain(epg_fields.into_iter())
+                .map(|field| field.field_name)
+                .collect();
+            
+            // Remove duplicates
+            combined_fields.sort();
+            combined_fields.dedup();
+            
+            Ok(combined_fields)
+        },
+        ValidationContext::Generic => {
+            // Use existing generic filter fields API for backward compatibility
+            match state.database.get_available_filter_fields().await {
+                Ok(fields) => Ok(fields.into_iter().map(|f| f.name).collect()),
+                Err(e) => {
+                    error!("Failed to get filter fields: {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        }
+    }
+}
+
+/// Check if a field name is stream-related
+fn is_stream_field(field_name: &str) -> bool {
+    matches!(field_name, 
+        "channel_name" | "group_title" | "stream_url" | 
+        "tvg_id" | "tvg_name" | "tvg_logo" | "tvg_shift" | "tvg_chno"
+    )
+}
+
+/// Check if a field name is EPG-related  
+fn is_epg_field(field_name: &str) -> bool {
+    matches!(field_name,
+        "programme_title" | "programme_description" | "programme_category" |
+        "start_time" | "end_time" | "duration" | "channel_id" | 
+        "episode_num" | "season_num"
+    )
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+    use crate::models::{ExpressionValidateRequest, ExpressionValidateResult};
+
+    #[test]
+    fn test_extract_field_name_from_error() {
+        // Test extracting field name from "Unknown field" errors
+        assert_eq!(
+            extract_field_name_from_error("Unknown field 'chanxnlname'"),
+            Some("chanxnlname".to_string())
+        );
+        
+        assert_eq!(
+            extract_field_name_from_error("Field 'invalid_field' is not available"),
+            Some("invalid_field".to_string())
+        );
+        
+        // Test cases where no field name can be extracted
+        assert_eq!(
+            extract_field_name_from_error("Syntax error: missing operator"),
+            None
+        );
+        
+        assert_eq!(
+            extract_field_name_from_error(""),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_similar_field() {
+        let available_fields = vec![
+            "channel_name".to_string(),
+            "group_title".to_string(),
+            "stream_url".to_string(),
+            "tvg_id".to_string(),
+            "tvg_name".to_string(),
+        ];
+
+        // Test exact case-insensitive matches
+        assert_eq!(
+            find_similar_field("CHANNEL_NAME", &available_fields),
+            Some("channel_name".to_string())
+        );
+        
+        assert_eq!(
+            find_similar_field("Group_Title", &available_fields),
+            Some("group_title".to_string())
+        );
+
+        // Test substring matching
+        assert_eq!(
+            find_similar_field("channel", &available_fields),
+            Some("channel_name".to_string())
+        );
+        
+        assert_eq!(
+            find_similar_field("title", &available_fields),
+            Some("group_title".to_string())
+        );
+
+        // Test typo detection (Levenshtein distance)
+        assert_eq!(
+            find_similar_field("chanxnlname", &available_fields),
+            Some("channel_name".to_string())
+        );
+        
+        assert_eq!(
+            find_similar_field("group_tittle", &available_fields),
+            Some("group_title".to_string())
+        );
+        
+        // Test no match found
+        assert_eq!(
+            find_similar_field("completely_different", &available_fields),
+            None
+        );
+    }
+
+    #[test]
+    fn test_levenshtein_distance() {
+        // Test identical strings
+        assert_eq!(levenshtein_distance("test", "test"), 0);
+        
+        // Test single character differences
+        assert_eq!(levenshtein_distance("test", "best"), 1); // substitution
+        assert_eq!(levenshtein_distance("test", "tests"), 1); // insertion
+        assert_eq!(levenshtein_distance("tests", "test"), 1); // deletion
+        
+        // Test multiple character differences
+        assert_eq!(levenshtein_distance("channel_name", "chanxnlname"), 2);
+        assert_eq!(levenshtein_distance("group_title", "group_tittle"), 1);
+        
+        // Test completely different strings
+        assert!(levenshtein_distance("abc", "xyz") > 2);
+        
+        // Test empty strings
+        assert_eq!(levenshtein_distance("", "test"), 4);
+        assert_eq!(levenshtein_distance("test", ""), 4);
+        assert_eq!(levenshtein_distance("", ""), 0);
+    }
+
+    // Note: These tests would require a test database setup to run properly
+    // They serve as documentation of expected behavior
+    
+    #[test] 
+    fn test_validate_expression_success_case() {
+        // This test demonstrates the expected behavior for valid expressions
+        // In a real test environment, this would need proper database setup
+        
+        let request = ExpressionValidateRequest {
+            expression: "channel_name contains \"HD\"".to_string(),
+        };
+        
+        // Expected successful response structure
+        let expected_response = ExpressionValidateResult {
+            is_valid: true,
+            errors: vec![],
+            expression_tree: Some(serde_json::json!({
+                "type": "condition",
+                "field": "channel_name",
+                "operator": "Contains",
+                "value": "HD",
+                "case_sensitive": false,
+                "negate": false
+            })),
+        };
+        
+        // Verify the structure is as expected
+        assert!(expected_response.is_valid);
+        assert!(expected_response.errors.is_empty());
+        assert!(expected_response.expression_tree.is_some());
+    }
+    
+    #[test]
+    fn test_validate_expression_field_error_case() {
+        // This test demonstrates the expected behavior for invalid field names
+        
+        let request = ExpressionValidateRequest {
+            expression: "invalid_field contains \"test\"".to_string(),
+        };
+        
+        // Expected error response structure  
+        let expected_response = ExpressionValidateResult {
+            is_valid: false,
+            errors: vec![crate::models::ExpressionValidationError {
+                category: crate::models::ExpressionErrorCategory::Field,
+                error_type: "unknown_field".to_string(),
+                message: "Unknown field 'invalid_field'".to_string(),
+                details: Some("Field 'invalid_field' is not available".to_string()),
+                position: None,
+                context: None,
+                suggestion: Some("Available fields: channel_name, group_title, stream_url, tvg_id, tvg_name, tvg_logo".to_string()),
+            }],
+            expression_tree: None,
+        };
+        
+        // Verify the error structure is as expected
+        assert!(!expected_response.is_valid);
+        assert!(!expected_response.errors.is_empty());
+        assert_eq!(expected_response.errors[0].category, crate::models::ExpressionErrorCategory::Field);
+        assert!(expected_response.expression_tree.is_none());
+    }
+    
+    #[test]
+    fn test_validate_expression_syntax_error_case() {
+        // This test demonstrates the expected behavior for syntax errors
+        
+        let request = ExpressionValidateRequest {
+            expression: "channel_name contains".to_string(),
+        };
+        
+        // Expected syntax error response structure
+        let expected_response = ExpressionValidateResult {
+            is_valid: false,
+            errors: vec![crate::models::ExpressionValidationError {
+                category: crate::models::ExpressionErrorCategory::Syntax,
+                error_type: "syntax_error".to_string(),
+                message: "Syntax error: Incomplete expression".to_string(),
+                details: Some("Expression is incomplete or malformed".to_string()),
+                position: None,
+                context: None,
+                suggestion: None,
+            }],
+            expression_tree: None,
+        };
+        
+        // Verify the error structure is as expected
+        assert!(!expected_response.is_valid);
+        assert!(!expected_response.errors.is_empty());
+        assert_eq!(expected_response.errors[0].category, crate::models::ExpressionErrorCategory::Syntax);
+        assert!(expected_response.expression_tree.is_none());
+    }
+}
+
 

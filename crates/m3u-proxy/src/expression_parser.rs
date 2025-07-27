@@ -248,6 +248,9 @@ impl ExpressionParser {
         let mut current_pos = 0;
         let expr = expression.trim();
 
+        // Don't pre-scan - let the proper tokenizer and parser handle all validation
+        // This ensures complex expressions with logical operators are handled correctly
+
         while current_pos < expr.len() {
             let remaining = &expr[current_pos..];
 
@@ -295,7 +298,9 @@ impl ExpressionParser {
                             context: Some(context),
                             suggestion: Some(format!("Add closing {} quote: {}...{}", quote_char, quote_char, quote_char)),
                         });
-                        return Err(errors);
+                        // Skip the problematic token and continue to find more errors
+                        current_pos += 1;
+                        continue;
                     }
                 }
             }
@@ -520,7 +525,9 @@ impl ExpressionParser {
                             context: Some(context),
                             suggestion: Some(format!("Use '{}' instead", correct)),
                         });
-                        return Err(errors);
+                        // Skip the problematic token and continue to find more errors
+                        current_pos += 1;
+                        continue;
                     }
                 }
             }
@@ -550,7 +557,9 @@ impl ExpressionParser {
                     context: Some(context),
                     suggestion: Some("Remove the invalid character or check your syntax".to_string()),
                 });
-                return Err(errors);
+                // Skip the problematic character and continue to find more errors
+                current_pos += 1;
+                continue;
             }
         }
 
@@ -560,6 +569,38 @@ impl ExpressionParser {
             Err(errors)
         }
     }
+
+
+    /// Check if an operator is valid
+    fn is_valid_operator(&self, operator: &str) -> bool {
+        let valid_ops = ["contains", "equals", "starts_with", "ends_with", "matches", 
+                        "not_contains", "not_equals", "not_starts_with", "not_ends_with", "not_matches"];
+        valid_ops.contains(&operator)
+    }
+
+    /// Suggest a correct operator for a typo
+    fn suggest_operator(&self, operator: &str) -> Option<String> {
+        let suggestions = [
+            ("contins", "contains"),
+            ("contain", "contains"), 
+            ("equal", "equals"),
+            ("start_with", "starts_with"),
+            ("end_with", "ends_with"),
+            ("match", "matches"),
+            ("=", "equals"),
+            ("==", "equals"),
+            ("!=", "not_equals"),
+        ];
+        
+        for (typo, correct) in &suggestions {
+            if operator == *typo {
+                return Some(format!("Did you mean '{}'?", correct));
+            }
+        }
+        
+        None
+    }
+
 
     /// Internal parsing method that works with pre-tokenized input
     fn parse_extended_from_tokens(&self, tokens: &[Token]) -> Result<ExtendedExpression, Vec<ExpressionValidationError>> {
@@ -697,7 +738,7 @@ impl ExpressionParser {
                 errors.extend(self.validate_actions_with_errors(actions));
             }
             ExtendedExpression::ConditionalActionGroups(groups) => {
-                for (i, group) in groups.iter().enumerate() {
+                for (_i, group) in groups.iter().enumerate() {
                     errors.extend(self.validate_condition_tree_with_errors(&group.conditions));
                     errors.extend(self.validate_actions_with_errors(&group.actions));
                 }
@@ -1567,53 +1608,6 @@ impl ExpressionParser {
         })
     }
 
-    /// Validate an extended expression for semantic correctness
-    pub fn validate_extended(&self, expression: &ExtendedExpression) -> Result<()> {
-        trace!("Validating extended expression");
-
-        match expression {
-            ExtendedExpression::ConditionOnly(condition) => {
-                trace!(
-                    "Validating condition-only expression with {} conditions",
-                    self.count_conditions(condition)
-                );
-                // Validate condition field names
-                self.validate_condition_tree_fields(condition)
-            }
-            ExtendedExpression::ConditionWithActions { condition, actions } => {
-                trace!(
-                    "Validating condition-with-actions expression: {} conditions, {} actions",
-                    self.count_conditions(condition),
-                    actions.len()
-                );
-                // Validate both condition fields and actions
-                self.validate_condition_tree_fields(condition)?;
-                self.validate_actions(actions)
-            }
-            ExtendedExpression::ConditionalActionGroups(groups) => {
-                trace!(
-                    "Validating conditional action groups: {} groups",
-                    groups.len()
-                );
-                // Validate each group's conditions and actions
-                for (i, group) in groups.iter().enumerate() {
-                    trace!(
-                        "Validating group {}: {} conditions, {} actions",
-                        i + 1,
-                        self.count_conditions(&group.conditions),
-                        group.actions.len()
-                    );
-                    self.validate_condition_tree_fields(&group.conditions)?;
-                    self.validate_actions(&group.actions)?;
-                }
-                trace!(
-                    "Successfully validated all {} conditional action groups",
-                    groups.len()
-                );
-                Ok(())
-            }
-        }
-    }
 
     /// Validate a list of actions for semantic correctness
     fn validate_actions(&self, actions: &[Action]) -> Result<()> {
@@ -2166,39 +2160,39 @@ mod tests {
 
         // Missing action after SET
         assert!(
-            parser
-                .parse_extended("channel_name contains \"sport\" SET")
-                .is_valid == false
+            !parser
+                .validate("channel_name contains \"sport\" SET")
+                .is_valid
         );
 
         // Missing assignment operator
         assert!(
-            parser
-                .parse_extended("channel_name contains \"sport\" SET group_title \"Sports\"")
-                .is_valid == false
+            !parser
+                .validate("channel_name contains \"sport\" SET group_title \"Sports\"")
+                .is_valid
         );
 
         // Missing value
         assert!(
-            parser
-                .parse_extended("channel_name contains \"sport\" SET group_title =")
-                .is_valid == false
+            !parser
+                .validate("channel_name contains \"sport\" SET group_title =")
+                .is_valid
         );
 
         // Missing comma between actions
         assert!(
-            parser
-                .parse_extended(
+            !parser
+                .validate(
                     "channel_name contains \"sport\" SET group_title = \"Sports\" category = \"TV\""
                 )
-                .is_valid == false
+                .is_valid
         );
 
         // Unquoted value
         assert!(
-            parser
-                .parse_extended("channel_name contains \"sport\" SET group_title = Sports")
-                .is_valid == false
+            !parser
+                .validate("channel_name contains \"sport\" SET group_title = Sports")
+                .is_valid
         );
     }
 
@@ -2207,16 +2201,10 @@ mod tests {
         let parser = FilterParser::new();
 
         // Valid action should pass validation
-        let result = parser
-            .parse_extended("channel_name contains \"sport\" SET group_title = \"Sports\"")
-            .unwrap();
-        assert!(parser.validate_extended(&result).is_valid);
+        assert!(parser.validate("channel_name contains \"sport\" SET group_title = \"Sports\"").is_valid);
 
         // Invalid field should fail validation
-        let result = parser
-            .parse_extended("channel_name contains \"sport\" SET invalid_field = \"value\"")
-            .unwrap();
-        assert!(parser.validate_extended(&result).is_valid == false);
+        assert!(!parser.validate("channel_name contains \"sport\" SET invalid_field = \"value\"").is_valid);
 
         // Too long value should fail validation
         let long_value = "a".repeat(300);
@@ -2224,8 +2212,7 @@ mod tests {
             "channel_name contains \"sport\" SET group_title = \"{}\"",
             long_value
         );
-        let result = parser.parse_extended(&expr).unwrap();
-        assert!(parser.validate_extended(&result).is_valid == false);
+        assert!(!parser.validate(&expr).is_valid);
     }
 
     #[test]
@@ -2403,39 +2390,39 @@ mod tests {
 
         // Missing SET keyword
         assert!(
-            parser
-                .parse_extended("(channel_name contains \"test\" group_title = \"Test\")")
-                .is_valid == false
+            !parser
+                .validate("(channel_name contains \"test\" group_title = \"Test\")")
+                .is_valid
         );
 
         // Missing closing parenthesis
         assert!(
-            parser
-                .parse_extended("(channel_name contains \"test\" SET group_title = \"Test\"")
-                .is_valid == false
+            !parser
+                .validate("(channel_name contains \"test\" SET group_title = \"Test\"")
+                .is_valid
         );
 
         // Missing opening parenthesis
         assert!(
-            parser
-                .parse_extended("channel_name contains \"test\" SET group_title = \"Test\")")
-                .is_valid == false
+            !parser
+                .validate("channel_name contains \"test\" SET group_title = \"Test\")")
+                .is_valid
         );
 
         // Empty group
         assert!(
-            parser
-                .parse_extended(
+            !parser
+                .validate(
                     "() AND (channel_name contains \"test\" SET group_title = \"Test\")"
                 )
-                .is_valid == false
+                .is_valid
         );
 
         // Missing action after SET
         assert!(
-            parser
-                .parse_extended("(channel_name contains \"test\" SET)")
-                .is_valid == false
+            !parser
+                .validate("(channel_name contains \"test\" SET)")
+                .is_valid
         );
     }
 
@@ -2779,37 +2766,34 @@ mod tests {
 
         // Test malformed regex
         assert!(
-            parser
-                .parse_extended("channel_name matches \"[unclosed\" SET group_title = \"Test\"")
-                .is_valid == false
+            !parser
+                .validate("channel_name matches \"[unclosed\" SET group_title = \"Test\"")
+                .is_valid
         );
 
         // Test missing SET keyword
         assert!(
-            parser
-                .parse_extended("channel_name contains \"test\" group_title = \"Test\"")
-                .is_valid == false
+            !parser
+                .validate("channel_name contains \"test\" group_title = \"Test\"")
+                .is_valid
         );
 
         // Test unbalanced parentheses in conditional groups
         assert!(
-            parser
-                .parse_extended("(channel_name contains \"test\" SET group_title = \"Test\" AND")
-                .is_valid == false
-        );
-
-        // Test empty action value
-        assert!(
-            parser
-                .parse_extended("channel_name contains \"test\" SET group_title = \"\"")
+            !parser
+                .validate("(channel_name contains \"test\" SET group_title = \"Test\" AND")
                 .is_valid
         );
 
-        // Test invalid field reference
-        let result =
-            parser.parse_extended("invalid_field contains \"test\" SET group_title = \"Test\"");
-        // This should parse syntactically but fail validation if field validation is enabled
-        assert!(result.is_valid);
+        // Test empty action value (should be valid)
+        assert!(
+            parser
+                .validate("channel_name contains \"test\" SET group_title = \"\"")
+                .is_valid
+        );
+
+        // Test invalid field reference (should fail with field validation)
+        assert!(!parser.validate("invalid_field contains \"test\" SET group_title = \"Test\"").is_valid);
     }
 
     #[test]
@@ -2832,23 +2816,23 @@ mod tests {
         assert!(parser.validate("channel_name not_contains \"SD\" AND tvg_id matches \"^[0-9]+$\"").is_valid);
 
         // Test invalid field names (should fail with proper field validation)
-        assert!(parser.validate("invalid_field contains \"test\"").is_valid == false);
-        assert!(parser.validate("chanxnlname contains \"sport\"").is_valid == false);
-        assert!(parser.validate("group_tittle equals \"Movies\"").is_valid == false);
+        assert!(!parser.validate("invalid_field contains \"test\"").is_valid);
+        assert!(!parser.validate("chanxnlname contains \"sport\"").is_valid);
+        assert!(!parser.validate("group_tittle equals \"Movies\"").is_valid);
 
         // Test syntax errors
-        assert!(parser.validate("channel_name contains").is_valid == false);
-        assert!(parser.validate("channel_name \"HD\"").is_valid == false);
-        assert!(parser.validate("(channel_name contains \"HD\"").is_valid == false);
-        assert!(parser.validate("channel_name contains \"HD\" AND").is_valid == false);
+        assert!(!parser.validate("channel_name contains").is_valid);
+        assert!(!parser.validate("channel_name \"HD\"").is_valid);
+        assert!(!parser.validate("(channel_name contains \"HD\"").is_valid);
+        assert!(!parser.validate("channel_name contains \"HD\" AND").is_valid);
 
         // Test invalid operators
-        assert!(parser.validate("channel_name invalid_op \"HD\"").is_valid == false);
-        assert!(parser.validate("channel_name == \"HD\"").is_valid == false); // Should use 'equals'
+        assert!(!parser.validate("channel_name invalid_op \"HD\"").is_valid);
+        assert!(!parser.validate("channel_name == \"HD\"").is_valid); // Should use 'equals'
 
         // Test empty expressions
-        assert!(parser.validate("").is_valid == false);
-        assert!(parser.validate("   ").is_valid == false);
+        assert!(!parser.validate("").is_valid);
+        assert!(!parser.validate("   ").is_valid);
     }
 
     #[test]
@@ -2860,12 +2844,12 @@ mod tests {
         let parser = ExpressionParser::new().with_fields(valid_fields);
 
         // Test case sensitivity in field names
-        assert!(parser.validate("CHANNEL_NAME contains \"HD\"").is_valid == false);
-        assert!(parser.validate("Channel_Name contains \"HD\"").is_valid == false);
+        assert!(!parser.validate("CHANNEL_NAME contains \"HD\"").is_valid);
+        assert!(!parser.validate("Channel_Name contains \"HD\"").is_valid);
         
         // Test partial field name matches (should fail)
-        assert!(parser.validate("channel contains \"HD\"").is_valid == false);
-        assert!(parser.validate("name contains \"HD\"").is_valid == false);
+        assert!(!parser.validate("channel contains \"HD\"").is_valid);
+        assert!(!parser.validate("name contains \"HD\"").is_valid);
         
         // Test field names with special characters (valid fields should work)
         let special_parser = ExpressionParser::new().with_fields(vec![
@@ -2896,13 +2880,13 @@ mod tests {
         assert!(parser.validate("stream_url starts_with \"http\" SET stream_url = \"https\" + SUBSTRING(stream_url, 4)").is_valid);
 
         // Test invalid field in condition
-        assert!(parser.validate("invalid_field contains \"test\" SET group_title = \"Test\"").is_valid == false);
+        assert!(!parser.validate("invalid_field contains \"test\" SET group_title = \"Test\"").is_valid);
         
         // Test invalid field in action
-        assert!(parser.validate("channel_name contains \"test\" SET invalid_field = \"Test\"").is_valid == false);
+        assert!(!parser.validate("channel_name contains \"test\" SET invalid_field = \"Test\"").is_valid);
         
         // Test valid condition with invalid action field
-        assert!(parser.validate("channel_name contains \"HD\" SET unknown_field = \"Test\"").is_valid == false);
+        assert!(!parser.validate("channel_name contains \"HD\" SET unknown_field = \"Test\"").is_valid);
     }
 
     #[test] 
@@ -2929,6 +2913,7 @@ mod tests {
         assert!(!error_msg.is_empty());
     }
 
+
     #[test]
     fn test_complex_nested_expressions() {
         let valid_fields = vec![
@@ -2943,7 +2928,7 @@ mod tests {
         assert!(parser.validate("((channel_name contains \"HD\" OR channel_name contains \"4K\") AND (group_title equals \"Movies\" OR group_title equals \"Sports\")) OR (stream_url starts_with \"https\" AND tvg_id matches \"^[0-9]+$\")").is_valid);
 
         // Test nested expression with invalid field
-        assert!(parser.validate("((channel_name contains \"HD\" OR invalid_field contains \"4K\") AND group_title equals \"Movies\")").is_valid == false);
+        assert!(!parser.validate("((channel_name contains \"HD\" OR invalid_field contains \"4K\") AND group_title equals \"Movies\")").is_valid);
 
         // Test multiple logical operators
         assert!(parser.validate("channel_name contains \"HD\" AND group_title equals \"Sports\" OR stream_url starts_with \"https\"").is_valid);
@@ -2960,13 +2945,13 @@ mod tests {
         let parser = ExpressionParser::new().with_fields(valid_fields);
 
         // Test valid expression
-        let result = parser.validate_structured("channel_name contains \"HD\"");
+        let result = parser.validate("channel_name contains \"HD\"");
         assert!(result.is_valid);
         assert!(result.errors.is_empty());
         assert!(result.expression_tree.is_some());
 
         // Test invalid field
-        let result = parser.validate_structured("invalid_field contains \"HD\"");
+        let result = parser.validate("invalid_field contains \"HD\"");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Field);
@@ -2979,7 +2964,7 @@ mod tests {
         let parser = ExpressionParser::new();
 
         // Test unclosed quote
-        let result = parser.validate_structured("channel_name contains \"unclosed");
+        let result = parser.validate("channel_name contains \"unclosed");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Syntax);
@@ -2987,14 +2972,14 @@ mod tests {
         assert!(result.errors[0].position.is_some());
 
         // Test unbalanced parentheses
-        let result = parser.validate_structured("(channel_name contains \"value\"");
+        let result = parser.validate("(channel_name contains \"value\"");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Syntax);
         assert_eq!(result.errors[0].error_type, "unclosed_parenthesis");
 
         // Test empty expression
-        let result = parser.validate_structured("");
+        let result = parser.validate("");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].error_type, "empty_expression");
@@ -3005,7 +2990,7 @@ mod tests {
         let parser = ExpressionParser::new();
 
         // Test invalid logical operator
-        let result = parser.validate_structured("channel_name contains \"test\" && group_title equals \"value\"");
+        let result = parser.validate("channel_name contains \"test\" && group_title equals \"value\"");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Operator);
@@ -3013,7 +2998,7 @@ mod tests {
         assert!(result.errors[0].suggestion.as_ref().unwrap().contains("AND"));
 
         // Test operator typo
-        let result = parser.validate_structured("channel_name containz \"test\"");
+        let result = parser.validate("channel_name containz \"test\"");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Operator);
@@ -3026,7 +3011,7 @@ mod tests {
         let parser = ExpressionParser::new();
 
         // Test invalid regex pattern
-        let result = parser.validate_structured("channel_name matches \"[unclosed\"");
+        let result = parser.validate("channel_name matches \"[unclosed\"");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Value);
@@ -3044,7 +3029,7 @@ mod tests {
         let parser = ExpressionParser::new().with_fields(valid_fields);
 
         // Test field name with typo
-        let result = parser.validate_structured("channe_name contains \"test\"");
+        let result = parser.validate("channe_name contains \"test\"");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Field);
@@ -3054,7 +3039,7 @@ mod tests {
         assert!(suggestion.contains("channel_name") || suggestion.contains("Available fields"));
 
         // Test completely unknown field
-        let result = parser.validate_structured("unknown_field contains \"test\"");
+        let result = parser.validate("unknown_field contains \"test\"");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         let suggestion = result.errors[0].suggestion.as_ref().unwrap();
@@ -3067,7 +3052,7 @@ mod tests {
         let parser = ExpressionParser::new().with_fields(valid_fields);
 
         // Expression with multiple errors: invalid field + invalid operator
-        let result = parser.validate_structured("invalid_field containz \"test\"");
+        let result = parser.validate("invalid_field containz \"test\"");
         assert!(!result.is_valid);
         // Should catch the operator typo first during tokenization
         assert_eq!(result.errors.len(), 1);
@@ -3083,13 +3068,13 @@ mod tests {
         let parser = ExpressionParser::new().with_fields(valid_fields);
 
         // Test valid action expression
-        let result = parser.validate_structured("channel_name contains \"HD\" SET group_title = \"High Definition\"");
+        let result = parser.validate("channel_name contains \"HD\" SET group_title = \"High Definition\"");
         assert!(result.is_valid);
         assert!(result.errors.is_empty());
         assert!(result.expression_tree.is_some());
 
         // Test action with invalid field
-        let result = parser.validate_structured("channel_name contains \"HD\" SET invalid_field = \"value\"");
+        let result = parser.validate("channel_name contains \"HD\" SET invalid_field = \"value\"");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Field);
@@ -3097,7 +3082,7 @@ mod tests {
         // Test action with value too long
         let long_value = "a".repeat(300);
         let expression = format!("channel_name contains \"HD\" SET group_title = \"{}\"", long_value);
-        let result = parser.validate_structured(&expression);
+        let result = parser.validate(&expression);
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Value);
@@ -3109,7 +3094,7 @@ mod tests {
         let parser = ExpressionParser::new();
 
         // Test that context and suggestions are provided
-        let result = parser.validate_structured("channel_name containz");
+        let result = parser.validate("channel_name containz");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         

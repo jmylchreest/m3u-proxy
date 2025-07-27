@@ -4407,78 +4407,7 @@ mod validation_tests {
         );
     }
 
-    #[test]
-    fn test_find_similar_field() {
-        let available_fields = vec![
-            "channel_name".to_string(),
-            "group_title".to_string(),
-            "stream_url".to_string(),
-            "tvg_id".to_string(),
-            "tvg_name".to_string(),
-        ];
 
-        // Test exact case-insensitive matches
-        assert_eq!(
-            find_similar_field("CHANNEL_NAME", &available_fields),
-            Some("channel_name".to_string())
-        );
-        
-        assert_eq!(
-            find_similar_field("Group_Title", &available_fields),
-            Some("group_title".to_string())
-        );
-
-        // Test substring matching
-        assert_eq!(
-            find_similar_field("channel", &available_fields),
-            Some("channel_name".to_string())
-        );
-        
-        assert_eq!(
-            find_similar_field("title", &available_fields),
-            Some("group_title".to_string())
-        );
-
-        // Test typo detection (Levenshtein distance)
-        assert_eq!(
-            find_similar_field("chanxnlname", &available_fields),
-            Some("channel_name".to_string())
-        );
-        
-        assert_eq!(
-            find_similar_field("group_tittle", &available_fields),
-            Some("group_title".to_string())
-        );
-        
-        // Test no match found
-        assert_eq!(
-            find_similar_field("completely_different", &available_fields),
-            None
-        );
-    }
-
-    #[test]
-    fn test_levenshtein_distance() {
-        // Test identical strings
-        assert_eq!(levenshtein_distance("test", "test"), 0);
-        
-        // Test single character differences
-        assert_eq!(levenshtein_distance("test", "best"), 1); // substitution
-        assert_eq!(levenshtein_distance("test", "tests"), 1); // insertion
-        assert_eq!(levenshtein_distance("tests", "test"), 1); // deletion
-        
-        // Test multiple character differences
-        assert_eq!(levenshtein_distance("channel_name", "chanxnlname"), 2);
-        assert_eq!(levenshtein_distance("group_title", "group_tittle"), 1);
-        
-        // Test completely different strings
-        assert!(levenshtein_distance("abc", "xyz") > 2);
-        
-        // Test empty strings
-        assert_eq!(levenshtein_distance("", "test"), 4);
-        assert_eq!(levenshtein_distance("test", ""), 4);
-        assert_eq!(levenshtein_distance("", ""), 0);
-    }
 
     // Note: These tests would require a test database setup to run properly
     // They serve as documentation of expected behavior

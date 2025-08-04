@@ -6,11 +6,15 @@
 
 use anyhow::Result;
 use sandboxed_file_manager::SandboxedManager;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, debug, warn};
 use uuid::Uuid;
 
 use crate::pipeline::models::{PipelineArtifact, ArtifactType, ContentType, ProcessingStage};
+use crate::pipeline::traits::{PipelineStage, ProgressAware};
+use crate::pipeline::error::PipelineError;
+use crate::services::progress_service::ProgressManager;
 
 /// Publish content stage - atomically publishes temporary files to final locations
 pub struct PublishContentStage {
@@ -18,6 +22,7 @@ pub struct PublishContentStage {
     proxy_output_file_manager: SandboxedManager,  // Final proxy output storage
     proxy_id: Uuid,
     enable_versioning: bool,
+    progress_manager: Option<Arc<ProgressManager>>,
 }
 
 impl PublishContentStage {
@@ -26,13 +31,29 @@ impl PublishContentStage {
         proxy_output_file_manager: SandboxedManager,
         proxy_id: Uuid,
         enable_versioning: bool,
+        progress_manager: Option<Arc<ProgressManager>>,
     ) -> Self {
         Self {
             pipeline_file_manager,
             proxy_output_file_manager,
             proxy_id,
             enable_versioning,
+            progress_manager,
         }
+    }
+    
+    /// Helper method for reporting progress
+    async fn report_progress(&self, percentage: f64, message: &str) {
+        if let Some(pm) = &self.progress_manager {
+            if let Some(updater) = pm.get_stage_updater("publish_content").await {
+                updater.update_progress(percentage, message).await;
+            }
+        }
+    }
+    
+    /// Set the progress manager for this stage
+    pub fn set_progress_manager(&mut self, progress_manager: Arc<ProgressManager>) {
+        self.progress_manager = Some(progress_manager);
     }
 
     /// Publish artifacts atomically from temporary to final location
@@ -56,9 +77,13 @@ impl PublishContentStage {
         let mut total_bytes_published = 0u64;
         let mut files_published = 0;
 
-        for artifact in input_artifacts {
+        let total_artifacts = input_artifacts.len();
+        for (artifact_index, artifact) in input_artifacts.into_iter().enumerate() {
+            let progress_percentage = 50.0 + (artifact_index as f64 / total_artifacts as f64 * 40.0); // 50% to 90%
+            
             match artifact.artifact_type.content {
                 ContentType::M3uPlaylist | ContentType::XmltvGuide => {
+                    self.report_progress(progress_percentage, &format!("Publishing file {}/{}: {:?}", artifact_index + 1, total_artifacts, artifact.artifact_type.content)).await;
                     let published_artifact = self.publish_file_artifact(artifact).await?;
                     
                     if let Some(file_size) = published_artifact.file_size {
@@ -69,6 +94,7 @@ impl PublishContentStage {
                     published_artifacts.push(published_artifact);
                 }
                 _ => {
+                    self.report_progress(progress_percentage, &format!("Processing artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     // Pass through non-publishable artifacts unchanged
                     published_artifacts.push(artifact);
                 }
@@ -210,5 +236,38 @@ impl PublishContentStage {
             }
         }
         Ok(())
+    }
+}
+
+impl ProgressAware for PublishContentStage {
+    fn get_progress_manager(&self) -> Option<&Arc<ProgressManager>> {
+        self.progress_manager.as_ref()
+    }
+}
+
+#[async_trait::async_trait]
+impl PipelineStage for PublishContentStage {
+    async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
+        self.report_progress(25.0, "Initializing file publishing").await;
+        let result = self.process(input).await
+            .map_err(|e| PipelineError::stage_error("publish_content", format!("Publishing failed: {}", e)))?;
+        self.report_progress(100.0, "Publishing completed").await;
+        Ok(result)
+    }
+    
+    fn stage_id(&self) -> &'static str {
+        "publish_content"
+    }
+    
+    fn stage_name(&self) -> &'static str {
+        "Publish Content"
+    }
+    
+    async fn cleanup(&mut self) -> Result<(), PipelineError> {
+        Ok(())
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

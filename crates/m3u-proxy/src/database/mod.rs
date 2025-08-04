@@ -334,7 +334,7 @@ impl Database {
     ) -> Result<Vec<ProxyFilterWithDetails>> {
         let rows = sqlx::query(
             "SELECT pf.proxy_id, pf.filter_id, pf.priority_order, pf.is_active, pf.created_at,
-                    f.name, f.starting_channel_number, f.is_inverse, f.is_system_default, f.condition_tree, f.updated_at as filter_updated_at
+                    f.name, f.starting_channel_number, f.is_inverse, f.is_system_default, f.expression, f.updated_at as filter_updated_at
              FROM proxy_filters pf
              JOIN filters f ON pf.filter_id = f.id
              WHERE pf.proxy_id = ? AND pf.is_active = 1
@@ -363,7 +363,7 @@ impl Database {
                 },
                 is_inverse: row.get("is_inverse"),
                 is_system_default: row.get("is_system_default"),
-                condition_tree: row.get("condition_tree"),
+                expression: row.get("expression"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("filter_updated_at"),
             };

@@ -8,11 +8,15 @@ use crate::pipeline::engines::{
     RegexEvaluator, FilterEngineResult
 };
 use crate::pipeline::models::{PipelineArtifact, ArtifactType, ContentType};
+use crate::pipeline::traits::{PipelineStage, ProgressAware};
+use crate::pipeline::error::PipelineError;
 use crate::models::{Channel, FilterSourceType};
+use crate::services::progress_service::ProgressManager;
 use crate::utils::regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
 use sandboxed_file_manager::SandboxedManager;
 use sqlx::SqlitePool;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn, trace};
 
@@ -21,7 +25,7 @@ struct FilterRule {
     id: String,
     name: String,
     source_type: FilterSourceType,
-    condition_tree: String,
+    expression: String,
     is_inverse: bool,
     is_system_default: bool,
     priority_order: i32,
@@ -34,10 +38,17 @@ pub struct FilteringStage {
     pipeline_execution_prefix: String,
     regex_preprocessor: RegexPreprocessor,
     proxy_id: Option<uuid::Uuid>,
+    progress_manager: Option<Arc<ProgressManager>>,
 }
 
 impl FilteringStage {
-    pub async fn new(db_pool: SqlitePool, file_manager: SandboxedManager, pipeline_execution_prefix: String, proxy_id: Option<uuid::Uuid>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(
+        db_pool: SqlitePool, 
+        file_manager: SandboxedManager, 
+        pipeline_execution_prefix: String, 
+        proxy_id: Option<uuid::Uuid>,
+        progress_manager: Option<Arc<ProgressManager>>
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let regex_preprocessor = RegexPreprocessor::new(RegexPreprocessorConfig::default());
         
         Ok(Self {
@@ -46,7 +57,22 @@ impl FilteringStage {
             pipeline_execution_prefix,
             regex_preprocessor,
             proxy_id,
+            progress_manager,
         })
+    }
+    
+    /// Helper method for reporting progress
+    async fn report_progress(&self, percentage: f64, message: &str) {
+        if let Some(pm) = &self.progress_manager {
+            if let Some(updater) = pm.get_stage_updater("filtering").await {
+                updater.update_progress(percentage, message).await;
+            }
+        }
+    }
+    
+    /// Set the progress manager for this stage
+    pub fn set_progress_manager(&mut self, progress_manager: Arc<ProgressManager>) {
+        self.progress_manager = Some(progress_manager);
     }
     
     pub async fn process(&mut self, input_artifacts: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, Box<dyn std::error::Error>> {
@@ -58,9 +84,13 @@ impl FilteringStage {
         let mut total_input_records = 0;
         let mut total_output_records = 0;
         
-        for artifact in input_artifacts {
+        let total_artifacts = input_artifacts.len();
+        for (artifact_index, artifact) in input_artifacts.into_iter().enumerate() {
+            let progress_percentage = 50.0 + (artifact_index as f64 / total_artifacts as f64 * 40.0); // 50% to 90%
+            
             match artifact.artifact_type.content {
                 ContentType::Channels => {
+                    self.report_progress(progress_percentage, &format!("Filtering channels artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     let (filtered_artifact, filter_stats, input_count, output_count) = self.process_channel_artifact(artifact).await?;
                     output_artifacts.push(filtered_artifact);
                     
@@ -75,17 +105,20 @@ impl FilteringStage {
                     }
                 }
                 ContentType::EpgPrograms => {
+                    self.report_progress(progress_percentage, &format!("Filtering EPG programs artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     let filtered_artifact = self.process_epg_artifact(artifact).await?;
                     output_artifacts.push(filtered_artifact);
                 }
                 _ => {
                     // Pass through other content types unchanged
+                    self.report_progress(progress_percentage, &format!("Processing artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     output_artifacts.push(artifact);
                 }
             }
         }
         
         let stage_duration = stage_start.elapsed();
+        self.report_progress(95.0, &format!("Finalizing: {} records filtered", total_output_records)).await;
         info!("Completed filtering stage duration={} input_records={} output_records={} output_artifacts={}", 
              crate::utils::human_format::format_duration_precise(stage_duration), 
              total_input_records, total_output_records, output_artifacts.len());
@@ -163,17 +196,21 @@ impl FilteringStage {
                 rule.id.clone(),
                 rule.name.clone(),
                 rule.is_inverse,
-                &rule.condition_tree,
+                &rule.expression,
                 regex_evaluator,
             )?;
             filtering_engine.add_filter_processor(Box::new(processor));
         }
         
-        // Process channels through filtering engine
+        // Process channels through filtering engine with progress updates
+        self.report_progress(70.0, &format!("Applying {} filters to {} channels", filter_rules.len(), channels.len())).await;
         let filter_result = filtering_engine.process_records(&channels)?;
         
         // Log filtering results
         self.log_filtering_results(&filter_result, "channels");
+        
+        // Send progress update after filtering
+        self.report_progress(85.0, &format!("Filtered {} channels to {} results", filter_result.total_input, filter_result.total_filtered)).await;
         
         // Write filtered channels to new artifact
         let filtered_file_path = artifact.file_path
@@ -246,9 +283,13 @@ impl FilteringStage {
         warn!("EPG filtering not yet implemented, applying deduplication and passing through");
         
         // Read EPG programs from input artifact with deduplication
+        self.report_progress(70.0, "Reading EPG programs for filtering").await;
         let programs = self.read_epg_programs_from_artifact(&artifact).await?;
         info!("Read EPG programs from input artifact count={}", programs.len());
         let programs_count = programs.len();
+        
+        // Send progress update after reading
+        self.report_progress(80.0, &format!("Processing {} EPG programs", programs_count)).await;
         
         // Update file path to include stage name
         let filtered_file_path = artifact.file_path
@@ -275,7 +316,7 @@ impl FilteringStage {
         if let Some(proxy_id) = self.proxy_id {
             // Load proxy-specific filters with priority ordering
             let query = r#"
-                SELECT pf.priority_order, f.id, f.name, f.source_type, f.condition_tree, f.is_inverse, f.is_system_default
+                SELECT pf.priority_order, f.id, f.name, f.source_type, f.expression, f.is_inverse, f.is_system_default
                 FROM proxy_filters pf
                 JOIN filters f ON pf.filter_id = f.id
                 WHERE pf.proxy_id = ? AND pf.is_active = 1 AND f.source_type = ?
@@ -294,12 +335,12 @@ impl FilteringStage {
                 .await?;
             
             let mut rules = Vec::new();
-            for (priority_order, id, name, _source_type, condition_tree, is_inverse, is_system_default) in rows {
+            for (priority_order, id, name, _source_type, expression, is_inverse, is_system_default) in rows {
                 rules.push(FilterRule {
                     id,
                     name,
                     source_type: source_type.clone(),
-                    condition_tree,
+                    expression,
                     is_inverse,
                     is_system_default,
                     priority_order,
@@ -445,5 +486,39 @@ impl FilteringStage {
         // Clear any cached state
         trace!("Cleaning up filtering stage");
         Ok(())
+    }
+}
+
+impl ProgressAware for FilteringStage {
+    fn get_progress_manager(&self) -> Option<&Arc<ProgressManager>> {
+        self.progress_manager.as_ref()
+    }
+}
+
+#[async_trait::async_trait]
+impl PipelineStage for FilteringStage {
+    async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
+        self.report_progress(25.0, "Initializing filters").await;
+        let result = self.process(input).await
+            .map_err(|e| PipelineError::stage_error("filtering", format!("Filtering failed: {}", e)))?;
+        self.report_progress(100.0, "Filtering completed").await;
+        Ok(result)
+    }
+    
+    fn stage_id(&self) -> &'static str {
+        "filtering"
+    }
+    
+    fn stage_name(&self) -> &'static str {
+        "Filtering"
+    }
+    
+    async fn cleanup(&mut self) -> Result<(), PipelineError> {
+        trace!("Cleaning up filtering stage");
+        Ok(())
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

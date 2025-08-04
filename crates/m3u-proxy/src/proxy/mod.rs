@@ -14,14 +14,13 @@ pub mod filter_engine;
 // pub mod generator; // ARCHIVED: Moved to /archive/old-proxy-generators/
 pub mod robust_streaming;
 pub mod session_tracker;
-pub mod stage_strategy;
 
 #[derive(Clone)]
 pub struct ProxyService {
     #[allow(dead_code)]
     storage_config: StorageConfig,
     #[allow(dead_code)]
-    shared_memory_monitor: Option<crate::utils::SimpleMemoryMonitor>,
+    shared_memory_monitor: Option<crate::utils::pressure_monitor::SimpleMemoryMonitor>,
     pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
     proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
     #[allow(dead_code)]
@@ -48,7 +47,7 @@ impl ProxyService {
         storage_config: StorageConfig,
         pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
         proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
-        memory_monitor: crate::utils::SimpleMemoryMonitor,
+        memory_monitor: crate::utils::pressure_monitor::SimpleMemoryMonitor,
         system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
@@ -95,7 +94,7 @@ impl ProxyService {
         // Create orchestrator using factory pattern
         let mut orchestrator = factory.create_for_proxy(config.proxy.id).await
             .map_err(|e| anyhow::anyhow!("Failed to create pipeline orchestrator: {}", e))?;
-        let execution = orchestrator.execute_pipeline(&None).await
+        let execution = orchestrator.execute_pipeline().await
             .map_err(|e| anyhow::anyhow!("Pipeline execution failed: {}", e))?;
 
         // Convert pipeline execution to legacy format for compatibility

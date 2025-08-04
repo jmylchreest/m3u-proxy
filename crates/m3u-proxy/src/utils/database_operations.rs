@@ -1,6 +1,6 @@
 use std::time::Duration;
 use sqlx::{Pool, Sqlite};
-use tracing::{debug, warn, info};
+use tracing::{debug, info, trace};
 use tokio::time::sleep;
 
 use crate::errors::{AppError, AppResult};
@@ -47,7 +47,7 @@ impl DatabaseOperations {
                             let jitter = Duration::from_millis(fastrand::u64(0..=50));
                             let total_delay = exponential_delay + jitter;
                             
-                            warn!(
+                            debug!(
                                 "Database operation '{}' failed on attempt {} with lock error: {}. Retrying in {:?}",
                                 operation_name, attempts, e, total_delay
                             );
@@ -76,6 +76,7 @@ impl DatabaseOperations {
         _source_id: uuid::Uuid,
         programs: Vec<crate::models::EpgProgram>,
         batch_size: usize,
+        progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
     ) -> AppResult<usize> {
         let total_items = programs.len();
         let mut total_processed = 0;
@@ -99,13 +100,28 @@ impl DatabaseOperations {
                     Ok(count) => {
                         total_processed += count;
                         debug!("Successfully processed EPG batch {}: {} items", chunk_index + 1, count);
+                        
+                        // Update progress if updater is available
+                        if let Some(updater) = progress_updater {
+                            // Calculate progress: 20% base + up to 80% for database saving
+                            let save_progress = (total_processed as f64 / total_items as f64) * 80.0;
+                            let total_progress = 20.0 + save_progress;
+                            let batch_num = chunk_index + 1;
+                            let total_batches = (total_items + batch_size - 1) / batch_size;
+                            
+                            let progress_message = format!("Inserting batch {}/{} ({} of {} programs)", 
+                                    batch_num, total_batches, total_processed, total_items);
+                            
+                            updater.update_progress(total_progress, &progress_message).await;
+                        }
+                        
                         break;
                     }
                     Err(e) => {
                         attempts += 1;
                         if attempts < max_attempts && e.to_string().to_lowercase().contains("database is locked") {
                             let delay = Duration::from_millis(100 * 2_u64.pow(attempts));
-                            warn!("EPG batch {} failed (attempt {}), retrying in {:?}: {}", 
+                            debug!("EPG batch {} failed (attempt {}), retrying in {:?}: {}", 
                                   chunk_index + 1, attempts, delay, e);
                             sleep(delay).await;
                             continue;
@@ -163,7 +179,7 @@ impl DatabaseOperations {
         Ok(())
     }
 
-    /// Create a batch insert operation for EPG programs
+    /// Create a batch insert operation for EPG programs using efficient multi-value INSERT
     pub async fn insert_epg_programs_batch(
         programs: Vec<crate::models::EpgProgram>,
         pool: &Pool<Sqlite>,
@@ -173,44 +189,60 @@ impl DatabaseOperations {
         }
 
         let batch_size = programs.len();
-        debug!("Inserting batch of {} EPG programs", batch_size);
+        debug!("Inserting batch of {} EPG programs using multi-value INSERT", batch_size);
 
         // Use a transaction for the batch
         let mut tx = pool.begin().await
             .map_err(|e| AppError::internal(format!("Failed to begin transaction: {}", e)))?;
 
-        let mut programs_inserted = 0;
-
-        // Build a batch insert query for better performance
-        for program in programs {
-            sqlx::query(
-                "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, language, created_at, updated_at) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(program.id.to_string())
-            .bind(program.source_id.to_string())
-            .bind(&program.channel_id)
-            .bind(&program.channel_name)
-            .bind(&program.program_title)
-            .bind(&program.program_description)
-            .bind(&program.program_category)
-            .bind(program.start_time)
-            .bind(program.end_time)
-            .bind(&program.language)
-            .bind(program.created_at)
-            .bind(program.updated_at)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| AppError::internal(format!("Failed to insert EPG program: {}", e)))?;
+        // Use the full batch size - config already accounts for SQLite parameter limits
+        // EPG programs have 12 fields, so 1800 * 12 = 21,600 parameters (well under 32,766 limit)
+        let max_records_per_query = batch_size;
+        
+        let mut total_inserted = 0;
+        
+        for chunk in programs.chunks(max_records_per_query) {
+            // Build multi-value INSERT statement
+            let mut query = String::from(
+                "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, language, created_at, updated_at) VALUES "
+            );
             
-            programs_inserted += 1;
+            let placeholders: Vec<String> = (0..chunk.len())
+                .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string())
+                .collect();
+            query.push_str(&placeholders.join(", "));
+            
+            let mut db_query = sqlx::query(&query);
+            
+            // Bind all parameters
+            for program in chunk {
+                db_query = db_query
+                    .bind(program.id.to_string())
+                    .bind(program.source_id.to_string())
+                    .bind(&program.channel_id)
+                    .bind(&program.channel_name)
+                    .bind(&program.program_title)
+                    .bind(&program.program_description)
+                    .bind(&program.program_category)
+                    .bind(program.start_time)
+                    .bind(program.end_time)
+                    .bind(&program.language)
+                    .bind(program.created_at)
+                    .bind(program.updated_at);
+            }
+            
+            let result = db_query.execute(&mut *tx).await
+                .map_err(|e| AppError::internal(format!("Failed to insert EPG programs batch: {}", e)))?;
+            
+            total_inserted += result.rows_affected() as usize;
+            trace!("Inserted {} programs in multi-value query", result.rows_affected());
         }
 
         tx.commit().await
             .map_err(|e| AppError::internal(format!("Failed to commit batch transaction: {}", e)))?;
 
-        debug!("Successfully inserted {} EPG programs in batch", programs_inserted);
-        Ok(programs_inserted)
+        debug!("Successfully inserted {} EPG programs in optimized batch", total_inserted);
+        Ok(total_inserted)
     }
 
     /// Delete EPG programs for a source with retry logic - simplified version
@@ -245,7 +277,7 @@ impl DatabaseOperations {
                     attempts += 1;
                     if attempts < max_attempts && e.to_string().to_lowercase().contains("database is locked") {
                         let delay = Duration::from_millis(100 * 2_u64.pow(attempts));
-                        warn!("Delete EPG programs failed (attempt {}), retrying in {:?}: {}", 
+                        debug!("Delete EPG programs failed (attempt {}), retrying in {:?}: {}", 
                               attempts, delay, e);
                         sleep(delay).await;
                         continue;

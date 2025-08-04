@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"
@@ -25,6 +25,7 @@ path = "src/lib.rs"
 sandboxed-file-manager = { path = "../sandboxed-file-manager" }
 anyhow = "1.0.98"
 async-stream = "0.3"
+async-trait = "0.1"
 axum = { version = "0.8", features = ["macros", "multipart"] }
 base64 = "0.22.1"
 chrono = { version = "0.4.41", features = ["serde"] }
@@ -57,7 +58,6 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 ulid = "1.1"
 uuid = { version = "1.17", features = ["v4", "serde"] }
-async-trait = "0.1"
 bytes = "1.5"
 tempfile = "3.8"
 futures = "0.3"

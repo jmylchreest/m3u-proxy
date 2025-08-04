@@ -12,7 +12,7 @@ use std::time::Duration;
 use tracing::{debug, info, trace};
 use uuid::Uuid;
 
-use crate::errors::{AppError, AppResult};
+use crate::errors::{AppError, AppResult, SourceError};
 use crate::models::{StreamSource, StreamSourceType, Channel};
 use crate::utils::{DecompressingHttpClient, StandardHttpClient};
 use super::traits::*;
@@ -85,6 +85,7 @@ impl XtreamSourceHandler {
 
 
     /// Basic connection test (lighter than full test_authentication)
+    #[allow(dead_code)]
     async fn test_connection_basic(&self, source: &StreamSource) -> AppResult<()> {
         let base_url = self.get_api_base_url(source)?;
         let auth_params = self.get_auth_params(source)?;
@@ -102,7 +103,14 @@ impl XtreamSourceHandler {
             .timeout(Duration::from_secs(5))
             .send()
             .await
-            .map_err(|e| AppError::source_error(format!("Connection failed: {}", e)))?;
+            .map_err(|e| {
+                let error_msg = e.to_string();
+                let obfuscated_msg = crate::utils::url::UrlUtils::obfuscate_credentials(&error_msg);
+                AppError::ExternalService { 
+                    service: "xtream_api".to_string(), 
+                    message: obfuscated_msg 
+                }
+            })?;
 
         if response.status().is_success() {
             Ok(())
@@ -141,15 +149,15 @@ impl XtreamSourceHandler {
         debug!("Testing Xtream authentication for: {}", source.name);
 
         let server_info: XtreamServerInfo = self.http_client.fetch_json(url.as_str()).await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch or parse Xtream server response: {}", e)))?;
+            .map_err(|e| e)?; // Pass through the original HTTP error without wrapping
 
         // Check if authentication was successful
         if let Some(ref auth) = server_info.user_info {
             if auth.status != "Active" {
-                return Err(AppError::source_error(format!("Xtream authentication failed: user status is {}", auth.status)));
+                return Err(AppError::Source(SourceError::auth_failed("xtream", format!("user status is {}", auth.status))));
             }
         } else {
-            return Err(AppError::source_error("Xtream server did not return user information"));
+            return Err(AppError::Source(SourceError::auth_failed("xtream", "server did not return user information")));
         }
 
         Ok(server_info)
@@ -172,7 +180,7 @@ impl XtreamSourceHandler {
         debug!("Fetching live channels from Xtream source: {}", source.name);
 
         let channels: Vec<XtreamChannel> = self.http_client.fetch_json(url.as_str()).await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch or parse Xtream channels: {}", e)))?;
+            .map_err(|e| e)?; // Pass through the original HTTP error
 
         info!("Retrieved {} live channels from Xtream source: {}", channels.len(), source.name);
         Ok(channels)
@@ -264,7 +272,7 @@ impl XtreamSourceHandler {
         url.query_pairs_mut().append_pair("action", "get_live_categories");
 
         let categories: Vec<XtreamCategory> = self.http_client.fetch_json(url.as_str()).await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch or parse categories: {}", e)))?;
+            .map_err(|e| e)?; // Pass through the original HTTP error
 
         Ok(categories)
     }
@@ -590,76 +598,24 @@ impl SourceHandler for XtreamSourceHandler {
 #[async_trait]
 impl ChannelIngestor for XtreamSourceHandler {
     async fn ingest_channels(&self, source: &StreamSource) -> AppResult<Vec<Channel>> {
-        self.ingest_channels_with_progress(source, None).await
-    }
-
-    async fn ingest_channels_with_progress(
-        &self,
-        source: &StreamSource,
-        progress_callback: Option<&ProgressCallback>,
-    ) -> AppResult<Vec<Channel>> {
-        info!("Starting Xtream channel ingestion for source: {} (ignore_channel_numbers: {})", 
-              source.name, source.ignore_channel_numbers);
-
-        if let Some(callback) = progress_callback {
-            callback(IngestionProgress::starting("Determining optimal connection protocol"));
-        }
-
-        // Determine the optimal URL with HTTPS/HTTP fallback
-        let optimal_source = if source.url.starts_with("http://") || source.url.starts_with("https://") {
-            source.clone()
-        } else {
-            // Try HTTPS first, fallback to HTTP if needed
-            let https_source = StreamSource {
-                url: format!("https://{}", source.url),
-                ..source.clone()
-            };
-            
-            match self.test_connection_basic(&https_source).await {
-                Ok(_) => {
-                    info!("Successfully connected to '{}' using HTTPS", source.name);
-                    https_source
-                },
-                Err(_) => {
-                    info!("HTTPS connection failed for '{}', falling back to HTTP", source.name);
-                    StreamSource {
-                        url: format!("http://{}", source.url),
-                        ..source.clone()
-                    }
-                }
-            }
-        };
-
-        if let Some(callback) = progress_callback {
-            callback(IngestionProgress::starting("Authenticating with Xtream server"));
-        }
-
-        // Test authentication first with the optimal source
-        let _server_info = self.test_authentication(&optimal_source).await?;
-
-        if let Some(callback) = progress_callback {
-            callback(IngestionProgress::starting("Fetching channel list").update_step("Fetching channel list", Some(25.0)));
-        }
-
+        // Directly ingest channels without progress callbacks
+        info!("Starting Xtream channel ingestion for source: {}", source.name);
+        
+        // Test authentication first
+        let _server_info = self.test_authentication(source).await?;
+        
         // Get live channels
-        let xtream_channels = self.get_live_channels(&optimal_source).await?;
-
-        if let Some(callback) = progress_callback {
-            callback(IngestionProgress::starting("Converting channels").update_step("Converting channels", Some(75.0)));
-        }
-
+        let xtream_channels = self.get_live_channels(source).await?;
+        
         // Convert to internal format
         let channels: Vec<Channel> = xtream_channels.iter()
             .map(|ch| self.convert_xtream_channel(ch, source))
             .collect();
-
-        if let Some(callback) = progress_callback {
-            callback(IngestionProgress::starting("Ingestion complete").update_step("Ingestion complete", Some(100.0)));
-        }
-
+        
         info!("Successfully ingested {} channels from Xtream source: {}", channels.len(), source.name);
         Ok(channels)
     }
+
 
     async fn estimate_channel_count(&self, source: &StreamSource) -> AppResult<Option<u32>> {
         // For Xtream, we need to actually fetch the channel list to get the count
@@ -670,145 +626,7 @@ impl ChannelIngestor for XtreamSourceHandler {
         }
     }
 
-    async fn ingest_channels_with_universal_progress(
-        &self,
-        source: &StreamSource,
-        progress_callback: Option<&crate::sources::traits::UniversalCallback>,
-    ) -> AppResult<Vec<Channel>> {
-        use crate::services::progress_service::{UniversalProgress, OperationType, UniversalState};
-        use uuid::Uuid;
 
-        info!("Starting Xtream channel ingestion with universal progress for source: {} (ignore_channel_numbers: {})", 
-              source.name, source.ignore_channel_numbers);
-        let source_id = Uuid::new_v4(); // Generate operation ID
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::StreamIngestion,
-                format!("Xtream Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Connecting)
-            .update_step("Determining optimal connection protocol".to_string());
-            callback(progress);
-        }
-
-        // Determine the optimal URL with HTTPS/HTTP fallback
-        let optimal_source = if source.url.starts_with("http://") || source.url.starts_with("https://") {
-            source.clone()
-        } else {
-            // Try HTTPS first, fallback to HTTP if needed
-            let https_source = StreamSource {
-                url: format!("https://{}", source.url),
-                ..source.clone()
-            };
-            
-            match self.test_connection_basic(&https_source).await {
-                Ok(_) => {
-                    info!("Successfully connected to '{}' using HTTPS", source.name);
-                    https_source
-                },
-                Err(_) => {
-                    info!("HTTPS connection failed for '{}', falling back to HTTP", source.name);
-                    StreamSource {
-                        url: format!("http://{}", source.url),
-                        ..source.clone()
-                    }
-                }
-            }
-        };
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::StreamIngestion,
-                format!("Xtream Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Connecting)
-            .update_step("Authenticating with Xtream server".to_string())
-            .update_percentage(10.0);
-            callback(progress);
-        }
-
-        // Test authentication first with the optimal source
-        match self.test_authentication(&optimal_source).await {
-            Ok(_) => {},
-            Err(e) => {
-                if let Some(callback) = progress_callback {
-                    let progress = UniversalProgress::new(
-                        source_id,
-                        OperationType::StreamIngestion,
-                        format!("Xtream Ingestion: {}", source.name)
-                    )
-                    .set_error(format!("Authentication failed: {}", e));
-                    callback(progress);
-                }
-                return Err(e);
-            }
-        }
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::StreamIngestion,
-                format!("Xtream Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Downloading)
-            .update_step("Fetching channel list".to_string())
-            .update_percentage(25.0);
-            callback(progress);
-        }
-
-        // Get live channels
-        let xtream_channels = match self.get_live_channels(&optimal_source).await {
-            Ok(channels) => channels,
-            Err(e) => {
-                if let Some(callback) = progress_callback {
-                    let progress = UniversalProgress::new(
-                        source_id,
-                        OperationType::StreamIngestion,
-                        format!("Xtream Ingestion: {}", source.name)
-                    )
-                    .set_error(format!("Failed to fetch channels: {}", e));
-                    callback(progress);
-                }
-                return Err(e);
-            }
-        };
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::StreamIngestion,
-                format!("Xtream Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Processing)
-            .update_step("Converting channels".to_string())
-            .update_percentage(75.0);
-            callback(progress);
-        }
-
-        // Convert to internal format
-        let channels: Vec<Channel> = xtream_channels.iter()
-            .map(|ch| self.convert_xtream_channel(ch, source))
-            .collect();
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::StreamIngestion,
-                format!("Xtream Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Completed)
-            .update_step("Ingestion complete".to_string())
-            .update_percentage(100.0)
-            .update_items(channels.len(), Some(channels.len()));
-            callback(progress);
-        }
-
-        info!("Successfully ingested {} channels from Xtream source: {}", channels.len(), source.name);
-        Ok(channels)
-    }
 }
 
 #[async_trait]

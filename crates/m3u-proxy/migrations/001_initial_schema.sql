@@ -92,10 +92,9 @@ CREATE TABLE filters (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
     source_type TEXT NOT NULL DEFAULT 'stream' CHECK (source_type IN ('stream', 'epg')),
-    starting_channel_number INTEGER NOT NULL DEFAULT 1,
     is_inverse BOOLEAN NOT NULL DEFAULT FALSE,
     is_system_default BOOLEAN NOT NULL DEFAULT FALSE,
-    condition_tree TEXT NOT NULL, -- JSON tree structure for complex nested conditions
+    expression TEXT NOT NULL, -- Human-readable expression like "channel_name contains \"HD\""
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

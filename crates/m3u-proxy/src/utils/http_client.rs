@@ -6,6 +6,7 @@ use tracing::debug;
 
 use crate::errors::{AppError, AppResult};
 use crate::utils::{CompressionFormat, DecompressionService};
+use crate::utils::url::UrlUtils;
 
 /// HTTP client trait that provides automatic decompression for all content types
 #[async_trait]
@@ -100,13 +101,21 @@ impl Default for StandardHttpClient {
 #[async_trait]
 impl DecompressingHttpClient for StandardHttpClient {
     async fn fetch_text(&self, url: &str) -> AppResult<String> {
-        debug!("Fetching text content from: {}", url);
+        debug!("Fetching text content from: {}", UrlUtils::obfuscate_credentials(url));
         
         let response = self.client
             .get(url)
             .send()
             .await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch URL: {}", e)))?;
+            .map_err(|e| {
+                // Create a custom error message with obfuscated URL
+                let error_msg = e.to_string();
+                let obfuscated_msg = UrlUtils::obfuscate_credentials(&error_msg);
+                AppError::ExternalService { 
+                    service: "http_client".to_string(), 
+                    message: obfuscated_msg 
+                }
+            })?;
 
         let decompressed_bytes = Self::process_response_to_bytes(response).await?;
         
@@ -119,13 +128,21 @@ impl DecompressingHttpClient for StandardHttpClient {
     }
     
     async fn fetch_json<T: DeserializeOwned + Send>(&self, url: &str) -> AppResult<T> {
-        debug!("Fetching JSON content from: {}", url);
+        debug!("Fetching JSON content from: {}", UrlUtils::obfuscate_credentials(url));
         
         let response = self.client
             .get(url)
             .send()
             .await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch URL: {}", e)))?;
+            .map_err(|e| {
+                // Create a custom error message with obfuscated URL
+                let error_msg = e.to_string();
+                let obfuscated_msg = UrlUtils::obfuscate_credentials(&error_msg);
+                AppError::ExternalService { 
+                    service: "http_client".to_string(), 
+                    message: obfuscated_msg 
+                }
+            })?;
 
         let decompressed_bytes = Self::process_response_to_bytes(response).await?;
         
@@ -138,13 +155,21 @@ impl DecompressingHttpClient for StandardHttpClient {
     }
     
     async fn fetch_bytes(&self, url: &str) -> AppResult<Vec<u8>> {
-        debug!("Fetching binary content from: {}", url);
+        debug!("Fetching binary content from: {}", UrlUtils::obfuscate_credentials(url));
         
         let response = self.client
             .get(url)
             .send()
             .await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch URL: {}", e)))?;
+            .map_err(|e| {
+                // Create a custom error message with obfuscated URL
+                let error_msg = e.to_string();
+                let obfuscated_msg = UrlUtils::obfuscate_credentials(&error_msg);
+                AppError::ExternalService { 
+                    service: "http_client".to_string(), 
+                    message: obfuscated_msg 
+                }
+            })?;
 
         let decompressed_bytes = Self::process_response_to_bytes(response).await?;
         
@@ -153,7 +178,7 @@ impl DecompressingHttpClient for StandardHttpClient {
     }
     
     async fn fetch_text_with_headers(&self, url: &str, headers: &[(&str, &str)]) -> AppResult<String> {
-        debug!("Fetching text content with headers from: {}", url);
+        debug!("Fetching text content with headers from: {}", UrlUtils::obfuscate_credentials(url));
         
         let mut request = self.client.get(url);
         for (name, value) in headers {
@@ -163,7 +188,15 @@ impl DecompressingHttpClient for StandardHttpClient {
         let response = request
             .send()
             .await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch URL: {}", e)))?;
+            .map_err(|e| {
+                // Create a custom error message with obfuscated URL
+                let error_msg = e.to_string();
+                let obfuscated_msg = UrlUtils::obfuscate_credentials(&error_msg);
+                AppError::ExternalService { 
+                    service: "http_client".to_string(), 
+                    message: obfuscated_msg 
+                }
+            })?;
 
         let decompressed_bytes = Self::process_response_to_bytes(response).await?;
         
@@ -234,7 +267,8 @@ impl DecompressingHttpClient for FallbackHttpClient {
                         Err(fallback_e) => {
                             Err(AppError::source_error(format!(
                                 "Failed to fetch content: HTTPS error: {}, HTTP fallback error: {}",
-                                e, fallback_e
+                                UrlUtils::obfuscate_credentials(&e.to_string()),
+                                UrlUtils::obfuscate_credentials(&fallback_e.to_string())
                             )))
                         }
                     }
@@ -263,7 +297,8 @@ impl DecompressingHttpClient for FallbackHttpClient {
                         Err(fallback_e) => {
                             Err(AppError::source_error(format!(
                                 "Failed to fetch content: HTTPS error: {}, HTTP fallback error: {}",
-                                e, fallback_e
+                                UrlUtils::obfuscate_credentials(&e.to_string()),
+                                UrlUtils::obfuscate_credentials(&fallback_e.to_string())
                             )))
                         }
                     }
@@ -292,7 +327,8 @@ impl DecompressingHttpClient for FallbackHttpClient {
                         Err(fallback_e) => {
                             Err(AppError::source_error(format!(
                                 "Failed to fetch content: HTTPS error: {}, HTTP fallback error: {}",
-                                e, fallback_e
+                                UrlUtils::obfuscate_credentials(&e.to_string()),
+                                UrlUtils::obfuscate_credentials(&fallback_e.to_string())
                             )))
                         }
                     }
@@ -321,7 +357,8 @@ impl DecompressingHttpClient for FallbackHttpClient {
                         Err(fallback_e) => {
                             Err(AppError::source_error(format!(
                                 "Failed to fetch content: HTTPS error: {}, HTTP fallback error: {}",
-                                e, fallback_e
+                                UrlUtils::obfuscate_credentials(&e.to_string()),
+                                UrlUtils::obfuscate_credentials(&fallback_e.to_string())
                             )))
                         }
                     }

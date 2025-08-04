@@ -7,7 +7,10 @@
 use crate::models::Channel;
 use crate::pipeline::models::{PipelineArtifact, ArtifactType, ContentType, ProcessingStage};
 use crate::pipeline::engines::rule_processor::{FieldModification, EpgProgram};
+use crate::pipeline::traits::{PipelineStage, ProgressAware};
+use crate::pipeline::error::PipelineError;
 use crate::logo_assets::service::LogoAssetService;
+use crate::services::progress_service::ProgressManager;
 use sandboxed_file_manager::SandboxedManager;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -32,6 +35,7 @@ pub struct LogoCachingStage {
     pipeline_execution_prefix: String,
     logo_service: Arc<LogoAssetService>,
     config: LogoCachingConfig,
+    progress_manager: Option<Arc<ProgressManager>>,
 }
 
 /// Classification of logo URLs for processing decisions
@@ -152,13 +156,29 @@ impl LogoCachingStage {
         pipeline_execution_prefix: String,
         logo_service: Arc<LogoAssetService>,
         config: LogoCachingConfig,
+        progress_manager: Option<Arc<ProgressManager>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
             file_manager,
             pipeline_execution_prefix,
             logo_service,
             config,
+            progress_manager,
         })
+    }
+    
+    /// Helper method for reporting progress
+    async fn report_progress(&self, percentage: f64, message: &str) {
+        if let Some(pm) = &self.progress_manager {
+            if let Some(updater) = pm.get_stage_updater("logo_caching").await {
+                updater.update_progress(percentage, message).await;
+            }
+        }
+    }
+    
+    /// Set the progress manager for this stage
+    pub fn set_progress_manager(&mut self, progress_manager: Arc<ProgressManager>) {
+        self.progress_manager = Some(progress_manager);
     }
 
     /// Process channels from a pipeline artifact
@@ -358,6 +378,10 @@ impl LogoCachingStage {
                     batch_index + 1, total_batches, processed_count, total_channels, progress_pct, 
                     total_cached, cache_failures, cache_hits, total_downloaded_bytes, elapsed, estimated_remaining
                 );
+                
+                // Send SSE progress update
+                let progress_message = format!("Caching logos: {}/{} channels ({:.1}%)", processed_count, total_channels, progress_pct);
+                self.report_progress(progress_pct as f64, &progress_message).await;
             } else {
                 // Just log batch completion without full progress details
                 debug!("Completed logo caching batch {}/{}: processed={} duration={}", 
@@ -441,18 +465,24 @@ impl LogoCachingStage {
         info!("Starting logo caching stage with {} input artifacts", input_artifacts.len());
         let mut output_artifacts = Vec::new();
         
-        for artifact in input_artifacts {
+        let total_artifacts = input_artifacts.len();
+        for (artifact_index, artifact) in input_artifacts.into_iter().enumerate() {
+            let base_progress = 30.0 + (artifact_index as f64 / total_artifacts as f64 * 60.0); // 30% to 90%
+            
             let processed_artifact = match artifact.artifact_type.content {
                 ContentType::Channels => {
+                    self.report_progress(base_progress, &format!("Caching channel logos {}/{}", artifact_index + 1, total_artifacts)).await;
                     // Process channels through existing channel logic
                     self.process_channel_artifact(artifact).await?
                 }
                 ContentType::EpgPrograms => {
+                    self.report_progress(base_progress, &format!("Caching EPG program logos {}/{}", artifact_index + 1, total_artifacts)).await;
                     // Process EPG programs with program_icon field
                     self.process_epg_artifact(artifact).await?
                 }
                 _ => {
                     // Pass through other content types unchanged
+                    self.report_progress(base_progress, &format!("Processing artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     debug!("Passing through artifact of type {:?} unchanged", artifact.artifact_type.content);
                     artifact
                 }
@@ -741,5 +771,38 @@ mod tests {
         
         // This test demonstrates the expected processing logic
         // In a real test, we'd mock LogoAssetService to verify the behavior
+    }
+}
+
+impl ProgressAware for LogoCachingStage {
+    fn get_progress_manager(&self) -> Option<&Arc<ProgressManager>> {
+        self.progress_manager.as_ref()
+    }
+}
+
+#[async_trait::async_trait]
+impl PipelineStage for LogoCachingStage {
+    async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
+        self.report_progress(10.0, "Initializing logo cache").await;
+        let result = self.process(input).await
+            .map_err(|e| PipelineError::stage_error("logo_caching", format!("Logo caching failed: {}", e)))?;
+        self.report_progress(100.0, "Logo caching completed").await;
+        Ok(result)
+    }
+    
+    fn stage_id(&self) -> &'static str {
+        "logo_caching"
+    }
+    
+    fn stage_name(&self) -> &'static str {
+        "Logo Caching"
+    }
+    
+    async fn cleanup(&mut self) -> Result<(), PipelineError> {
+        Ok(())
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

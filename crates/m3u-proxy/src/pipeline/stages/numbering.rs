@@ -4,10 +4,14 @@
 //! with priority-based conflict resolution and efficient single-pass algorithm.
 
 use crate::pipeline::models::{PipelineArtifact, ArtifactType, ContentType, ProcessingStage};
+use crate::pipeline::traits::{PipelineStage, ProgressAware};
+use crate::pipeline::error::PipelineError;
 use crate::models::Channel;
+use crate::services::progress_service::ProgressManager;
 use sandboxed_file_manager::SandboxedManager;
 use serde_json;
 use std::collections::{HashSet, BTreeSet};
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn, debug};
 use crate::utils::human_format::format_duration_precise;
@@ -16,6 +20,7 @@ pub struct NumberingStage {
     file_manager: SandboxedManager,
     pipeline_execution_prefix: String,
     starting_channel_number: u32,
+    progress_manager: Option<Arc<ProgressManager>>,
 }
 
 impl NumberingStage {
@@ -23,12 +28,28 @@ impl NumberingStage {
         file_manager: SandboxedManager, 
         pipeline_execution_prefix: String,
         starting_channel_number: u32,
+        progress_manager: Option<Arc<ProgressManager>>,
     ) -> Self {
         Self {
             file_manager,
             pipeline_execution_prefix,
             starting_channel_number,
+            progress_manager,
         }
+    }
+    
+    /// Helper method for reporting progress
+    async fn report_progress(&self, percentage: f64, message: &str) {
+        if let Some(pm) = &self.progress_manager {
+            if let Some(updater) = pm.get_stage_updater("numbering").await {
+                updater.update_progress(percentage, message).await;
+            }
+        }
+    }
+    
+    /// Set the progress manager for this stage
+    pub fn set_progress_manager(&mut self, progress_manager: Arc<ProgressManager>) {
+        self.progress_manager = Some(progress_manager);
     }
     
     pub async fn process(&self, input_artifacts: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, Box<dyn std::error::Error>> {
@@ -40,9 +61,13 @@ impl NumberingStage {
         let mut total_numbers_assigned = 0;
         let mut total_channo_conflicts_resolved = 0;
         
-        for artifact in input_artifacts {
+        let total_artifacts = input_artifacts.len();
+        for (artifact_index, artifact) in input_artifacts.into_iter().enumerate() {
+            let progress_percentage = 40.0 + (artifact_index as f64 / total_artifacts as f64 * 50.0); // 40% to 90%
+            
             match artifact.artifact_type.content {
                 ContentType::Channels => {
+                    self.report_progress(progress_percentage, &format!("Numbering channels {}/{}", artifact_index + 1, total_artifacts)).await;
                     let (numbered_artifact, processed, assigned, conflicts) = self.process_channel_artifact(artifact).await?;
                     output_artifacts.push(numbered_artifact);
                     total_channels_processed += processed;
@@ -50,11 +75,13 @@ impl NumberingStage {
                     total_channo_conflicts_resolved += conflicts;
                 }
                 ContentType::EpgPrograms => {
+                    self.report_progress(progress_percentage, &format!("Processing EPG artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     // EPG data: copy content to maintain consistent naming
                     let copied_artifact = self.copy_epg_artifact(artifact).await?;
                     output_artifacts.push(copied_artifact);
                 }
                 _ => {
+                    self.report_progress(progress_percentage, &format!("Processing artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     // Pass through other content types unchanged
                     output_artifacts.push(artifact);
                 }
@@ -62,6 +89,7 @@ impl NumberingStage {
         }
         
         let stage_duration = stage_start.elapsed();
+        self.report_progress(95.0, &format!("Finalizing: {} channels numbered", total_numbers_assigned)).await;
         info!(
             "Numbering stage completed: duration={} channels_processed={} numbers_assigned={} channo_conflicts_resolved={}",
             format_duration_precise(stage_duration), total_channels_processed, total_numbers_assigned, total_channo_conflicts_resolved
@@ -166,6 +194,10 @@ impl NumberingStage {
             debug!("Numbering progress: starting analysis of {} channels (0.0%), elapsed: {}", 
                    total_channels, format_duration_precise(algorithm_start.elapsed()));
             
+            // Broadcast progress update via SSE
+            let progress_message = format!("Analyzing {} channels for numbering", total_channels);
+            self.report_progress(10.0, &progress_message).await;
+            
             // Start interval-driven progress updates
             let total_for_task = total_channels;
             let start_time = algorithm_start;
@@ -232,6 +264,10 @@ impl NumberingStage {
         if total_channels > 1000 {
             debug!("Numbering progress: first pass complete, {} channels analyzed (33.3%), elapsed: {}", 
                    total_channels, format_duration_precise(algorithm_start.elapsed()));
+            
+            // Broadcast progress update via SSE
+            let progress_message = format!("First pass complete: {} channels analyzed", total_channels);
+            self.report_progress(33.0, &progress_message).await;
         }
         
         // Build available number pool efficiently - start from starting_channel_number for sequential fills
@@ -281,6 +317,10 @@ impl NumberingStage {
         if total_channels > 1000 {
             debug!("Numbering progress: pool building complete, {} available numbers (66.7%), elapsed: {}", 
                    available_numbers.len(), format_duration_precise(algorithm_start.elapsed()));
+            
+            // Broadcast progress update via SSE
+            let progress_message = format!("Pool building complete: {} available numbers", available_numbers.len());
+            self.report_progress(67.0, &progress_message).await;
         }
         
         // Second pass: assign numbers to channels that need them
@@ -317,6 +357,10 @@ impl NumberingStage {
         if total_channels > 1000 {
             debug!("Numbering progress: assignment complete, {} channels processed (100.0%), elapsed: {}", 
                    total_channels, format_duration_precise(total_algorithm_duration));
+            
+            // Broadcast progress update via SSE
+            let progress_message = format!("Assignment complete: {} channels processed", total_channels);
+            self.report_progress(100.0, &progress_message).await;
         }
         
         // Abort progress logging
@@ -364,5 +408,38 @@ impl NumberingStage {
         }
         
         Ok((assigned_count, channo_conflicts_resolved))
+    }
+}
+
+impl ProgressAware for NumberingStage {
+    fn get_progress_manager(&self) -> Option<&Arc<ProgressManager>> {
+        self.progress_manager.as_ref()
+    }
+}
+
+#[async_trait::async_trait]
+impl PipelineStage for NumberingStage {
+    async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
+        self.report_progress(20.0, "Initializing channel numbering").await;
+        let result = self.process(input).await
+            .map_err(|e| PipelineError::stage_error("numbering", format!("Numbering failed: {}", e)))?;
+        self.report_progress(100.0, "Channel numbering completed").await;
+        Ok(result)
+    }
+    
+    fn stage_id(&self) -> &'static str {
+        "numbering"
+    }
+    
+    fn stage_name(&self) -> &'static str {
+        "Numbering"
+    }
+    
+    async fn cleanup(&mut self) -> Result<(), PipelineError> {
+        Ok(())
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

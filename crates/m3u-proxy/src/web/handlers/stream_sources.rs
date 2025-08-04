@@ -35,6 +35,11 @@ fn default_update_linked() -> bool {
     true
 }
 
+/// Default value for is_active field (defaults to true)
+fn default_is_active() -> bool {
+    true
+}
+
 /// Request DTO for creating a stream source
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateStreamSourceRequest {
@@ -91,6 +96,9 @@ pub struct UpdateStreamSourceRequest {
     /// Whether to update linked sources with the same URL (defaults to true)
     #[serde(default = "default_update_linked")]
     pub update_linked: bool,
+    /// Whether the source is active (defaults to true)
+    #[serde(default = "default_is_active")]
+    pub is_active: bool,
 }
 
 impl UpdateStreamSourceRequest {
@@ -112,7 +120,7 @@ impl UpdateStreamSourceRequest {
             password: self.password,
             field_map: self.field_map,
             ignore_channel_numbers: self.ignore_channel_numbers,
-            is_active: true, // Default to active for updates
+            is_active: self.is_active,
             update_linked: self.update_linked,
         })
     }
@@ -383,9 +391,21 @@ pub async fn update_stream_source(
         .update_with_validation(uuid, service_request)
         .await
     {
-        Ok(source) => {
-            let response = StreamSourceResponse::from(source);
-            ok(response).into_response()
+        Ok(_source) => {
+            // Get the updated source with details including channel count
+            match state.stream_source_service.get_with_details(uuid).await {
+                Ok(source_with_details) => {
+                    let mut response = StreamSourceResponse::from(source_with_details.source);
+                    response.channel_count = source_with_details.channel_count;
+                    response.next_scheduled_update = source_with_details.next_scheduled_update;
+                    ok(response).into_response()
+                }
+                Err(e) => {
+                    tracing::error!("Failed to get updated stream source details {}: {}", uuid, e);
+                    crate::web::responses::internal_error(&format!("Failed to get updated source details: {}", e))
+                        .into_response()
+                }
+            }
         }
         Err(e) => {
             tracing::error!("Failed to update stream source {}: {}", uuid, e);

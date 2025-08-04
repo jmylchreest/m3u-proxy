@@ -833,8 +833,14 @@ impl ResolvedRelayConfig {
             }
         }
         
-        // Hardware acceleration video filters (must come after codec specification)
-        if self.profile.enable_hardware_acceleration {
+        // Hardware acceleration video filters (only when encoding, not copying)
+        let should_apply_hwaccel_filters = if let Some(strategy) = mapping_strategy {
+            self.profile.enable_hardware_acceleration && strategy.video_mapping.is_some() && !strategy.video_copy
+        } else {
+            self.profile.enable_hardware_acceleration && self.profile.video_codec != VideoCodec::Copy
+        };
+        
+        if should_apply_hwaccel_filters {
             if let Some(hwaccel_filters) = self.generate_hwaccel_video_filters(hwaccel_caps) {
                 args.extend(hwaccel_filters);
             }

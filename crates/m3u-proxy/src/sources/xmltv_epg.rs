@@ -21,7 +21,7 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{EpgSource, EpgSourceType, EpgProgram};
 use crate::sources::traits::{
     EpgSourceHandler, EpgProgramIngestor, FullEpgSourceHandler, SourceValidationResult,
-    EpgSourceCapabilities, EpgIngestionProgress, EpgProgressCallback, EpgSourceHandlerSummary,
+    EpgSourceCapabilities, EpgSourceHandlerSummary,
 };
 use crate::utils::time::{detect_timezone_from_xmltv, log_timezone_detection};
 use crate::utils::url::UrlUtils;
@@ -100,11 +100,7 @@ impl XmltvEpgHandler {
         &self,
         source: &EpgSource,
         content: &str,
-        progress_callback: Option<&EpgProgressCallback>,
     ) -> AppResult<Vec<EpgProgram>> {
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Parsing XMLTV content"));
-        }
 
         // Parse using our custom quick-xml parser
         let xmltv_programs = crate::utils::xmltv_parser::parse_xmltv_programs(content)?;
@@ -119,10 +115,6 @@ impl XmltvEpgHandler {
 
         // Skip channel processing - programs-only approach for database-first generation
 
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Converting programs")
-                .update_step("Converting programs", Some(50.0)));
-        }
 
         // Convert from SimpleXmltvProgram to EpgProgram
         let mut epg_programs = Vec::new();
@@ -200,10 +192,6 @@ impl XmltvEpgHandler {
             );
         }
 
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Parsing complete")
-                .update_step("Parsing complete", Some(100.0)));
-        }
 
         info!(
             "Parsed XMLTV EPG for source '{}': {} programs",
@@ -299,29 +287,12 @@ impl EpgSourceHandler for XmltvEpgHandler {
 #[async_trait]
 impl EpgProgramIngestor for XmltvEpgHandler {
     async fn ingest_epg_programs(&self, source: &EpgSource) -> AppResult<Vec<EpgProgram>> {
-        self.ingest_epg_programs_with_progress(source, None).await
-    }
-
-    async fn ingest_epg_programs_with_progress(
-        &self,
-        source: &EpgSource,
-        progress_callback: Option<&EpgProgressCallback>,
-    ) -> AppResult<Vec<EpgProgram>> {
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Fetching XMLTV content"));
-        }
-
         // Fetch content
         let content = self.fetch_xmltv_content(&source.url).await?;
-
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Fetching complete")
-                .update_step("Parsing XMLTV", Some(25.0)));
-        }
-
         // Parse content
-        self.parse_xmltv_content(source, &content, progress_callback).await
+        self.parse_xmltv_content(source, &content).await
     }
+
 
     async fn estimate_program_count(&self, source: &EpgSource) -> AppResult<Option<u32>> {
         // For XMLTV, we can't easily estimate without downloading and parsing
@@ -330,204 +301,45 @@ impl EpgProgramIngestor for XmltvEpgHandler {
         Ok(None)
     }
 
-    async fn ingest_epg_programs_with_universal_progress(
+
+    async fn ingest_epg_programs_with_progress_updater(
         &self,
         source: &EpgSource,
-        progress_callback: Option<&crate::sources::traits::UniversalCallback>,
+        progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
     ) -> AppResult<Vec<EpgProgram>> {
-        use crate::services::progress_service::{UniversalProgress, OperationType, UniversalState};
-        use uuid::Uuid;
+        info!("Starting XMLTV EPG ingestion with ProgressStageUpdater for source: {}", source.name);
 
-        info!("Starting XMLTV EPG ingestion with universal progress for source: {}", source.name);
-        let source_id = Uuid::new_v4(); // Generate operation ID
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("XMLTV EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Connecting)
-            .update_step("Connecting to XMLTV source".to_string());
-            callback(progress);
+        // Update to starting state
+        if let Some(updater) = progress_updater {
+            updater.update_progress(0.0, &format!("Starting XMLTV ingestion for {}", source.name)).await;
         }
 
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("XMLTV EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Downloading)
-            .update_step("Fetching XMLTV content".to_string())
-            .update_percentage(10.0);
-            callback(progress);
+        // Update progress: fetching
+        if let Some(updater) = progress_updater {
+            updater.update_progress(10.0, "Fetching XMLTV data").await;
         }
 
-        // Fetch content
-        let content = match self.fetch_xmltv_content(&source.url).await {
-            Ok(content) => content,
-            Err(e) => {
-                if let Some(callback) = progress_callback {
-                    let progress = UniversalProgress::new(
-                        source_id,
-                        OperationType::EpgIngestion,
-                        format!("XMLTV EPG Ingestion: {}", source.name)
-                    )
-                    .set_error(format!("Failed to fetch XMLTV content: {}", e));
-                    callback(progress);
-                }
-                return Err(e);
-            }
-        };
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("XMLTV EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Processing)
-            .update_step("Parsing XMLTV content".to_string())
-            .update_percentage(25.0);
-            callback(progress);
-        }
-
-        // Parse using our custom quick-xml parser
-        let xmltv_programs = match crate::utils::xmltv_parser::parse_xmltv_programs(&content) {
-            Ok(programs) => programs,
-            Err(e) => {
-                if let Some(callback) = progress_callback {
-                    let progress = UniversalProgress::new(
-                        source_id,
-                        OperationType::EpgIngestion,
-                        format!("XMLTV EPG Ingestion: {}", source.name)
-                    )
-                    .set_error(format!("Failed to parse XMLTV: {}", e));
-                    callback(progress);
-                }
-                return Err(e);
-            }
-        };
-
-        // Detect timezone
-        let detected_tz = detect_timezone_from_xmltv(&content);
-        if let Some(tz) = &detected_tz {
-            log_timezone_detection(&source.name, Some(tz), tz);
-        } else {
-            log_timezone_detection(&source.name, None, "UTC");
-        }
-
-        // Skip channel processing - programs-only approach for database-first generation
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("XMLTV EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Processing)
-            .update_step("Converting programs".to_string())
-            .update_percentage(75.0);
-            callback(progress);
-        }
-
-        // Convert from SimpleXmltvProgram to EpgProgram
-        let mut epg_programs = Vec::new();
-        let mut seen_programs = HashSet::new();
-        let mut duplicate_program_count = 0;
+        // Fetch content using existing method
+        let content = self.fetch_xmltv_content(&source.url).await?;
         
-        for xmltv_program in xmltv_programs {
-            // Create deduplication key: channel_id + start_time + program_title
-            let program_title = xmltv_program.title.as_ref()
-                .map(|t| t.as_str())
-                .unwrap_or("Unknown Program");
-            let dedup_key = format!("{}|{}|{}", 
-                xmltv_program.channel,
-                xmltv_program.start,
-                program_title
-            );
-            
-            // Skip duplicate programs
-            if seen_programs.contains(&dedup_key) {
-                duplicate_program_count += 1;
-                debug!("Skipping duplicate program '{}' on channel '{}' at {}", 
-                       program_title, xmltv_program.channel, xmltv_program.start);
-                continue;
-            }
-            seen_programs.insert(dedup_key);
-            // Parse start and stop times
-            let start_time = chrono::DateTime::parse_from_str(&xmltv_program.start, "%Y%m%d%H%M%S %z")
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&xmltv_program.start, "%Y%m%d%H%M%S")
-                    .map(|dt| dt.and_utc().with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())))
-                .map_err(|e| AppError::source_error(format!("Failed to parse start time '{}': {}", xmltv_program.start, e)))?;
-
-            let end_time = if let Some(stop) = xmltv_program.stop {
-                chrono::DateTime::parse_from_str(&stop, "%Y%m%d%H%M%S %z")
-                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(&stop, "%Y%m%d%H%M%S")
-                        .map(|dt| dt.and_utc().with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())))
-                    .map_err(|e| AppError::source_error(format!("Failed to parse stop time '{}': {}", stop, e)))?
-            } else {
-                start_time + chrono::Duration::minutes(30)
-            };
-
-            // Channel name will be resolved during generation stage from M3U channels
-            let channel_name = String::new();
-
-            let epg_program = EpgProgram {
-                id: uuid::Uuid::new_v4(),
-                source_id: source.id,
-                channel_id: xmltv_program.channel,
-                channel_name,
-                program_title: xmltv_program.title.unwrap_or_else(|| "Unknown Program".to_string()),
-                program_description: xmltv_program.description,
-                program_category: xmltv_program.category,
-                start_time: start_time.with_timezone(&chrono::Utc),
-                end_time: end_time.with_timezone(&chrono::Utc),
-                episode_num: None,
-                season_num: None,
-                rating: None,
-                language: xmltv_program.language,
-                subtitles: None,
-                aspect_ratio: None,
-                program_icon: xmltv_program.icon,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            };
-            epg_programs.push(epg_program);
+        // Update progress: parsing
+        if let Some(updater) = progress_updater {
+            updater.update_progress(30.0, "Parsing XMLTV content").await;
         }
+
+        // Parse XMLTV using existing method (no progress callback for new API)
+        let programs = self.parse_xmltv_content(source, &content).await?;
         
-        // Clean up deduplication set to free memory
-        drop(seen_programs);
-        
-        if duplicate_program_count > 0 {
-            info!(
-                "Removed {} duplicate program entries from XMLTV feed for source '{}'", 
-                duplicate_program_count, source.name
-            );
+        // Update progress: processing complete
+        if let Some(updater) = progress_updater {
+            updater.update_progress(100.0, &format!("Completed: {} programs ingested", programs.len())).await;
+            updater.complete_stage().await;
         }
 
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("XMLTV EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Completed)
-            .update_step("EPG ingestion complete".to_string())
-            .update_percentage(100.0)
-            .update_items(epg_programs.len(), Some(epg_programs.len()));
-            callback(progress);
-        }
-
-        info!(
-            "Parsed XMLTV EPG for source '{}': {} programs",
-            source.name,
-            epg_programs.len()
-        );
-
-        Ok(epg_programs)
+        info!("XMLTV EPG ingestion completed for source: {} ({} programs)", source.name, programs.len());
+        Ok(programs)
     }
+
 }
 
 impl FullEpgSourceHandler for XmltvEpgHandler {

@@ -17,6 +17,8 @@ pub mod engines;
 pub mod models;
 pub mod stages;
 pub mod services;
+pub mod traits;
+pub mod error;
 
 // Re-export key types for easier access
 pub use core::{PipelineBuilder, PipelineConfig, PipelineOrchestrator, PipelineOrchestratorFactory};
@@ -27,9 +29,11 @@ pub use engines::{
     DataMappingValidator, FilteringValidator, NumberingValidator, GenerationValidator,
     ValidationFactory, RuleValidationService
 };
-pub use models::{PipelineExecution, PipelineStage, PipelineStatus, StageStatus};
+pub use models::{PipelineExecution, PipelineStageExecution, PipelineStatus, StageStatus};
 pub use stages::{DataMappingStage, FilteringStage, LogoCachingStage, LogoCachingConfig, NumberingStage, GenerationStage};
 pub use services::{EngineBasedDataMappingService, PipelineValidationService, ApiValidationService};
+pub use traits::{ProgressAware, PipelineStage, PipelineStageFactory};
+pub use error::PipelineError;
 
 /// Pipeline stage names for consistent naming across the system
 pub mod stage_names {

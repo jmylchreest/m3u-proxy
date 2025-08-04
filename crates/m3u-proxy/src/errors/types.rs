@@ -49,6 +49,10 @@ pub enum AppError {
     #[error("External service error: {service} - {message}")]
     ExternalService { service: String, message: String },
     
+    /// Operation already in progress errors
+    #[error("Operation already in progress: {operation_type} on {resource}")]
+    OperationInProgress { operation_type: String, resource: String },
+    
     /// Generic internal errors
     #[error("Internal error: {message}")]
     Internal { message: String },
@@ -183,6 +187,14 @@ impl AppError {
         Self::ExternalService {
             service: service.into(),
             message: message.into(),
+        }
+    }
+    
+    /// Create an operation in progress error
+    pub fn operation_in_progress<O: Into<String>, R: Into<String>>(operation_type: O, resource: R) -> Self {
+        Self::OperationInProgress {
+            operation_type: operation_type.into(),
+            resource: resource.into(),
         }
     }
     

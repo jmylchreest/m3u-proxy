@@ -41,9 +41,6 @@ pub struct IngestionStateManager {
     progress_tx: ProgressSender,
     cancellation_tokens: Arc<RwLock<HashMap<Uuid, broadcast::Sender<()>>>>,
     processing_info: Arc<RwLock<HashMap<Uuid, ProcessingInfo>>>,
-    // Bridge to UniversalProgress system
-    #[allow(dead_code)]
-    progress_service: Option<std::sync::Arc<crate::services::progress_service::ProgressService>>,
 }
 
 impl IngestionStateManager {
@@ -54,23 +51,9 @@ impl IngestionStateManager {
             progress_tx,
             cancellation_tokens: Arc::new(RwLock::new(HashMap::new())),
             processing_info: Arc::new(RwLock::new(HashMap::new())),
-            progress_service: None,
         }
     }
 
-    /// Create new state manager with UniversalProgress service bridge
-    pub fn new_with_progress_service(
-        progress_service: std::sync::Arc<crate::services::progress_service::ProgressService>
-    ) -> Self {
-        let (progress_tx, _) = broadcast::channel(1000);
-        Self {
-            states: Arc::new(RwLock::new(HashMap::new())),
-            progress_tx,
-            cancellation_tokens: Arc::new(RwLock::new(HashMap::new())),
-            processing_info: Arc::new(RwLock::new(HashMap::new())),
-            progress_service: Some(progress_service),
-        }
-    }
 
     #[allow(dead_code)]
     pub fn subscribe(&self) -> ProgressReceiver {

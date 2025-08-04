@@ -13,7 +13,8 @@ pub mod log_capture;
 pub mod logo;
 pub mod memory_cleanup;
 pub mod memory_config;
-pub mod memory_context;
+// pub mod memory_context; // Temporarily disabled - needs simplification
+// pub mod memory_pressure_calculator; // Removed - no longer needed
 pub mod pressure_monitor;
 pub mod regex_preprocessor;
 pub mod sqlite;
@@ -33,12 +34,8 @@ pub use human_format::{format_duration, format_memory, format_memory_delta};
 pub use memory_cleanup::{
     CleanupStrategy, MemoryCleanable, MemoryCleanupCoordinator, StageTransition,
 };
-pub use memory_config::{MemoryMonitoringConfig, MemoryVerbosity};
-pub use memory_context::{MemoryAnalysis, MemoryContext, MemoryEfficiencyTrend, StageMemoryInfo};
-pub use pressure_monitor::{
-    MemoryLimitStatus, MemorySnapshot, MemoryStats, SimpleMemoryMonitor, SystemPressureAssessment,
-    SystemPressureMetrics,
-};
+// Memory monitoring modules available for future pipeline integration
+// but not exposed to prevent accidental usage
 pub use regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
 pub use system_manager::SystemManager;
 pub use uuid_parser::{resolve_proxy_id, uuid_to_base64, uuid_to_hex32};

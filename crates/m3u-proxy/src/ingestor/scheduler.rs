@@ -9,12 +9,10 @@ use tokio::time::{sleep_until, Instant};
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
-use super::{IngestionStateManager, IngestorService};
+use super::IngestorService;
 use crate::database::Database;
-use crate::ingestor::state_manager::ProcessingTrigger;
 use crate::models::*;
-use crate::services::progress_service::ProgressService;
-use crate::services::ProxyRegenerationService;
+use crate::services::{ProxyRegenerationService, StreamSourceBusinessService, EpgSourceService};
 
 pub type CacheInvalidationSender = broadcast::Sender<()>;
 pub type CacheInvalidationReceiver = broadcast::Receiver<()>;
@@ -87,6 +85,8 @@ pub enum SchedulerEvent {
 
 pub struct SchedulerService {
     ingestor: IngestorService,
+    stream_source_service: Arc<StreamSourceBusinessService>,
+    epg_source_service: Arc<EpgSourceService>,
     database: Database,
     run_missed_immediately: bool,
     cached_sources: Arc<RwLock<HashMap<Uuid, CachedSource>>>,
@@ -100,17 +100,20 @@ pub struct SchedulerService {
 
 impl SchedulerService {
     pub fn new(
-        _state_manager: IngestionStateManager,
+        progress_service: Arc<crate::services::progress_service::ProgressService>,
         database: Database,
+        stream_source_service: Arc<StreamSourceBusinessService>,
+        epg_source_service: Arc<EpgSourceService>,
         run_missed_immediately: bool,
         cache_invalidation_rx: Option<CacheInvalidationReceiver>,
         proxy_regeneration_service: Option<ProxyRegenerationService>,
-        progress_service: Arc<ProgressService>,
     ) -> Self {
         let ingestor = IngestorService::new(progress_service);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         Self {
             ingestor,
+            stream_source_service,
+            epg_source_service,
             database,
             run_missed_immediately,
             cached_sources: Arc::new(RwLock::new(HashMap::new())),
@@ -408,42 +411,115 @@ impl SchedulerService {
                 self.process_stream_source_update(stream_source).await;
 
                 // If this stream source has a linked EPG source, refresh it too
+                // BUT only if it hasn't been updated recently (prevent cascading loops)
                 if let Ok(Some(linked_epg)) = self
                     .database
                     .find_linked_epg_by_stream_id(stream_source.id)
                     .await
                 {
-                    info!(
-                        "Refreshing linked EPG source '{}' after stream source '{}' update",
-                        linked_epg.name, stream_source.name
-                    );
-                    self.process_epg_source_update(&linked_epg).await;
+                    // Check if linked EPG was updated recently (within last 5 minutes)
+                    // Use scheduler cache to get more accurate timing
+                    let should_refresh_linked = {
+                        let cache = self.cached_sources.read().await;
+                        if let Some(cached_epg) = cache.get(&linked_epg.id) {
+                            if let Some(last_ingested) = cached_epg.source.last_ingested_at() {
+                                let time_since_last = chrono::Utc::now().signed_duration_since(last_ingested);
+                                time_since_last.num_minutes() >= 5
+                            } else {
+                                true // Never ingested, safe to refresh
+                            }
+                        } else {
+                            true // Not in cache, safe to refresh
+                        }
+                    };
+                    
+                    if should_refresh_linked {
+                        info!(
+                            "Refreshing linked EPG source '{}' after stream source '{}' update",
+                            linked_epg.name, stream_source.name
+                        );
+                        self.process_epg_source_update(&linked_epg).await;
+                    } else {
+                        info!(
+                            "Skipping linked EPG source '{}' refresh - updated recently (within 5 minutes)",
+                            linked_epg.name
+                        );
+                    }
                 }
             }
             SchedulableSource::Epg(epg_source) => {
                 self.process_epg_source_update(epg_source).await;
 
                 // If this EPG source has a linked stream source, refresh it too
+                // BUT only if it hasn't been updated recently (prevent cascading loops)
                 if let Ok(Some(linked_stream)) = self
                     .database
                     .find_linked_stream_by_epg_id(epg_source.id)
                     .await
                 {
-                    info!(
-                        "Refreshing linked stream source '{}' after EPG source '{}' update",
-                        linked_stream.name, epg_source.name
-                    );
-                    self.process_stream_source_update(&linked_stream).await;
+                    // Check if linked stream was updated recently (within last 5 minutes)
+                    // Use scheduler cache to get more accurate timing
+                    let should_refresh_linked = {
+                        let cache = self.cached_sources.read().await;
+                        if let Some(cached_stream) = cache.get(&linked_stream.id) {
+                            if let Some(last_ingested) = cached_stream.source.last_ingested_at() {
+                                let time_since_last = chrono::Utc::now().signed_duration_since(last_ingested);
+                                time_since_last.num_minutes() >= 5
+                            } else {
+                                true // Never ingested, safe to refresh
+                            }
+                        } else {
+                            true // Not in cache, safe to refresh
+                        }
+                    };
+                    
+                    if should_refresh_linked {
+                        info!(
+                            "Refreshing linked stream source '{}' after EPG source '{}' update",
+                            linked_stream.name, epg_source.name
+                        );
+                        self.process_stream_source_update(&linked_stream).await;
+                    } else {
+                        info!(
+                            "Skipping linked stream source '{}' refresh - updated recently (within 5 minutes)",
+                            linked_stream.name
+                        );
+                    }
                 }
             }
         }
     }
 
     async fn process_stream_source_update(&self, source: &StreamSource) {
-        // Use the IngestorService orchestrator to ensure identical behavior
+        // Create progress manager for this ingestion operation
+        let progress_manager = match self.ingestor.progress_service.create_staged_progress_manager(
+            source.id, // Use source ID as owner
+            "stream_source".to_string(),
+            crate::services::progress_service::OperationType::StreamIngestion,
+            format!("Ingest Stream Source: {}", source.name),
+        ).await {
+            Ok(manager) => {
+                // Add ingestion stage
+                let manager_with_stage: std::sync::Arc<crate::services::progress_service::ProgressManager> = manager.add_stage("stream_ingestion", "Stream Ingestion").await;
+                Some(manager_with_stage)
+            },
+            Err(e) => {
+                warn!("Failed to create progress manager for stream source ingestion {}: {} - continuing without progress", source.name, e);
+                None
+            }
+        };
+
+        // Get progress updater if we have a progress manager
+        let progress_updater = if let Some(ref manager) = progress_manager {
+            manager.get_stage_updater("stream_ingestion").await
+        } else {
+            None
+        };
+
+        // Use StreamSourceService with progress tracking
         let success = match self
-            .ingestor
-            .ingest_source_with_trigger(self.database.clone(), source, ProcessingTrigger::Scheduler)
+            .stream_source_service
+            .refresh_with_progress_updater(source, progress_updater.as_ref())
             .await
         {
             Ok(_channel_count) => {
@@ -487,6 +563,17 @@ impl SchedulerService {
             }
         };
 
+        // Complete the progress operation
+        if let Some(manager) = progress_manager {
+            if success {
+                manager.complete().await;
+                info!("Completed stream source ingestion progress for {}", source.name);
+            } else {
+                manager.fail(&format!("Stream source ingestion failed for {}", source.name)).await;
+                warn!("Failed stream source ingestion progress for {}", source.name);
+            }
+        }
+
         // Trigger proxy auto-regeneration after successful stream source update
         if success {
             if let Some(ref proxy_service) = self.proxy_regeneration_service {
@@ -497,13 +584,38 @@ impl SchedulerService {
     }
 
     async fn process_epg_source_update(&self, source: &EpgSource) {
-        // Use the IngestorService orchestrator to ensure identical behavior
+        // Create progress manager for this ingestion operation
+        let progress_manager = match self.ingestor.progress_service.create_staged_progress_manager(
+            source.id, // Use source ID as owner
+            "epg_source".to_string(),
+            crate::services::progress_service::OperationType::EpgIngestion,
+            format!("Ingest EPG Source: {}", source.name),
+        ).await {
+            Ok(manager) => {
+                // Add ingestion stage
+                let manager_with_stage: std::sync::Arc<crate::services::progress_service::ProgressManager> = manager.add_stage("epg_ingestion", "EPG Ingestion").await;
+                Some(manager_with_stage)
+            },
+            Err(e) => {
+                warn!("Failed to create progress manager for EPG source ingestion {}: {} - continuing without progress", source.name, e);
+                None
+            }
+        };
+
+        // Get progress updater if we have a progress manager
+        let progress_updater = if let Some(ref manager) = progress_manager {
+            manager.get_stage_updater("epg_ingestion").await
+        } else {
+            None
+        };
+
+        // Use EpgSourceService with progress tracking
         let success = match self
-            .ingestor
-            .ingest_epg_source(self.database.clone(), source, ProcessingTrigger::Scheduler)
+            .epg_source_service
+            .ingest_programs_with_progress_updater(source, progress_updater.as_ref())
             .await
         {
-            Ok((_channel_count, _program_count)) => {
+            Ok(_program_count) => {
                 // Update cached source data - the timestamp was already updated by the shared function
                 {
                     let mut cache = self.cached_sources.write().await;
@@ -543,6 +655,17 @@ impl SchedulerService {
                 false
             }
         };
+
+        // Complete the progress operation
+        if let Some(manager) = progress_manager {
+            if success {
+                manager.complete().await;
+                info!("Completed EPG source ingestion progress for {}", source.name);
+            } else {
+                manager.fail(&format!("EPG source ingestion failed for {}", source.name)).await;
+                warn!("Failed EPG source ingestion progress for {}", source.name);
+            }
+        }
 
         // Trigger proxy auto-regeneration after successful EPG source update
         if success {

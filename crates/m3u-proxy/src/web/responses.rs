@@ -190,6 +190,11 @@ pub fn handle_error(error: AppError) -> impl IntoResponse {
             "Web request processing failed".to_string(),
             None,
         ),
+        AppError::OperationInProgress { operation_type, resource } => (
+            StatusCode::CONFLICT,
+            format!("Operation already in progress: {} on {}", operation_type, resource),
+            None,
+        ),
         AppError::Internal { message } => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Internal error: {}", message),

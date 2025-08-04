@@ -83,7 +83,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         let id_str = id.to_string();
         let row = sqlx::query(
             r#"
-            SELECT id, name, source_type, is_inverse, is_system_default, condition_tree, created_at, updated_at
+            SELECT id, name, source_type, is_inverse, is_system_default, expression, created_at, updated_at
             FROM filters
             WHERE id = ?
             "#
@@ -113,7 +113,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
                     },
                     is_inverse: row.get("is_inverse"),
                     is_system_default: row.get("is_system_default"),
-                    condition_tree: row.get("condition_tree"),
+                    expression: row.get("expression"),
                     created_at: row.get_datetime("created_at"),
                     updated_at: row.get_datetime("updated_at"),
                 };
@@ -124,7 +124,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
     }
 
     async fn find_all(&self, query: Self::Query) -> RepositoryResult<Vec<Filter>> {
-        let mut sql = "SELECT id, name, source_type, is_inverse, is_system_default, condition_tree, created_at, updated_at FROM filters WHERE 1=1".to_string();
+        let mut sql = "SELECT id, name, source_type, is_inverse, is_system_default, expression, created_at, updated_at FROM filters WHERE 1=1".to_string();
         let mut params: Vec<String> = Vec::new();
 
         if let Some(source_type) = &query.source_type {
@@ -173,7 +173,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
                 },
                 is_inverse: row.get("is_inverse"),
                 is_system_default: row.get("is_system_default"),
-                condition_tree: row.get("condition_tree"),
+                expression: row.get("expression"),
                 created_at: row.get_datetime("created_at"),
                 updated_at: row.get_datetime("updated_at"),
             };
@@ -195,17 +195,16 @@ impl Repository<Filter, Uuid> for FilterRepository {
 
         // Parse the filter expression into a proper ConditionTree
         let parser = crate::expression_parser::ExpressionParser::new();
-        let condition_tree = parser.parse(&request.filter_expression)
+        parser.parse(&request.expression)
             .map_err(|e| RepositoryError::QueryFailed { 
                 query: "filter expression parsing".to_string(), 
                 message: format!("Invalid filter expression: {}", e) 
             })?;
-        let condition_tree_json = serde_json::to_string(&condition_tree)
-            .map_err(|e| RepositoryError::SerializationFailed(e))?;
+        // Store the expression as-is
 
         sqlx::query(
             r#"
-            INSERT INTO filters (id, name, source_type, is_inverse, condition_tree, created_at, updated_at)
+            INSERT INTO filters (id, name, source_type, is_inverse, expression, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             "#
         )
@@ -213,7 +212,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         .bind(request.name.clone())
         .bind(source_type_str)
         .bind(request.is_inverse)
-        .bind(condition_tree_json.clone())
+        .bind(&request.expression)
         .bind(now_str.clone())
         .bind(now_str)
         .execute(&self.pool)
@@ -229,7 +228,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
             source_type: request.source_type,
             is_inverse: request.is_inverse,
             is_system_default: false, // Always false for user-created filters
-            condition_tree: request.filter_expression,
+            expression: request.expression,
             created_at: now,
             updated_at: now,
         })
@@ -246,25 +245,24 @@ impl Repository<Filter, Uuid> for FilterRepository {
 
         // Parse the filter expression into a proper ConditionTree
         let parser = crate::expression_parser::ExpressionParser::new();
-        let condition_tree = parser.parse(&request.filter_expression)
+        parser.parse(&request.expression)
             .map_err(|e| RepositoryError::QueryFailed { 
                 query: "filter expression parsing".to_string(), 
                 message: format!("Invalid filter expression: {}", e) 
             })?;
-        let condition_tree_json = serde_json::to_string(&condition_tree)
-            .map_err(|e| RepositoryError::SerializationFailed(e))?;
+        // Store the expression as-is
 
         sqlx::query(
             r#"
             UPDATE filters
-            SET name = ?, source_type = ?, is_inverse = ?, condition_tree = ?, updated_at = ?
+            SET name = ?, source_type = ?, is_inverse = ?, expression = ?, updated_at = ?
             WHERE id = ?
             "#
         )
         .bind(request.name.clone())
         .bind(source_type_str)
         .bind(request.is_inverse)
-        .bind(condition_tree_json)
+        .bind(&request.expression)
         .bind(now_str)
         .bind(id_str.clone())
         .execute(&self.pool)

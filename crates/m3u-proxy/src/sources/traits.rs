@@ -10,7 +10,6 @@ use std::collections::HashMap;
 
 use crate::errors::AppResult;
 use crate::models::{StreamSource, Channel, StreamSourceType, EpgSource, EpgProgram, EpgSourceType};
-use crate::services::progress_service::UniversalProgressCallback;
 
 /// Source validation result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,53 +113,8 @@ impl SourceCapabilities {
     }
 }
 
-/// Ingestion progress information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngestionProgress {
-    /// Current processing step
-    pub current_step: String,
-    /// Total bytes to download (if known)
-    pub total_bytes: Option<u64>,
-    /// Bytes downloaded so far
-    pub downloaded_bytes: Option<u64>,
-    /// Channels parsed so far
-    pub channels_parsed: Option<u32>,
-    /// Channels successfully saved
-    pub channels_saved: Option<u32>,
-    /// Overall progress percentage (0-100)
-    pub percentage: Option<f32>,
-    /// Additional progress metadata
-    pub metadata: HashMap<String, String>,
-}
 
-impl IngestionProgress {
-    /// Create initial progress state
-    pub fn starting<S: Into<String>>(step: S) -> Self {
-        Self {
-            current_step: step.into(),
-            total_bytes: None,
-            downloaded_bytes: None,
-            channels_parsed: None,
-            channels_saved: None,
-            percentage: Some(0.0),
-            metadata: HashMap::new(),
-        }
-    }
 
-    /// Update progress with new step
-    pub fn update_step<S: Into<String>>(mut self, step: S, percentage: Option<f32>) -> Self {
-        self.current_step = step.into();
-        self.percentage = percentage;
-        self
-    }
-}
-
-/// Progress callback type for reporting ingestion progress
-/// DEPRECATED: Use UniversalProgressCallback instead
-pub type ProgressCallback = dyn Fn(IngestionProgress) + Send + Sync;
-
-/// Universal progress callback type (preferred)
-pub type UniversalCallback = Box<UniversalProgressCallback>;
 
 /// Core source handler trait
 ///
@@ -194,19 +148,8 @@ pub trait ChannelIngestor: Send + Sync {
     /// Ingest channels from a source
     async fn ingest_channels(&self, source: &StreamSource) -> AppResult<Vec<Channel>>;
 
-    /// Ingest channels with progress callback
-    async fn ingest_channels_with_progress(
-        &self,
-        source: &StreamSource,
-        progress_callback: Option<&ProgressCallback>,
-    ) -> AppResult<Vec<Channel>>;
 
-    /// Ingest channels with universal progress callback (preferred)
-    async fn ingest_channels_with_universal_progress(
-        &self,
-        source: &StreamSource,
-        progress_callback: Option<&UniversalCallback>,
-    ) -> AppResult<Vec<Channel>>;
+
 
     /// Estimate the number of channels available (for progress reporting)
     async fn estimate_channel_count(&self, source: &StreamSource) -> AppResult<Option<u32>>;
@@ -411,19 +354,18 @@ pub trait EpgProgramIngestor: Send + Sync {
     /// Ingest EPG programs from a source (programs-only mode)
     async fn ingest_epg_programs(&self, source: &EpgSource) -> AppResult<Vec<EpgProgram>>;
 
-    /// Ingest EPG programs with progress callback (programs-only mode)
-    async fn ingest_epg_programs_with_progress(
-        &self,
-        source: &EpgSource,
-        progress_callback: Option<&EpgProgressCallback>,
-    ) -> AppResult<Vec<EpgProgram>>;
 
-    /// Ingest EPG programs with universal progress callback (preferred)
-    async fn ingest_epg_programs_with_universal_progress(
+
+
+    /// Ingest EPG programs with ProgressStageUpdater (new API)
+    async fn ingest_epg_programs_with_progress_updater(
         &self,
         source: &EpgSource,
-        progress_callback: Option<&UniversalCallback>,
-    ) -> AppResult<Vec<EpgProgram>>;
+        _progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
+    ) -> AppResult<Vec<EpgProgram>> {
+        // Default implementation uses basic method
+        self.ingest_epg_programs(source).await
+    }
 
     /// Estimate the number of programs available (for progress reporting)
     async fn estimate_program_count(&self, source: &EpgSource) -> AppResult<Option<u32>>;
@@ -480,53 +422,7 @@ impl EpgSourceCapabilities {
     }
 }
 
-/// EPG progress information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EpgIngestionProgress {
-    /// Current processing step
-    pub current_step: String,
-    /// Total bytes to download (if known)
-    pub total_bytes: Option<u64>,
-    /// Bytes downloaded so far
-    pub downloaded_bytes: Option<u64>,
-    /// Channels parsed so far
-    pub channels_parsed: Option<u32>,
-    /// Programs parsed so far
-    pub programs_parsed: Option<u32>,
-    /// Programs successfully saved
-    pub programs_saved: Option<u32>,
-    /// Overall progress percentage (0-100)
-    pub percentage: Option<f32>,
-    /// Additional progress metadata
-    pub metadata: HashMap<String, String>,
-}
 
-impl EpgIngestionProgress {
-    /// Create initial progress state
-    pub fn starting<S: Into<String>>(step: S) -> Self {
-        Self {
-            current_step: step.into(),
-            total_bytes: None,
-            downloaded_bytes: None,
-            channels_parsed: None,
-            programs_parsed: None,
-            programs_saved: None,
-            percentage: Some(0.0),
-            metadata: HashMap::new(),
-        }
-    }
-
-    /// Update progress with new step
-    pub fn update_step<S: Into<String>>(mut self, step: S, percentage: Option<f32>) -> Self {
-        self.current_step = step.into();
-        self.percentage = percentage;
-        self
-    }
-}
-
-/// EPG progress callback type for reporting ingestion progress
-/// DEPRECATED: Use UniversalProgressCallback instead
-pub type EpgProgressCallback = dyn Fn(EpgIngestionProgress) + Send + Sync;
 
 /// Composite trait for full-featured EPG source handlers
 ///

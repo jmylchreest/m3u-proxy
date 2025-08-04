@@ -6,66 +6,30 @@
 -- DEFAULT FILTER TEMPLATES
 -- =============================================================================
 
-INSERT INTO filters (id, name, source_type, starting_channel_number, is_inverse, is_system_default, condition_tree) VALUES
+INSERT INTO filters (id, name, source_type, is_inverse, is_system_default, expression) VALUES
 -- Include All Valid Stream URLs
 ('00000000-0000-0000-0000-000000000001',
  'Include All Valid Stream URLs',
  'stream',
- 1,
  false,
  true,
- '{
-   "root": {
-     "type": "condition",
-     "field": "stream_url",
-     "operator": "starts_with",
-     "value": "http"
-   }
- }'),
+ '(stream_url starts_with "http")'),
 
 -- Exclude Adult Content
 ('00000000-0000-0000-0000-000000000002',
  'Exclude Adult Content',
  'stream',
- 1,
  true,
  true,
- '{
-   "root": {
-     "type": "group",
-     "operator": "or",
-     "children": [
-       {"type": "condition", "field": "group_title", "operator": "contains", "value": "adult"},
-       {"type": "condition", "field": "group_title", "operator": "contains", "value": "xxx"},
-       {"type": "condition", "field": "group_title", "operator": "contains", "value": "porn"},
-       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "adult"},
-       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "xxx"},
-       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "porn"},
-       {"type": "condition", "field": "group_title", "operator": "matches", "value": "\\b18\\+\\b"},
-       {"type": "condition", "field": "channel_name", "operator": "matches", "value": "\\b18\\+\\b"}
-     ]
-   }
- }'),
+ '(group_title contains "adult" OR group_title contains "xxx" OR group_title contains "porn" OR channel_name contains "adult" OR channel_name contains "xxx" OR channel_name contains "porn" OR group_title matches "\\b18\\+\\b" OR channel_name matches "\\b18\\+\\b")'),
 
 -- HD Only Filter
 ('00000000-0000-0000-0000-000000000003',
  'HD Only',
  'stream',
- 1,
  false,
  true,
- '{
-   "root": {
-     "type": "group",
-     "operator": "or",
-     "children": [
-       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "HD", "case_sensitive": true},
-       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "FHD", "case_sensitive": true},
-       {"type": "condition", "field": "channel_name", "operator": "contains", "value": "4K", "case_sensitive": true},
-       {"type": "condition", "field": "channel_name", "operator": "matches", "value": "\\b(720p|1080p|1080i|2160p)\\b"}
-     ]
-   }
- }');
+ '(channel_name contains "HD" OR channel_name contains "FHD" OR channel_name contains "4K" OR channel_name matches "\\b(720p|1080p|1080i|2160p)\\b")');
 
 -- =============================================================================
 -- DEFAULT RELAY PROFILES (Modern codec-based configurations)

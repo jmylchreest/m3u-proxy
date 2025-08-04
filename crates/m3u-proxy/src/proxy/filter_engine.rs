@@ -266,7 +266,7 @@ impl FilterEngine {
             None => {
                 warn!(
                     "Filter '{}' has no condition tree - parsing failed! Raw condition_tree: '{}'",
-                    filter.name, filter.condition_tree
+                    filter.name, filter.expression
                 );
                 // For safety, exclude filters should default to false (no matches)
                 // and include filters should default to true (match all)

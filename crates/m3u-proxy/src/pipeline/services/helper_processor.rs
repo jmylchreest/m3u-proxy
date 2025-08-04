@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{trace, warn, error};
+use tracing::{debug, error, trace, warn};
 use uuid::Uuid;
 
 use crate::pipeline::engines::rule_processor::{FieldModification, ModificationType};
@@ -39,15 +39,15 @@ impl std::error::Error for HelperProcessorError {}
 #[async_trait]
 pub trait HelperProcessor: Send + Sync {
     /// Returns the helper prefix this processor handles (e.g., "@logo:", "@time:")
-    fn helper_prefix(&self) -> &'static str;
+    fn get_supported_prefix(&self) -> &'static str;
     
     /// Process a field value containing the helper
     /// Returns None if the helper should result in field removal (null value)
-    async fn process_helper(&self, field_value: &str) -> Result<Option<String>, HelperProcessorError>;
+    async fn resolve_helper(&self, field_value: &str) -> Result<Option<String>, HelperProcessorError>;
     
     /// Quick check if a field contains this helper (default implementation)
     fn contains_helper(&self, field_value: &str) -> bool {
-        field_value.contains(self.helper_prefix())
+        field_value.contains(self.get_supported_prefix())
     }
 }
 
@@ -111,9 +111,9 @@ impl HelperPostProcessor {
                 // Try each processor until one matches
                 for processor in &self.processors {
                     if processor.contains_helper(&field_value) {
-                        trace!("Processing field '{}' with {} processor", field.name, processor.helper_prefix());
+                        trace!("Processing field '{}' with {} processor", field.name, processor.get_supported_prefix());
                         
-                        match processor.process_helper(&field_value).await {
+                        match processor.resolve_helper(&field_value).await {
                             Ok(result_value) => {
                                 new_value = result_value;
                                 processed = true;
@@ -196,7 +196,7 @@ impl LogoHelperProcessor {
                     } else {
                         // Retry with exponential backoff
                         let delay_ms = BASE_DELAY_MS * (2_u64.pow(attempt - 1));
-                        warn!("Logo UUID lookup attempt {} failed for UUID {}: {}. Retrying in {}ms...", 
+                        debug!("Logo UUID lookup attempt {} failed for UUID {}: {}. Retrying in {}ms...", 
                             attempt, uuid, e, delay_ms);
                         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                     }
@@ -213,11 +213,11 @@ impl LogoHelperProcessor {
 
 #[async_trait]
 impl HelperProcessor for LogoHelperProcessor {
-    fn helper_prefix(&self) -> &'static str {
+    fn get_supported_prefix(&self) -> &'static str {
         "@logo:"
     }
     
-    async fn process_helper(&self, field_value: &str) -> Result<Option<String>, HelperProcessorError> {
+    async fn resolve_helper(&self, field_value: &str) -> Result<Option<String>, HelperProcessorError> {
         if let Some(uuid_str) = field_value.strip_prefix("@logo:") {
             match uuid_str.parse::<Uuid>() {
                 Ok(uuid) => {
@@ -268,11 +268,11 @@ pub struct TimeHelperProcessor;
 
 #[async_trait]
 impl HelperProcessor for TimeHelperProcessor {
-    fn helper_prefix(&self) -> &'static str {
+    fn get_supported_prefix(&self) -> &'static str {
         "@time:"
     }
     
-    async fn process_helper(&self, field_value: &str) -> Result<Option<String>, HelperProcessorError> {
+    async fn resolve_helper(&self, field_value: &str) -> Result<Option<String>, HelperProcessorError> {
         // Use existing time resolution from utils::time
         match crate::utils::time::resolve_time_functions(field_value) {
             Ok(resolved) => {
@@ -306,7 +306,7 @@ mod tests {
         let processor = LogoHelperProcessor::new(Arc::new(pool), "https://example.com".to_string());
         
         // Malformed UUID should result in field removal (None), not an error
-        let result = processor.process_helper("@logo:invalid-uuid").await;
+        let result = processor.resolve_helper("@logo:invalid-uuid").await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), None); // Field should be removed
     }
@@ -332,7 +332,7 @@ mod tests {
         let processor = LogoHelperProcessor::new(Arc::new(pool), "https://example.com".to_string());
         
         // Valid UUID format but doesn't exist in database
-        let result = processor.process_helper("@logo:550e8400-e29b-41d4-a716-446655440000").await;
+        let result = processor.resolve_helper("@logo:550e8400-e29b-41d4-a716-446655440000").await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), None); // Field should be removed
     }
@@ -365,7 +365,7 @@ mod tests {
         let processor = LogoHelperProcessor::new(Arc::new(pool), "https://example.com".to_string());
         
         // Valid UUID that exists in database
-        let result = processor.process_helper(&format!("@logo:{}", test_uuid)).await;
+        let result = processor.resolve_helper(&format!("@logo:{}", test_uuid)).await;
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap(), 
@@ -377,7 +377,7 @@ mod tests {
     async fn test_time_helper_processor() {
         let processor = TimeHelperProcessor;
         
-        let result = processor.process_helper("@time:now()").await;
+        let result = processor.resolve_helper("@time:now()").await;
         assert!(result.is_ok());
         let resolved = result.unwrap();
         assert!(resolved.is_some());

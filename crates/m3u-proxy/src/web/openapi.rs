@@ -137,14 +137,10 @@ Check the endpoints below to see the complete API surface.
             crate::models::FilterWithUsage,
             crate::models::FilterFieldInfo,
             
-            // Unified progress schemas
-            crate::web::api::unified_progress::ProgressOperationResponse,
-            crate::web::api::unified_progress::ProgressDetails,
-            crate::web::api::unified_progress::ItemProgress,
-            crate::web::api::unified_progress::ByteProgress,
-            crate::web::api::unified_progress::TimingDetails,
-            crate::web::api::unified_progress::ProgressSummary,
-            crate::web::api::unified_progress::UnifiedProgressResponse,
+            // Filter query parameters
+            crate::web::api::FilterQueryParams,
+            crate::web::api::FilterFieldsQueryParams,
+            
         )
     ),
     paths(
@@ -164,26 +160,8 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::get_epg_source_channels_unified,
         crate::web::api::list_all_sources,
         
-        // Progress endpoints
-        crate::web::api::get_sources_progress,
-        crate::web::api::get_epg_progress,
-        crate::web::api::get_proxy_regeneration_progress,
-        crate::web::api::get_all_progress,
-        crate::web::api::get_all_source_progress,
-        crate::web::api::get_operation_progress,
-        crate::web::api::get_epg_source_progress,
-        crate::web::api::get_stream_source_progress,
-        
-        // Unified progress endpoints
-        crate::web::api::unified_progress::get_unified_progress,
-        crate::web::api::unified_progress::progress_events_stream,
-        crate::web::api::unified_progress::get_operation_progress,
-        crate::web::api::unified_progress::get_stream_progress,
-        crate::web::api::unified_progress::get_epg_progress,
-        crate::web::api::unified_progress::get_proxy_progress,
-        crate::web::api::unified_progress::get_stream_source_progress,
-        crate::web::api::unified_progress::get_epg_source_progress,
-        crate::web::api::unified_progress::get_proxy_regeneration_progress,
+        // Progress events SSE endpoint
+        crate::web::api::progress_events::progress_events_stream,
         
         // EPG Sources endpoints
         crate::web::handlers::epg_sources::list_epg_sources,
@@ -214,14 +192,6 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::delete_filter,
         crate::web::api::test_filter,
         crate::web::api::get_filter_fields,
-        crate::web::api::list_stream_source_filters,
-        crate::web::api::create_stream_source_filter,
-        crate::web::api::list_epg_source_filters,
-        crate::web::api::create_epg_source_filter,
-        crate::web::api::list_stream_filters,
-        crate::web::api::list_epg_filters,
-        crate::web::api::get_stream_filter_fields,
-        crate::web::api::get_epg_filter_fields,
         
         // Data mapping endpoints
         crate::web::api::list_data_mapping_rules,
@@ -233,6 +203,10 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::validate_data_mapping_expression,
         crate::web::api::get_data_mapping_stream_fields,
         crate::web::api::get_data_mapping_epg_fields,
+        
+        // Expression validation endpoints
+        crate::web::api::validate_stream_expression,
+        crate::web::api::validate_epg_expression,
         crate::web::api::test_data_mapping_rule,
         crate::web::api::apply_data_mapping_rules,
         crate::web::api::apply_data_mapping_rules_post,

@@ -2,15 +2,19 @@ use anyhow::Result;
 use sandboxed_file_manager::SandboxedManager;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::logo_assets::service::LogoAssetService;
-use crate::models::NumberedChannel;
+use crate::models::{NumberedChannel, ChannelNumberAssignmentType};
 use crate::pipeline::engines::rule_processor::EpgProgram;
 use crate::pipeline::models::{PipelineArtifact, ArtifactType, ContentType, ProcessingStage};
+use crate::pipeline::traits::{PipelineStage, ProgressAware};
+use crate::pipeline::error::PipelineError;
+use crate::services::progress_service::ProgressManager;
 
 
 /// Optimized channel info for M3U generation (removed unused fields)
@@ -30,6 +34,7 @@ pub struct GenerationStage {
     proxy_id: Uuid,
     #[allow(dead_code)]
     base_url: String,
+    progress_manager: Option<Arc<ProgressManager>>,
 }
 
 impl GenerationStage {
@@ -39,6 +44,7 @@ impl GenerationStage {
         pipeline_execution_prefix: String,
         proxy_id: Uuid,
         base_url: String,
+        progress_manager: Option<Arc<ProgressManager>>,
     ) -> Result<Self> {
         Ok(Self {
             db_pool,
@@ -46,7 +52,22 @@ impl GenerationStage {
             pipeline_execution_prefix,
             proxy_id,
             base_url,
+            progress_manager,
         })
+    }
+    
+    /// Helper method for reporting progress
+    async fn report_progress(&self, percentage: f64, message: &str) {
+        if let Some(pm) = &self.progress_manager {
+            if let Some(updater) = pm.get_stage_updater("generation").await {
+                updater.update_progress(percentage, message).await;
+            }
+        }
+    }
+    
+    /// Set the progress manager for this stage
+    pub fn set_progress_manager(&mut self, progress_manager: Arc<ProgressManager>) {
+        self.progress_manager = Some(progress_manager);
     }
     
     /// Generate temporary M3U and XMLTV files for atomic publishing
@@ -399,10 +420,128 @@ impl GenerationStage {
     
 
     
+    /// Load artifacts from input for pipeline execution
+    async fn load_artifacts_from_input(&self, input_artifacts: Vec<PipelineArtifact>) -> Result<(Vec<NumberedChannel>, Vec<EpgProgram>), PipelineError> {
+        let mut numbered_channels = Vec::new();
+        let mut epg_programs = Vec::new();
+        
+        for artifact in input_artifacts {
+            match artifact.artifact_type.content {
+                ContentType::Channels => {
+                    // Read channels from JSONL file and convert to NumberedChannel
+                    let content = self.pipeline_file_manager.read_to_string(&artifact.file_path).await
+                        .map_err(|e| PipelineError::stage_error("generation", format!("Failed to read channels file {}: {}", artifact.file_path, e)))?;
+                    
+                    // Parse JSONL format (one JSON object per line)
+                    for (line_num, line) in content.lines().enumerate() {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        
+                        match serde_json::from_str::<crate::models::Channel>(line) {
+                            Ok(channel) => {
+                                let numbered_channel = NumberedChannel {
+                                    channel,
+                                    assigned_number: 0, // Will be assigned by numbering stage
+                                    assignment_type: ChannelNumberAssignmentType::Sequential,
+                                };
+                                numbered_channels.push(numbered_channel);
+                            }
+                            Err(e) => {
+                                warn!("Failed to parse channel at line {}: {} - Error: {}", line_num + 1, line, e);
+                            }
+                        }
+                    }
+                }
+                ContentType::EpgPrograms => {
+                    // Read EPG programs from JSONL file
+                    let content = self.pipeline_file_manager.read_to_string(&artifact.file_path).await
+                        .map_err(|e| PipelineError::stage_error("generation", format!("Failed to read EPG programs file {}: {}", artifact.file_path, e)))?;
+                    
+                    for (line_num, line) in content.lines().enumerate() {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        
+                        match serde_json::from_str::<EpgProgram>(line) {
+                            Ok(program) => epg_programs.push(program),
+                            Err(e) => {
+                                warn!("Failed to parse EPG program at line {}: {} - Error: {}", line_num + 1, line, e);
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    debug!("Skipping artifact of type {:?} in generation stage", artifact.artifact_type.content);
+                }
+            }
+        }
+        
+        info!(
+            "Loaded artifacts: {} numbered channels, {} EPG programs",
+            numbered_channels.len(),
+            epg_programs.len()
+        );
+        
+        Ok((numbered_channels, epg_programs))
+    }
+
     /// Clean up temporary files and resources
     pub fn cleanup(self) -> Result<()> {
         // The SandboxedManager will clean up its temporary files when dropped
         debug!("Generation stage cleanup completed for execution: {}", self.pipeline_execution_prefix);
         Ok(())
+    }
+}
+
+impl ProgressAware for GenerationStage {
+    fn get_progress_manager(&self) -> Option<&Arc<ProgressManager>> {
+        self.progress_manager.as_ref()
+    }
+}
+
+#[async_trait::async_trait]
+impl PipelineStage for GenerationStage {
+    async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
+        info!("Generation stage starting with {} input artifacts", input.len());
+        
+        self.report_progress(10.0, "Loading generation data").await;
+        
+        // Load data from input artifacts
+        let (numbered_channels, epg_programs) = self.load_artifacts_from_input(input).await?;
+        
+        self.report_progress(50.0, "Generating M3U and XMLTV files").await;
+        
+        // Generate the files (for now, create a dummy logo service)
+        let logo_storage = crate::logo_assets::LogoAssetStorage::new(
+            std::path::PathBuf::from("/tmp/logos_uploaded"),
+            std::path::PathBuf::from("/tmp/logos_cached")
+        );
+        let logo_service = crate::logo_assets::service::LogoAssetService::new(
+            self.db_pool.clone(),
+            logo_storage
+        );
+        let artifacts = self.process_channels_and_programs(numbered_channels, epg_programs, false, &logo_service).await
+            .map_err(|e| PipelineError::stage_error("generation", format!("Generation failed: {}", e)))?;
+        
+        self.report_progress(100.0, "Generation completed").await;
+        
+        Ok(artifacts)
+    }
+    
+    fn stage_id(&self) -> &'static str {
+        "generation"
+    }
+    
+    fn stage_name(&self) -> &'static str {
+        "Generation"
+    }
+    
+    async fn cleanup(&mut self) -> Result<(), PipelineError> {
+        Ok(())
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

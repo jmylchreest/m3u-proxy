@@ -346,103 +346,7 @@ pub struct TestConnectionResult {
 }
 
 impl EpgSourceService {
-    /// Refresh an EPG source using new source handlers with progress tracking
-    pub async fn refresh_with_progress(&self, 
-        source: &crate::models::EpgSource,
-        progress_service: &crate::services::ProgressService
-    ) -> Result<(usize, usize)> {
-        let start_time = std::time::Instant::now();
-        
-        // Execute the refresh and handle progress completion
-        let result = self.execute_refresh_internal(source, progress_service).await;
-        
-        // Complete or fail the progress operation based on result
-        match &result {
-            Ok((channels_saved, programs_saved)) => {
-                let elapsed = start_time.elapsed();
-                info!(
-                    "EPG source refresh completed for '{}' in {:.2}s: {} channels saved, {} programs saved",
-                    source.name,
-                    elapsed.as_secs_f64(),
-                    channels_saved,
-                    programs_saved
-                );
-                progress_service.complete_operation(source.id).await;
-            }
-            Err(e) => {
-                let elapsed = start_time.elapsed();
-                warn!(
-                    "EPG source refresh failed for '{}' after {:.2}s: {}",
-                    source.name,
-                    elapsed.as_secs_f64(),
-                    e
-                );
-                progress_service.fail_operation(source.id, e.to_string()).await;
-            }
-        }
-        
-        result
-    }
     
-    /// Internal refresh implementation without progress handling
-    async fn execute_refresh_internal(&self, 
-        source: &crate::models::EpgSource,
-        progress_service: &crate::services::ProgressService
-    ) -> Result<(usize, usize)> {
-        use crate::sources::factory::SourceHandlerFactory;
-        use tracing::info;
-        
-        // Create EPG source handler
-        let handler = SourceHandlerFactory::create_epg_handler(&source.source_type)
-            .map_err(|e| anyhow::anyhow!("Failed to create EPG source handler: {}", e))?;
-        
-        // Create universal progress callback using provided progress service
-        let progress_callback = progress_service
-            .start_operation(
-                source.id, 
-                crate::services::progress_service::OperationType::EpgIngestion,
-                format!("EPG Ingestion: {}", source.name)
-            )
-            .await;
-            
-        // Use new EPG source handler with universal progress to ingest programs only
-        let programs = handler
-            .ingest_epg_programs_with_universal_progress(
-                source, 
-                Some(&Box::new(progress_callback))
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("EPG source handler failed: {}", e))?;
-        
-        info!(
-            "EPG handler ingested {} programs from source '{}'",
-            programs.len(),
-            source.name
-        );
-        
-        // Save programs to database (programs-only mode)
-        info!("Saving {} EPG programs to database for '{}'", programs.len(), source.name);
-        let programs_saved = match self.save_epg_programs(source.id, programs).await {
-            Ok(count) => count,
-            Err(e) => {
-                warn!("Failed to save EPG programs for '{}': {}", source.name, e);
-                0
-            }
-        };
-        
-        info!("Completed database save for EPG source '{}': {} programs saved", 
-              source.name, programs_saved);
-        
-        // Update last ingested timestamp
-        info!("Updating last_ingested_at timestamp for EPG source '{}'", source.name);
-        if let Err(e) = self.database.update_epg_source_last_ingested(source.id).await {
-            tracing::error!("Failed to update last_ingested_at for EPG source '{}': {}", source.name, e);
-        } else {
-            info!("Updated timestamp for EPG source '{}'", source.name);
-        }
-        
-        Ok((0, programs_saved)) // programs-only mode: no channels saved
-    }
 
 
     /// Save EPG programs to database with robust batching and retry logic
@@ -450,6 +354,7 @@ impl EpgSourceService {
         &self,
         source_id: uuid::Uuid,
         programs: Vec<crate::models::EpgProgram>,
+        progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
     ) -> Result<usize> {
         use tracing::{debug, info};
         
@@ -484,6 +389,7 @@ impl EpgSourceService {
             source_id,
             programs,
             batch_size,
+            progress_updater,
         ).await?;
 
         // Perform WAL checkpoint after large operation
@@ -493,6 +399,87 @@ impl EpgSourceService {
 
         info!("Successfully saved {} EPG programs for source: {}", total_saved, source_id);
         Ok(total_saved)
+    }
+    
+    /// Ingest EPG programs using ProgressStageUpdater (new API)
+    pub async fn ingest_programs_with_progress_updater(
+        &self,
+        source: &EpgSource,
+        progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
+    ) -> Result<usize> {
+        use crate::sources::factory::SourceHandlerFactory;
+        
+        info!("Starting EPG ingestion with ProgressStageUpdater for source: {}", source.name);
+        
+        // Wrap the entire operation in error handling to ensure progress completion
+        let result = async {
+            // Create EPG source handler using the factory
+            let handler = SourceHandlerFactory::create_epg_handler(&source.source_type)
+                .map_err(|e| anyhow::anyhow!("Failed to create EPG source handler: {}", e))?;
+                
+            // Use the new ProgressStageUpdater API
+            let programs = handler
+                .ingest_epg_programs_with_progress_updater(source, progress_updater)
+                .await
+                .map_err(|e| anyhow::anyhow!("EPG source handler failed: {}", e))?;
+            
+            info!(
+                "EPG handler ingested {} programs from source '{}'",
+                programs.len(), source.name
+            );
+            
+            // Update progress: inserting to database (this is 80% of the total work)
+            if let Some(updater) = progress_updater {
+                updater.update_progress(20.0, &format!("Inserting {} programs to database", programs.len())).await;
+            }
+            
+            // Save programs to database
+            info!("Saving {} EPG programs to database for '{}'", programs.len(), source.name);
+            let programs_saved = self.save_epg_programs(source.id, programs, progress_updater).await?;
+            
+            // Mark stage as completed
+            if let Some(updater) = progress_updater {
+                updater.update_progress(100.0, &format!("Completed: {} programs saved", programs_saved)).await;
+                updater.complete_stage().await;
+            }
+            
+            // Update the source's last_ingested_at timestamp
+            let now = chrono::Utc::now();
+            if let Err(e) = sqlx::query(
+                "UPDATE epg_sources SET last_ingested_at = ?, updated_at = ? WHERE id = ?"
+            )
+            .bind(now)
+            .bind(now)
+            .bind(source.id.to_string())
+            .execute(&self.database.pool())
+            .await {
+                warn!("Failed to update last_ingested_at for EPG source '{}': {}", source.name, e);
+            } else {
+                info!("Updated last_ingested_at for EPG source '{}'", source.name);
+            }
+            
+            info!(
+                "EPG ingestion completed for source '{}': {} programs saved",
+                source.name, programs_saved
+            );
+            
+            Ok(programs_saved)
+        }.await;
+        
+        // Always complete the operation, whether successful or failed
+        if let Some(updater) = progress_updater {
+            match &result {
+                Ok(_) => {
+                    updater.complete_operation().await;
+                }
+                Err(e) => {
+                    // Mark operation as failed with error message
+                    updater.fail_operation(&format!("EPG ingestion failed: {}", e)).await;
+                }
+            }
+        }
+        
+        result
     }
 }
 

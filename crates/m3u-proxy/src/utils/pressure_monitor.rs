@@ -6,7 +6,19 @@
 //! 3. Enforces memory limits when configured
 //! 4. Provides unified pressure assessment for app/system/CPU
 
-use crate::proxy::stage_strategy::MemoryPressureLevel;
+// use crate::utils::memory_pressure_calculator::MemoryPressureLevel; // Removed
+
+// Simplified replacement for MemoryPressureLevel
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemoryPressureLevel {
+    Low,
+    Medium,
+    High,
+    Optimal,
+    Moderate,
+    Critical,
+    Emergency,
+}
 use crate::utils::human_format::{format_memory, format_memory_delta};
 use crate::utils::memory_config::{MemoryMonitoringConfig, get_global_memory_config};
 use anyhow::Result;

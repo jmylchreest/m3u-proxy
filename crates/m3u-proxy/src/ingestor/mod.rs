@@ -36,7 +36,7 @@ impl IngestorService {
         }
     }
 
-    pub fn get_state_manager(&self) -> &IngestionStateManager {
+    pub fn get_state_manager(&self) -> Arc<IngestionStateManager> {
         self.progress_service.get_ingestion_state_manager()
     }
     
@@ -74,23 +74,28 @@ impl IngestorService {
         
         info!("Created {} source handler for '{}'", source.source_type, source.name);
         
-        // Create universal progress callback via ProgressService
-        let progress_callback = self.progress_service
-            .start_operation(
-                source.id, 
+        // Create one operation and pass its callback to the handler
+        let _progress_callback = match self.progress_service
+            .start_operation_with_id(
+                source.id, // Use source.id as operation_id for consistency
+                source.id, // owner_id same as operation_id
+                "stream_source".to_string(),
                 crate::services::progress_service::OperationType::StreamIngestion,
                 format!("Stream Ingestion: {}", source.name)
             )
-            .await;
+            .await {
+                Ok(callback) => callback,
+                Err(e) => {
+                    warn!("Cannot start stream ingestion for '{}': {}", source.name, e);
+                    return Err(crate::errors::AppError::operation_in_progress("stream ingestion", &source.name).into());
+                }
+            };
         
         info!("Starting channel ingestion with universal progress tracking for '{}'", source.name);
 
-        // Ingest channels from source handler with universal progress
+        // Use basic channel ingestion method
         let channels = handler
-            .ingest_channels_with_universal_progress(
-                source, 
-                Some(&Box::new(progress_callback))
-            )
+            .ingest_channels(source) 
             .await
             .map_err(|e| {
                 tracing::error!("Source handler failed for '{}': {}", source.name, e);
@@ -103,7 +108,7 @@ impl IngestorService {
         // Save channels to database
         info!("Saving {} channels to database for '{}'", channel_count, source_name);
         database
-            .update_source_channels(source_id, &channels, Some(self.get_state_manager()))
+            .update_source_channels(source_id, &channels, Some(&*self.get_state_manager()))
             .await
             .map_err(|e| {
                 error!("Failed to save channels to database for '{}': {}", source_name, e);
@@ -171,20 +176,27 @@ impl IngestorService {
             .map_err(|e| anyhow::anyhow!("Failed to create EPG source handler: {}", e))?;
         
         // Create universal progress callback via ProgressService  
-        let progress_callback = self.progress_service
+        let _progress_callback = match self.progress_service
             .start_operation(
-                source.id, 
+                source.id,
+                "epg_source".to_string(),
                 crate::services::progress_service::OperationType::EpgIngestion,
                 format!("EPG Ingestion: {}", source.name)
             )
-            .await;
+            .await {
+                Ok(callback) => callback,
+                Err(e) => {
+                    warn!("Cannot start EPG ingestion for '{}': {}", source.name, e);
+                    // Mark processing as completed since we're not proceeding
+                    self.progress_service.get_ingestion_state_manager()
+                        .finish_processing(source_id, false).await;
+                    return Err(anyhow::anyhow!("Operation already in progress: {}", e).into());
+                }
+            };
         
-        // Use new EPG source handler with universal progress to ingest programs only (programs-only mode)
+        // Use new EPG source handler to ingest programs only (programs-only mode)
         let programs = handler
-            .ingest_epg_programs_with_universal_progress(
-                source, 
-                Some(&Box::new(progress_callback))
-            )
+            .ingest_epg_programs(source) 
             .await
             .map_err(|e| anyhow::anyhow!("New EPG source handler failed: {}", e))?;
         

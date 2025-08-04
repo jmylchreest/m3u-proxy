@@ -1,7 +1,7 @@
 //! Filter processor engines for extensible filtering
 //!
 //! This module provides filter processing capabilities for both channels and EPG programs,
-//! with time function support and regex preprocessing optimization.
+//! with expression parsing, time function support and regex preprocessing optimization.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -70,25 +70,36 @@ impl StreamFilterProcessor {
         filter_id: String,
         filter_name: String,
         is_inverse: bool,
-        condition_tree_json: &str,
+        condition_expression: &str,
         regex_evaluator: RegexEvaluator,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Parse the condition tree JSON directly instead of using expression parser
-        let parsed_condition = if condition_tree_json.trim().is_empty() {
+        // Parse the condition expression text into a ConditionTree
+        let parsed_condition = if condition_expression.trim().is_empty() {
             None
         } else {
-            // First resolve time functions
-            let resolved_condition_json = Self::resolve_time_functions(condition_tree_json)?;
+            // First resolve time functions if any
+            let resolved_expression = Self::resolve_time_functions(condition_expression)?;
             
-            // Parse as ConditionTree JSON structure, not as expression text
-            match serde_json::from_str::<crate::models::ConditionTree>(&resolved_condition_json) {
+            // Parse the human-readable expression into a ConditionTree using ExpressionParser
+            let parser = crate::expression_parser::ExpressionParser::new()
+                .with_fields(vec![
+                    "tvg_id".to_string(),
+                    "tvg_name".to_string(),
+                    "tvg_logo".to_string(),
+                    "tvg_shift".to_string(),
+                    "group_title".to_string(),
+                    "channel_name".to_string(),
+                    "stream_url".to_string(),
+                ]);
+            
+            match parser.parse(&resolved_expression) {
                 Ok(condition_tree) => {
-                    trace!("Successfully parsed condition tree for filter_id={} filter_name={}", filter_id, filter_name);
+                    trace!("Successfully parsed filter expression for filter_id={} filter_name={}", filter_id, filter_name);
                     Some(condition_tree)
                 },
                 Err(e) => {
-                    warn!("Failed to parse condition tree filter_id={} filter_name={} error={} json={}", 
-                          filter_id, filter_name, e, resolved_condition_json);
+                    warn!("Failed to parse filter expression filter_id={} filter_name={} error={} expression={}", 
+                          filter_id, filter_name, e, resolved_expression);
                     None
                 }
             }
@@ -104,9 +115,9 @@ impl StreamFilterProcessor {
         })
     }
     
-    /// Resolve @time: functions in the condition tree JSON
-    fn resolve_time_functions(condition_json: &str) -> Result<String, Box<dyn std::error::Error>> {
-        crate::utils::time::resolve_time_functions(condition_json)
+    /// Resolve @time: functions in the condition expression
+    fn resolve_time_functions(condition_expression: &str) -> Result<String, Box<dyn std::error::Error>> {
+        crate::utils::time::resolve_time_functions(condition_expression)
             .map_err(|e| e.into())
     }
     
@@ -245,7 +256,7 @@ impl EpgFilterProcessor {
         filter_id: String,
         filter_name: String,
         is_inverse: bool,
-        _condition_tree_json: &str,
+        _condition_expression: &str,
         regex_evaluator: RegexEvaluator,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // TODO: Implement EPG filter parsing similar to StreamFilterProcessor

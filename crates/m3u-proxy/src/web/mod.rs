@@ -83,6 +83,8 @@ impl WebServer {
         relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
         system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
         progress_service: std::sync::Arc<ProgressService>,
+        stream_source_service: std::sync::Arc<crate::services::StreamSourceBusinessService>,
+        epg_source_service: std::sync::Arc<crate::services::EpgSourceService>,
         log_broadcaster: broadcast::Sender<crate::web::api::log_streaming::LogEvent>,
     ) -> Result<Self> {
         tracing::info!("WebServer using native pipeline");
@@ -98,20 +100,7 @@ impl WebServer {
             ))
         };
 
-        // Use shared progress service passed from main application
-
-        // Initialize new service layer components
-        let epg_source_service = std::sync::Arc::new(crate::services::EpgSourceService::new(
-            database.clone(),
-            cache_invalidation_tx.clone(),
-        ));
-
-        let stream_source_service =
-            std::sync::Arc::new(crate::services::StreamSourceBusinessService::new(
-                database.clone(),
-                epg_source_service.clone(),
-                cache_invalidation_tx.clone(),
-            ));
+        // Use shared progress service and other services passed from main application
 
         let source_linking_service =
             std::sync::Arc::new(crate::services::SourceLinkingService::new(database.clone()));
@@ -282,19 +271,8 @@ impl WebServer {
             // Unified sources
             .route("/sources", get(api::list_all_sources))
             .route("/sources/unified", get(api::list_all_sources))
-            // Legacy progress endpoints (deprecated - commented out to avoid conflicts)
-            // .route("/progress/sources", get(api::get_sources_progress))
-            // .route("/progress/epg", get(api::get_epg_progress))
-            // New unified progress endpoints
-            .route("/progress", get(api::unified_progress::get_unified_progress))
-            .route("/progress/events", get(api::unified_progress::progress_events_stream))
-            .route("/progress/operations/{operation_id}", get(api::unified_progress::get_operation_progress))
-            .route("/progress/streams", get(api::unified_progress::get_stream_progress))
-            .route("/progress/epg", get(api::unified_progress::get_epg_progress))
-            .route("/progress/proxies", get(api::unified_progress::get_proxy_progress))
-            .route("/progress/resources/streams/{source_id}", get(api::unified_progress::get_stream_source_progress))
-            .route("/progress/resources/epg/{source_id}", get(api::unified_progress::get_epg_source_progress))
-            .route("/progress/resources/proxies/{proxy_id}", get(api::unified_progress::get_proxy_regeneration_progress))
+            // Progress events SSE endpoint
+            .route("/progress/events", get(api::progress_events::progress_events_stream))
             // Logo assets
             .route("/logos", get(api::list_logo_assets))
             .route("/logos/stats", get(api::get_logo_cache_stats))
@@ -385,7 +363,6 @@ impl WebServer {
             .route("/proxies/{id}/regenerate", post(api::regenerate_proxy))
             .route("/proxies/regenerate-all", post(api::regenerate_all_proxies))
             .route("/proxies/regeneration/status", get(api::get_regeneration_queue_status))
-            .route("/progress/regeneration", get(api::get_proxy_regeneration_progress))
             // Relay system endpoints
             .merge(api::relay::relay_routes())
             // Active relay monitoring

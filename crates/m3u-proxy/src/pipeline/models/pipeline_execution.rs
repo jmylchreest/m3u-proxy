@@ -17,7 +17,7 @@ pub struct PipelineExecution {
     #[serde(serialize_with = "crate::utils::datetime::serialize_optional_datetime")]
     #[serde(deserialize_with = "crate::utils::datetime::deserialize_optional_datetime")]
     pub completed_at: Option<DateTime<Utc>>,
-    pub stages: HashMap<String, PipelineStage>,
+    pub stages: HashMap<String, PipelineStageExecution>,
     pub artifacts: ArtifactRegistry,
     pub error_message: Option<String>,
 }
@@ -36,7 +36,7 @@ pub enum PipelineStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PipelineStage {
+pub struct PipelineStageExecution {
     pub name: String,
     pub status: StageStatus,
     #[serde(serialize_with = "crate::utils::datetime::serialize_optional_datetime")]
@@ -78,7 +78,7 @@ impl PipelineExecution {
     }
     
     pub fn add_stage(&mut self, stage_name: String) {
-        let stage = PipelineStage {
+        let stage = PipelineStageExecution {
             name: stage_name.clone(),
             status: StageStatus::Pending,
             started_at: None,

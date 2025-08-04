@@ -122,7 +122,7 @@ pub struct Filter {
     pub source_type: FilterSourceType,
     pub is_inverse: bool,
     pub is_system_default: bool,
-    pub condition_tree: String, // JSON tree structure for complex nested conditions
+    pub expression: String, // Human-readable expression like "channel_name contains \"HD\""
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -359,7 +359,7 @@ pub struct FilterCreateRequest {
     pub name: String,
     pub source_type: FilterSourceType,
     pub is_inverse: bool,
-    pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
+    pub expression: String, // Human-readable expression like "channel_name contains \"HD\""
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -367,7 +367,7 @@ pub struct FilterUpdateRequest {
     pub name: String,
     pub source_type: FilterSourceType,
     pub is_inverse: bool,
-    pub filter_expression: String, // Raw text expression like "(A OR B) AND C"
+    pub expression: String, // Human-readable expression like "channel_name contains \"HD\""
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -808,7 +808,13 @@ impl Filter {
 
     /// Parse the condition tree from JSON
     pub fn get_condition_tree(&self) -> Option<ConditionTree> {
-        match serde_json::from_str::<ConditionTree>(&self.condition_tree) {
+        if self.expression.trim().is_empty() {
+            return None;
+        }
+        
+        // Parse expression to condition tree
+        let parser = crate::expression_parser::ExpressionParser::new();
+        match parser.parse(&self.expression) {
             Ok(tree) => {
                 if self.name.contains("Adult") {
                     tracing::debug!(
@@ -820,11 +826,11 @@ impl Filter {
             }
             Err(e) => {
                 tracing::error!(
-                    "Failed to parse condition tree for filter '{}': {}",
+                    "Failed to parse expression for filter '{}': {}",
                     self.name,
                     e
                 );
-                tracing::error!("Raw condition_tree JSON: {}", self.condition_tree);
+                tracing::error!("Raw expression: {}", self.expression);
                 None
             }
         }

@@ -15,11 +15,9 @@ use m3u_proxy::{
         scheduler::{SchedulerService, create_cache_invalidation_channel},
     },
     logo_assets::{LogoAssetService, LogoAssetStorage},
-    services::ProxyRegenerationService,
+    services::{ProxyRegenerationService, StreamSourceBusinessService, EpgSourceService},
     utils::{
         SystemManager,
-        memory_config::{MemoryMonitoringConfig, MemoryVerbosity, init_global_memory_config},
-        pressure_monitor::SimpleMemoryMonitor,
     },
     web::WebServer,
 };
@@ -114,13 +112,7 @@ struct Cli {
     #[arg(short = 'l', long, default_value = "info")]
     log_level: String,
 
-    /// Memory monitoring verbosity (silent, minimal, normal, verbose, debug)
-    #[arg(long, default_value = "minimal")]
-    memory_verbosity: String,
 
-    /// Memory limit in MB
-    #[arg(long, value_name = "MB")]
-    memory_limit: Option<usize>,
 
     /// Print version information including dependency versions
     #[arg(short = 'v', long)]
@@ -156,41 +148,12 @@ async fn main() -> Result<()> {
         .with(log_capture_layer) // Add log capture for SSE streaming
         .init();
 
-    // Parse memory verbosity from CLI or environment
-    let memory_verbosity = std::env::var("M3U_PROXY_MEMORY_VERBOSITY")
-        .unwrap_or_else(|_| cli.memory_verbosity.clone());
-
-    let memory_verbosity = MemoryVerbosity::from_str(&memory_verbosity).unwrap_or_else(|_| {
-        eprintln!(
-            "Warning: Invalid memory verbosity '{}', using 'minimal'",
-            memory_verbosity
-        );
-        MemoryVerbosity::Minimal
-    });
-
-    let memory_limit = cli.memory_limit.or_else(|| {
-        std::env::var("M3U_PROXY_MEMORY_LIMIT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-    });
-
-    // Create memory monitoring configuration
-    let mut memory_config = MemoryMonitoringConfig::default();
-    memory_config.verbosity = memory_verbosity;
-    memory_config.memory_limit_mb = memory_limit;
 
     info!("Starting M3U Proxy Service v{}", env!("CARGO_PKG_VERSION"));
-    info!(
-        "Memory monitoring: verbosity={}, limit={:?}MB",
-        memory_config.verbosity.as_str(),
-        memory_config.memory_limit_mb
-    );
     
     // Test log capture is working
     info!("Log capture initialized for SSE streaming");
 
-    // Initialize global memory configuration
-    init_global_memory_config(memory_config.clone());
 
     // Load configuration from specified file
     let mut config = Config::load_from_file(&cli.config)?;
@@ -214,7 +177,7 @@ async fn main() -> Result<()> {
     info!("Database connection established and migrations applied");
 
     // Create state manager for ingestion progress tracking
-    let state_manager = IngestionStateManager::new();
+    let state_manager = std::sync::Arc::new(IngestionStateManager::new());
     info!("Ingestion state manager initialized");
     
     // Create universal progress service
@@ -326,16 +289,6 @@ async fn main() -> Result<()> {
     let system_manager = SystemManager::new(Duration::from_secs(10));
     info!("Shared system manager initialized with 10-second refresh interval");
 
-    // Create shared memory monitor using the shared system
-    let _shared_memory_monitor = SimpleMemoryMonitor::new(
-        memory_limit,
-        memory_config.clone(),
-        system_manager.get_system(),
-    );
-    info!(
-        "Shared memory monitor initialized with limit: {:?}MB",
-        memory_limit
-    );
 
     // Initialize proxy regeneration service with managed pipeline file manager
     let proxy_regeneration_service = ProxyRegenerationService::new(
@@ -344,18 +297,32 @@ async fn main() -> Result<()> {
         None,
         pipeline_file_manager.clone(),
         system_manager.get_system(),
-        progress_service.clone(),
+        progress_service.clone(), // Pass ProgressService to create ProgressManagers
+        state_manager.clone(), // Pass IngestionStateManager to check for active operations
     );
     info!("Proxy regeneration service initialized with in-memory state");
 
+    // Create shared services for both web server and scheduler
+    let epg_source_service = std::sync::Arc::new(EpgSourceService::new(
+        database.clone(),
+        cache_invalidation_tx.clone(),
+    ));
+
+    let stream_source_service = std::sync::Arc::new(StreamSourceBusinessService::new(
+        database.clone(),
+        epg_source_service.clone(),
+        cache_invalidation_tx.clone(),
+    ));
+
     // Create scheduler service now that proxy regeneration service exists
     let scheduler = SchedulerService::new(
-        state_manager.clone(),
+        progress_service.clone(),
         database.clone(),
+        stream_source_service.clone(),
+        epg_source_service.clone(),
         config.ingestion.run_missed_immediately,
         Some(cache_invalidation_rx),
         Some(proxy_regeneration_service.clone()),
-        progress_service.clone(), // Pass shared ProgressService!
     );
     info!("Scheduler service initialized");
 
@@ -384,7 +351,7 @@ async fn main() -> Result<()> {
     let mut web_server = WebServer::new(
         config,
         database,
-        state_manager,
+        (*state_manager).clone(),
         cache_invalidation_tx,
         data_mapping_service,
         logo_asset_service,
@@ -397,6 +364,8 @@ async fn main() -> Result<()> {
         relay_manager,
         system_manager.get_system(),
         progress_service.clone(),
+        stream_source_service.clone(),
+        epg_source_service.clone(),
         log_broadcaster,
     )
     .await?;

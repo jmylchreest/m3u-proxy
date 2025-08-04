@@ -91,11 +91,8 @@ pub struct DatabaseConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseBatchConfig {
-    /// Maximum number of EPG channels to insert in a single batch
-    /// Each channel has 9 fields, so batch_size * 9 must be <= SQLite variable limit
-    pub epg_channels: Option<usize>,
     /// Maximum number of EPG programs to insert in a single batch
-    /// Each program has 17 fields, so batch_size * 17 must be <= SQLite variable limit
+    /// Each program has 12 fields, so batch_size * 12 must be <= SQLite variable limit
     pub epg_programs: Option<usize>,
     /// Maximum number of stream channels to process in a single chunk
     pub stream_channels: Option<usize>,
@@ -310,26 +307,11 @@ impl DatabaseBatchConfig {
     /// SQLite variable limit (32,766 in 3.32.0+, 999 in older versions)
     const SQLITE_MAX_VARIABLES: usize = 32766;
 
-    /// Number of fields per EPG channel record
-    const EPG_CHANNEL_FIELDS: usize = 9;
-
     /// Number of fields per EPG program record
     const EPG_PROGRAM_FIELDS: usize = 18;
 
     /// Validate batch sizes to ensure they don't exceed SQLite limits
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(epg_channels) = self.epg_channels {
-            let variables = epg_channels * Self::EPG_CHANNEL_FIELDS;
-            if variables > Self::SQLITE_MAX_VARIABLES {
-                return Err(format!(
-                    "EPG channel batch size {} would require {} variables, exceeding SQLite limit of {}",
-                    epg_channels,
-                    variables,
-                    Self::SQLITE_MAX_VARIABLES
-                ));
-            }
-        }
-
         if let Some(epg_programs) = self.epg_programs {
             let variables = epg_programs * Self::EPG_PROGRAM_FIELDS;
             if variables > Self::SQLITE_MAX_VARIABLES {
@@ -345,13 +327,6 @@ impl DatabaseBatchConfig {
         Ok(())
     }
 
-    /// Get safe batch size for EPG channels (respects SQLite limits)
-    pub fn safe_epg_channel_batch_size(&self) -> usize {
-        let configured = self.epg_channels.unwrap_or(3600);
-        let max_safe = Self::SQLITE_MAX_VARIABLES / Self::EPG_CHANNEL_FIELDS;
-        configured.min(max_safe)
-    }
-
     /// Get safe batch size for EPG programs (respects SQLite limits)
     pub fn safe_epg_program_batch_size(&self) -> usize {
         let configured = self.epg_programs.unwrap_or(1900);
@@ -364,8 +339,6 @@ impl Default for DatabaseBatchConfig {
     fn default() -> Self {
         Self {
             // SQLite 3.32.0+ supports up to 32,766 variables per query
-            // EPG channels: 9 fields * 3600 = 32,400 variables (safe margin)
-            epg_channels: Some(3600),
             // EPG programs: 18 fields * 1800 = 32,400 variables (safe margin)
             epg_programs: Some(1800),
             // Stream channels: reduced for better SQLite performance with large datasets
@@ -567,24 +540,14 @@ mod tests {
     fn test_database_batch_config_validation() {
         // Test valid configuration
         let valid_config = DatabaseBatchConfig {
-            epg_channels: Some(3600), // 3600 * 9 = 32,400 variables
-            epg_programs: Some(1900), // 1900 * 17 = 32,300 variables
+            epg_programs: Some(1900), // 1900 * 18 = 34,200 variables (exceeds 32,766, should be capped)
             stream_channels: Some(1000),
         };
         assert!(valid_config.validate().is_ok());
 
-        // Test EPG channels exceeding limit
-        let invalid_channels = DatabaseBatchConfig {
-            epg_channels: Some(4000), // 4000 * 9 = 36,000 variables (exceeds 32,766)
-            epg_programs: Some(1900),
-            stream_channels: Some(1000),
-        };
-        assert!(invalid_channels.validate().is_err());
-
         // Test EPG programs exceeding limit
         let invalid_programs = DatabaseBatchConfig {
-            epg_channels: Some(3600),
-            epg_programs: Some(2000), // 2000 * 17 = 34,000 variables (exceeds 32,766)
+            epg_programs: Some(2000), // 2000 * 18 = 36,000 variables (exceeds 32,766)
             stream_channels: Some(1000),
         };
         assert!(invalid_programs.validate().is_err());
@@ -593,21 +556,17 @@ mod tests {
     #[test]
     fn test_safe_batch_sizes() {
         let config = DatabaseBatchConfig {
-            epg_channels: Some(5000), // Too large, should be capped
             epg_programs: Some(3000), // Too large, should be capped
             stream_channels: Some(1000),
         };
 
         // Should return safe sizes within SQLite limits
-        let safe_channels = config.safe_epg_channel_batch_size();
         let safe_programs = config.safe_epg_program_batch_size();
 
-        assert!(safe_channels * 9 <= 32766);
-        assert!(safe_programs * 17 <= 32766);
+        assert!(safe_programs * 18 <= 32766);
 
         // Should cap to maximum safe values
-        assert_eq!(safe_channels, 32766 / 9); // 3640
-        assert_eq!(safe_programs, 32766 / 17); // 1927
+        assert_eq!(safe_programs, 32766 / 18); // 1820
     }
 
     #[test]
@@ -618,9 +577,8 @@ mod tests {
         assert!(default_config.validate().is_ok());
 
         // Default values should be within safe limits
-        assert_eq!(default_config.epg_channels, Some(3600));
-        assert_eq!(default_config.epg_programs, Some(1900));
-        assert_eq!(default_config.stream_channels, Some(1000));
+        assert_eq!(default_config.epg_programs, Some(1800));
+        assert_eq!(default_config.stream_channels, Some(500));
     }
 }
 

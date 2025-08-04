@@ -9,25 +9,22 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
-use crate::proxy::stage_strategy::{
-    DynamicStrategySelector, MemoryPressureLevel, MemoryThresholds,
-};
+// Memory pressure calculator functionality removed - using simpler approach
+// TODO: Restore memory pressure calculation with simpler implementation
 use crate::utils::memory_config::{
     MemoryMonitoringConfig, MemoryVerbosity, get_global_memory_config,
 };
-use crate::utils::{
-    MemoryLimitStatus, MemorySnapshot, MemoryStats, SimpleMemoryMonitor, format_duration,
-    format_memory,
+use crate::utils::{format_duration, format_memory};
+use crate::utils::pressure_monitor::{
+    MemoryLimitStatus, MemorySnapshot, MemoryStats, SimpleMemoryMonitor,
 };
 
 /// Unified memory context for the entire processing pipeline
 pub struct MemoryContext {
     /// The underlying memory monitor for system memory tracking
     monitor: SimpleMemoryMonitor,
-    /// Strategy selector for memory pressure calculation
-    pressure_calculator: DynamicStrategySelector,
-    /// Current memory pressure level
-    current_pressure: MemoryPressureLevel,
+    /// Memory pressure level (simplified)
+    current_pressure: String, // Simplified - was MemoryPressureLevel,
     /// Progression of stages and their memory impact
     stage_progression: Vec<StageMemoryInfo>,
     /// Last memory observation for delta calculation
@@ -91,14 +88,12 @@ impl MemoryContext {
         let config = get_global_memory_config();
         let monitor = SimpleMemoryMonitor::new(memory_limit_mb, config.clone(), system);
 
-        // Create a minimal strategy selector just for pressure calculation
-        let registry = crate::proxy::stage_strategy::StageStrategyRegistry::new();
-        let mut pressure_calculator = DynamicStrategySelector::new(registry);
-
-        // Use custom thresholds if provided
-        if let Some(thresholds) = memory_thresholds {
-            pressure_calculator.set_memory_thresholds(thresholds);
-        }
+        // Create memory pressure calculator
+        let pressure_calculator = if let Some(thresholds) = memory_thresholds {
+            MemoryPressureCalculator::with_thresholds(thresholds)
+        } else {
+            MemoryPressureCalculator::new()
+        };
 
         Self {
             monitor,
@@ -439,7 +434,7 @@ impl MemoryContext {
             // Identify stages where pressure increased
             if matches!(
                 stage.pressure_level,
-                MemoryPressureLevel::High | MemoryPressureLevel::Critical
+                MemoryPressureLevel::High | MemoryPressureLevel::Emergency
             ) {
                 opportunities.push(format!(
                     "During '{}': Pressure reached {:?}",
@@ -525,12 +520,6 @@ impl MemoryContext {
     }
 }
 
-/// Extension trait to add memory pressure thresholds configuration
-impl DynamicStrategySelector {
-    pub fn set_memory_thresholds(&mut self, thresholds: MemoryThresholds) {
-        self.memory_thresholds = thresholds;
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -19,9 +19,9 @@ use super::AppState;
 
 pub mod relay;
 pub mod active_relays;
-pub mod unified_progress;
 pub mod log_streaming;
 pub mod settings;
+pub mod progress_events;
 
 use crate::data_mapping::DataMappingService;
 use crate::models::*;
@@ -37,6 +37,22 @@ pub struct ChannelQueryParams {
 pub struct DataMappingPreviewRequest {
     pub source_type: String,
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
+pub struct FilterQueryParams {
+    /// Filter by source type (stream or epg)
+    pub source_type: Option<String>,
+    /// Sort order for results (name, created_at, updated_at, usage_count)
+    pub sort: Option<String>,
+    /// Sort direction (asc or desc)
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
+pub struct FilterFieldsQueryParams {
+    /// Filter fields by source type (stream or epg)
+    pub source_type: Option<String>,
 }
 
 
@@ -97,87 +113,6 @@ fn mapped_channel_to_frontend_format(
 
 // Progress API
 
-/// Get all source progress information
-#[utoipa::path(
-    get,
-    path = "/progress/all",
-    tag = "progress",
-    summary = "Get all source progress",
-    description = "Retrieve progress information for all sources with enhanced processing details",
-    responses(
-        (status = 200, description = "All source progress retrieved"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_all_progress(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let all_progress = state.state_manager.get_all_progress().await;
-
-    // Get processing info for all sources with progress
-    let mut enhanced_progress = std::collections::HashMap::new();
-
-    for (source_id, progress) in all_progress.iter() {
-        let processing_info = state.state_manager.get_processing_info(*source_id).await;
-        enhanced_progress.insert(
-            source_id,
-            serde_json::json!({
-                "progress": progress,
-                "processing_info": processing_info
-            }),
-        );
-    }
-
-    let result = serde_json::json!({
-        "success": true,
-        "message": "All progress retrieved",
-        "progress": enhanced_progress,
-        "total_sources": all_progress.len()
-    });
-
-    Ok(Json(result))
-}
-
-/// Get source progress information
-#[utoipa::path(
-    get,
-    path = "/progress/sources",
-    tag = "progress",
-    summary = "Get source progress",
-    description = "Retrieve progress information for all sources with processing details",
-    responses(
-        (status = 200, description = "Source progress retrieved"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_all_source_progress(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let all_progress = state.state_manager.get_all_progress().await;
-
-    // Get processing info for all sources with progress
-    let mut enhanced_progress = std::collections::HashMap::new();
-
-    for (source_id, progress) in all_progress.iter() {
-        let processing_info = state.state_manager.get_processing_info(*source_id).await;
-        enhanced_progress.insert(
-            source_id,
-            serde_json::json!({
-                "progress": progress,
-                "processing_info": processing_info
-            }),
-        );
-    }
-
-    let result = serde_json::json!({
-        "success": true,
-        "message": "Source progress retrieved",
-        "progress": enhanced_progress,
-        "total_sources": all_progress.len()
-    });
-
-    Ok(Json(result))
-}
 
 /// Get active operation progress
 #[utoipa::path(
@@ -326,6 +261,14 @@ pub async fn regenerate_proxy(
                 }
                 Err(e) => {
                     error!("Failed to queue proxy {} for regeneration: {}", proxy_id, e);
+                    // Check if it's an operation in progress error by checking the error message
+                    let error_msg = e.to_string();
+                    if error_msg.contains("Operation already in progress") || 
+                       error_msg.contains("already actively regenerating") ||
+                       error_msg.contains("already being processed") {
+                        // _cleanup_guard will automatically clean up when function returns
+                        return Err(StatusCode::CONFLICT);
+                    }
                     // _cleanup_guard will automatically clean up when function returns
                     Err(StatusCode::INTERNAL_SERVER_ERROR)
                 }
@@ -343,6 +286,7 @@ pub async fn regenerate_proxy(
         }
     }
 }
+
 
 #[utoipa::path(
     get,
@@ -388,57 +332,14 @@ pub async fn get_regeneration_queue_status(
 pub async fn get_proxy_regeneration_progress(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Use UniversalProgress system to get all proxy regeneration operations
-    let regeneration_operations = state.progress_service.get_progress_by_type(
-        crate::services::progress_service::OperationType::ProxyRegeneration
-    ).await;
-    
-    let mut progress_data = Vec::new();
-    
-    // Convert UniversalProgress entries to API format
-    for (operation_id, progress) in regeneration_operations {
-        // Get proxy name for display
-        let proxy_name = match state.database.get_stream_proxy(operation_id).await {
-            Ok(Some(proxy)) => proxy.name,
-            Ok(None) => format!("Proxy {}", operation_id),
-            Err(_) => format!("Proxy {}", operation_id),
-        };
-
-        // Convert UniversalState to API status
-        let status = match progress.state {
-            crate::services::progress_service::UniversalState::Preparing => "pending",
-            crate::services::progress_service::UniversalState::Processing => "processing",
-            crate::services::progress_service::UniversalState::Completed => "completed",
-            crate::services::progress_service::UniversalState::Error => "failed",
-            crate::services::progress_service::UniversalState::Cancelled => "cancelled",
-            _ => "unknown",
-        };
-
-        progress_data.push(serde_json::json!({
-            "proxy_id": operation_id,
-            "proxy_name": proxy_name,
-            "queue_id": format!("universal-{}", operation_id),
-            "status": status,
-            "progress": {
-                "percentage": progress.progress_percentage.unwrap_or(0.0),
-                "current_step": progress.current_step,
-            },
-            "scheduled_at": progress.started_at,
-            "created_at": progress.started_at,
-            "updated_at": progress.updated_at,
-            "completed_at": progress.completed_at,
-            "trigger_source_id": null, // Not available in UniversalProgress
-            "trigger_type": "auto", // Default since we can't distinguish
-            "error_message": progress.error_message
-        }));
+    // Use proxy regeneration service to get queue status
+    match state.proxy_regeneration_service.get_queue_status().await {
+        Ok(status) => Ok(Json(status)),
+        Err(e) => {
+            tracing::error!("Failed to get proxy regeneration progress: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
-
-    Ok(Json(serde_json::json!({
-        "success": true,
-        "message": "Regeneration progress retrieved",
-        "regenerations": progress_data,
-        "timestamp": chrono::Utc::now()
-    })))
 }
 
 // Filters API
@@ -449,40 +350,58 @@ pub async fn get_proxy_regeneration_progress(
     tag = "filters",
     summary = "List filters",
     description = "Retrieve all filters with usage statistics and expression trees",
+    params(FilterQueryParams),
     responses(
         (status = 200, description = "List of filters with statistics"),
         (status = 500, description = "Internal server error")
     )
 )]
 pub async fn list_filters(
+    Query(params): Query<FilterQueryParams>,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.database.get_filters_with_usage().await {
+    // Parse source_type parameter
+    let source_type = params.source_type.as_ref().and_then(|st| {
+        match st.as_str() {
+            "stream" => Some(FilterSourceType::Stream),
+            "epg" => Some(FilterSourceType::Epg),
+            _ => None,
+        }
+    });
+
+    match state.database.get_filters_with_usage_filtered(source_type, params.sort, params.order).await {
         Ok(filters) => {
-            // Generate expression trees for each filter
+            // Get available fields for expression parsing
+            let available_fields = match state.database.get_available_filter_fields().await {
+                Ok(fields) => fields.into_iter().map(|f| f.name).collect::<Vec<String>>(),
+                Err(_) => vec![], // Fallback to empty if fields can't be retrieved
+            };
+            let parser = crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
+
             let enhanced_filters: Vec<serde_json::Value> = filters
                 .into_iter()
                 .map(|filter_with_usage| {
-                    let expression_tree =
-                        if !filter_with_usage.filter.condition_tree.trim().is_empty() {
-                            // Parse the condition_tree JSON to generate expression tree
-                            if let Ok(condition_tree) =
-                                serde_json::from_str::<crate::models::ConditionTree>(
-                                    &filter_with_usage.filter.condition_tree,
-                                )
-                            {
-                                Some(generate_expression_tree_json(&condition_tree))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
+                    // Parse expression to condition_tree for UI compatibility
+                    let condition_tree = if !filter_with_usage.filter.expression.trim().is_empty() {
+                        match parser.parse(&filter_with_usage.filter.expression) {
+                            Ok(tree) => Some(tree),
+                            Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Create filter object with both expression and condition_tree
+                    let mut filter_json = serde_json::to_value(&filter_with_usage.filter).unwrap_or_default();
+                    if let Some(filter_obj) = filter_json.as_object_mut() {
+                        filter_obj.insert("usage_count".to_string(), serde_json::json!(filter_with_usage.usage_count));
+                        if let Some(tree) = condition_tree {
+                            filter_obj.insert("condition_tree".to_string(), serde_json::to_value(tree).unwrap_or_default());
+                        }
+                    }
 
                     serde_json::json!({
-                        "filter": filter_with_usage.filter,
-                        "usage_count": filter_with_usage.usage_count,
-                        "expression_tree": expression_tree,
+                        "filter": filter_json
                     })
                 })
                 .collect();
@@ -502,16 +421,31 @@ pub async fn list_filters(
     tag = "filters",
     summary = "Get available filter fields",
     description = "Retrieve list of fields available for filtering operations",
+    params(FilterFieldsQueryParams),
     responses(
         (status = 200, description = "List of available filter fields"),
         (status = 500, description = "Internal server error")
     )
 )]
 pub async fn get_filter_fields(
+    Query(params): Query<FilterFieldsQueryParams>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<FilterFieldInfo>>, StatusCode> {
     match state.database.get_available_filter_fields().await {
-        Ok(fields) => Ok(Json(fields)),
+        Ok(mut fields) => {
+            // Filter fields by source_type if specified
+            if let Some(source_type_str) = &params.source_type {
+                let source_type = match source_type_str.as_str() {
+                    "stream" => Some(FilterSourceType::Stream),
+                    "epg" => Some(FilterSourceType::Epg),
+                    _ => None,
+                };
+                if let Some(st) = source_type {
+                    fields.retain(|field| field.source_type == st);
+                }
+            }
+            Ok(Json(fields))
+        }
         Err(e) => {
             error!("Failed to get filter fields: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -567,20 +501,41 @@ pub async fn get_filter(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     match state.database.get_filter(id).await {
         Ok(Some(filter)) => {
-            let expression_tree = if !filter.condition_tree.trim().is_empty() {
-                // Parse the condition_tree JSON to generate expression tree
-                if let Ok(condition_tree) = serde_json::from_str::<crate::models::ConditionTree>(&filter.condition_tree) {
-                    Some(generate_expression_tree_json(&condition_tree))
-                } else {
-                    None
+            // Get usage count for this filter
+            let usage_count = match state.database.get_filter_usage_count(id).await {
+                Ok(count) => count,
+                Err(e) => {
+                    warn!("Failed to get usage count for filter {}: {}", id, e);
+                    0 // Default to 0 if we can't get usage count
+                }
+            };
+
+            // Parse expression to condition_tree for UI compatibility
+            let condition_tree = if !filter.expression.trim().is_empty() {
+                let available_fields = match state.database.get_available_filter_fields().await {
+                    Ok(fields) => fields.into_iter().map(|f| f.name).collect::<Vec<String>>(),
+                    Err(_) => vec![],
+                };
+                let parser = crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
+                match parser.parse(&filter.expression) {
+                    Ok(tree) => Some(tree),
+                    Err(_) => None,
                 }
             } else {
                 None
             };
 
+            // Create filter object with usage_count and condition_tree
+            let mut filter_json = serde_json::to_value(&filter).unwrap_or_default();
+            if let Some(filter_obj) = filter_json.as_object_mut() {
+                filter_obj.insert("usage_count".to_string(), serde_json::json!(usage_count));
+                if let Some(tree) = condition_tree {
+                    filter_obj.insert("condition_tree".to_string(), serde_json::to_value(tree).unwrap_or_default());
+                }
+            }
+
             let response = serde_json::json!({
-                "filter": filter,
-                "expression_tree": expression_tree,
+                "filter": filter_json
             });
             Ok(Json(response))
         },
@@ -810,385 +765,12 @@ async fn validate_expression_with_context(
     Ok(Json(validation_result))
 }
 
-// Source-specific filter endpoints
-/// List filters for a specific stream source
-#[utoipa::path(
-    get,
-    path = "/sources/stream/{source_id}/filters",
-    tag = "filters",
-    summary = "List stream source filters",
-    description = "Get all filters applicable to a specific stream source",
-    params(
-        ("source_id" = Uuid, Path, description = "Stream source ID")
-    ),
-    responses(
-        (status = 200, description = "Stream source filters retrieved"),
-        (status = 404, description = "Stream source not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn list_stream_source_filters(
-    Path(source_id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Verify stream source exists
-    match state.database.get_stream_source(source_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to verify stream source {}: {}", source_id, e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    }
 
-    // Get filters for this source type
-    match state.database.get_filters_with_usage().await {
-        Ok(filters) => {
-            let stream_filters: Vec<_> = filters
-                .into_iter()
-                .filter(|f| matches!(f.filter.source_type, FilterSourceType::Stream))
-                .collect();
 
-            let result = serde_json::json!({
-                "success": true,
-                "message": "Stream source filters retrieved",
-                "source_id": source_id,
-                "source_type": "stream",
-                "filters": stream_filters,
-                "total_filters": stream_filters.len()
-            });
 
-            Ok(Json(result))
-        }
-        Err(e) => {
-            error!("Failed to list stream source filters: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
 
-/// Create a filter for a specific stream source
-#[utoipa::path(
-    post,
-    path = "/sources/stream/{source_id}/filters",
-    tag = "filters",
-    summary = "Create stream source filter",
-    description = "Create a new filter for a specific stream source",
-    params(
-        ("source_id" = Uuid, Path, description = "Stream source ID")
-    ),
-    request_body = FilterCreateRequest,
-    responses(
-        (status = 201, description = "Filter created successfully"),
-        (status = 404, description = "Stream source not found"),
-        (status = 400, description = "Invalid filter data"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn create_stream_source_filter(
-    Path(source_id): Path<Uuid>,
-    State(state): State<AppState>,
-    Json(mut payload): Json<FilterCreateRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Verify stream source exists
-    match state.database.get_stream_source(source_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to verify stream source {}: {}", source_id, e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    }
 
-    // Ensure source type is set to Stream
-    payload.source_type = FilterSourceType::Stream;
 
-    match state.database.create_filter(&payload).await {
-        Ok(filter) => {
-            let result = serde_json::json!({
-                "success": true,
-                "message": "Stream source filter created",
-                "source_id": source_id,
-                "source_type": "stream",
-                "filter": filter
-            });
-
-            Ok(Json(result))
-        }
-        Err(e) => {
-            error!("Failed to create stream source filter: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// List filters for a specific EPG source
-#[utoipa::path(
-    get,
-    path = "/sources/epg/{source_id}/filters",
-    tag = "filters",
-    summary = "List EPG source filters",
-    description = "Get all filters applicable to a specific EPG source",
-    params(
-        ("source_id" = Uuid, Path, description = "EPG source ID")
-    ),
-    responses(
-        (status = 200, description = "EPG source filters retrieved"),
-        (status = 404, description = "EPG source not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn list_epg_source_filters(
-    Path(source_id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Verify EPG source exists
-    match state.database.get_epg_source(source_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to verify EPG source {}: {}", source_id, e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    }
-
-    // Get filters for this source type
-    match state.database.get_filters_with_usage().await {
-        Ok(filters) => {
-            let epg_filters: Vec<_> = filters
-                .into_iter()
-                .filter(|f| matches!(f.filter.source_type, FilterSourceType::Epg))
-                .collect();
-
-            let result = serde_json::json!({
-                "success": true,
-                "message": "EPG source filters retrieved",
-                "source_id": source_id,
-                "source_type": "epg",
-                "filters": epg_filters,
-                "total_filters": epg_filters.len()
-            });
-
-            Ok(Json(result))
-        }
-        Err(e) => {
-            error!("Failed to list EPG source filters: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Create a filter for a specific EPG source
-#[utoipa::path(
-    post,
-    path = "/sources/epg/{source_id}/filters",
-    tag = "filters",
-    summary = "Create EPG source filter",
-    description = "Create a new filter for a specific EPG source",
-    params(
-        ("source_id" = Uuid, Path, description = "EPG source ID")
-    ),
-    request_body = FilterCreateRequest,
-    responses(
-        (status = 201, description = "Filter created successfully"),
-        (status = 404, description = "EPG source not found"),
-        (status = 400, description = "Invalid filter data"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn create_epg_source_filter(
-    Path(source_id): Path<Uuid>,
-    State(state): State<AppState>,
-    Json(mut payload): Json<FilterCreateRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Verify EPG source exists
-    match state.database.get_epg_source(source_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to verify EPG source {}: {}", source_id, e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    }
-
-    // Ensure source type is set to EPG
-    payload.source_type = FilterSourceType::Epg;
-
-    match state.database.create_filter(&payload).await {
-        Ok(filter) => {
-            let result = serde_json::json!({
-                "success": true,
-                "message": "EPG source filter created",
-                "source_id": source_id,
-                "source_type": "epg",
-                "filter": filter
-            });
-
-            Ok(Json(result))
-        }
-        Err(e) => {
-            error!("Failed to create EPG source filter: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-// Cross-source filter operations
-/// List all stream filters
-#[utoipa::path(
-    get,
-    path = "/filters/stream",
-    tag = "filters",
-    summary = "List stream filters",
-    description = "Get all filters that apply to stream sources",
-    responses(
-        (status = 200, description = "Stream filters retrieved"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn list_stream_filters(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.database.get_filters_with_usage().await {
-        Ok(filters) => {
-            let stream_filters: Vec<_> = filters
-                .into_iter()
-                .filter(|f| matches!(f.filter.source_type, FilterSourceType::Stream))
-                .collect();
-
-            let result = serde_json::json!({
-                "success": true,
-                "message": "All stream filters retrieved",
-                "source_type": "stream",
-                "filters": stream_filters,
-                "total_filters": stream_filters.len()
-            });
-
-            Ok(Json(result))
-        }
-        Err(e) => {
-            error!("Failed to list stream filters: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// List all EPG filters
-#[utoipa::path(
-    get,
-    path = "/filters/epg",
-    tag = "filters",
-    summary = "List EPG filters",
-    description = "Get all filters that apply to EPG sources",
-    responses(
-        (status = 200, description = "EPG filters retrieved"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn list_epg_filters(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.database.get_filters_with_usage().await {
-        Ok(filters) => {
-            let epg_filters: Vec<_> = filters
-                .into_iter()
-                .filter(|f| matches!(f.filter.source_type, FilterSourceType::Epg))
-                .collect();
-
-            let result = serde_json::json!({
-                "success": true,
-                "message": "All EPG filters retrieved",
-                "source_type": "epg",
-                "filters": epg_filters,
-                "total_filters": epg_filters.len()
-            });
-
-            Ok(Json(result))
-        }
-        Err(e) => {
-            error!("Failed to list EPG filters: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Get available filter fields for stream sources
-#[utoipa::path(
-    get,
-    path = "/filters/fields/stream",
-    tag = "filters",
-    summary = "Get stream filter fields",
-    description = "Get available fields that can be used in stream source filters",
-    responses(
-        (status = 200, description = "Stream filter fields retrieved"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_stream_filter_fields(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.database.get_available_filter_fields().await {
-        Ok(fields) => {
-            let stream_fields: Vec<_> = fields
-                .into_iter()
-                .filter(|f| matches!(f.source_type, FilterSourceType::Stream))
-                .collect();
-
-            let result = serde_json::json!({
-                "success": true,
-                "message": "Stream filter fields retrieved",
-                "source_type": "stream",
-                "fields": stream_fields,
-                "total_fields": stream_fields.len()
-            });
-
-            Ok(Json(result))
-        }
-        Err(e) => {
-            error!("Failed to get stream filter fields: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Get available filter fields for EPG sources
-#[utoipa::path(
-    get,
-    path = "/filters/fields/epg",
-    tag = "filters",
-    summary = "Get EPG filter fields",
-    description = "Get available fields that can be used in EPG source filters",
-    responses(
-        (status = 200, description = "EPG filter fields retrieved"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_epg_filter_fields(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.database.get_available_filter_fields().await {
-        Ok(fields) => {
-            let epg_fields: Vec<_> = fields
-                .into_iter()
-                .filter(|f| matches!(f.source_type, FilterSourceType::Epg))
-                .collect();
-
-            let result = serde_json::json!({
-                "success": true,
-                "message": "EPG filter fields retrieved",
-                "source_type": "epg",
-                "fields": epg_fields,
-                "total_fields": epg_fields.len()
-            });
-
-            Ok(Json(result))
-        }
-        Err(e) => {
-            error!("Failed to get EPG filter fields: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
 
 // Data Mapping API
 /// List all data mapping rules
@@ -3070,24 +2652,61 @@ pub async fn refresh_stream_source(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     match state.database.get_stream_source(id).await {
         Ok(Some(source)) => {
-            tokio::spawn({
-                let stream_service = state.stream_source_service.clone();
-                let progress_service = state.progress_service.clone(); // Use shared instance!
-                async move {
-                    if let Err(e) = stream_service.refresh_with_progress(&source, &progress_service).await {
-                        error!("Failed to refresh stream source {}: {}", source.id, e);
-                    }
+            // Create progress manager for manual refresh operation
+            let progress_manager = match state.progress_service.create_staged_progress_manager(
+                source.id, // Use source ID as owner
+                "stream_source".to_string(),
+                crate::services::progress_service::OperationType::StreamIngestion,
+                format!("Manual Refresh: {}", source.name),
+            ).await {
+                Ok(manager) => {
+                    // Add ingestion stage
+                    let manager_with_stage = manager.add_stage("stream_ingestion", "Stream Ingestion").await;
+                    Some((manager_with_stage, manager.get_stage_updater("stream_ingestion").await))
+                },
+                Err(e) => {
+                    warn!("Failed to create progress manager for stream source manual refresh {}: {} - continuing without progress", source.name, e);
+                    None
                 }
-            });
-
-            // Emit scheduler event for manual refresh trigger
-            state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
-
-            Ok(Json(serde_json::json!({
-                "success": true,
-                "message": "Stream source refresh started",
-                "source_id": id
-            })))
+            };
+            
+            let progress_updater = progress_manager.as_ref().and_then(|(_, updater)| updater.as_ref());
+            
+            // Call stream source service refresh with progress tracking
+            match state.stream_source_service.refresh_with_progress_updater(&source, progress_updater).await {
+                Ok(_channel_count) => {
+                    // Complete progress operation if it was created
+                    if let Some((manager, _)) = progress_manager {
+                        manager.complete().await;
+                    }
+                    
+                    // Emit scheduler event for manual refresh trigger
+                    state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
+                    Ok(Json(serde_json::json!({
+                        "success": true,
+                        "message": "Stream source refresh started",
+                        "source_id": id
+                    })))
+                }
+                Err(e) => {
+                    // Fail progress operation if it was created
+                    if let Some((manager, _)) = progress_manager {
+                        manager.fail(&format!("Stream source refresh failed: {}", e)).await;
+                    }
+                    
+                    error!("Failed to refresh stream source {}: {}", source.id, e);
+                    // Check if it's an operation in progress error
+                    if let Some(app_error) = e.downcast_ref::<crate::errors::AppError>() {
+                        match app_error {
+                            crate::errors::AppError::OperationInProgress { .. } => {
+                                return Err(StatusCode::CONFLICT);
+                            }
+                            _ => {}
+                        }
+                    }
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            }
         }
         Ok(None) => Ok(Json(serde_json::json!({
             "success": false,
@@ -3253,23 +2872,61 @@ pub async fn refresh_epg_source_unified(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     match state.database.get_epg_source(id).await {
         Ok(Some(source)) => {
-            // Use EPG source service to trigger refresh with new source handlers
-            let epg_service = state.epg_source_service.clone();
-            let progress_service = state.progress_service.clone(); // Use shared instance!
-            tokio::spawn(async move {
-                if let Err(e) = epg_service.refresh_with_progress(&source, &progress_service).await {
-                    error!("Failed to refresh EPG source {}: {}", source.id, e);
+            // Create progress manager for manual refresh operation
+            let progress_manager = match state.progress_service.create_staged_progress_manager(
+                source.id, // Use source ID as owner
+                "epg_source".to_string(),
+                crate::services::progress_service::OperationType::EpgIngestion,
+                format!("Manual Refresh: {}", source.name),
+            ).await {
+                Ok(manager) => {
+                    // Add ingestion stage
+                    let manager_with_stage = manager.add_stage("epg_ingestion", "EPG Ingestion").await;
+                    Some((manager_with_stage, manager.get_stage_updater("epg_ingestion").await))
+                },
+                Err(e) => {
+                    warn!("Failed to create progress manager for EPG source manual refresh {}: {} - continuing without progress", source.name, e);
+                    None
                 }
-            });
-
-            // Emit scheduler event for manual refresh trigger
-            state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
-
-            Ok(Json(serde_json::json!({
-                "success": true,
-                "message": "EPG source refresh started",
-                "source_id": id
-            })))
+            };
+            
+            let progress_updater = progress_manager.as_ref().and_then(|(_, updater)| updater.as_ref());
+            
+            // Call EPG source service refresh with progress tracking
+            match state.epg_source_service.ingest_programs_with_progress_updater(&source, progress_updater).await {
+                Ok(_program_count) => {
+                    // Complete progress operation if it was created
+                    if let Some((manager, _)) = progress_manager {
+                        manager.complete().await;
+                    }
+                    
+                    // Emit scheduler event for manual refresh trigger
+                    state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
+                    Ok(Json(serde_json::json!({
+                        "success": true,
+                        "message": "EPG source refresh started",
+                        "source_id": id
+                    })))
+                }
+                Err(e) => {
+                    // Fail progress operation if it was created
+                    if let Some((manager, _)) = progress_manager {
+                        manager.fail(&format!("EPG source refresh failed: {}", e)).await;
+                    }
+                    
+                    error!("Failed to refresh EPG source {}: {}", source.id, e);
+                    // Check if it's an operation in progress error
+                    if let Some(app_error) = e.downcast_ref::<crate::errors::AppError>() {
+                        match app_error {
+                            crate::errors::AppError::OperationInProgress { .. } => {
+                                return Err(StatusCode::CONFLICT);
+                            }
+                            _ => {}
+                        }
+                    }
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            }
         }
         Ok(None) => Ok(Json(serde_json::json!({
             "success": false,
@@ -3864,6 +3521,65 @@ fn generate_condition_node_json(node: &crate::models::ConditionNode) -> serde_js
     }
 }
 
+/// Generate human-readable expression from condition tree
+/// 
+/// Note: This function is no longer used in the filter system as expressions are now stored directly.
+/// It's kept for potential debugging and data mapping use cases.
+#[allow(dead_code)]
+pub fn generate_human_expression(tree: &crate::models::ConditionTree) -> String {
+    generate_condition_node_expression(&tree.root)
+}
+
+/// Generate human-readable expression from a condition node
+#[allow(dead_code)]
+fn generate_condition_node_expression(node: &crate::models::ConditionNode) -> String {
+    match node {
+        crate::models::ConditionNode::Condition {
+            field,
+            operator,
+            value,
+            negate,
+            case_sensitive: _,
+        } => {
+            let operator_str = match operator {
+                crate::models::FilterOperator::Contains => "contains",
+                crate::models::FilterOperator::Equals => "equals",
+                crate::models::FilterOperator::Matches => "matches",
+                crate::models::FilterOperator::StartsWith => "starts_with",
+                crate::models::FilterOperator::EndsWith => "ends_with",
+                crate::models::FilterOperator::NotContains => "not_contains",
+                crate::models::FilterOperator::NotEquals => "not_equals",
+                crate::models::FilterOperator::NotMatches => "not_matches",
+                crate::models::FilterOperator::NotStartsWith => "not_starts_with",
+                crate::models::FilterOperator::NotEndsWith => "not_ends_with",
+            };
+            
+            let neg_prefix = if *negate { "NOT " } else { "" };
+            let escaped_value = value.replace("\\", "\\\\").replace("\"", "\\\"");
+            format!("{}{} {} \"{}\"", neg_prefix, field, operator_str, escaped_value)
+        }
+        crate::models::ConditionNode::Group { operator, children } => {
+            let operator_str = match operator {
+                crate::models::LogicalOperator::And => " AND ",
+                crate::models::LogicalOperator::Or => " OR ",
+            };
+            
+            let child_expressions: Vec<String> = children.iter()
+                .map(|child| {
+                    match child {
+                        crate::models::ConditionNode::Group { .. } => {
+                            format!("({})", generate_condition_node_expression(child))
+                        }
+                        _ => generate_condition_node_expression(child)
+                    }
+                })
+                .collect();
+            
+            child_expressions.join(operator_str)
+        }
+    }
+}
+
 /// Get progress for all sources (used by frontend polling)
 #[utoipa::path(
     get,
@@ -4072,6 +3788,11 @@ pub async fn regenerate_all_proxies(
         }
         Err(e) => {
             error!("Failed to queue all proxies for regeneration: {}", e);
+            // Check if it's an operation in progress error by checking the error message
+            let error_msg = e.to_string();
+            if error_msg.contains("Operation already in progress") {
+                return Err(StatusCode::CONFLICT);
+            }
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

@@ -430,131 +430,18 @@ impl SourceHandler for M3uSourceHandler {
 #[async_trait]
 impl ChannelIngestor for M3uSourceHandler {
     async fn ingest_channels(&self, source: &StreamSource) -> AppResult<Vec<Channel>> {
-        self.ingest_channels_with_progress(source, None).await
-    }
-
-    async fn ingest_channels_with_progress(
-        &self,
-        source: &StreamSource,
-        progress_callback: Option<&ProgressCallback>,
-    ) -> AppResult<Vec<Channel>> {
-        info!("Starting M3U channel ingestion for source: {}", source.name);
-
-        // Report initial progress
-        if let Some(callback) = progress_callback {
-            callback(IngestionProgress::starting("Connecting to M3U source"));
-        }
-
-        if let Some(callback) = progress_callback {
-            callback(IngestionProgress::starting("Downloading playlist").update_step("Downloading playlist", Some(25.0)));
-        }
-
-        // Download the M3U content with automatic decompression
+        // Fetch and parse M3U content directly
         let content = self.http_client.fetch_text(&source.url).await
             .map_err(|e| AppError::source_error(format!("Failed to fetch M3U: {}", e)))?;
-
-        if let Some(callback) = progress_callback {
-            callback(IngestionProgress::starting("Parsing channels").update_step("Parsing channels", Some(50.0)));
-        }
-
-        // Parse the content
-        let channels = self.parse_m3u_content(&content, source).await?;
-
-        if let Some(callback) = progress_callback {
-            callback(IngestionProgress::starting("Ingestion complete").update_step("Ingestion complete", Some(100.0)));
-        }
-
-        info!("Successfully ingested {} channels from M3U source: {}", channels.len(), source.name);
-        Ok(channels)
+        self.parse_m3u_content(&content, source).await
     }
+
 
     async fn estimate_channel_count(&self, source: &StreamSource) -> AppResult<Option<u32>> {
         self.estimate_channels(source).await
     }
 
-    async fn ingest_channels_with_universal_progress(
-        &self,
-        source: &StreamSource,
-        progress_callback: Option<&crate::sources::traits::UniversalCallback>,
-    ) -> AppResult<Vec<Channel>> {
-        use crate::services::progress_service::{UniversalProgress, OperationType, UniversalState};
-        use uuid::Uuid;
 
-        info!("Starting M3U channel ingestion with universal progress for source: {}", source.name);
-        let source_id = Uuid::new_v4(); // Generate operation ID
-        
-        // Report initial progress
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::StreamIngestion, 
-                format!("M3U Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Connecting)
-            .update_step("Connecting to M3U source".to_string());
-            callback(progress);
-        }
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::StreamIngestion,
-                format!("M3U Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Downloading)
-            .update_step("Downloading playlist".to_string())
-            .update_percentage(25.0);
-            callback(progress);
-        }
-
-        // Download the M3U content with automatic decompression
-        let content = match self.http_client.fetch_text(&source.url).await {
-            Ok(content) => content,
-            Err(e) => {
-                if let Some(callback) = progress_callback {
-                    let progress = UniversalProgress::new(
-                        source_id,
-                        OperationType::StreamIngestion,
-                        format!("M3U Ingestion: {}", source.name)
-                    )
-                    .set_error(format!("Failed to fetch M3U: {}", e));
-                    callback(progress);
-                }
-                return Err(e);
-            }
-        };
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::StreamIngestion,
-                format!("M3U Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Processing)
-            .update_step("Parsing channels".to_string())
-            .update_percentage(50.0);
-            callback(progress);
-        }
-
-        // Parse the content
-        let channels = self.parse_m3u_content(&content, source).await?;
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::StreamIngestion,
-                format!("M3U Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Completed)
-            .update_step("Ingestion complete".to_string())
-            .update_percentage(100.0)
-            .update_items(channels.len(), Some(channels.len()));
-            callback(progress);
-        }
-
-        info!("Successfully ingested {} channels from M3U source: {}", channels.len(), source.name);
-        Ok(channels)
-    }
 }
 
 #[async_trait]

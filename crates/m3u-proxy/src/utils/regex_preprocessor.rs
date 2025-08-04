@@ -1,4 +1,4 @@
-use tracing::debug;
+use tracing::trace;
 
 /// Information about a regex quantifier
 #[derive(Debug, Clone)]
@@ -74,7 +74,7 @@ impl RegexPreprocessor {
         let should_run = special_chars_present || literal_strings_present;
         
         if !should_run {
-            debug!(
+            trace!(
                 "{} regex preprocessor skipped: field='{}' pattern='{}' (no special chars or required literals found)",
                 debug_context, field_value, regex_pattern
             );

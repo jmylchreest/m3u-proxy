@@ -6,7 +6,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::database::Database;
 use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceUpdateRequest};
@@ -288,83 +288,7 @@ impl StreamSourceService {
         }
     }
 
-    /// Refresh a stream source using new source handlers with progress tracking
-    pub async fn refresh_with_progress(
-        &self, 
-        source: &crate::models::StreamSource,
-        progress_service: &crate::services::ProgressService,
-    ) -> Result<usize> {
-        use crate::sources::factory::SourceHandlerFactory;
-        use tracing::info;
-        
-        let start_time = std::time::Instant::now();
-        
-        // Create stream source handler
-        let handler = SourceHandlerFactory::create_handler(&source.source_type)
-            .map_err(|e| anyhow::anyhow!("Failed to create stream handler: {}", e))?;
-        
-        // Start progress tracking
-        let operation_id = source.id;
-        let operation_name = format!("Stream Ingestion: {}", source.name);
-        
-        let _operation_callback = progress_service.start_operation(
-            operation_id,
-            crate::services::progress_service::OperationType::StreamIngestion,
-            operation_name.clone(),
-        ).await;
-        
-        info!(
-            "Starting stream ingestion for source '{}' ({}) using new pipeline",
-            source.name, source.id
-        );
-        
-        // Create universal progress callback via ProgressService
-        let progress_callback = progress_service
-            .start_operation(
-                source.id, 
-                crate::services::progress_service::OperationType::StreamIngestion,
-                format!("Stream Ingestion: {}", source.name)
-            )
-            .await;
-        
-        // Use new stream source handler with universal progress to ingest data
-        let channels = handler
-            .ingest_channels_with_universal_progress(
-                source, 
-                Some(&Box::new(progress_callback))
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("Stream source handler failed: {}", e))?;
-        
-        info!("Saving {} channels to database for '{}'", channels.len(), source.name);
-        
-        // Save channels to database 
-        let channels_saved = self.save_channels(source.id, channels).await
-            .map_err(|e| {
-                tracing::error!("Failed to save channels for '{}': {}", source.name, e);
-                anyhow::anyhow!("Failed to save channels: {}", e)
-            })?;
-        
-        info!("Successfully saved {} channels to database for Stream source '{}'", channels_saved, source.name);
-        
-        // Update last ingested timestamp
-        if let Err(e) = self.database.update_source_last_ingested(source.id).await {
-            tracing::warn!("Failed to update last ingested timestamp for stream source '{}': {}", source.name, e);
-        }
-        
-        let duration = start_time.elapsed();
-        info!(
-            "Stream ingestion completed for '{}' in {:?}: {} channels",
-            source.name, duration, channels_saved
-        );
-        
-        progress_service.complete_operation(operation_id).await;
-        
-        // Invalidate cache since we updated channels
-        let _ = self.cache_invalidation_tx.send(());
-        
-        Ok(channels_saved)
-    }
+
     
     /// Save channels to database
     async fn save_channels(
@@ -411,6 +335,82 @@ impl StreamSourceService {
         tx.commit().await?;
         debug!("Successfully saved {} channels", channels_saved);
         
+        Ok(channels_saved)
+    }
+    
+    /// Refresh stream source using ProgressStageUpdater (new API)
+    pub async fn refresh_with_progress_updater(
+        &self,
+        source: &crate::models::StreamSource,
+        progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
+    ) -> Result<usize> {
+        use crate::sources::factory::SourceHandlerFactory;
+        
+        info!("Starting stream source refresh with ProgressStageUpdater for source: {}", source.name);
+        
+        // Create stream source handler using the factory
+        let handler = SourceHandlerFactory::create_handler(&source.source_type)
+            .map_err(|e| anyhow::anyhow!("Failed to create stream source handler: {}", e))?;
+        
+        // Update progress: starting ingestion
+        if let Some(updater) = progress_updater {
+            updater.update_progress(0.0, &format!("Starting stream ingestion for {}", source.name)).await;
+        }
+        
+        // Ingest channels using the handler
+        let channels = handler
+            .ingest_channels(source)
+            .await
+            .map_err(|e| anyhow::anyhow!("Stream source handler failed: {}", e))?;
+        
+        info!(
+            "Stream handler ingested {} channels from source '{}'",
+            channels.len(), source.name
+        );
+        
+        // Update progress: saving to database
+        if let Some(updater) = progress_updater {
+            updater.update_progress(80.0, &format!("Saving {} channels to database", channels.len())).await;
+        }
+        
+        // Save channels to database
+        info!("Saving {} channels to database for '{}'", channels.len(), source.name);
+        let channels_saved = match self.save_channels(source.id, channels).await {
+            Ok(count) => count,
+            Err(e) => {
+                warn!("Failed to save channels for '{}': {}", source.name, e);
+                return Err(e);
+            }
+        };
+        
+        // Final progress update
+        if let Some(updater) = progress_updater {
+            updater.update_progress(100.0, &format!("Completed: {} channels saved", channels_saved)).await;
+            updater.complete_stage().await;
+        }
+        
+        // Update the source's last_ingested_at timestamp
+        let now = chrono::Utc::now();
+        if let Err(e) = sqlx::query(
+            "UPDATE stream_sources SET last_ingested_at = ?, updated_at = ? WHERE id = ?"
+        )
+        .bind(now)
+        .bind(now)
+        .bind(source.id.to_string())
+        .execute(&self.database.pool())
+        .await {
+            warn!("Failed to update last_ingested_at for stream source '{}': {}", source.name, e);
+        } else {
+            info!("Updated last_ingested_at for stream source '{}'", source.name);
+        }
+        
+        // Invalidate cache since we updated channels
+        let _ = self.cache_invalidation_tx.send(());
+        
+        info!(
+            "Stream source refresh completed for '{}': {} channels saved",
+            source.name, channels_saved
+        );
         Ok(channels_saved)
     }
 }

@@ -12,7 +12,7 @@ use crate::{
     errors::types::AppError,
     models::*,
     repositories::{
-        FilterRepository, StreamProxyRepository, StreamSourceRepository, traits::Repository,
+        StreamProxyRepository, StreamSourceRepository, traits::Repository,
     },
     web::handlers::proxies::PreviewProxyRequest,
 };
@@ -21,8 +21,6 @@ use crate::{
 pub struct ProxyConfigResolver {
     proxy_repo: StreamProxyRepository,
     stream_source_repo: StreamSourceRepository,
-    filter_repo: FilterRepository,
-    #[allow(dead_code)]
     database: Database,
 }
 
@@ -30,13 +28,11 @@ impl ProxyConfigResolver {
     pub fn new(
         proxy_repo: StreamProxyRepository,
         stream_source_repo: StreamSourceRepository,
-        filter_repo: FilterRepository,
         database: Database,
     ) -> Self {
         Self {
             proxy_repo,
             stream_source_repo,
-            filter_repo,
             database,
         }
     }
@@ -95,10 +91,10 @@ impl ProxyConfigResolver {
         let mut filters = Vec::new();
         for proxy_filter in proxy_filters {
             if let Some(filter) = self
-                .filter_repo
-                .find_by_id(proxy_filter.filter_id)
+                .database
+                .get_filter(proxy_filter.filter_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(|e| AppError::Internal { message: e.to_string() })?
             {
                 filters.push(ProxyFilterConfig {
                     filter,
@@ -221,10 +217,10 @@ impl ProxyConfigResolver {
         let mut filters = Vec::new();
         for filter_req in &request.filters {
             if let Some(filter) = self
-                .filter_repo
-                .find_by_id(filter_req.filter_id)
+                .database
+                .get_filter(filter_req.filter_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(|e| AppError::Internal { message: e.to_string() })?
             {
                 filters.push(ProxyFilterConfig {
                     filter,

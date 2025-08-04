@@ -214,7 +214,6 @@ impl StreamProxyService {
         let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
             self.proxy_repo.clone(),
             self.stream_source_repo.clone(),
-            self.filter_repo.clone(),
             self.database.clone(),
         );
 

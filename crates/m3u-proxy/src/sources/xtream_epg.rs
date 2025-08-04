@@ -20,7 +20,7 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{EpgSource, EpgSourceType, EpgProgram};
 use crate::sources::traits::{
     EpgSourceHandler, EpgProgramIngestor, FullEpgSourceHandler, SourceValidationResult,
-    EpgSourceCapabilities, EpgIngestionProgress, EpgProgressCallback, EpgSourceHandlerSummary,
+    EpgSourceCapabilities, EpgSourceHandlerSummary,
 };
 use crate::utils::url::UrlUtils;
 use crate::utils::human_format::format_memory;
@@ -127,26 +127,112 @@ impl XtreamEpgHandler {
         }
     }
 
+    /// Fetch EPG content from Xtream API with progress updates
+    async fn fetch_xtream_epg_content_with_progress(
+        &self,
+        source: &EpgSource,
+        progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
+    ) -> AppResult<String> {
+        let epg_url = self.build_epg_url(source)?;
+        let source_name = source.name.clone(); // Clone to avoid lifetime issues
+        
+        // Update progress: Starting download
+        if let Some(updater) = progress_updater {
+            updater.update_progress(10.0, "Downloading EPG data...").await;
+        }
+        
+        debug!("Fetching Xtream EPG content from: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&epg_url));
+
+        // Helper function to process response with decompression and progress updates
+        async fn process_response_with_progress(
+            response: reqwest::Response,
+            source_name: String,
+            progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
+        ) -> AppResult<String> {
+            if !response.status().is_success() {
+                return Err(AppError::source_error(format!(
+                    "Xtream EPG API returned error status: {} for source: {}",
+                    response.status(),
+                    source_name
+                )));
+            }
+
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| AppError::source_error(format!("Failed to read Xtream EPG response: {}", e)))?;
+
+            let byte_count = bytes.len();
+            let human_size = format_memory(byte_count as f64);
+            
+            debug!("Fetched {} bytes of raw Xtream EPG content", byte_count);
+            
+            // Update progress: Downloaded data
+            if let Some(updater) = progress_updater {
+                updater.update_progress(12.0, &format!("Downloaded {}", human_size)).await;
+            }
+
+            // Detect compression format and decompress if needed
+            let compression_format = DecompressionService::detect_compression_format(&bytes);
+            debug!("Detected compression format: {:?}", compression_format);
+
+            let decompressed_bytes = match compression_format {
+                CompressionFormat::Uncompressed => bytes.to_vec(),
+                _ => {
+                    debug!("Decompressing Xtream EPG content using {:?}", compression_format);
+                    DecompressionService::decompress(bytes)
+                        .map_err(|e| AppError::source_error(format!("Failed to decompress Xtream EPG content: {}", e)))?
+                }
+            };
+
+            String::from_utf8(decompressed_bytes)
+                .map_err(|e| AppError::source_error(format!("Xtream EPG content is not valid UTF-8: {}", e)))
+        }
+
+        match self.client.get(&epg_url).send().await {
+            Ok(response) => {
+                process_response_with_progress(response, source_name.clone(), progress_updater).await
+            }
+            Err(e) => {
+                // If HTTPS failed and URL started with https://, try HTTP fallback
+                if epg_url.starts_with("https://") {
+                    warn!("HTTPS EPG fetch failed for '{}', trying HTTP fallback", source_name);
+                    
+                    let http_url = epg_url.replace("https://", "http://");
+                    debug!("Fetching Xtream EPG content from HTTP fallback: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&http_url));
+                    
+                    match self.client.get(&http_url).send().await {
+                        Ok(response) => {
+                            let content = process_response_with_progress(response, source_name, progress_updater).await?;
+                            info!("Successfully fetched {} of Xtream EPG content using HTTP fallback", format_memory(content.len() as f64));
+                            Ok(content)
+                        }
+                        Err(fallback_e) => {
+                            Err(AppError::source_error(format!(
+                                "Failed to fetch Xtream EPG: HTTPS error: {}, HTTP fallback error: {}",
+                                e, fallback_e
+                            )))
+                        }
+                    }
+                } else {
+                    Err(AppError::source_error(format!("Failed to fetch Xtream EPG: {}", e)))
+                }
+            }
+        }
+    }
+
     /// Parse Xtream EPG content (which is usually XMLTV format) - programs-only mode
     async fn parse_xtream_epg_content(
         &self,
         source: &EpgSource,
         content: &str,
-        progress_callback: Option<&EpgProgressCallback>,
     ) -> AppResult<Vec<EpgProgram>> {
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Parsing Xtream EPG content"));
-        }
 
         // Parse using our custom quick-xml parser
         let xmltv_programs = crate::utils::xmltv_parser::parse_xmltv_programs(content)?;
 
         // Skip channel processing - programs-only approach for database-first generation
 
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Converting programs")
-                .update_step("Converting programs", Some(50.0)));
-        }
 
         // Convert from SimpleXmltvProgram to EpgProgram
         let mut epg_programs = Vec::new();
@@ -225,10 +311,6 @@ impl XtreamEpgHandler {
             );
         }
 
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Parsing complete")
-                .update_step("Parsing complete", Some(100.0)));
-        }
 
         info!(
             "Parsed Xtream EPG for source '{}': {} programs",
@@ -244,6 +326,11 @@ impl XtreamEpgHandler {
         use tracing::warn;
         
         if let (Some(username), Some(password)) = (&source.username, &source.password) {
+            // Only skip if username is empty (password can be empty for some services)
+            if username.trim().is_empty() {
+                warn!("EPG source '{}' has empty username, skipping authentication test", source.name);
+                return Ok(false);
+            }
             
             // Ensure URL has proper scheme (same logic as stream source handler)
             let base_url = if source.url.starts_with("http://") || source.url.starts_with("https://") {
@@ -338,12 +425,14 @@ impl XtreamEpgHandler {
                                 }
                             }
                             Err(fallback_e) => {
-                                warn!("EPG auth fallback also failed: {}", fallback_e);
+                                let obfuscated_error = crate::utils::url::UrlUtils::obfuscate_credentials(&fallback_e.to_string());
+                                warn!("EPG auth fallback also failed: {}", obfuscated_error);
                                 Ok(false)
                             }
                         }
                     } else {
-                        warn!("EPG auth network request failed: {}", e);
+                        let obfuscated_error = crate::utils::url::UrlUtils::obfuscate_credentials(&e.to_string());
+                        warn!("EPG auth network request failed: {}", obfuscated_error);
                         Ok(false)
                     }
                 }
@@ -455,39 +544,30 @@ impl EpgSourceHandler for XtreamEpgHandler {
 #[async_trait]
 impl EpgProgramIngestor for XtreamEpgHandler {
     async fn ingest_epg_programs(&self, source: &EpgSource) -> AppResult<Vec<EpgProgram>> {
-        self.ingest_epg_programs_with_progress(source, None).await
-    }
-
-    async fn ingest_epg_programs_with_progress(
-        &self,
-        source: &EpgSource,
-        progress_callback: Option<&EpgProgressCallback>,
-    ) -> AppResult<Vec<EpgProgram>> {
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Authenticating with Xtream"));
-        }
-
-        // Test authentication first
+        // Authenticate and fetch EPG content directly
         if !self.test_xtream_auth(source).await? {
             return Err(AppError::source_error(format!("Xtream authentication failed for source: {}", source.name)));
         }
-
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Authentication successful")
-                .update_step("Fetching EPG content", Some(20.0)));
-        }
-
-        // Fetch EPG content
+        
         let content = self.fetch_xtream_epg_content(source).await?;
-
-        if let Some(callback) = progress_callback {
-            callback(EpgIngestionProgress::starting("Fetching complete")
-                .update_step("Parsing EPG", Some(40.0)));
-        }
-
-        // Parse content
-        self.parse_xtream_epg_content(source, &content, progress_callback).await
+        self.parse_xtream_epg_content(source, &content).await
     }
+
+    /// Ingest EPG programs with progress updates (enhanced for Xtream)
+    async fn ingest_epg_programs_with_progress_updater(
+        &self,
+        source: &EpgSource,
+        progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
+    ) -> AppResult<Vec<EpgProgram>> {
+        // Authenticate and fetch EPG content with progress updates
+        if !self.test_xtream_auth(source).await? {
+            return Err(AppError::source_error(format!("Xtream authentication failed for source: {}", source.name)));
+        }
+        
+        let content = self.fetch_xtream_epg_content_with_progress(source, progress_updater).await?;
+        self.parse_xtream_epg_content(source, &content).await
+    }
+
 
     async fn estimate_program_count(&self, source: &EpgSource) -> AppResult<Option<u32>> {
         // For Xtream, we could potentially get some info from the API
@@ -496,240 +576,7 @@ impl EpgProgramIngestor for XtreamEpgHandler {
         Ok(None)
     }
 
-    async fn ingest_epg_programs_with_universal_progress(
-        &self,
-        source: &EpgSource,
-        progress_callback: Option<&crate::sources::traits::UniversalCallback>,
-    ) -> AppResult<Vec<EpgProgram>> {
-        use crate::services::progress_service::{UniversalProgress, OperationType, UniversalState};
-        use uuid::Uuid;
 
-        info!("Starting Xtream EPG ingestion with universal progress for source: {}", source.name);
-        let source_id = Uuid::new_v4(); // Generate operation ID
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("Xtream EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Connecting)
-            .update_step("Authenticating with Xtream".to_string());
-            callback(progress);
-        }
-
-        // Test authentication first
-        let auth_success = match self.test_xtream_auth(source).await {
-            Ok(success) => success,
-            Err(e) => {
-                if let Some(callback) = progress_callback {
-                    let progress = UniversalProgress::new(
-                        source_id,
-                        OperationType::EpgIngestion,
-                        format!("Xtream EPG Ingestion: {}", source.name)
-                    )
-                    .set_error(format!("Authentication test failed: {}", e));
-                    callback(progress);
-                }
-                return Err(e);
-            }
-        };
-
-        if !auth_success {
-            let error_msg = format!("Xtream authentication failed for source: {}", source.name);
-            if let Some(callback) = progress_callback {
-                let progress = UniversalProgress::new(
-                    source_id,
-                    OperationType::EpgIngestion,
-                    format!("Xtream EPG Ingestion: {}", source.name)
-                )
-                .set_error(error_msg.clone());
-                callback(progress);
-            }
-            return Err(AppError::source_error(error_msg));
-        }
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("Xtream EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Downloading)
-            .update_step("Fetching EPG content".to_string())
-            .update_percentage(20.0);
-            callback(progress);
-        }
-
-        // Fetch EPG content
-        let content = match self.fetch_xtream_epg_content(source).await {
-            Ok(content) => content,
-            Err(e) => {
-                if let Some(callback) = progress_callback {
-                    let progress = UniversalProgress::new(
-                        source_id,
-                        OperationType::EpgIngestion,
-                        format!("Xtream EPG Ingestion: {}", source.name)
-                    )
-                    .set_error(format!("Failed to fetch EPG content: {}", e));
-                    callback(progress);
-                }
-                return Err(e);
-            }
-        };
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("Xtream EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Processing)
-            .update_step("Parsing EPG content".to_string())
-            .update_percentage(40.0);
-            callback(progress);
-        }
-
-        // Parse using our custom quick-xml parser
-        let xmltv_programs = match crate::utils::xmltv_parser::parse_xmltv_programs(&content) {
-            Ok(programs) => programs,
-            Err(e) => {
-                if let Some(callback) = progress_callback {
-                    let progress = UniversalProgress::new(
-                        source_id,
-                        OperationType::EpgIngestion,
-                        format!("Xtream EPG Ingestion: {}", source.name)
-                    )
-                    .set_error(format!("Failed to parse Xtream EPG (XMLTV format): {}", e));
-                    callback(progress);
-                }
-                return Err(e);
-            }
-        };
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("Xtream EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Processing)
-            .update_step("Converting programs".to_string())
-            .update_percentage(60.0);
-            callback(progress);
-        }
-
-        // Skip channel processing - programs-only approach for database-first generation
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("Xtream EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Processing)
-            .update_step("Converting programs".to_string())
-            .update_percentage(80.0);
-            callback(progress);
-        }
-
-        // Convert from SimpleXmltvProgram to EpgProgram
-        let mut epg_programs = Vec::new();
-        let mut seen_programs = HashSet::new();
-        let mut duplicate_program_count = 0;
-        
-        for xmltv_program in xmltv_programs {
-            // Create deduplication key: channel_id + start_time + program_title
-            let program_title = xmltv_program.title.as_ref()
-                .map(|t| t.as_str())
-                .unwrap_or("Unknown Program");
-            let dedup_key = format!("{}|{}|{}", 
-                xmltv_program.channel,
-                xmltv_program.start,
-                program_title
-            );
-            
-            // Skip duplicate programs
-            if seen_programs.contains(&dedup_key) {
-                duplicate_program_count += 1;
-                debug!("Skipping duplicate program '{}' on channel '{}' at {}", 
-                       program_title, xmltv_program.channel, xmltv_program.start);
-                continue;
-            }
-            seen_programs.insert(dedup_key);
-            
-            // Parse start and stop times (Xtream usually provides proper timezone info)
-            let start_time = chrono::DateTime::parse_from_str(&xmltv_program.start, "%Y%m%d%H%M%S %z")
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&xmltv_program.start, "%Y%m%d%H%M%S")
-                    .map(|dt| dt.and_utc().with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())))
-                .map_err(|e| AppError::source_error(format!("Failed to parse start time '{}': {}", xmltv_program.start, e)))?;
-
-            let end_time = if let Some(ref stop) = xmltv_program.stop {
-                chrono::DateTime::parse_from_str(stop, "%Y%m%d%H%M%S %z")
-                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(stop, "%Y%m%d%H%M%S")
-                        .map(|dt| dt.and_utc().with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())))
-                    .map_err(|e| AppError::source_error(format!("Failed to parse stop time '{}': {}", stop, e)))?
-            } else {
-                start_time + chrono::Duration::minutes(30)
-            };
-
-            // Channel name will be resolved during generation stage from M3U channels
-            let channel_name = String::new();
-
-            let epg_program = EpgProgram {
-                id: uuid::Uuid::new_v4(),
-                source_id: source.id,
-                channel_id: xmltv_program.channel,
-                channel_name,
-                program_title: xmltv_program.title.unwrap_or_else(|| "Unknown Program".to_string()),
-                program_description: xmltv_program.description,
-                program_category: xmltv_program.category,
-                start_time: start_time.with_timezone(&chrono::Utc),
-                end_time: end_time.with_timezone(&chrono::Utc),
-                episode_num: None,
-                season_num: None,
-                rating: None,
-                language: xmltv_program.language,
-                subtitles: None,
-                aspect_ratio: None,
-                program_icon: xmltv_program.icon,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            };
-            epg_programs.push(epg_program);
-        }
-        
-        // Clean up deduplication set to free memory
-        drop(seen_programs);
-        
-        if duplicate_program_count > 0 {
-            info!(
-                "Removed {} duplicate program entries from Xtream EPG feed for source '{}'", 
-                duplicate_program_count, source.name
-            );
-        }
-
-        if let Some(callback) = progress_callback {
-            let progress = UniversalProgress::new(
-                source_id,
-                OperationType::EpgIngestion,
-                format!("Xtream EPG Ingestion: {}", source.name)
-            )
-            .set_state(UniversalState::Completed)
-            .update_step("EPG ingestion complete".to_string())
-            .update_percentage(100.0)
-            .update_items(epg_programs.len(), Some(epg_programs.len()));
-            callback(progress);
-        }
-
-        info!(
-            "Parsed Xtream EPG for source '{}': {} programs",
-            source.name,
-            epg_programs.len()
-        );
-
-        Ok(epg_programs)
-    }
 }
 
 impl FullEpgSourceHandler for XtreamEpgHandler {

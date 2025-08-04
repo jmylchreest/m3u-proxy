@@ -24,29 +24,21 @@
 //! # Usage
 //!
 //! ```rust
-//! use crate::services::{StreamSourceService, ChannelService};
-//! use crate::repositories::{StreamSourceRepository, ChannelRepository};
+//! use crate::services::StreamSourceService;
 //!
 //! async fn example() {
-//!     let stream_repo = StreamSourceRepository::new(pool);
-//!     let channel_repo = ChannelRepository::new(pool);
-//!
-//!     let stream_service = StreamSourceService::new(stream_repo);
-//!     let channel_service = ChannelService::new(channel_repo);
+//!     let stream_service = StreamSourceService::new(database, epg_service, cache_tx);
 //!
 //!     // Use services for business operations
-//!     let source = stream_service.create_source(request).await?;
+//!     let source = stream_service.create_with_auto_epg(request).await?;
 //! }
 //! ```
 
-pub mod channel;
 pub mod cyclic_buffer;
-pub mod data_mapping;
 pub mod epg_source_service;
 pub mod error_fallback;
 pub mod ffmpeg_wrapper;
 pub mod file_categories;
-pub mod filter;
 pub mod logo_cache_scanner;
 pub mod metrics_housekeeper;
 pub mod progress_service;
@@ -61,15 +53,12 @@ pub mod stream_source_service;
 pub mod traits;
 
 // Re-export main traits and services
-pub use channel::ChannelService;
 pub use cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient, CyclicBufferStats};
-pub use data_mapping::DataMappingService;
 pub use epg_source_service::EpgSourceService;
 pub use error_fallback::{ErrorFallbackGenerator, StreamHealthMonitor};
 pub use ffmpeg_wrapper::FFmpegProcessWrapper;
-pub use filter::FilterService;
 pub use metrics_housekeeper::MetricsHousekeeper;
-pub use progress_service::{ProgressService, UniversalProgress, OperationType, UniversalState, UniversalProgressCallback};
+pub use progress_service::{ProgressService, OperationType};
 pub use proxy_regeneration::ProxyRegenerationService;
 pub use relay_manager::RelayManager;
 pub use source_linking_service::SourceLinkingService;

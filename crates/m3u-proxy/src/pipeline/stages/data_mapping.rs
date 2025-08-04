@@ -1,6 +1,9 @@
 use crate::models::{Channel, data_mapping::DataMappingRule};
 use crate::pipeline::models::{PipelineArtifact, ArtifactType};
+use crate::pipeline::traits::{PipelineStage, ProgressAware};
+use crate::pipeline::error::PipelineError;
 use crate::pipeline::services::{HelperPostProcessor, HelperProcessorError};
+use crate::services::progress_service::ProgressManager;
 // Import helper traits implementation (this ensures the trait implementations are available)
 #[allow(unused_imports)]
 use crate::pipeline::services::helper_traits;
@@ -15,6 +18,7 @@ use sandboxed_file_manager::SandboxedManager;
 use serde_json;
 use sqlx::{SqlitePool, Row};
 use futures::StreamExt;
+use std::sync::Arc;
 use std::time::Instant;
 use std::collections::HashMap;
 
@@ -30,13 +34,15 @@ pub struct DataMappingStage {
     pipeline_execution_prefix: String,
     regex_preprocessor: RegexPreprocessor,
     helper_processor: Option<HelperPostProcessor>,
+    progress_manager: Option<Arc<ProgressManager>>,
 }
 
 impl DataMappingStage {
     pub async fn new(
         db_pool: SqlitePool, 
         pipeline_execution_prefix: String, 
-        shared_file_manager: SandboxedManager
+        shared_file_manager: SandboxedManager,
+        progress_manager: Option<Arc<ProgressManager>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Use the shared file manager instead of creating our own
         // Initialize regex preprocessor for optimization
@@ -48,7 +54,13 @@ impl DataMappingStage {
             pipeline_execution_prefix,
             regex_preprocessor,
             helper_processor: None,
+            progress_manager,
         })
+    }
+    
+    /// Set the progress manager for this stage (used when set after construction)
+    pub fn set_progress_manager(&mut self, progress_manager: Arc<ProgressManager>) {
+        self.progress_manager = Some(progress_manager);
     }
     
     /// Configure the helper post-processor for this stage
@@ -68,12 +80,20 @@ impl DataMappingStage {
         
         info!("Found {} active stream sources", stream_sources.len());
         
+        // Debug: Log all found stream sources
+        for source in &stream_sources {
+            let source_id: String = source.get("id");
+            let source_name: String = source.get("name");
+            debug!("Active stream source found: {} ({})", source_name, source_id);
+        }
+        
         let output_file_path = format!("{}_mapping_channels.jsonl", self.pipeline_execution_prefix);
         
         // Track overall statistics
         let mut total_channels_processed = 0;
         let mut total_channels_modified = 0;
         let mut rule_stats: HashMap<String, (String, usize, usize, std::time::Duration)> = HashMap::new(); // (rule_name, applied_count, processed_count, total_time)
+        let mut output_file_created = false; // Track if output file has been created across all sources
         
         for source in stream_sources {
             let source_id_str: String = source.get("id");
@@ -279,11 +299,12 @@ impl DataMappingStage {
                                         
                                         // Write to file if we have content
                                         if !batch_content.is_empty() {
-                                            if channel_count <= BATCH_SIZE {
-                                                // First write - create file
+                                            if !output_file_created {
+                                                // First write across all sources - create file
                                                 self.file_manager.write(&output_file_path, batch_content.as_bytes()).await?;
+                                                output_file_created = true;
                                             } else {
-                                                // Subsequent writes - append
+                                                // Subsequent writes - append to existing file
                                                 let existing_content = self.file_manager.read(&output_file_path).await?;
                                                 let mut combined_content = String::from_utf8(existing_content)?;
                                                 combined_content.push_str(&batch_content);
@@ -300,8 +321,11 @@ impl DataMappingStage {
                                         } else {
                                             0
                                         };
-                                        debug!("Progress update: source={} processed_channels={} modified_channels={} completion_percentage={}%", 
-                                               source_name, channel_count, source_modified_count, completion_percentage);
+                                        
+                                        // Broadcast progress update via SSE
+                                        let progress_message = format!("Processing {}: {}/{} channels ({} modified)", 
+                                                                      source_name, channel_count, total_channels, source_modified_count);
+                                        self.report_progress(10.0 + (completion_percentage as f64 * 0.4), &progress_message).await;
                                     }
                                 }
                             },
@@ -401,9 +425,12 @@ impl DataMappingStage {
                 }
                 
                 if !batch_content.is_empty() {
-                    if channel_count <= BATCH_SIZE {
+                    if !output_file_created {
+                        // First write across all sources - create file
                         self.file_manager.write(&output_file_path, batch_content.as_bytes()).await?;
+                        output_file_created = true;
                     } else {
+                        // Subsequent writes - append to existing file
                         let existing_content = self.file_manager.read(&output_file_path).await?;
                         let mut combined_content = String::from_utf8(existing_content)?;
                         combined_content.push_str(&batch_content);
@@ -418,7 +445,7 @@ impl DataMappingStage {
             } else {
                 100
             };
-            info!("Source processing completed: source={} total_channels={} modified_channels={} completion_percentage={}% duration={}", 
+            info!("Source processing completed: source={} total_channels={} modified_channels={} completion_percentage={:.0}% duration={}", 
                   source_name, channel_count, source_modified_count, final_completion_percentage, format_duration_precise(source_duration));
             
             // Update totals
@@ -438,7 +465,7 @@ impl DataMappingStage {
         // Log overall performance summary
         let stage_duration = stage_start.elapsed();
         let overall_completion_percentage = 100u32; // Stage completed fully
-        info!("Data mapping stage completed: total_channels_processed={} total_channels_modified={} completion_percentage={}% stage_duration={}", 
+        info!("Data mapping stage completed: total_channels_processed={} total_channels_modified={} completion_percentage={:.0}% stage_duration={}", 
               total_channels_processed, total_channels_modified, overall_completion_percentage, format_duration_precise(stage_duration));
         
         // Log per-rule performance statistics
@@ -674,6 +701,10 @@ impl DataMappingStage {
                 // Log progress periodically
                 if processed_count % EPG_PROGRESS_LOG_INTERVAL == 0 {
                     debug!("Processed {} EPG programs so far", processed_count);
+                    
+                    // Broadcast progress update via SSE
+                    let progress_message = format!("Processing EPG programs: {} processed", processed_count);
+                    self.report_progress(70.0, &progress_message).await;
                 }
             }
         }
@@ -789,5 +820,65 @@ impl DataMappingStage {
     pub fn cleanup(self) -> Result<(), Box<dyn std::error::Error>> {
         // The file manager will cleanup temp files when dropped
         Ok(())
+    }
+    
+    /// Helper method for reporting progress
+    async fn report_progress(&self, percentage: f64, message: &str) {
+        if let Some(pm) = &self.progress_manager {
+            if let Some(updater) = pm.get_stage_updater("data_mapping").await {
+                debug!("Data mapping progress: {:.0}% - {}", percentage, message);
+                updater.update_progress(percentage, message).await;
+            } else {
+                debug!("No stage updater found for 'data_mapping'");
+            }
+        } else {
+            debug!("No progress manager set on DataMappingStage");
+        }
+    }
+}
+
+impl ProgressAware for DataMappingStage {
+    fn get_progress_manager(&self) -> Option<&Arc<ProgressManager>> {
+        self.progress_manager.as_ref()
+    }
+}
+
+#[async_trait::async_trait]
+impl PipelineStage for DataMappingStage {
+    async fn execute(&mut self, _input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
+        self.report_progress(5.0, "Starting data mapping").await;
+        
+        let mut artifacts = Vec::new();
+        
+        // Process channels
+        self.report_progress(10.0, "Processing channels").await;
+        let channel_artifact = self.process_channels().await
+            .map_err(|e| PipelineError::stage_error("data_mapping", format!("Channel processing failed: {}", e)))?;
+        artifacts.push(channel_artifact);
+        
+        // Process EPG programs
+        self.report_progress(50.0, "Processing EPG programs").await;
+        let program_artifact = self.process_programs().await
+            .map_err(|e| PipelineError::stage_error("data_mapping", format!("EPG processing failed: {}", e)))?;
+        artifacts.push(program_artifact);
+        
+        self.report_progress(100.0, "Data mapping completed").await;
+        Ok(artifacts)
+    }
+    
+    fn stage_id(&self) -> &'static str {
+        "data_mapping"
+    }
+    
+    fn stage_name(&self) -> &'static str {
+        "Data Mapping"
+    }
+    
+    async fn cleanup(&mut self) -> Result<(), PipelineError> {
+        Ok(())
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

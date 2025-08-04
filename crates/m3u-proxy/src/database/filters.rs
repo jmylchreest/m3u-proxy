@@ -59,7 +59,7 @@ impl super::Database {
     #[allow(dead_code)]
     pub async fn list_filters(&self) -> Result<Vec<Filter>> {
         let rows = sqlx::query(
-            "SELECT id, name, source_type, is_inverse, is_system_default, condition_tree, created_at, updated_at
+            "SELECT id, name, source_type, is_inverse, is_system_default, expression, created_at, updated_at
              FROM filters
              ORDER BY name",
         )
@@ -77,7 +77,7 @@ impl super::Database {
                 },
                 is_inverse: row.try_get("is_inverse")?,
                 is_system_default: row.try_get("is_system_default")?,
-                condition_tree: row.try_get("condition_tree")?,
+                expression: row.try_get("expression")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
             };
@@ -90,19 +90,26 @@ impl super::Database {
     pub async fn create_filter(&self, request: &FilterCreateRequest) -> Result<Filter> {
         let id = Uuid::new_v4();
 
-        // Get available fields for validation
+        // Validate and normalize the expression
         let available_fields = self.get_available_filter_fields().await?;
         let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
-
-        // Parse the filter expression using the proper parser
         let parser = crate::expression_parser::ExpressionParser::new().with_fields(field_names);
-        let condition_tree = parser.parse(&request.filter_expression)?;
+        
+        // Validate expression syntax
+        parser.parse(&request.expression)?;
+        
+        // Normalize expression to always have outer parentheses for consistency
+        let normalized_expression = if request.expression.trim().starts_with('(') && request.expression.trim().ends_with(')') {
+            request.expression.clone()
+        } else {
+            format!("({})", request.expression.trim())
+        };
 
         // Start a transaction to insert filter
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "INSERT INTO filters (id, name, source_type, is_inverse, is_system_default, condition_tree)
+            "INSERT INTO filters (id, name, source_type, is_inverse, is_system_default, expression)
              VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
@@ -113,7 +120,7 @@ impl super::Database {
         })
         .bind(request.is_inverse)
         .bind(false) // Always set is_system_default to false for user-created filters
-        .bind(serde_json::to_string(&condition_tree)?)
+        .bind(&normalized_expression)
         .execute(&mut *tx)
         .await?;
 
@@ -126,7 +133,7 @@ impl super::Database {
 
     pub async fn get_filter(&self, id: Uuid) -> Result<Option<Filter>> {
         let row = sqlx::query(
-            "SELECT id, name, source_type, is_inverse, is_system_default, condition_tree, created_at, updated_at
+            "SELECT id, name, source_type, is_inverse, is_system_default, expression, created_at, updated_at
              FROM filters
              WHERE id = ?",
         )
@@ -144,7 +151,7 @@ impl super::Database {
                 },
                 is_inverse: row.try_get("is_inverse")?,
                 is_system_default: row.try_get("is_system_default")?,
-                condition_tree: row.try_get("condition_tree")?,
+                expression: row.try_get("expression")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
             };
@@ -159,19 +166,26 @@ impl super::Database {
         id: Uuid,
         request: &FilterUpdateRequest,
     ) -> Result<Option<Filter>> {
-        // Get available fields for validation
+        // Validate and normalize the expression
         let available_fields = self.get_available_filter_fields().await?;
         let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
-
-        // Parse the filter expression using the proper parser
         let parser = crate::expression_parser::ExpressionParser::new().with_fields(field_names);
-        let condition_tree = parser.parse(&request.filter_expression)?;
+        
+        // Validate expression syntax
+        parser.parse(&request.expression)?;
+        
+        // Normalize expression to always have outer parentheses for consistency
+        let normalized_expression = if request.expression.trim().starts_with('(') && request.expression.trim().ends_with(')') {
+            request.expression.clone()
+        } else {
+            format!("({})", request.expression.trim())
+        };
 
         let mut tx = self.pool.begin().await?;
 
         let result = sqlx::query(
             "UPDATE filters
-             SET name = ?, source_type = ?, is_inverse = ?, condition_tree = ?
+             SET name = ?, source_type = ?, is_inverse = ?, expression = ?
              WHERE id = ?",
         )
         .bind(&request.name)
@@ -180,7 +194,7 @@ impl super::Database {
             FilterSourceType::Epg => "epg",
         })
         .bind(request.is_inverse)
-        .bind(serde_json::to_string(&condition_tree)?)
+        .bind(&normalized_expression)
         .bind(id.to_string())
         .execute(&mut *tx)
         .await?;
@@ -215,15 +229,52 @@ impl super::Database {
     }
 
     pub async fn get_filters_with_usage(&self) -> Result<Vec<FilterWithUsage>> {
-        let filters = sqlx::query(
-            "SELECT f.id, f.name, f.source_type, f.is_inverse, f.is_system_default, f.condition_tree,
+        self.get_filters_with_usage_filtered(None, None, None).await
+    }
+
+    pub async fn get_filters_with_usage_filtered(
+        &self,
+        source_type: Option<FilterSourceType>,
+        sort: Option<String>,
+        order: Option<String>,
+    ) -> Result<Vec<FilterWithUsage>> {
+        // Build dynamic query based on parameters
+        let mut query_str = "SELECT f.id, f.name, f.source_type, f.is_inverse, f.is_system_default, f.expression,
              f.created_at, f.updated_at, COUNT(pf.filter_id) as usage_count
              FROM filters f
-             LEFT JOIN proxy_filters pf ON f.id = pf.filter_id AND pf.is_active = 1
-             GROUP BY f.id, f.name, f.source_type, f.is_inverse, f.is_system_default, f.condition_tree,
-             f.created_at, f.updated_at
-             ORDER BY f.is_system_default DESC, f.name",
-        )
+             LEFT JOIN proxy_filters pf ON f.id = pf.filter_id AND pf.is_active = 1".to_string();
+        
+        // Add WHERE clause if source_type filter is specified
+        if source_type.is_some() {
+            query_str.push_str(" WHERE f.source_type = ?");
+        }
+        
+        // GROUP BY clause
+        query_str.push_str(" GROUP BY f.id, f.name, f.source_type, f.is_inverse, f.is_system_default, f.expression, f.created_at, f.updated_at");
+        
+        // ORDER BY clause
+        let sort_field = sort.as_deref().unwrap_or("name");
+        let sort_order = order.as_deref().unwrap_or("asc");
+        
+        match sort_field {
+            "name" => query_str.push_str(&format!(" ORDER BY f.is_system_default DESC, f.name {}", sort_order.to_uppercase())),
+            "created_at" => query_str.push_str(&format!(" ORDER BY f.created_at {}", sort_order.to_uppercase())),
+            "updated_at" => query_str.push_str(&format!(" ORDER BY f.updated_at {}", sort_order.to_uppercase())),
+            "usage_count" => query_str.push_str(&format!(" ORDER BY usage_count {}", sort_order.to_uppercase())),
+            _ => query_str.push_str(" ORDER BY f.is_system_default DESC, f.name ASC"), // default fallback
+        }
+        
+        let mut query = sqlx::query(&query_str);
+        
+        // Bind source_type parameter if specified
+        if let Some(st) = source_type {
+            query = query.bind(match st {
+                FilterSourceType::Stream => "stream",
+                FilterSourceType::Epg => "epg",
+            });
+        }
+        
+        let filters = query
         .fetch_all(&self.pool)
         .await?;
 
@@ -239,7 +290,7 @@ impl super::Database {
                 },
                 is_inverse: row.try_get("is_inverse")?,
                 is_system_default: row.try_get("is_system_default")?,
-                condition_tree: row.try_get("condition_tree")?,
+                expression: row.try_get("expression")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
             };
@@ -253,6 +304,20 @@ impl super::Database {
         }
 
         Ok(result)
+    }
+
+    /// Get usage count for a specific filter
+    pub async fn get_filter_usage_count(&self, filter_id: Uuid) -> Result<i64> {
+        let count = sqlx::query_scalar(
+            "SELECT COUNT(pf.filter_id) as usage_count
+             FROM proxy_filters pf
+             WHERE pf.filter_id = ? AND pf.is_active = 1"
+        )
+        .bind(filter_id.to_string())
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count)
     }
 
     pub async fn test_filter_pattern(
@@ -280,14 +345,14 @@ impl super::Database {
             }
         };
 
-        // Create a temporary filter for testing with the parsed tree
+        // Create a temporary filter for testing with the expression
         let temp_filter = Filter {
             id: Uuid::new_v4(),
             name: "Test Filter".to_string(),
             source_type: request.source_type.clone(),
             is_inverse: request.is_inverse,
             is_system_default: false,
-            condition_tree: serde_json::to_string(&condition_tree)?,
+            expression: request.filter_expression.clone(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -376,7 +441,7 @@ impl super::Database {
     pub async fn get_proxy_filters(&self, proxy_id: Uuid) -> Result<Vec<ProxyFilterWithDetails>> {
         let filters = sqlx::query(
             "SELECT pf.proxy_id, pf.filter_id, pf.priority_order, pf.is_active, pf.created_at,
-                    f.name, f.source_type, f.is_inverse, f.is_system_default, f.condition_tree, f.updated_at as filter_updated_at
+                    f.name, f.source_type, f.is_inverse, f.is_system_default, f.expression, f.updated_at as filter_updated_at
              FROM proxy_filters pf
              JOIN filters f ON pf.filter_id = f.id
              WHERE pf.proxy_id = ? AND pf.is_active = 1
@@ -405,7 +470,7 @@ impl super::Database {
                 },
                 is_inverse: row.get("is_inverse"),
                 is_system_default: row.get("is_system_default"),
-                condition_tree: row.get("condition_tree"),
+                expression: row.get("expression"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("filter_updated_at"),
             };
@@ -500,15 +565,22 @@ impl super::Database {
         let available_fields = self.get_available_filter_fields().await?;
         let field_names: Vec<String> = available_fields.into_iter().map(|f| f.name).collect();
 
-        // Parse the filter expression using the proper parser
+        // Parse and normalize the filter expression
         let parser = crate::expression_parser::ExpressionParser::new().with_fields(field_names);
-        let condition_tree = parser.parse(&request.filter_expression)?;
+        parser.parse(&request.expression)?;
+        
+        // Normalize expression to always have outer parentheses for consistency
+        let normalized_expression = if request.expression.trim().starts_with('(') && request.expression.trim().ends_with(')') {
+            request.expression.clone()
+        } else {
+            format!("({})", request.expression.trim())
+        };
 
         // Start a transaction to insert filter
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "INSERT INTO filters (id, name, source_type, is_inverse, is_system_default, condition_tree)
+            "INSERT INTO filters (id, name, source_type, is_inverse, is_system_default, expression)
              VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
@@ -519,7 +591,7 @@ impl super::Database {
         })
         .bind(request.is_inverse)
         .bind(true) // System default filters have is_system_default = true
-        .bind(serde_json::to_string(&condition_tree)?)
+        .bind(&normalized_expression)
         .execute(&mut *tx)
         .await?;
 
@@ -551,7 +623,7 @@ impl super::Database {
             name: "Include All Valid Stream URLs".to_string(),
             source_type: FilterSourceType::Stream,
             is_inverse: false,
-            filter_expression: "stream_url starts_with \"http\"".to_string(),
+            expression: "stream_url starts_with \"http\"".to_string(),
         };
 
         // Create "Exclude Adult Content" filter
@@ -559,7 +631,7 @@ impl super::Database {
             name: "Exclude Adult Content".to_string(),
             source_type: FilterSourceType::Stream,
             is_inverse: true, // This makes it an exclude filter
-            filter_expression: "(group_title contains \"adult\" OR group_title contains \"xxx\" OR group_title contains \"porn\" OR channel_name contains \"adult\" OR channel_name contains \"xxx\" OR channel_name contains \"porn\")".to_string(),
+            expression: "(group_title contains \"adult\" OR group_title contains \"xxx\" OR group_title contains \"porn\" OR channel_name contains \"adult\" OR channel_name contains \"xxx\" OR channel_name contains \"porn\")".to_string(),
         };
 
         // Try to create the filters, but don't fail if they already exist

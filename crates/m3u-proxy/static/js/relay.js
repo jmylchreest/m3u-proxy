@@ -861,8 +861,6 @@ function editProfile(profileId) {
     showEditProfileModal(profileId);
 }
 
-// Function removed - using edit modal for viewing system defaults
-
 async function deleteProfile(profileId) {
     if (!confirm('Are you sure you want to delete this relay profile?')) {
         return;

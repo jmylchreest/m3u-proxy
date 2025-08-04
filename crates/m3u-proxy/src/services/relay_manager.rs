@@ -396,8 +396,14 @@ impl RelayManager {
 
         for (config_id, process) in processes.iter() {
             let uptime = process.get_uptime().as_secs() as i64;
-            let client_count = process.get_client_count() as i32;
+            let connected_clients = process.cyclic_buffer.get_connected_clients().await;
+            let client_count = connected_clients.len() as i32;
             let last_heartbeat = chrono::Utc::now(); // In real implementation, this would be from process monitoring
+            
+            // Get traffic stats for this process
+            let buffer_stats = process.cyclic_buffer.get_stats().await;
+            let bytes_received_upstream = buffer_stats.bytes_received_from_upstream as i64;
+            let bytes_delivered_downstream = connected_clients.iter().map(|c| c.bytes_served).sum::<u64>() as i64;
 
             // Determine health status
             let status = if true {
@@ -415,48 +421,40 @@ impl RelayManager {
                 RelayHealthStatus::Failed
             };
 
+            let pid = process.child.id().unwrap_or(0);
             let health = RelayProcessHealth {
                 config_id: *config_id,
+                profile_id: process.config.profile.id,
                 profile_name: process.config.profile.name.clone(),
-                channel_name: self
-                    .get_channel_name(&process.config.config.channel_id.to_string())
-                    .await
-                    .unwrap_or_else(|| format!("Channel {}", process.config.config.channel_id)),
+                proxy_id: Some(process.config.config.proxy_id),
+                source_url: format!("Channel {}", process.config.config.channel_id), // Mock source URL since we don't have it in config
                 status,
+                pid: Some(pid),
                 uptime_seconds: uptime,
-                client_count,
                 memory_usage_mb: self
-                    .get_process_memory_usage(process.child.id())
+                    .get_process_memory_usage(Some(pid))
                     .await
                     .unwrap_or(0.0),
                 cpu_usage_percent: self
-                    .get_process_cpu_usage(process.child.id())
+                    .get_process_cpu_usage(Some(pid))
                     .await
                     .unwrap_or(0.0),
+                bytes_received_upstream,
+                bytes_delivered_downstream,
+                connected_clients,
                 last_heartbeat,
-                error_count: process.error_count.load(Ordering::SeqCst) as i32,
-                restart_count: process.restart_count.load(Ordering::SeqCst) as i32,
             };
             process_health.push(health);
         }
 
         let total_processes = processes.len() as i32;
-        let system_load = self.get_system_load().await.unwrap_or(0.0);
-        let memory_usage = self.get_system_memory_usage().await.unwrap_or(0.0);
 
         Ok(RelayHealth {
             total_processes,
             healthy_processes: healthy_count,
             unhealthy_processes: unhealthy_count,
             processes: process_health,
-            system_load,
-            memory_usage_mb: memory_usage,
             last_check: chrono::Utc::now(),
-            ffmpeg_available: self.ffmpeg_available,
-            ffmpeg_version: self.ffmpeg_version.clone(),
-            ffmpeg_command: self.ffmpeg_command.clone(),
-            hwaccel_available: self.hwaccel_available,
-            hwaccel_capabilities: self.hwaccel_capabilities.clone(),
         })
     }
 
@@ -469,8 +467,14 @@ impl RelayManager {
 
         if let Some(process) = processes.get(&config_id) {
             let uptime = process.get_uptime().as_secs() as i64;
-            let client_count = process.get_client_count() as i32;
+            let connected_clients = process.cyclic_buffer.get_connected_clients().await;
+            let client_count = connected_clients.len() as i32;
             let last_heartbeat = chrono::Utc::now();
+            
+            // Get traffic stats for this process
+            let buffer_stats = process.cyclic_buffer.get_stats().await;
+            let bytes_received_upstream = buffer_stats.bytes_received_from_upstream as i64;
+            let bytes_delivered_downstream = connected_clients.iter().map(|c| c.bytes_served).sum::<u64>() as i64;
 
             let status = if true {
                 // process.is_running() would need mutable access
@@ -483,18 +487,28 @@ impl RelayManager {
                 RelayHealthStatus::Failed
             };
 
+            let pid = process.child.id().unwrap_or(0);
             let health = RelayProcessHealth {
                 config_id,
+                profile_id: process.config.profile.id,
                 profile_name: process.config.profile.name.clone(),
-                channel_name: format!("Channel {}", process.config.config.channel_id),
+                proxy_id: Some(process.config.config.proxy_id),
+                source_url: format!("Channel {}", process.config.config.channel_id), // Mock source URL since we don't have it in config
                 status,
+                pid: Some(pid),
                 uptime_seconds: uptime,
-                client_count,
-                memory_usage_mb: 0.0,
-                cpu_usage_percent: 0.0,
+                memory_usage_mb: self
+                    .get_process_memory_usage(Some(pid))
+                    .await
+                    .unwrap_or(0.0),
+                cpu_usage_percent: self
+                    .get_process_cpu_usage(Some(pid))
+                    .await
+                    .unwrap_or(0.0),
+                bytes_received_upstream,
+                bytes_delivered_downstream,
+                connected_clients,
                 last_heartbeat,
-                error_count: 0,
-                restart_count: 0,
             };
 
             Ok(Some(health))
@@ -529,14 +543,23 @@ impl RelayManager {
         }
     }
 
-    /// Get CPU usage for a specific process (percentage)
+    /// Get CPU usage for a specific process (percentage, normalized to 100%)
+    /// 
+    /// Returns CPU usage as a percentage where 100% means the process is using
+    /// one full CPU core. On multi-core systems, values can exceed 100% if the
+    /// process uses multiple cores.
     async fn get_process_cpu_usage(&self, process_id: Option<u32>) -> Option<f64> {
         let process_id = process_id?;
         let mut system = self.system.write().await;
         system.refresh_process(Pid::from_u32(process_id));
 
         if let Some(process) = system.process(Pid::from_u32(process_id)) {
-            Some(process.cpu_usage() as f64)
+            // sysinfo's cpu_usage() returns percentage where 100% = 1 full CPU core
+            // This is already normalized correctly for our purposes
+            let cpu_usage = process.cpu_usage() as f64;
+            
+            // Clamp to reasonable values (sometimes sysinfo can return slightly negative values)
+            Some(cpu_usage.max(0.0))
         } else {
             None
         }
@@ -1008,6 +1031,42 @@ impl RelayManager {
             Ok(Err(_)) => false,
             Err(_) => false, // Timeout
         }
+    }
+    
+    /// Get FFmpeg availability status
+    pub fn is_ffmpeg_available(&self) -> bool {
+        self.ffmpeg_available
+    }
+    
+    /// Get FFmpeg version
+    pub fn get_ffmpeg_version(&self) -> Option<String> {
+        self.ffmpeg_version.clone()
+    }
+    
+    /// Get FFprobe availability status
+    pub fn is_ffprobe_available(&self) -> bool {
+        self.ffprobe_available
+    }
+    
+    /// Get FFprobe version
+    pub fn get_ffprobe_version(&self) -> Option<String> {
+        self.ffprobe_version.clone()
+    }
+    
+    /// Get hardware acceleration availability status
+    pub fn is_hwaccel_available(&self) -> bool {
+        self.hwaccel_available
+    }
+    
+    /// Get hardware acceleration capabilities
+    pub fn get_hwaccel_capabilities(&self) -> &HwAccelCapabilities {
+        &self.hwaccel_capabilities
+    }
+    
+    /// Get number of CPU cores
+    pub async fn get_cpu_count(&self) -> u32 {
+        let system = self.system.read().await;
+        system.cpus().len() as u32
     }
 }
 

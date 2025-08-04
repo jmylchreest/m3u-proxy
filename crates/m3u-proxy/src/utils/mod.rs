@@ -13,10 +13,12 @@ pub mod log_capture;
 pub mod logo;
 pub mod memory_cleanup;
 pub mod memory_config;
+pub mod memory_stats;
 // pub mod memory_context; // Temporarily disabled - needs simplification
 // pub mod memory_pressure_calculator; // Removed - no longer needed
 pub mod pressure_monitor;
 pub mod regex_preprocessor;
+pub mod sandbox_health;
 pub mod sqlite;
 pub mod system_manager;
 pub mod time;

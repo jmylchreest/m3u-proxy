@@ -7,10 +7,9 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
-use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -26,24 +25,8 @@ pub fn relay_routes() -> Router<AppState> {
         .route("/relay/profiles", get(list_profiles).post(create_profile))
         .route("/relay/profiles/{id}", get(get_profile).put(update_profile).delete(delete_profile))
         
-        // Channel relay configuration
-        .route("/proxies/{proxy_id}/channels/{channel_id}/relay", 
-               get(get_channel_relay_config).post(create_channel_relay_config).delete(delete_channel_relay_config))
-        
-        // Relay content serving
-        .route("/relay/{config_id}/playlist.m3u8", get(serve_relay_playlist))
-        .route("/relay/{config_id}/segments/{segment_name}", get(serve_relay_segment))
-        
-        // Relay status and control
-        .route("/relay/{config_id}/status", get(get_relay_status))
-        .route("/proxy/{proxy_id}/relay/{channel_id}/start", post(start_relay))
-        .route("/relay/{config_id}/stop", post(stop_relay))
-        
-        // Metrics and monitoring
-        .route("/relay/metrics", get(get_relay_metrics))
-        .route("/relay/metrics/{config_id}", get(get_relay_metrics_for_config))
+        // System monitoring
         .route("/relay/health", get(get_relay_health))
-        .route("/relay/health/{config_id}", get(get_relay_health_for_config))
 }
 
 /// List all relay profiles
@@ -179,405 +162,26 @@ pub async fn delete_profile(
     }
 }
 
-/// Get channel relay configuration
-#[utoipa::path(
-    get,
-    path = "/proxies/{proxy_id}/channels/{channel_id}/relay",
-    tag = "relay",
-    summary = "Get channel relay configuration",
-    description = "Retrieve relay configuration for a specific channel in a proxy",
-    params(
-        ("proxy_id" = String, Path, description = "Proxy ID (UUID)"),
-        ("channel_id" = String, Path, description = "Channel ID (UUID)"),
-    ),
-    responses(
-        (status = 200, description = "Channel relay configuration"),
-        (status = 400, description = "Invalid proxy or channel ID"),
-        (status = 404, description = "Proxy has no relay profile configured"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_channel_relay_config(
-    State(state): State<AppState>,
-    Path((proxy_id, channel_id)): Path<(String, Uuid)>,
-) -> impl IntoResponse {
-    let proxy_uuid = match proxy_id.parse::<Uuid>() {
-        Ok(uuid) => uuid,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid proxy ID").into_response(),
-    };
-
-    // Since relay configs are now at proxy level, we check if the proxy has a relay profile
-    match get_proxy_relay_profile(&state.database, proxy_uuid).await {
-        Ok(Some(profile_id)) => {
-            // Create a synthetic channel config based on the proxy's relay profile
-            let synthetic_config = ChannelRelayConfig {
-                id: Uuid::new_v4(),
-                proxy_id: proxy_uuid,
-                channel_id,
-                profile_id,
-                name: format!("Relay for Channel {}", channel_id),
-                description: Some("Auto-generated from proxy relay profile".to_string()),
-                custom_args: None,
-                is_active: true,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            };
-            Json(synthetic_config).into_response()
-        },
-        Ok(None) => (StatusCode::NOT_FOUND, "Proxy has no relay profile configured").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", e)).into_response(),
-    }
-}
-
-/// Create channel relay configuration
-#[utoipa::path(
-    post,
-    path = "/proxies/{proxy_id}/channels/{channel_id}/relay",
-    tag = "relay",
-    summary = "Create channel relay configuration",
-    description = "Create relay configuration for a specific channel in a proxy",
-    params(
-        ("proxy_id" = String, Path, description = "Proxy ID (UUID)"),
-        ("channel_id" = String, Path, description = "Channel ID (UUID)"),
-    ),
-    responses(
-        (status = 201, description = "Channel relay configuration created successfully"),
-        (status = 400, description = "Invalid request or profile not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn create_channel_relay_config(
-    State(state): State<AppState>,
-    Path((proxy_id, channel_id)): Path<(String, Uuid)>,
-    Json(request): Json<CreateChannelRelayConfigRequest>,
-) -> impl IntoResponse {
-    let proxy_uuid = match proxy_id.parse::<Uuid>() {
-        Ok(uuid) => uuid,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid proxy ID").into_response(),
-    };
-
-    // Validate that the profile exists
-    match get_relay_profile_by_id(&state.database, request.profile_id).await {
-        Ok(Some(_)) => {},
-        Ok(None) => return (StatusCode::BAD_REQUEST, "Profile not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", e)).into_response(),
-    }
-
-    // Update the proxy's relay profile instead of creating channel-specific config
-    match update_proxy_relay_profile(&state.database, proxy_uuid, request.profile_id).await {
-        Ok(_) => {
-            // Return a synthetic config for the response
-            let config = ChannelRelayConfig {
-                id: Uuid::new_v4(),
-                proxy_id: proxy_uuid,
-                channel_id,
-                profile_id: request.profile_id,
-                name: request.name,
-                description: request.description,
-                custom_args: request.custom_args.map(|args| args.join(" ")),
-                is_active: true,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            };
-            (StatusCode::CREATED, Json(config)).into_response()
-        },
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", e)).into_response(),
-    }
-}
-
-/// Delete channel relay configuration
-#[utoipa::path(
-    delete,
-    path = "/proxies/{proxy_id}/channels/{channel_id}/relay",
-    tag = "relay",
-    summary = "Delete channel relay configuration",
-    description = "Remove relay configuration from a proxy (affects all channels)",
-    params(
-        ("proxy_id" = String, Path, description = "Proxy ID (UUID)"),
-        ("channel_id" = String, Path, description = "Channel ID (UUID)"),
-    ),
-    responses(
-        (status = 204, description = "Channel relay configuration deleted successfully"),
-        (status = 400, description = "Invalid proxy ID"),
-        (status = 404, description = "Proxy has no relay profile configured"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn delete_channel_relay_config(
-    State(state): State<AppState>,
-    Path((proxy_id, _channel_id)): Path<(String, Uuid)>,
-) -> impl IntoResponse {
-    let proxy_uuid = match proxy_id.parse::<Uuid>() {
-        Ok(uuid) => uuid,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid proxy ID").into_response(),
-    };
-
-    // Remove relay profile from proxy (affects all channels)
-    match remove_proxy_relay_profile(&state.database, proxy_uuid).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "Proxy has no relay profile configured").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", e)).into_response(),
-    }
-}
-
-/// Serve HLS playlist (playlist.m3u8)
-#[utoipa::path(
-    get,
-    path = "/relay/{config_id}/playlist.m3u8",
-    tag = "relay",
-    summary = "Serve relay HLS playlist",
-    description = "Serve the HLS master playlist for a relay configuration",
-    params(
-        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
-    ),
-    responses(
-        (status = 200, description = "HLS playlist content", content_type = "application/vnd.apple.mpegurl"),
-        (status = 404, description = "Playlist not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn serve_relay_playlist(
-    State(state): State<AppState>,
-    Path(config_id): Path<Uuid>,
-) -> impl IntoResponse {
-    let client_info = ClientInfo {
-        ip: "playlist_request".to_string(),
-        user_agent: None,
-        referer: None,
-    };
-
-    match state.relay_manager.serve_relay_content(config_id, "", &client_info).await {
-        Ok(RelayContent::Playlist(content)) => {
-            use axum::http::header;
-            (
-                [
-                    (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
-                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-                    (header::EXPIRES, "0"),
-                ],
-                content,
-            ).into_response()
-        }
-        Ok(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Unexpected content type").into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, format!("Playlist not found: {}", e)).into_response(),
-    }
-}
-
-/// Serve relay segment (for HLS)
-#[utoipa::path(
-    get,
-    path = "/relay/{config_id}/segments/{segment_name}",
-    tag = "relay",
-    summary = "Serve relay HLS segment",
-    description = "Serve HLS video segments for a relay configuration",
-    params(
-        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
-        ("segment_name" = String, Path, description = "Segment filename"),
-    ),
-    responses(
-        (status = 200, description = "Video segment data", content_type = "video/mp2t"),
-        (status = 404, description = "Segment not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn serve_relay_segment(
-    State(state): State<AppState>,
-    Path((config_id, segment_name)): Path<(Uuid, String)>,
-) -> impl IntoResponse {
-    let client_info = ClientInfo {
-        ip: "segment_request".to_string(),
-        user_agent: None,
-        referer: None,
-    };
-
-    match state.relay_manager.serve_relay_content(config_id, &segment_name, &client_info).await {
-        Ok(RelayContent::Segment(data)) => {
-            use axum::http::header;
-            (
-                [
-                    (header::CONTENT_TYPE, "video/mp2t"),
-                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-                    (header::EXPIRES, "0"),
-                ],
-                data,
-            ).into_response()
-        }
-        Ok(RelayContent::Playlist(content)) => {
-            // Sometimes segments might be served as playlists for sub-manifests
-            use axum::http::header;
-            (
-                [
-                    (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
-                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-                    (header::EXPIRES, "0"),
-                ],
-                content,
-            ).into_response()
-        }
-        Ok(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Unexpected content type").into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, format!("Segment not found: {}", e)).into_response(),
-    }
-}
 
 
-/// Get relay status
-#[utoipa::path(
-    get,
-    path = "/relay/{config_id}/status",
-    tag = "relay",
-    summary = "Get relay status",
-    description = "Retrieve runtime status information for a relay configuration",
-    params(
-        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
-    ),
-    responses(
-        (status = 200, description = "Relay runtime status"),
-        (status = 404, description = "Relay not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_relay_status(
-    State(state): State<AppState>,
-    Path(config_id): Path<Uuid>,
-) -> impl IntoResponse {
-    match get_relay_status_from_db(&state.database, config_id).await {
-        Ok(Some(status)) => Json(status).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "Relay not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", e)).into_response(),
-    }
-}
 
-/// Start relay process (now uses proxy_id and channel_id instead of config_id)
-#[utoipa::path(
-    post,
-    path = "/proxy/{proxy_id}/relay/{channel_id}/start",
-    tag = "relay",
-    summary = "Start relay process",
-    description = "Start a relay process for a specific channel in a proxy",
-    params(
-        ("proxy_id" = String, Path, description = "Proxy ID (UUID)"),
-        ("channel_id" = String, Path, description = "Channel ID (UUID)"),
-    ),
-    responses(
-        (status = 200, description = "Relay started successfully"),
-        (status = 400, description = "Invalid proxy ID"),
-        (status = 404, description = "Proxy has no relay profile configured or channel not found"),
-        (status = 500, description = "Failed to start relay")
-    )
-)]
-pub async fn start_relay(
-    State(state): State<AppState>,
-    Path((proxy_id, channel_id)): Path<(String, Uuid)>,
-) -> impl IntoResponse {
-    let proxy_uuid = match proxy_id.parse::<Uuid>() {
-        Ok(uuid) => uuid,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid proxy ID").into_response(),
-    };
 
-    // Get the relay configuration from relay manager
-    let resolved_config = match state.relay_manager.get_relay_config_for_channel(proxy_uuid, channel_id).await {
-        Ok(Some(config)) => config,
-        Ok(None) => return (StatusCode::NOT_FOUND, "Proxy has no relay profile configured").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get relay config: {}", e)).into_response(),
-    };
 
-    // Get channel information to get the input URL
-    let channel = match state.database.get_channel_for_proxy(&proxy_uuid.to_string(), channel_id).await {
-        Ok(Some(channel)) => channel,
-        Ok(None) => return (StatusCode::NOT_FOUND, "Channel not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", e)).into_response(),
-    };
 
-    // Start the relay process
-    match state.relay_manager.ensure_relay_running(&resolved_config, &channel.stream_url).await {
-        Ok(_) => Json(json!({
-            "message": "Relay started successfully",
-            "proxy_id": proxy_uuid,
-            "channel_id": channel_id,
-            "profile_name": resolved_config.profile.name,
-            "channel_name": channel.channel_name
-        })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start relay: {}", e)).into_response(),
-    }
-}
 
-/// Stop relay process
-#[utoipa::path(
-    post,
-    path = "/relay/{config_id}/stop",
-    tag = "relay",
-    summary = "Stop relay process",
-    description = "Stop a running relay process",
-    params(
-        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
-    ),
-    responses(
-        (status = 200, description = "Relay stopped successfully"),
-        (status = 500, description = "Failed to stop relay")
-    )
-)]
-pub async fn stop_relay(
-    State(state): State<AppState>,
-    Path(config_id): Path<Uuid>,
-) -> impl IntoResponse {
-    match state.relay_manager.stop_relay(config_id).await {
-        Ok(_) => Json(json!({"message": "Relay stopped successfully"})).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to stop relay: {}", e)).into_response(),
-    }
-}
 
-/// Get relay metrics
-#[utoipa::path(
-    get,
-    path = "/relay/metrics",
-    tag = "relay",
-    summary = "Get relay metrics",
-    description = "Retrieve overall relay system metrics",
-    responses(
-        (status = 200, description = "Relay system metrics"),
-        (status = 500, description = "Failed to get metrics")
-    )
-)]
-pub async fn get_relay_metrics(State(state): State<AppState>) -> impl IntoResponse {
-    match state.relay_manager.get_relay_status().await {
-        Ok(metrics) => Json(metrics).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get metrics: {}", e)).into_response(),
-    }
-}
 
-/// Get relay metrics for specific config
-#[utoipa::path(
-    get,
-    path = "/relay/metrics/{config_id}",
-    tag = "relay",
-    summary = "Get relay metrics for configuration",
-    description = "Retrieve metrics for a specific relay configuration",
-    params(
-        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
-    ),
-    responses(
-        (status = 200, description = "Relay configuration metrics"),
-        (status = 501, description = "Not implemented yet"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_relay_metrics_for_config(
-    State(_state): State<AppState>,
-    Path(_config_id): Path<Uuid>,
-) -> impl IntoResponse {
-    // TODO: Implement config-specific metrics
-    (StatusCode::NOT_IMPLEMENTED, "Config-specific metrics not implemented yet").into_response()
-}
 
-/// Get overall relay system health
+
+/// Get comprehensive relay system health and metrics
 #[utoipa::path(
     get,
     path = "/relay/health",
     tag = "relay",
     summary = "Get relay system health",
-    description = "Retrieve overall health status of the relay system",
+    description = "Retrieve comprehensive health status, metrics, and connected client information for the relay system",
     responses(
-        (status = 200, description = "Relay system health status"),
+        (status = 200, description = "Relay system health with detailed metrics and client information", body = RelayHealth),
         (status = 500, description = "Failed to get health status")
     )
 )]
@@ -588,32 +192,6 @@ pub async fn get_relay_health(State(state): State<AppState>) -> impl IntoRespons
     }
 }
 
-/// Get health for specific relay config
-#[utoipa::path(
-    get,
-    path = "/relay/health/{config_id}",
-    tag = "relay",
-    summary = "Get relay configuration health",
-    description = "Retrieve health status for a specific relay configuration",
-    params(
-        ("config_id" = String, Path, description = "Relay configuration ID (UUID)"),
-    ),
-    responses(
-        (status = 200, description = "Relay configuration health status"),
-        (status = 404, description = "Relay config not found"),
-        (status = 500, description = "Failed to get health status")
-    )
-)]
-pub async fn get_relay_health_for_config(
-    State(state): State<AppState>,
-    Path(config_id): Path<Uuid>,
-) -> impl IntoResponse {
-    match state.relay_manager.get_relay_health_for_config(config_id).await {
-        Ok(Some(health)) => Json(health).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "Relay config not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get health: {}", e)).into_response(),
-    }
-}
 
 // Database helper functions
 
@@ -902,106 +480,7 @@ async fn delete_relay_profile(database: &Database, id: Uuid) -> Result<bool, sql
     Ok(result.rows_affected() > 0)
 }
 
-/// Get proxy's relay profile ID
-async fn get_proxy_relay_profile(
-    database: &Database,
-    proxy_id: Uuid,
-) -> Result<Option<Uuid>, sqlx::Error> {
-    let query = r#"
-        SELECT relay_profile_id
-        FROM stream_proxies
-        WHERE id = ? AND is_active = true AND relay_profile_id IS NOT NULL
-    "#;
-
-    let row = sqlx::query(query)
-        .bind(proxy_id.to_string())
-        .fetch_optional(&database.pool())
-        .await?;
-
-    if let Some(row) = row {
-        let profile_id_str: String = row.get("relay_profile_id");
-        Ok(Some(parse_uuid_flexible(&profile_id_str).expect("Invalid UUID in relay_profile_id")))
-    } else {
-        Ok(None)
-    }
-}
-
-/// Update proxy's relay profile
-async fn update_proxy_relay_profile(
-    database: &Database,
-    proxy_id: Uuid,
-    profile_id: Uuid,
-) -> Result<(), sqlx::Error> {
-    let query = r#"
-        UPDATE stream_proxies 
-        SET relay_profile_id = ?, updated_at = ?
-        WHERE id = ? AND is_active = true
-    "#;
-
-    sqlx::query(query)
-        .bind(profile_id.to_string())
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind(proxy_id.to_string())
-        .execute(&database.pool())
-        .await?;
-
-    Ok(())
-}
-
-/// Remove relay profile from proxy
-async fn remove_proxy_relay_profile(
-    database: &Database,
-    proxy_id: Uuid,
-) -> Result<bool, sqlx::Error> {
-    let query = r#"
-        UPDATE stream_proxies 
-        SET relay_profile_id = NULL, updated_at = ?
-        WHERE id = ? AND is_active = true AND relay_profile_id IS NOT NULL
-    "#;
-
-    let result = sqlx::query(query)
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind(proxy_id.to_string())
-        .execute(&database.pool())
-        .await?;
-
-    Ok(result.rows_affected() > 0)
-}
 
 
-/// Get relay status from database
-async fn get_relay_status_from_db(
-    database: &Database,
-    config_id: Uuid,
-) -> Result<Option<RelayRuntimeStatus>, sqlx::Error> {
-    let query = r#"
-        SELECT channel_relay_config_id, process_id, sandbox_path, is_running,
-               started_at, client_count, bytes_served, error_message,
-               last_heartbeat, updated_at
-        FROM relay_runtime_status
-        WHERE channel_relay_config_id = ?
-    "#;
 
-    let row = sqlx::query(query)
-        .bind(config_id.to_string())
-        .fetch_optional(&database.pool())
-        .await?;
 
-    if let Some(row) = row {
-        let status = RelayRuntimeStatus {
-            channel_relay_config_id: parse_uuid_flexible(&row.get::<String, _>("channel_relay_config_id")).expect("Invalid UUID in channel_relay_config_id"),
-            process_id: row.get("process_id"),
-            sandbox_path: row.get("sandbox_path"),
-            is_running: row.get("is_running"),
-            started_at: row.get("started_at"),
-            client_count: row.get("client_count"),
-            bytes_served: row.get("bytes_served"),
-            error_message: row.get("error_message"),
-            last_heartbeat: row.get("last_heartbeat"),
-            updated_at: row.get("updated_at"),
-        };
-        Ok(Some(status))
-    } else {
-        Ok(None)
-    }
-}

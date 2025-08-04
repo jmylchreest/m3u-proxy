@@ -139,14 +139,19 @@ async fn main() -> Result<()> {
     // Set up log capture layer for SSE streaming
     let (log_capture_layer, log_broadcaster) = m3u_proxy::utils::log_capture::setup_log_capture_with_subscriber();
     
+    // Set up reloadable tracing filter for runtime log level changes
+    let initial_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| log_filter.into());
+    let (filter_layer, reload_handle) = tracing_subscriber::reload::Layer::new(initial_filter);
+    
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| log_filter.into()),
-        )
+        .with(filter_layer)
         .with(tracing_subscriber::fmt::layer())
         .with(log_capture_layer) // Add log capture for SSE streaming
         .init();
+    
+    // Create runtime settings store with tracing reload capability
+    let runtime_settings_store = m3u_proxy::runtime_settings::RuntimeSettingsStore::with_tracing_reload(reload_handle);
 
 
     info!("Starting M3U Proxy Service v{}", env!("CARGO_PKG_VERSION"));
@@ -367,6 +372,7 @@ async fn main() -> Result<()> {
         stream_source_service.clone(),
         epg_source_service.clone(),
         log_broadcaster,
+        runtime_settings_store,
     )
     .await?;
     

@@ -86,6 +86,7 @@ impl GenerationStage {
         );
 
         // Build M3U channel map (no EPG channel data needed)
+        self.report_progress(5.0, "Building M3U channel map").await;
         let channel_map_start = std::time::Instant::now();
         let channel_map = self.build_m3u_channel_map(&numbered_channels).await?;
         let channel_map_duration = channel_map_start.elapsed();
@@ -95,7 +96,8 @@ impl GenerationStage {
             channel_map.len()
         );
         
-        // Generate temporary M3U file
+        // Generate temporary M3U file (5-40% range)
+        self.report_progress(15.0, "Generating M3U playlist").await;
         let m3u_gen_start = std::time::Instant::now();
         let temp_m3u_file = format!("{}_temp.m3u8", self.pipeline_execution_prefix);
         let m3u_bytes = self.generate_m3u_streaming(&numbered_channels, &temp_m3u_file).await?;
@@ -106,7 +108,8 @@ impl GenerationStage {
             temp_m3u_file, m3u_bytes / 1024, numbered_channels.len()
         );
         
-        // Generate temporary XMLTV file with M3U channel filtering
+        // Generate temporary XMLTV file with M3U channel filtering (40-95% range)
+        self.report_progress(40.0, "Generating XMLTV EPG guide").await;
         let xmltv_gen_start = std::time::Instant::now();
         let temp_xmltv_file = format!("{}_temp.xmltv", self.pipeline_execution_prefix);
         let xmltv_bytes = self.generate_xmltv_streaming(&channel_map, &epg_programs, &temp_xmltv_file).await?;
@@ -117,6 +120,7 @@ impl GenerationStage {
             temp_xmltv_file, xmltv_bytes / 1024
         );
         
+        self.report_progress(90.0, "Finalizing generated files").await;
         let total_duration = process_start.elapsed();
         
         // Create pipeline artifacts for publish_content stage
@@ -505,12 +509,10 @@ impl PipelineStage for GenerationStage {
     async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
         info!("Generation stage starting with {} input artifacts", input.len());
         
-        self.report_progress(10.0, "Loading generation data").await;
+        self.report_progress(5.0, "Loading generation data").await;
         
         // Load data from input artifacts
         let (numbered_channels, epg_programs) = self.load_artifacts_from_input(input).await?;
-        
-        self.report_progress(50.0, "Generating M3U and XMLTV files").await;
         
         // Generate the files (for now, create a dummy logo service)
         let logo_storage = crate::logo_assets::LogoAssetStorage::new(

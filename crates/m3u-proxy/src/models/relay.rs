@@ -466,40 +466,47 @@ pub struct HwAccelerator {
 }
 
 /// Health status for relay processes
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RelayHealth {
+    #[schema(example = "3")]
     pub total_processes: i32,
+    #[schema(example = "3")]
     pub healthy_processes: i32,
+    #[schema(example = "0")]
     pub unhealthy_processes: i32,
     pub processes: Vec<RelayProcessHealth>,
-    pub system_load: f64,
-    pub memory_usage_mb: f64,
     pub last_check: DateTime<Utc>,
-    pub ffmpeg_available: bool,
-    pub ffmpeg_version: Option<String>,
-    pub ffmpeg_command: String,
-    pub hwaccel_available: bool,
-    pub hwaccel_capabilities: HwAccelCapabilities,
 }
 
 /// Health status for individual relay process
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RelayProcessHealth {
     pub config_id: Uuid,
+    pub profile_id: Uuid,
+    #[schema(example = "HD Transcode")]
     pub profile_name: String,
-    pub channel_name: String,
+    pub proxy_id: Option<Uuid>,
+    #[schema(example = "http://example.com/stream.m3u8")]
+    pub source_url: String,
     pub status: RelayHealthStatus,
+    #[schema(example = "12345")]
+    pub pid: Option<u32>,
+    #[schema(example = "1800")]
     pub uptime_seconds: i64,
-    pub client_count: i32,
+    #[schema(example = "256.5")]
     pub memory_usage_mb: f64,
+    #[schema(example = "15.2")]
     pub cpu_usage_percent: f64,
+    #[schema(example = "1024000")]
+    pub bytes_received_upstream: i64,
+    #[schema(example = "5120000")]
+    pub bytes_delivered_downstream: i64,
+    pub connected_clients: Vec<ConnectedClient>,
     pub last_heartbeat: DateTime<Utc>,
-    pub error_count: i32,
-    pub restart_count: i32,
 }
 
 /// Health status enumeration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub enum RelayHealthStatus {
     #[serde(rename = "healthy")]
     Healthy,
@@ -528,12 +535,16 @@ pub struct ClientInfo {
 }
 
 /// Connected client information for metrics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ConnectedClient {
+    #[schema(example = "550e8400-e29b-41d4-a716-446655440000")]
     pub id: Uuid,
+    #[schema(example = "192.168.1.100")]
     pub ip: String,
+    #[schema(example = "VLC/3.0.16")]
     pub user_agent: Option<String>,
     pub connected_at: DateTime<Utc>,
+    #[schema(example = "1024000")]
     pub bytes_served: u64,
     pub last_activity: DateTime<Utc>,
 }

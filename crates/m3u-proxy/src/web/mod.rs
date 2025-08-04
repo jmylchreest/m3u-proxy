@@ -41,6 +41,7 @@ use crate::{
     ingestor::{IngestionStateManager, scheduler::{CacheInvalidationSender, SchedulerEvent}},
     logo_assets::{LogoAssetService, LogoAssetStorage},
     metrics::MetricsLogger,
+    runtime_settings::RuntimeSettingsStore,
     services::{ProxyRegenerationService, progress_service::ProgressService},
 };
 use tokio::sync::mpsc;
@@ -86,6 +87,7 @@ impl WebServer {
         stream_source_service: std::sync::Arc<crate::services::StreamSourceBusinessService>,
         epg_source_service: std::sync::Arc<crate::services::EpgSourceService>,
         log_broadcaster: broadcast::Sender<crate::web::api::log_streaming::LogEvent>,
+        runtime_settings_store: RuntimeSettingsStore,
     ) -> Result<Self> {
         tracing::info!("WebServer using native pipeline");
 
@@ -146,6 +148,7 @@ impl WebServer {
             active_regeneration_requests: Arc::new(Mutex::new(HashSet::new())),
             log_broadcaster,
             start_time: chrono::Utc::now(),
+            runtime_settings_store,
         })
         .await;
 
@@ -361,14 +364,9 @@ impl WebServer {
                 get(handlers::proxies::preview_existing_proxy),
             )
             .route("/proxies/{id}/regenerate", post(api::regenerate_proxy))
-            .route("/proxies/regenerate-all", post(api::regenerate_all_proxies))
             .route("/proxies/regeneration/status", get(api::get_regeneration_queue_status))
             // Relay system endpoints
             .merge(api::relay::relay_routes())
-            // Active relay monitoring
-            .route("/active-relays", get(api::active_relays::get_active_relays))
-            .route("/active-relays/{config_id}", get(api::active_relays::get_active_relay_by_id))
-            .route("/active-relays/health", get(api::active_relays::get_relay_health))
             // Metrics and analytics
             .route("/metrics/dashboard", get(api::get_dashboard_metrics))
             .route("/metrics/realtime", get(api::get_realtime_metrics))
@@ -466,6 +464,8 @@ pub struct AppState {
     pub log_broadcaster: Option<broadcast::Sender<crate::web::api::log_streaming::LogEvent>>,
     /// Application start time for uptime calculation
     pub start_time: chrono::DateTime<chrono::Utc>,
+    /// Runtime settings store for dynamic configuration changes
+    pub runtime_settings_store: RuntimeSettingsStore,
 }
 
 impl AppState {}

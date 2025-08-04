@@ -379,9 +379,10 @@ impl LogoCachingStage {
                     total_cached, cache_failures, cache_hits, total_downloaded_bytes, elapsed, estimated_remaining
                 );
                 
-                // Send SSE progress update
+                // Send SSE progress update with 5-95% range
+                let adjusted_progress = 5.0 + (progress_pct as f64 * 0.9); // Scale to 5-95% range
                 let progress_message = format!("Caching logos: {}/{} channels ({:.1}%)", processed_count, total_channels, progress_pct);
-                self.report_progress(progress_pct as f64, &progress_message).await;
+                self.report_progress(adjusted_progress, &progress_message).await;
             } else {
                 // Just log batch completion without full progress details
                 debug!("Completed logo caching batch {}/{}: processed={} duration={}", 
@@ -467,7 +468,7 @@ impl LogoCachingStage {
         
         let total_artifacts = input_artifacts.len();
         for (artifact_index, artifact) in input_artifacts.into_iter().enumerate() {
-            let base_progress = 30.0 + (artifact_index as f64 / total_artifacts as f64 * 60.0); // 30% to 90%
+            let base_progress = 5.0 + (artifact_index as f64 / total_artifacts as f64 * 90.0); // 5% to 95%
             
             let processed_artifact = match artifact.artifact_type.content {
                 ContentType::Channels => {
@@ -783,7 +784,7 @@ impl ProgressAware for LogoCachingStage {
 #[async_trait::async_trait]
 impl PipelineStage for LogoCachingStage {
     async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
-        self.report_progress(10.0, "Initializing logo cache").await;
+        self.report_progress(5.0, "Initializing logo cache").await;
         let result = self.process(input).await
             .map_err(|e| PipelineError::stage_error("logo_caching", format!("Logo caching failed: {}", e)))?;
         self.report_progress(100.0, "Logo caching completed").await;

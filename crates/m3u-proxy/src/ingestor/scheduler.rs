@@ -997,4 +997,53 @@ impl SchedulerService {
         
         trace!("Scheduled backoff expiry timer for source {} at {}", source_id, retry_after);
     }
+
+    /// Get scheduler health information for the health endpoint
+    pub async fn get_health_info(&self) -> crate::web::responses::SchedulerHealth {
+        let cached_sources = self.cached_sources.read().await;
+        let last_cache_refresh = *self.last_cache_refresh.read().await;
+        
+        // Count sources by type
+        let mut stream_sources = 0u32;
+        let mut epg_sources = 0u32;
+        let mut next_scheduled_times = Vec::new();
+        
+        for cached_source in cached_sources.values() {
+            match &cached_source.source {
+                SchedulableSource::Stream(_) => stream_sources += 1,
+                SchedulableSource::Epg(_) => epg_sources += 1,
+            }
+            
+            // Get next scheduled time if schedule is available
+            if let Some(ref schedule) = cached_source.schedule {
+                if let Some(next_time) = schedule.upcoming(Utc).next() {
+                    next_scheduled_times.push(crate::web::responses::NextScheduledTime {
+                        source_id: cached_source.source.id(),
+                        source_name: cached_source.source.name().to_string(),
+                        source_type: cached_source.source.source_type().to_string(),
+                        next_run: next_time,
+                        cron_expression: cached_source.source.update_cron().to_string(),
+                    });
+                }
+            }
+        }
+        
+        // Sort by next run time
+        next_scheduled_times.sort_by(|a, b| a.next_run.cmp(&b.next_run));
+        
+        // Get active ingestions count - simplified for now
+        // TODO: Get actual active ingestion count from progress service or state manager
+        let active_ingestions = 0u32;
+        
+        crate::web::responses::SchedulerHealth {
+            status: "running".to_string(),
+            sources_scheduled: crate::web::responses::ScheduledSourceCounts {
+                stream_sources,
+                epg_sources,
+            },
+            next_scheduled_times,
+            last_cache_refresh,
+            active_ingestions,
+        }
+    }
 }

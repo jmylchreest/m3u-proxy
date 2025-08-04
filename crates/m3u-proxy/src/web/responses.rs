@@ -275,3 +275,106 @@ pub struct DatabaseHealth {
     pub connection_pool_size: u32,
     pub active_connections: u32,
 }
+
+/// Scheduler health information
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SchedulerHealth {
+    pub status: String,
+    pub sources_scheduled: ScheduledSourceCounts,
+    pub next_scheduled_times: Vec<NextScheduledTime>,
+    pub last_cache_refresh: chrono::DateTime<chrono::Utc>,
+    pub active_ingestions: u32,
+}
+
+/// Count of scheduled sources by type
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ScheduledSourceCounts {
+    pub stream_sources: u32,
+    pub epg_sources: u32,
+}
+
+/// Information about next scheduled run for a source
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct NextScheduledTime {
+    pub source_id: uuid::Uuid,
+    pub source_name: String,
+    pub source_type: String,
+    pub next_run: chrono::DateTime<chrono::Utc>,
+    pub cron_expression: String,
+}
+
+/// Sandbox manager health information
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SandboxManagerHealth {
+    pub status: String,
+    pub last_cleanup_run: Option<chrono::DateTime<chrono::Utc>>,
+    pub cleanup_status: String,
+    pub temp_files_cleaned: u32,
+    pub disk_space_freed_mb: f64,
+    pub managed_directories: Vec<String>,
+}
+
+/// Relay system health information (simplified for main health endpoint)
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RelaySystemHealth {
+    pub status: String,
+    pub total_processes: i32,
+    pub healthy_processes: i32,
+    pub unhealthy_processes: i32,
+    pub ffmpeg_available: bool,
+    pub ffmpeg_version: Option<String>,
+    pub ffprobe_available: bool,
+    pub ffprobe_version: Option<String>,
+    pub hwaccel_available: bool,
+    pub hwaccel_capabilities: DetailedHwAccelCapabilities,
+}
+
+/// Detailed hardware acceleration capabilities for main health endpoint
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DetailedHwAccelCapabilities {
+    pub accelerators: Vec<String>,
+    pub codecs: Vec<String>,
+    pub support_matrix: std::collections::HashMap<String, AcceleratorSupport>,
+}
+
+/// Hardware accelerator support details
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AcceleratorSupport {
+    pub h264: bool,
+    pub hevc: bool,
+    pub av1: bool,
+}
+
+/// Comprehensive memory breakdown information
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MemoryBreakdown {
+    /// Total system memory in MB
+    pub total_memory_mb: f64,
+    /// Currently used system memory in MB
+    pub used_memory_mb: f64,
+    /// Free system memory in MB
+    pub free_memory_mb: f64,
+    /// Available system memory in MB (free + buffers + cache)
+    pub available_memory_mb: f64,
+    /// Swap memory usage in MB
+    pub swap_used_mb: f64,
+    /// Total swap memory in MB
+    pub swap_total_mb: f64,
+    /// Memory usage by the m3u-proxy process and its children
+    pub process_memory: ProcessMemoryBreakdown,
+}
+
+/// Memory usage breakdown for the m3u-proxy process tree
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ProcessMemoryBreakdown {
+    /// Main m3u-proxy process memory usage in MB
+    pub main_process_mb: f64,
+    /// Memory used by child processes (FFmpeg relays, etc.) in MB
+    pub child_processes_mb: f64,
+    /// Total memory used by m3u-proxy and all children in MB
+    pub total_process_tree_mb: f64,
+    /// Percentage of total system memory used by m3u-proxy process tree
+    pub percentage_of_system: f64,
+    /// Number of child processes tracked
+    pub child_process_count: u32,
+}

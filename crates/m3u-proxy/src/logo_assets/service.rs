@@ -170,6 +170,7 @@ impl LogoAssetService {
     pub async fn list_assets(
         &self,
         request: LogoAssetListRequest,
+        base_url: &str,
     ) -> Result<LogoAssetListResponse, sqlx::Error> {
         let limit = request.limit.unwrap_or(20);
         let page = request.page.unwrap_or(1);
@@ -258,7 +259,7 @@ impl LogoAssetService {
         let assets_with_urls: Vec<LogoAssetWithUrl> = assets
             .into_iter()
             .map(|asset| {
-                let url = format!("/api/v1/logos/{}", asset.id);
+                let url = format!("{}/api/v1/logos/{}", base_url.trim_end_matches('/'), asset.id);
                 LogoAssetWithUrl { asset, url }
             })
             .collect();
@@ -543,7 +544,7 @@ impl LogoAssetService {
             stats.filesystem_cached_storage =
                 cached_logos.iter().map(|logo| logo.size_bytes as i64).sum();
 
-            tracing::info!(
+            tracing::debug!(
                 "Filesystem cache stats: {} logos, {} bytes total",
                 stats.filesystem_cached_logos,
                 stats.filesystem_cached_storage

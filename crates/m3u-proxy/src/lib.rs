@@ -11,6 +11,7 @@ pub mod models;
 pub mod pipeline;
 pub mod proxy;
 pub mod repositories;
+pub mod runtime_settings;
 pub mod services;
 pub mod sources;
 pub mod utils;

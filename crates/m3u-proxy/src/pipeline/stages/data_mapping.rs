@@ -702,9 +702,19 @@ impl DataMappingStage {
                 if processed_count % EPG_PROGRESS_LOG_INTERVAL == 0 {
                     debug!("Processed {} EPG programs so far", processed_count);
                     
-                    // Broadcast progress update via SSE
+                    // Calculate progress in 50-95% range based on processed count
+                    // Note: We don't know total count in advance, so use a reasonable estimate
+                    // For progress reporting, assume we're making steady progress through the range
+                    let estimated_progress = if processed_count < 10000 {
+                        50.0 + (processed_count as f64 / 10000.0) * 20.0  // 50-70% for first 10k
+                    } else if processed_count < 50000 {
+                        70.0 + ((processed_count - 10000) as f64 / 40000.0) * 15.0  // 70-85% for 10k-50k
+                    } else {
+                        85.0 + ((processed_count - 50000) as f64 / 50000.0) * 10.0  // 85-95% for 50k+
+                    }.min(95.0);
+                    
                     let progress_message = format!("Processing EPG programs: {} processed", processed_count);
-                    self.report_progress(70.0, &progress_message).await;
+                    self.report_progress(estimated_progress, &progress_message).await;
                 }
             }
         }

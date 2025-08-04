@@ -18,7 +18,7 @@ use sqlx::SqlitePool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{info, warn, trace};
+use tracing::{debug, info, warn, trace};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FilterRule {
@@ -86,11 +86,10 @@ impl FilteringStage {
         
         let total_artifacts = input_artifacts.len();
         for (artifact_index, artifact) in input_artifacts.into_iter().enumerate() {
-            let progress_percentage = 50.0 + (artifact_index as f64 / total_artifacts as f64 * 40.0); // 50% to 90%
-            
             match artifact.artifact_type.content {
                 ContentType::Channels => {
-                    self.report_progress(progress_percentage, &format!("Filtering channels artifact {}/{}", artifact_index + 1, total_artifacts)).await;
+                    let channel_progress = 10.0 + (artifact_index as f64 / total_artifacts as f64 * 40.0); // 10-50% for channels
+                    self.report_progress(channel_progress, &format!("Filtering channels artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     let (filtered_artifact, filter_stats, input_count, output_count) = self.process_channel_artifact(artifact).await?;
                     output_artifacts.push(filtered_artifact);
                     
@@ -105,13 +104,15 @@ impl FilteringStage {
                     }
                 }
                 ContentType::EpgPrograms => {
-                    self.report_progress(progress_percentage, &format!("Filtering EPG programs artifact {}/{}", artifact_index + 1, total_artifacts)).await;
+                    let epg_progress = 50.0 + (artifact_index as f64 / total_artifacts as f64 * 45.0); // 50-95% for EPG programs
+                    self.report_progress(epg_progress, &format!("Filtering EPG programs artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     let filtered_artifact = self.process_epg_artifact(artifact).await?;
                     output_artifacts.push(filtered_artifact);
                 }
                 _ => {
                     // Pass through other content types unchanged
-                    self.report_progress(progress_percentage, &format!("Processing artifact {}/{}", artifact_index + 1, total_artifacts)).await;
+                    let generic_progress = 10.0 + (artifact_index as f64 / total_artifacts as f64 * 85.0); // 10-95% for other types
+                    self.report_progress(generic_progress, &format!("Processing artifact {}/{}", artifact_index + 1, total_artifacts)).await;
                     output_artifacts.push(artifact);
                 }
             }
@@ -157,7 +158,7 @@ impl FilteringStage {
         
         // Load channel filter rules from database
         let filter_rules = self.load_filter_rules(FilterSourceType::Stream).await?;
-        info!("Loaded channel filter rules count={} for proxy_id={:?}", filter_rules.len(), self.proxy_id);
+        // Channel filter rules loaded
         
         if filter_rules.is_empty() {
             info!("No channel filter rules found, passing through unchanged");
@@ -182,7 +183,7 @@ impl FilteringStage {
         
         // Read channels from input artifact
         let channels = self.read_channels_from_artifact(&artifact).await?;
-        info!("Read channels from input artifact count={}", channels.len());
+        debug!("Read channels from input artifact count={}", channels.len());
         
         // Create filtering engine and add processors
         let mut filtering_engine = ChannelFilteringEngine::new();
@@ -203,14 +204,14 @@ impl FilteringStage {
         }
         
         // Process channels through filtering engine with progress updates
-        self.report_progress(70.0, &format!("Applying {} filters to {} channels", filter_rules.len(), channels.len())).await;
+        self.report_progress(30.0, &format!("Applying {} filters to {} channels", filter_rules.len(), channels.len())).await;
         let filter_result = filtering_engine.process_records(&channels)?;
         
         // Log filtering results
         self.log_filtering_results(&filter_result, "channels");
         
         // Send progress update after filtering
-        self.report_progress(85.0, &format!("Filtered {} channels to {} results", filter_result.total_input, filter_result.total_filtered)).await;
+        self.report_progress(45.0, &format!("Filtered {} channels to {} results", filter_result.total_input, filter_result.total_filtered)).await;
         
         // Write filtered channels to new artifact
         let filtered_file_path = artifact.file_path
@@ -276,20 +277,20 @@ impl FilteringStage {
             return Ok(output_artifact);
         }
         
-        info!("Loaded EPG filter rules count={}", filter_rules.len());
+        // EPG filter rules loaded
         
         // For now, apply deduplication and pass through EPG artifacts since EpgFilterProcessor is a placeholder
         // TODO: Implement actual EPG filtering when EpgFilterProcessor is complete
         warn!("EPG filtering not yet implemented, applying deduplication and passing through");
         
         // Read EPG programs from input artifact with deduplication
-        self.report_progress(70.0, "Reading EPG programs for filtering").await;
+        self.report_progress(60.0, "Reading EPG programs for filtering").await;
         let programs = self.read_epg_programs_from_artifact(&artifact).await?;
-        info!("Read EPG programs from input artifact count={}", programs.len());
+        debug!("Read EPG programs from input artifact count={}", programs.len());
         let programs_count = programs.len();
         
         // Send progress update after reading
-        self.report_progress(80.0, &format!("Processing {} EPG programs", programs_count)).await;
+        self.report_progress(85.0, &format!("Processing {} EPG programs", programs_count)).await;
         
         // Update file path to include stage name
         let filtered_file_path = artifact.file_path

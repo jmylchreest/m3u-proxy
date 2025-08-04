@@ -18,7 +18,6 @@ use uuid::Uuid;
 use super::AppState;
 
 pub mod relay;
-pub mod active_relays;
 pub mod log_streaming;
 pub mod settings;
 pub mod progress_events;
@@ -2056,7 +2055,7 @@ pub async fn list_logo_assets(
         }
     } else {
         // Use standard database-only listing
-        match state.logo_asset_service.list_assets(params).await {
+        match state.logo_asset_service.list_assets(params, &state.config.web.base_url).await {
             Ok(response) => Ok(Json(response)),
             Err(e) => {
                 error!("Failed to list logo assets: {}", e);
@@ -2078,7 +2077,7 @@ async fn list_logo_assets_with_cached(
     let search_query = params.search.as_deref();
 
     // Get database assets
-    let db_response = state.logo_asset_service.list_assets(params.clone()).await?;
+    let db_response = state.logo_asset_service.list_assets(params.clone(), &state.config.web.base_url).await?;
     let mut all_assets = db_response.assets;
 
     // Add cached logos if scanner is available
@@ -2271,7 +2270,7 @@ pub async fn upload_logo_asset(
                     name: asset.name,
                     file_name: asset.file_name,
                     file_size: asset.file_size,
-                    url: format!("/api/v1/logos/{}", asset.id),
+                    url: format!("{}/api/v1/logos/{}", state.config.web.base_url.trim_end_matches('/'), asset.id),
                 })),
                 Err(e) => {
                     error!("Failed to create logo asset: {}", e);
@@ -3698,105 +3697,6 @@ pub async fn preview_proxies(
     })))
 }
 
-/// Regenerate all active proxies
-#[utoipa::path(
-    post,
-    path = "/proxies/regenerate-all",
-    tag = "proxies",
-    summary = "Regenerate all active proxies",
-    description = "Queue all active proxies for background regeneration.
-
-This endpoint:
-- Queues all proxies with `is_active = true` for regeneration
-- Uses the proxy regeneration service to avoid conflicts
-- Prevents duplicate batch regeneration requests
-- Returns immediately with queuing status (regeneration happens in background)
-- Updates proxy files with fresh data from all sources
-
-Note: This operation may take several minutes depending on the number of proxies and source response times.",
-    responses(
-        (status = 200, description = "Batch regeneration queued successfully"),
-        (status = 409, description = "Another batch regeneration is already in progress"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn regenerate_all_proxies(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    info!("Queuing all active proxies for background regeneration");
-    
-    // CRITICAL FIX: Use a special UUID for batch operations to prevent concurrent batch requests
-    let batch_operation_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
-    
-    // Check for duplicate batch requests
-    {
-        let mut active_requests = state.active_regeneration_requests.lock().await;
-        if active_requests.contains(&batch_operation_id) {
-            tracing::warn!("Duplicate batch regeneration API request - rejecting");
-            return Ok(Json(serde_json::json!({
-                "success": false,
-                "message": "A batch regeneration request is already being processed",
-                "status": "duplicate_request"
-            })));
-        }
-        // Reserve the batch operation ID to prevent other requests
-        active_requests.insert(batch_operation_id);
-    }
-    
-    // Create a cleanup guard for the batch operation
-    let _cleanup_guard = RequestCleanupGuard {
-        proxy_id: batch_operation_id,
-        active_requests: state.active_regeneration_requests.clone(),
-    };
-    
-    // Get all active proxies count for response
-    let active_proxies = match state.database.get_all_active_proxies().await {
-        Ok(proxies) => proxies,
-        Err(e) => {
-            error!("Failed to get active proxies: {}", e);
-            // _cleanup_guard will automatically clean up when function returns
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
-    
-    if active_proxies.is_empty() {
-        // cleanup_guard will automatically clean up when function returns
-        return Ok(Json(json!({
-            "success": true,
-            "message": "No active proxies found to regenerate",
-            "count": 0
-        })));
-    }
-    
-    // Queue all proxies for regeneration using the service
-    match state.proxy_regeneration_service.queue_manual_regeneration_all().await {
-        Ok(_) => {
-            info!("All {} active proxies queued for background regeneration", active_proxies.len());
-            
-            // Cleanup guard will automatically clean up when function returns
-            // The service-level deduplication will handle actual regeneration conflicts
-            
-            Ok(Json(serde_json::json!({
-                "success": true,
-                "message": format!("All {} active proxies queued for regeneration", active_proxies.len()),
-                "queue_id": "universal-batch-regeneration", // Use consistent format for batch operations
-                "count": active_proxies.len(),
-                "total": active_proxies.len(),
-                "status": "queued",
-                "queued_at": chrono::Utc::now()
-            })))
-        }
-        Err(e) => {
-            error!("Failed to queue all proxies for regeneration: {}", e);
-            // Check if it's an operation in progress error by checking the error message
-            let error_msg = e.to_string();
-            if error_msg.contains("Operation already in progress") {
-                return Err(StatusCode::CONFLICT);
-            }
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
 
 // Relay Configuration API Endpoints - implemented in web/api/relay.rs
 

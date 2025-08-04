@@ -302,6 +302,32 @@ impl IngestionStateManager {
         tokens.get(&source_id).map(|tx| tx.subscribe())
     }
 
+    /// Check if there are any active ingestions in progress
+    pub async fn has_active_ingestions(&self) -> Result<bool, Box<dyn std::error::Error>> {
+        let states = self.states.read().await;
+        
+        for (_, progress) in states.iter() {
+            match progress.state {
+                crate::models::IngestionState::Idle 
+                | crate::models::IngestionState::Completed 
+                | crate::models::IngestionState::Error => {
+                    // These are not active
+                    continue;
+                }
+                crate::models::IngestionState::Connecting
+                | crate::models::IngestionState::Downloading
+                | crate::models::IngestionState::Parsing
+                | crate::models::IngestionState::Saving
+                | crate::models::IngestionState::Processing => {
+                    // These are active ingestion states
+                    return Ok(true);
+                }
+            }
+        }
+        
+        Ok(false)
+    }
+
     #[allow(dead_code)]
     pub async fn cleanup_completed(&self, max_age_hours: i64) {
         let cutoff = Utc::now() - chrono::Duration::hours(max_age_hours);

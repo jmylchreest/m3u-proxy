@@ -9,7 +9,6 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn, error};
 use utoipa::ToSchema;
 
 use crate::web::AppState;
@@ -69,16 +68,15 @@ const VALID_LOG_LEVELS: &[&str] = &["TRACE", "DEBUG", "INFO", "WARN", "ERROR"];
     )
 )]
 pub async fn get_settings(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
-    // In a real implementation, these would be retrieved from a configuration store
-    // For now, we'll return some default/current values
+    let runtime_settings = state.runtime_settings_store.get().await;
     let settings = RuntimeSettings {
-        log_level: get_current_log_level(),
-        max_connections: Some(1000), // Example value
-        request_timeout_seconds: Some(30),
-        enable_request_logging: true,
-        enable_metrics: true,
+        log_level: runtime_settings.log_level,
+        max_connections: runtime_settings.max_connections,
+        request_timeout_seconds: runtime_settings.request_timeout_seconds,
+        enable_request_logging: runtime_settings.enable_request_logging,
+        enable_metrics: runtime_settings.enable_metrics,
     };
 
     let response = SettingsResponse {
@@ -106,10 +104,9 @@ pub async fn get_settings(
     )
 )]
 pub async fn update_settings(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(request): Json<UpdateSettingsRequest>,
 ) -> impl IntoResponse {
-    let mut applied_changes = Vec::new();
     let mut validation_errors = Vec::new();
 
     // Validate log level if provided
@@ -147,51 +144,24 @@ pub async fn update_settings(
         return (StatusCode::BAD_REQUEST, Json(error_response)).into_response();
     }
 
-    // Apply changes
-    let mut current_settings = RuntimeSettings {
-        log_level: get_current_log_level(),
-        max_connections: Some(1000),
-        request_timeout_seconds: Some(30),
-        enable_request_logging: true,
-        enable_metrics: true,
+    // Apply changes using the runtime settings store
+    let applied_changes = state.runtime_settings_store.update_multiple(
+        request.log_level.as_deref(),
+        request.max_connections,
+        request.request_timeout_seconds,
+        request.enable_request_logging,
+        request.enable_metrics,
+    ).await;
+
+    // Get current settings after update
+    let updated_settings = state.runtime_settings_store.get().await;
+    let current_settings = RuntimeSettings {
+        log_level: updated_settings.log_level,
+        max_connections: updated_settings.max_connections,
+        request_timeout_seconds: updated_settings.request_timeout_seconds,
+        enable_request_logging: updated_settings.enable_request_logging,
+        enable_metrics: updated_settings.enable_metrics,
     };
-
-    // Update log level if provided
-    if let Some(ref new_log_level) = request.log_level {
-        let new_level_upper = new_log_level.to_uppercase();
-        if apply_log_level_change(&new_level_upper) {
-            current_settings.log_level = new_level_upper.clone();
-            applied_changes.push(format!("Log level changed to {}", new_level_upper));
-            info!("Runtime log level changed to: {}", new_level_upper);
-        } else {
-            warn!("Failed to apply log level change to: {}", new_level_upper);
-        }
-    }
-
-    // Update other settings (these would need actual implementation)
-    if let Some(max_conn) = request.max_connections {
-        current_settings.max_connections = Some(max_conn);
-        applied_changes.push(format!("Max connections changed to {}", max_conn));
-        info!("Max connections setting changed to: {}", max_conn);
-    }
-
-    if let Some(timeout) = request.request_timeout_seconds {
-        current_settings.request_timeout_seconds = Some(timeout);
-        applied_changes.push(format!("Request timeout changed to {} seconds", timeout));
-        info!("Request timeout changed to: {} seconds", timeout);
-    }
-
-    if let Some(enable_logging) = request.enable_request_logging {
-        current_settings.enable_request_logging = enable_logging;
-        applied_changes.push(format!("Request logging {}", if enable_logging { "enabled" } else { "disabled" }));
-        info!("Request logging {}", if enable_logging { "enabled" } else { "disabled" });
-    }
-
-    if let Some(enable_metrics) = request.enable_metrics {
-        current_settings.enable_metrics = enable_metrics;
-        applied_changes.push(format!("Metrics collection {}", if enable_metrics { "enabled" } else { "disabled" }));
-        info!("Metrics collection {}", if enable_metrics { "enabled" } else { "disabled" });
-    }
 
     let response = SettingsResponse {
         success: true,
@@ -216,15 +186,17 @@ pub async fn update_settings(
     )
 )]
 pub async fn get_settings_info(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
+    let current_settings = state.runtime_settings_store.get().await;
+    
     let info = serde_json::json!({
         "available_settings": {
             "log_level": {
                 "description": "Current logging level",
                 "type": "string",
                 "valid_values": VALID_LOG_LEVELS,
-                "current_value": get_current_log_level(),
+                "current_value": current_settings.log_level,
                 "changeable_at_runtime": true
             },
             "max_connections": {
@@ -232,7 +204,7 @@ pub async fn get_settings_info(
                 "type": "integer",
                 "min_value": 1,
                 "max_value": 10000,
-                "current_value": 1000,
+                "current_value": current_settings.max_connections,
                 "changeable_at_runtime": true
             },
             "request_timeout_seconds": {
@@ -240,19 +212,19 @@ pub async fn get_settings_info(
                 "type": "integer",
                 "min_value": 1,
                 "max_value": 300,
-                "current_value": 30,
+                "current_value": current_settings.request_timeout_seconds,
                 "changeable_at_runtime": true
             },
             "enable_request_logging": {
                 "description": "Enable or disable request logging",
                 "type": "boolean",
-                "current_value": true,
+                "current_value": current_settings.enable_request_logging,
                 "changeable_at_runtime": true
             },
             "enable_metrics": {
                 "description": "Enable or disable metrics collection",
                 "type": "boolean", 
-                "current_value": true,
+                "current_value": current_settings.enable_metrics,
                 "changeable_at_runtime": true
             }
         },
@@ -262,36 +234,3 @@ pub async fn get_settings_info(
     Json(info)
 }
 
-/// Get the current log level from the tracing subscriber
-fn get_current_log_level() -> String {
-    // This is a simplified implementation
-    // In a real scenario, you'd want to track the current level set in the subscriber
-    std::env::var("RUST_LOG")
-        .unwrap_or_else(|_| "INFO".to_string())
-        .to_uppercase()
-}
-
-/// Apply log level change at runtime
-/// 
-/// This is a simplified implementation. In practice, you'd need to:
-/// 1. Update the tracing subscriber's filter
-/// 2. Store the new level for persistence
-/// 3. Notify all relevant components
-fn apply_log_level_change(new_level: &str) -> bool {
-    // Note: Changing log level at runtime with tracing-subscriber
-    // requires more complex implementation with a reload layer
-    // For now, this is a placeholder that would need proper implementation
-    
-    match new_level {
-        "TRACE" | "DEBUG" | "INFO" | "WARN" | "ERROR" => {
-            // In a real implementation, you'd update the tracing filter here
-            // This might involve using tracing_subscriber::reload::Layer
-            info!("Would change log level to: {}", new_level);
-            true
-        }
-        _ => {
-            error!("Invalid log level: {}", new_level);
-            false
-        }
-    }
-}

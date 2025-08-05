@@ -197,9 +197,6 @@ pub enum AudioCodec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub enum RelayOutputFormat {
     TransportStream,
-    HLS,
-    Dash,
-    Copy,
 }
 
 impl ToString for VideoCodec {
@@ -266,9 +263,6 @@ impl ToString for RelayOutputFormat {
     fn to_string(&self) -> String {
         match self {
             RelayOutputFormat::TransportStream => "transport_stream".to_string(),
-            RelayOutputFormat::HLS => "hls".to_string(),
-            RelayOutputFormat::Dash => "dash".to_string(),
-            RelayOutputFormat::Copy => "copy".to_string(),
         }
     }
 }
@@ -279,9 +273,6 @@ impl FromStr for RelayOutputFormat {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "transport_stream" => Ok(RelayOutputFormat::TransportStream),
-            "hls" => Ok(RelayOutputFormat::HLS),
-            "dash" => Ok(RelayOutputFormat::Dash),
-            "copy" => Ok(RelayOutputFormat::Copy),
             _ => Err(format!("Unknown relay output format: {}", s)),
         }
     }
@@ -937,8 +928,19 @@ impl ResolvedRelayConfig {
         
         // Apply manual args override (if provided)
         if let Some(ref manual_args) = self.profile.manual_args {
-            if let Ok(manual_vec) = serde_json::from_str::<Vec<String>>(manual_args) {
-                args.extend(manual_vec);
+            let manual_args_trimmed = manual_args.trim();
+            if !manual_args_trimmed.is_empty() {
+                // Try JSON array format first
+                if let Ok(manual_vec) = serde_json::from_str::<Vec<String>>(manual_args_trimmed) {
+                    args.extend(manual_vec);
+                } else {
+                    // Fallback to space-separated string format
+                    let manual_vec: Vec<String> = manual_args_trimmed
+                        .split_whitespace()
+                        .map(|s| s.to_string())
+                        .collect();
+                    args.extend(manual_vec);
+                }
             }
         }
         
@@ -1118,8 +1120,6 @@ pub enum RelayError {
     #[error("Invalid FFmpeg argument: {0}")]
     InvalidArgument(String),
     
-    #[error("Unsupported output format: {0:?}")]
-    UnsupportedFormat(RelayOutputFormat),
     
     #[error("Invalid path: {0}")]
     InvalidPath(String),

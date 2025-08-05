@@ -461,15 +461,6 @@ impl FFmpegProcess {
             RelayOutputFormat::TransportStream => {
                 self.serve_transport_stream_buffered(path, &relay_session_id, client_info).await
             }
-            RelayOutputFormat::HLS => {
-                self.serve_hls_content(path, &relay_session_id, client_info).await
-            }
-            RelayOutputFormat::Dash => {
-                self.serve_dash_content(path, &relay_session_id, client_info).await
-            }
-            RelayOutputFormat::Copy => {
-                self.serve_copy_content(path, &relay_session_id, client_info).await
-            }
         }
     }
     
@@ -515,27 +506,6 @@ impl FFmpegProcess {
         Ok(RelayContent::Stream(Box::new(relay_stream)))
     }
     
-
-
-
-    /// Serve HLS content (playlist or segments)
-    async fn serve_hls_content(&self, _path: &str, _session_id: &str, _client_info: &ClientInfo) -> Result<RelayContent, RelayError> {
-        // HLS support not implemented for cyclic buffer mode
-        Err(RelayError::UnsupportedFormat(RelayOutputFormat::HLS))
-    }
-
-
-
-
-    /// Serve DASH content (not implemented yet)
-    async fn serve_dash_content(&self, _path: &str, _session_id: &str, _client_info: &ClientInfo) -> Result<RelayContent, RelayError> {
-        Err(RelayError::UnsupportedFormat(RelayOutputFormat::Dash))
-    }
-
-    /// Serve copy content (not implemented yet)
-    async fn serve_copy_content(&self, _path: &str, _session_id: &str, _client_info: &ClientInfo) -> Result<RelayContent, RelayError> {
-        Err(RelayError::UnsupportedFormat(RelayOutputFormat::Copy))
-    }
 
 
 

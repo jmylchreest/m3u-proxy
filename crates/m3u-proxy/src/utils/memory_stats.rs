@@ -12,23 +12,28 @@ pub async fn get_memory_breakdown(
     system: Arc<RwLock<System>>,
     relay_manager: &crate::services::relay_manager::RelayManager,
 ) -> MemoryBreakdown {
-    let mut sys = system.write().await;
-    sys.refresh_memory();
-    sys.refresh_processes();
+    // Minimize write lock duration - refresh and extract data quickly
+    let (total_memory, used_memory, free_memory, available_memory, swap_used, swap_total, current_pid) = {
+        let mut sys = system.write().await;
+        sys.refresh_memory();
+        sys.refresh_processes();
 
-    // Get system memory information
-    let total_memory = sys.total_memory() as f64 / 1024.0 / 1024.0; // Convert to MB
-    let used_memory = sys.used_memory() as f64 / 1024.0 / 1024.0;
-    let free_memory = sys.free_memory() as f64 / 1024.0 / 1024.0;
-    let available_memory = sys.available_memory() as f64 / 1024.0 / 1024.0;
-    let swap_used = sys.used_swap() as f64 / 1024.0 / 1024.0;
-    let swap_total = sys.total_swap() as f64 / 1024.0 / 1024.0;
+        let total_memory = sys.total_memory() as f64 / 1024.0 / 1024.0; // Convert to MB
+        let used_memory = sys.used_memory() as f64 / 1024.0 / 1024.0;
+        let free_memory = sys.free_memory() as f64 / 1024.0 / 1024.0;
+        let available_memory = sys.available_memory() as f64 / 1024.0 / 1024.0;
+        let swap_used = sys.used_swap() as f64 / 1024.0 / 1024.0;
+        let swap_total = sys.total_swap() as f64 / 1024.0 / 1024.0;
+        let current_pid = std::process::id();
+        
+        (total_memory, used_memory, free_memory, available_memory, swap_used, swap_total, current_pid)
+    }; // Write lock released here
 
-    // Get current process ID
-    let current_pid = std::process::id();
-
-    // Calculate process memory usage
-    let process_memory = calculate_process_memory(&sys, current_pid, relay_manager).await;
+    // Calculate process memory usage with read-only access
+    let process_memory = {
+        let sys = system.read().await;
+        calculate_process_memory(&sys, current_pid, relay_manager).await
+    };
 
     MemoryBreakdown {
         total_memory_mb: total_memory,

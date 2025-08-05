@@ -48,12 +48,12 @@ pub struct RelayManager {
 }
 
 impl RelayManager {
-    /// Create a new relay manager with shared system instance
+    /// Create a new relay manager with its own system instance
     pub async fn new(
         database: Database,
         temp_manager: SandboxedManager,
         metrics_logger: Arc<MetricsLogger>,
-        system: Arc<tokio::sync::RwLock<System>>,
+        _system: Arc<tokio::sync::RwLock<System>>, // Not used anymore
         config: Config,
     ) -> Self {
         // Get FFmpeg command from config
@@ -114,7 +114,7 @@ impl RelayManager {
             ),
             metrics_logger,
             cleanup_interval: Duration::from_secs(10),
-            system,
+            system: Arc::new(tokio::sync::RwLock::new(System::new_all())),
             config,
             ffmpeg_available,
             ffmpeg_version: ffmpeg_version.clone(),

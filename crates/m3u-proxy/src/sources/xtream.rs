@@ -10,11 +10,10 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, trace};
-use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult, SourceError};
 use crate::models::{StreamSource, StreamSourceType, Channel};
-use crate::utils::{DecompressingHttpClient, StandardHttpClient};
+use crate::utils::{DecompressingHttpClient, StandardHttpClient, generate_channel_uuid};
 use super::traits::*;
 
 /// Xtream source handler
@@ -202,8 +201,10 @@ impl XtreamSourceHandler {
             result // Preserve original channel numbers
         };
         
+        let stream_url = self.generate_xtream_stream_url(source, &xtream_channel.stream_id.to_string());
+        
         Channel {
-            id: Uuid::new_v4(),
+            id: generate_channel_uuid(&source.id, &stream_url, &xtream_channel.name),
             source_id: source.id,
             tvg_id: xtream_channel.epg_channel_id.clone(),
             tvg_name: Some(xtream_channel.name.clone()),
@@ -212,7 +213,7 @@ impl XtreamSourceHandler {
             tvg_shift: None,
             group_title: xtream_channel.category_name.clone(),
             channel_name: xtream_channel.name.clone(),
-            stream_url: self.generate_xtream_stream_url(source, &xtream_channel.stream_id.to_string()),
+            stream_url: stream_url,
             created_at: now,
             updated_at: now,
         }

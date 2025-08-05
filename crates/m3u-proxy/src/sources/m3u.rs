@@ -9,11 +9,10 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, warn};
-use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{StreamSource, StreamSourceType, Channel};
-use crate::utils::{DecompressingHttpClient, StandardHttpClient};
+use crate::utils::{DecompressingHttpClient, StandardHttpClient, generate_channel_uuid};
 use super::traits::*;
 
 /// M3U source handler
@@ -214,7 +213,7 @@ impl M3uSourceHandler {
         let now = Utc::now();
         
         Ok(Channel {
-            id: Uuid::new_v4(),
+            id: generate_channel_uuid(&source.id, &partial.url, &partial.name),
             source_id: source.id,
             tvg_id: partial.tvg_id,
             tvg_name: partial.tvg_name,
@@ -244,7 +243,7 @@ impl M3uSourceHandler {
             .to_string();
         
         Ok(Channel {
-            id: Uuid::new_v4(),
+            id: generate_channel_uuid(&source.id, url, &name),
             source_id: source.id,
             tvg_id: None,
             tvg_name: None,

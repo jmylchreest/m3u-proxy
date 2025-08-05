@@ -7,14 +7,28 @@ pub mod defaults;
 pub mod duration_serde;
 pub mod file_categories;
 
-pub use file_categories::FileManagerConfig;
 use defaults::*;
 
-/// Simplified pipeline configuration for native-only implementation
+/// Pipeline configuration for processing optimization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineConfig {
     /// Maximum memory usage in MB before spilling to disk
     pub max_memory_mb: Option<usize>,
+    /// Pipeline suspension duration when errors occur
+    #[serde(default = "default_suspension_duration")]
+    pub suspension_duration: String,
+    /// Logo processing batch size
+    #[serde(default = "default_logo_batch_size")]
+    pub logo_batch_size: usize,
+    /// Channel processing batch size
+    #[serde(default = "default_channel_batch_size")]
+    pub channel_batch_size: usize,
+    /// EPG processing batch size
+    #[serde(default = "default_epg_batch_size")]
+    pub epg_batch_size: usize,
+    /// Retry attempts for failed operations
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
 }
 
 /// Metrics configuration for stream access tracking and retention
@@ -51,6 +65,11 @@ impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
             max_memory_mb: Some(512), // 512MB default limit
+            suspension_duration: default_suspension_duration(),
+            logo_batch_size: default_logo_batch_size(),
+            channel_batch_size: default_channel_batch_size(),
+            epg_batch_size: default_epg_batch_size(),
+            max_retries: default_max_retries(),
         }
     }
 }
@@ -73,13 +92,12 @@ pub struct Config {
     pub web: WebConfig,
     pub storage: StorageConfig,
     pub ingestion: IngestionConfig,
-    pub display: Option<DisplayConfig>,
     pub data_mapping_engine: Option<DataMappingEngineConfig>,
     pub proxy_generation: Option<ProxyGenerationConfig>,
-    pub file_manager: Option<FileManagerConfig>,
     pub pipeline: Option<PipelineConfig>,
     pub metrics: Option<MetricsConfig>,
     pub relay: Option<RelayConfig>,
+    pub operational: Option<OperationalConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +105,12 @@ pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: Option<u32>,
     pub batch_sizes: Option<DatabaseBatchConfig>,
+    #[serde(default = "default_busy_timeout")]
+    pub busy_timeout: String,
+    #[serde(default = "default_cache_size")]
+    pub cache_size: String,
+    #[serde(default = "default_wal_autocheckpoint")]
+    pub wal_autocheckpoint: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +129,10 @@ pub struct WebConfig {
     #[serde(default = "default_port")]
     pub port: u16,
     pub base_url: String, // This is the ONLY mandatory field
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout: String,
+    #[serde(default = "default_max_request_size")]
+    pub max_request_size: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +184,74 @@ fn default_host() -> String {
 
 fn default_port() -> u16 {
     DEFAULT_PORT
+}
+
+fn default_request_timeout() -> String {
+    "30s".to_string()
+}
+
+fn default_max_request_size() -> String {
+    "10MB".to_string()
+}
+
+fn default_busy_timeout() -> String {
+    "30s".to_string()
+}
+
+fn default_cache_size() -> String {
+    "64MB".to_string()
+}
+
+fn default_wal_autocheckpoint() -> u32 {
+    1000
+}
+
+fn default_suspension_duration() -> String {
+    "5m".to_string()
+}
+
+fn default_logo_batch_size() -> usize {
+    1000
+}
+
+fn default_channel_batch_size() -> usize {
+    100
+}
+
+fn default_epg_batch_size() -> usize {
+    1000
+}
+
+fn default_max_retries() -> u32 {
+    3
+}
+
+fn default_analyzeduration() -> String {
+    "10s".to_string()
+}
+
+fn default_probesize() -> String {
+    "10MB".to_string()
+}
+
+fn default_log_buffer_size() -> usize {
+    200
+}
+
+fn default_similarity_threshold() -> f64 {
+    0.60
+}
+
+fn default_logo_progress_interval() -> usize {
+    10
+}
+
+fn default_channel_debug_interval() -> usize {
+    1000
+}
+
+fn default_epg_progress_interval() -> usize {
+    10000
 }
 
 // Storage defaults
@@ -244,10 +340,6 @@ pub struct IngestionConfig {
     pub use_new_source_handlers: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DisplayConfig {
-    pub local_timezone: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingEngineConfig {
@@ -347,11 +439,58 @@ impl Default for DatabaseBatchConfig {
     }
 }
 
+/// Operational configuration for logging and system behavior
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationalConfig {
+    /// Log buffer size for in-memory logging
+    #[serde(default = "default_log_buffer_size")]
+    pub log_buffer_size: usize,
+    /// Similarity threshold for expression matching (0.0-1.0)
+    #[serde(default = "default_similarity_threshold")]
+    pub similarity_threshold: f64,
+    /// Progress reporting intervals for various operations
+    pub progress_intervals: Option<ProgressIntervalConfig>,
+}
+
+/// Progress interval configuration for UI responsiveness
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressIntervalConfig {
+    /// Logo progress batch interval
+    #[serde(default = "default_logo_progress_interval")]
+    pub logo_progress_interval: usize,
+    /// Channel debug interval
+    #[serde(default = "default_channel_debug_interval")]
+    pub channel_debug_interval: usize,
+    /// EPG progress log interval
+    #[serde(default = "default_epg_progress_interval")]
+    pub epg_progress_interval: usize,
+}
+
 impl Default for DataMappingEngineConfig {
     fn default() -> Self {
         Self {
             precheck_special_chars: Some("+-@#$%&*=<>!~`€£{}[].".to_string()),
             minimum_literal_length: Some(2),
+        }
+    }
+}
+
+impl Default for OperationalConfig {
+    fn default() -> Self {
+        Self {
+            log_buffer_size: default_log_buffer_size(),
+            similarity_threshold: default_similarity_threshold(),
+            progress_intervals: Some(ProgressIntervalConfig::default()),
+        }
+    }
+}
+
+impl Default for ProgressIntervalConfig {
+    fn default() -> Self {
+        Self {
+            logo_progress_interval: default_logo_progress_interval(),
+            channel_debug_interval: default_channel_debug_interval(),
+            epg_progress_interval: default_epg_progress_interval(),
         }
     }
 }
@@ -407,6 +546,14 @@ pub struct RelayConfig {
     #[serde(default = "default_ffprobe_command")]
     pub ffprobe_command: String,
     
+    /// Stream analysis duration for FFmpeg
+    #[serde(default = "default_analyzeduration")]
+    pub analyzeduration: String,
+    
+    /// Stream probe size for FFmpeg
+    #[serde(default = "default_probesize")]
+    pub probesize: String,
+    
     /// Cyclic buffer configuration for in-memory stream buffering
     #[serde(default)]
     pub buffer: BufferConfig,
@@ -425,6 +572,8 @@ impl Default for RelayConfig {
         Self {
             ffmpeg_command: default_ffmpeg_command(),
             ffprobe_command: default_ffprobe_command(),
+            analyzeduration: default_analyzeduration(),
+            probesize: default_probesize(),
             buffer: BufferConfig::default(),
         }
     }
@@ -491,11 +640,16 @@ impl Default for Config {
                 url: "sqlite://./m3u-proxy.db".to_string(),
                 max_connections: Some(10),
                 batch_sizes: Some(DatabaseBatchConfig::default()),
+                busy_timeout: default_busy_timeout(),
+                cache_size: default_cache_size(),
+                wal_autocheckpoint: default_wal_autocheckpoint(),
             },
             web: WebConfig {
                 host: "0.0.0.0".to_string(),
                 port: 8080,
                 base_url: "http://localhost:8080".to_string(),
+                request_timeout: default_request_timeout(),
+                max_request_size: default_max_request_size(),
             },
             storage: StorageConfig {
                 m3u_path: PathBuf::from("./data/m3u"),
@@ -519,15 +673,12 @@ impl Default for Config {
                 run_missed_immediately: true,
                 use_new_source_handlers: default_use_new_source_handlers(),
             },
-            display: Some(DisplayConfig {
-                local_timezone: "UTC".to_string(),
-            }),
             data_mapping_engine: Some(DataMappingEngineConfig::default()),
             proxy_generation: Some(ProxyGenerationConfig::default()),
-            file_manager: None,
             pipeline: Some(PipelineConfig::default()),
             metrics: Some(MetricsConfig::default()),
             relay: Some(RelayConfig::default()),
+            operational: Some(OperationalConfig::default()),
         }
     }
 }

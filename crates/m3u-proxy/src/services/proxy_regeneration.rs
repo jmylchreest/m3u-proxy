@@ -151,6 +151,43 @@ impl ProxyRegenerationService {
                 if !processed_manual {
                     match auto_queue_receiver.try_recv() {
                         Ok(request) => {
+                            // Check if a manual request for the same proxy exists in the manual queue
+                            let mut manual_has_proxy = false;
+                            while let Ok(manual_request) = manual_queue_receiver.try_recv() {
+                                if manual_request.proxy_id == request.proxy_id {
+                                    manual_has_proxy = true;
+                                    // Process the manual request immediately (higher priority)
+                                    Self::process_regeneration_request(
+                                        manual_request,
+                                        &pool,
+                                        &temp_file_manager,
+                                        &ingestion_state_manager,
+                                        &active_regenerations,
+                                        &queued_proxies,
+                                        &app_config,
+                                    ).await;
+                                    break;
+                                } else {
+                                    // Put other manual requests back in queue
+                                    // Since this is try_recv, we can't put it back, so process it
+                                    Self::process_regeneration_request(
+                                        manual_request,
+                                        &pool,
+                                        &temp_file_manager,
+                                        &ingestion_state_manager,
+                                        &active_regenerations,
+                                        &queued_proxies,
+                                        &app_config,
+                                    ).await;
+                                }
+                            }
+                            
+                            // If manual request exists for same proxy, skip auto request
+                            if manual_has_proxy {
+                                debug!("Skipping auto regeneration for proxy {} - manual request takes priority", request.proxy_id);
+                                continue;
+                            }
+                            
                             // Got an auto request - wait for queue to fill before processing
                             info!("Auto regeneration request received for proxy {} - waiting {}s for queue to fill", 
                                   request.proxy_id, queue_fill_delay);
@@ -347,7 +384,7 @@ impl ProxyRegenerationService {
             {
                 let mut queued = service_clone.queued_proxies.lock().await;
                 if queued.contains(&proxy_id) {
-                    info!("Proxy {} already queued for regeneration, skipping duplicate", proxy_id);
+                    debug!("Proxy {} already queued for regeneration, skipping duplicate", proxy_id);
                     return;
                 }
                 queued.insert(proxy_id);
@@ -357,8 +394,6 @@ impl ProxyRegenerationService {
                 // Remove from queued set if send failed
                 service_clone.queued_proxies.lock().await.remove(&proxy_id);
                 error!("Failed to queue automatic regeneration for proxy {} after delay: {}", proxy_id, e);
-            } else {
-                info!("Queued automatic regeneration for proxy {} after {}s delay", proxy_id, delay_seconds);
             }
         });
 
@@ -395,7 +430,16 @@ impl ProxyRegenerationService {
             let mut pending = self.pending_regenerations.lock().await;
             if let Some(existing_handle) = pending.remove(&proxy_id) {
                 existing_handle.abort();
-                debug!("Cancelled pending regeneration for manual trigger: {}", proxy_id);
+                debug!("Cancelled pending auto regeneration for manual trigger: {}", proxy_id);
+            }
+        }
+        
+        // Remove from auto queue if it exists there (manual takes priority)
+        {
+            let mut queued = self.queued_proxies.lock().await;
+            if queued.contains(&proxy_id) {
+                queued.remove(&proxy_id);
+                debug!("Removed proxy {} from auto queue - manual regeneration takes priority", proxy_id);
             }
         }
 
@@ -407,7 +451,7 @@ impl ProxyRegenerationService {
             format!("Manual Regeneration: Proxy {}", proxy_id),
         ).await?;
 
-        // Check if already queued to prevent duplicates
+        // Check if already queued to prevent duplicates (after removing from auto queue)
         {
             let mut queued = self.queued_proxies.lock().await;
             if queued.contains(&proxy_id) {

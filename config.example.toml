@@ -26,6 +26,15 @@ epg_programs = 1800
 # Maximum stream channels to process in a single chunk
 stream_channels = 500
 
+# Database connection timeout for busy operations
+busy_timeout = "30s"
+
+# SQLite cache size for better performance
+cache_size = "64MB"
+
+# WAL autocheckpoint interval (pages)
+wal_autocheckpoint = 1000
+
 # ┌─────────────────────────────────────────────────────────────┐
 # │                      WEB SERVER CONFIGURATION              │
 # └─────────────────────────────────────────────────────────────┘
@@ -41,6 +50,12 @@ port = 8080
 # This should match the public URL clients use to access the service
 # Examples: http://localhost:8080, https://m3u-proxy.example.com, http://192.168.1.100:8080
 base_url = "http://localhost:8080"
+
+# HTTP request timeout for client connections
+request_timeout = "30s"
+
+# Maximum size for HTTP requests (affects file uploads)
+max_request_size = "10MB"
 
 # ┌─────────────────────────────────────────────────────────────┐
 # │                     STORAGE CONFIGURATION                  │
@@ -179,6 +194,21 @@ enabled = true
 # Maximum memory usage in MB before spilling to disk
 max_memory_mb = 512
 
+# Pipeline suspension duration when errors occur
+suspension_duration = "5m"
+
+# Logo processing batch size for memory management
+logo_batch_size = 1000
+
+# Channel processing batch size for efficiency
+channel_batch_size = 100
+
+# EPG processing batch size for memory management
+epg_batch_size = 1000
+
+# Maximum retry attempts for failed operations
+max_retries = 3
+
 # ┌─────────────────────────────────────────────────────────────┐
 # │                    METRICS CONFIGURATION                   │
 # └─────────────────────────────────────────────────────────────┘
@@ -234,3 +264,67 @@ enable_file_spill = false
 
 # Maximum file spill size in bytes (500MB default)
 max_file_spill_size = 524288000
+
+# FFprobe command path for stream analysis
+# Used for relay stream probing and optimization
+ffprobe_command = "ffprobe"
+
+# Stream analysis duration for FFmpeg probing
+analyzeduration = "10s"
+
+# Stream probe size for FFmpeg analysis
+probesize = "10MB"
+
+# ┌─────────────────────────────────────────────────────────────┐
+# │               RETENTION POLICY CONFIGURATION               │
+# └─────────────────────────────────────────────────────────────┘
+
+# File retention and cleanup intervals
+# Use format: 5m, 1h, 4h, 1d, 30d, etc.
+
+[storage]
+# M3U file retention period
+m3u_retention = "30d"
+
+# M3U cleanup check interval
+m3u_cleanup_interval = "4h"
+
+# Cached logo retention period
+cached_logo_retention = "90d"
+
+# Cached logo cleanup check interval
+cached_logo_cleanup_interval = "12h"
+
+# Temporary file retention period
+temp_retention = "5m"
+
+# Temporary file cleanup check interval
+temp_cleanup_interval = "1m"
+
+# Pipeline artifact retention period
+pipeline_retention = "10m"
+
+# Pipeline cleanup check interval
+pipeline_cleanup_interval = "2m"
+
+# ┌─────────────────────────────────────────────────────────────┐
+# │               OPERATIONAL CONFIGURATION                    │
+# └─────────────────────────────────────────────────────────────┘
+
+[operational]
+# Log buffer size for in-memory logging
+log_buffer_size = 200
+
+# Similarity threshold for expression matching (0.0-1.0)
+similarity_threshold = 0.60
+
+# Progress reporting intervals for UI responsiveness
+[operational.progress_intervals]
+# Logo progress batch interval (log every N batches)
+logo_progress_interval = 10
+
+# Channel debug interval (log every N channels)
+channel_debug_interval = 1000
+
+# EPG progress log interval (log every N programs)
+epg_progress_interval = 10000

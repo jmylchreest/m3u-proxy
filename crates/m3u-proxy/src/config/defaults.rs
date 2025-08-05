@@ -28,8 +28,6 @@ pub const DEFAULT_CLEAN_ORPHAN_LOGOS: bool = true;
 pub const DEFAULT_PROGRESS_UPDATE_INTERVAL: usize = 1000;
 pub const DEFAULT_RUN_MISSED_IMMEDIATELY: bool = true;
 
-// Display defaults
-pub const DEFAULT_LOCAL_TIMEZONE: &str = "UTC";
 
 // Data mapping engine defaults
 pub const DEFAULT_PRECHECK_SPECIAL_CHARS: &str = "+-@#$%&*=<>!~`€£{}[].";

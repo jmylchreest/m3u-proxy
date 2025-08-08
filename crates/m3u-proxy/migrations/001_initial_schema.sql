@@ -317,83 +317,7 @@ CREATE TABLE relay_events (
 -- METRICS AND LOGGING
 -- =============================================================================
 
--- Stream Access Logs Table
-CREATE TABLE stream_access_logs (
-    id TEXT PRIMARY KEY NOT NULL,
-    proxy_name TEXT NOT NULL, -- Proxy name for metrics (no FK constraint)
-    channel_id TEXT NOT NULL, -- References channels(id) but not FK due to channel lifecycle
-    client_ip TEXT NOT NULL,
-    user_agent TEXT,
-    referer TEXT, -- HTTP referer header
-    start_time TEXT NOT NULL DEFAULT (datetime('now')),
-    end_time TEXT,
-    bytes_served INTEGER NOT NULL DEFAULT 0,
-    relay_used BOOLEAN NOT NULL DEFAULT FALSE,
-    relay_config_id TEXT REFERENCES channel_relay_configs(id) ON DELETE SET NULL,
-    duration_seconds INTEGER, -- Duration in seconds
-    proxy_mode TEXT, -- 'redirect', 'proxy', or 'relay'
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Active Stream Sessions (for real-time tracking)
-CREATE TABLE active_stream_sessions (
-    session_id TEXT PRIMARY KEY NOT NULL,
-    proxy_name TEXT NOT NULL, -- Proxy name for metrics (no FK constraint)
-    channel_id TEXT NOT NULL,
-    client_ip TEXT NOT NULL,
-    user_agent TEXT,
-    referer TEXT, -- HTTP referer header
-    start_time TEXT NOT NULL DEFAULT (datetime('now')),
-    last_activity TEXT NOT NULL DEFAULT (datetime('now')),
-    last_access_time TEXT NOT NULL DEFAULT (datetime('now')), -- Alias for last_activity
-    bytes_served INTEGER NOT NULL DEFAULT 0,
-    relay_used BOOLEAN NOT NULL DEFAULT FALSE,
-    relay_config_id TEXT,
-    proxy_mode TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Hourly Statistics
-CREATE TABLE stream_stats_hourly (
-    id TEXT PRIMARY KEY NOT NULL, -- Changed to TEXT for composite IDs
-    proxy_name TEXT NOT NULL, -- Proxy name for metrics (no FK constraint)
-    channel_id TEXT,
-    hour_bucket TEXT NOT NULL, -- Renamed from hour_start to match app code
-    unique_clients INTEGER NOT NULL DEFAULT 0,
-    total_sessions INTEGER NOT NULL DEFAULT 0,
-    total_bytes_served INTEGER NOT NULL DEFAULT 0, -- Renamed from total_bytes
-    total_duration_seconds INTEGER NOT NULL DEFAULT 0,
-    relay_sessions INTEGER NOT NULL DEFAULT 0,
-    proxy_sessions INTEGER NOT NULL DEFAULT 0,
-    redirect_sessions INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Daily Statistics
-CREATE TABLE stream_stats_daily (
-    id TEXT PRIMARY KEY NOT NULL, -- Changed to TEXT for composite IDs
-    proxy_name TEXT NOT NULL, -- Proxy name for metrics (no FK constraint)
-    channel_id TEXT,
-    date TEXT NOT NULL,
-    unique_clients INTEGER NOT NULL DEFAULT 0,
-    total_sessions INTEGER NOT NULL DEFAULT 0,
-    total_bytes_served INTEGER NOT NULL DEFAULT 0, -- Renamed from total_bytes
-    total_duration_seconds INTEGER NOT NULL DEFAULT 0,
-    peak_concurrent_sessions INTEGER NOT NULL DEFAULT 0,
-    relay_sessions INTEGER NOT NULL DEFAULT 0,
-    proxy_sessions INTEGER NOT NULL DEFAULT 0,
-    redirect_sessions INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Real-time Statistics Cache
-CREATE TABLE stream_stats_realtime (
-    proxy_name TEXT PRIMARY KEY NOT NULL, -- Proxy name for metrics (no FK constraint)
-    active_sessions INTEGER NOT NULL DEFAULT 0,
-    active_clients INTEGER NOT NULL DEFAULT 0,
-    bytes_per_second INTEGER NOT NULL DEFAULT 0,
-    last_updated TEXT NOT NULL DEFAULT (datetime('now'))
-);
+-- Historical statistics tables removed
 
 -- =============================================================================
 -- SYSTEM MANAGEMENT
@@ -510,23 +434,7 @@ CREATE INDEX idx_relay_events_config_id ON relay_events(config_id);
 CREATE INDEX idx_relay_events_timestamp ON relay_events(timestamp);
 CREATE INDEX idx_relay_events_event_type ON relay_events(event_type);
 
--- Stream Access Logs
-CREATE INDEX idx_stream_access_logs_proxy_name ON stream_access_logs(proxy_name);
-CREATE INDEX idx_stream_access_logs_channel_id ON stream_access_logs(channel_id);
-CREATE INDEX idx_stream_access_logs_start_time ON stream_access_logs(start_time);
-CREATE INDEX idx_stream_access_logs_client_ip ON stream_access_logs(client_ip);
-CREATE INDEX idx_stream_access_logs_relay_used ON stream_access_logs(relay_used);
-
--- Metrics Tables
-CREATE INDEX idx_active_sessions_proxy_channel ON active_stream_sessions(proxy_name, channel_id);
-CREATE INDEX idx_active_sessions_client_ip ON active_stream_sessions(client_ip);
-CREATE INDEX idx_active_sessions_start_time ON active_stream_sessions(start_time);
-CREATE INDEX idx_active_sessions_last_activity ON active_stream_sessions(last_activity);
-CREATE INDEX idx_hourly_stats_lookup ON stream_stats_hourly(proxy_name, hour_bucket);
-CREATE INDEX idx_hourly_stats_channel ON stream_stats_hourly(channel_id, hour_bucket);
-CREATE INDEX idx_daily_stats_lookup ON stream_stats_daily(proxy_name, date);
-CREATE INDEX idx_daily_stats_channel ON stream_stats_daily(channel_id, date);
-CREATE INDEX idx_realtime_stats_updated ON stream_stats_realtime(last_updated);
+-- Historical statistics table indexes removed
 
 -- Proxy Regeneration Queue indexes removed - now uses in-memory timers
 

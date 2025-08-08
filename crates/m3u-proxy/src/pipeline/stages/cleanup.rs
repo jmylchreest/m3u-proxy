@@ -10,7 +10,6 @@ use std::time::Instant;
 use tracing::{info, debug, warn, error};
 
 use crate::pipeline::models::PipelineArtifact;
-use crate::pipeline::core::performance_tracker::PipelinePerformanceTracker;
 
 /// Cleanup mode determines what cleanup actions to perform
 #[derive(Debug, Clone, Copy)]
@@ -26,7 +25,6 @@ pub struct CleanupStage {
     pipeline_file_manager: SandboxedManager,
     pipeline_execution_prefix: String,
     cleanup_mode: CleanupMode,
-    performance_tracker: Option<PipelinePerformanceTracker>,
 }
 
 impl CleanupStage {
@@ -39,24 +37,9 @@ impl CleanupStage {
             pipeline_file_manager,
             pipeline_execution_prefix,
             cleanup_mode,
-            performance_tracker: None,
         }
     }
 
-    /// Create cleanup stage with performance tracker for comprehensive reporting
-    pub fn with_performance_tracker(
-        pipeline_file_manager: SandboxedManager,
-        pipeline_execution_prefix: String,
-        cleanup_mode: CleanupMode,
-        performance_tracker: PipelinePerformanceTracker,
-    ) -> Self {
-        Self {
-            pipeline_file_manager,
-            pipeline_execution_prefix,
-            cleanup_mode,
-            performance_tracker: Some(performance_tracker),
-        }
-    }
 
     /// Execute cleanup based on the configured mode and pipeline state
     pub async fn process(
@@ -91,11 +74,6 @@ impl CleanupStage {
             crate::utils::human_format::format_duration_precise(cleanup_duration)
         );
 
-        // Display comprehensive performance report if available
-        if let Some(ref performance_tracker) = self.performance_tracker {
-            info!("Pipeline execution completed - generating comprehensive performance report");
-            performance_tracker.log_performance_report();
-        }
 
         // Return empty artifacts list as cleanup is final stage
         Ok(Vec::new())
@@ -273,14 +251,6 @@ impl CleanupStage {
         Self::new(pipeline_file_manager, pipeline_execution_prefix, CleanupMode::Success)
     }
 
-    /// Create a cleanup stage for successful pipeline completion with performance tracking
-    pub fn success_with_performance_tracker(
-        pipeline_file_manager: SandboxedManager,
-        pipeline_execution_prefix: String,
-        performance_tracker: PipelinePerformanceTracker,
-    ) -> Self {
-        Self::with_performance_tracker(pipeline_file_manager, pipeline_execution_prefix, CleanupMode::Success, performance_tracker)
-    }
 
     /// Create a cleanup stage for failed pipeline error recovery
     pub fn error(
@@ -290,12 +260,4 @@ impl CleanupStage {
         Self::new(pipeline_file_manager, pipeline_execution_prefix, CleanupMode::Error)
     }
 
-    /// Create a cleanup stage for failed pipeline error recovery with performance tracking
-    pub fn error_with_performance_tracker(
-        pipeline_file_manager: SandboxedManager,
-        pipeline_execution_prefix: String,
-        performance_tracker: PipelinePerformanceTracker,
-    ) -> Self {
-        Self::with_performance_tracker(pipeline_file_manager, pipeline_execution_prefix, CleanupMode::Error, performance_tracker)
-    }
 }

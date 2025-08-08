@@ -10,7 +10,6 @@ use crate::pipeline::models::{PipelineExecution, PipelineStatus};
 use crate::pipeline::traits::{PipelineStage, ProgressAware, ProgressReporter};
 use crate::pipeline::error::PipelineError;
 use crate::services::progress_service::ProgressManager;
-use crate::pipeline::core::performance_tracker::PipelinePerformanceTracker;
 use sandboxed_file_manager::SandboxedManager;
 
 /// Default suspension duration for pipeline operations (5 minutes)
@@ -21,7 +20,6 @@ pub struct PipelineOrchestrator {
     execution: PipelineExecution,
     file_manager: SandboxedManager,
     _proxy_output_file_manager: SandboxedManager,
-    performance_tracker: PipelinePerformanceTracker,
     progress_manager: Option<Arc<ProgressManager>>,
     stages: Vec<Box<dyn PipelineStage>>,
 }
@@ -34,16 +32,10 @@ impl PipelineOrchestrator {
         proxy_output_file_manager: SandboxedManager,
         progress_manager: Option<Arc<ProgressManager>>,
     ) -> Self {
-        let performance_tracker = PipelinePerformanceTracker::new(
-            execution.proxy_id.to_string(),
-            execution.execution_prefix.clone()
-        );
-        
         Self {
             execution,
             file_manager,
             _proxy_output_file_manager: proxy_output_file_manager,
-            performance_tracker,
             progress_manager,
             stages: Vec::new(),
         }
@@ -59,16 +51,10 @@ impl PipelineOrchestrator {
         db_pool: sqlx::SqlitePool,
     ) -> Self {
         let execution = PipelineExecution::new(proxy_config.id);
-        let performance_tracker = PipelinePerformanceTracker::new(
-            execution.id.to_string(),
-            execution.execution_prefix.clone(),
-        );
-        
         let mut orchestrator = Self {
             execution,
             file_manager,
             _proxy_output_file_manager: proxy_output_file_manager,
-            performance_tracker,
             progress_manager: None, // Will be set later if needed
             stages: Vec::new(),
         };
@@ -306,7 +292,6 @@ impl PipelineOrchestrator {
             // Update execution status
             self.execution.status = self.get_pipeline_status_for_stage(stage_id);
             self.execution.start_stage(stage_id);
-            self.performance_tracker.start_stage(stage_id.to_string());
             
             // CRITICAL: Set the current active stage in progress manager
             if let Some(ref progress_mgr) = self.progress_manager {
@@ -328,7 +313,6 @@ impl PipelineOrchestrator {
                     let mut metrics = std::collections::HashMap::new();
                     metrics.insert("artifacts_created".to_string(), serde_json::json!(stage_artifacts.len()));
                     self.execution.complete_stage_with_artifacts(stage_id, stage_artifacts.clone(), metrics);
-                    self.performance_tracker.complete_stage(stage_id, stage_artifacts.len());
                     
                     artifacts = stage_artifacts;
                 }
@@ -348,7 +332,6 @@ impl PipelineOrchestrator {
         // Pipeline completed successfully
         let total_duration = pipeline_start.elapsed();
         self.execution.status = PipelineStatus::Completed;
-        self.performance_tracker.complete_pipeline();
         
         info!(
             "Pipeline execution completed successfully: {} stages, {} artifacts, duration: {:?}",

@@ -376,10 +376,6 @@ impl RelayManager {
                 process_id: process.child.id(),
                 input_url: process.input_url.clone(),
                 config_snapshot: process.config_snapshot.clone(),
-                // TODO: Implement historical data collection
-                cpu_history: Vec::new(),
-                memory_history: Vec::new(),
-                traffic_history: Vec::new(),
             };
             metrics.push(process_metrics);
         }

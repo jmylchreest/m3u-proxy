@@ -399,10 +399,6 @@ pub struct RelayProcessMetrics {
     pub process_id: Option<u32>,
     pub input_url: String,
     pub config_snapshot: String, // JSON string of the config used
-    // Historical data for graphs
-    pub cpu_history: Vec<CpuMemoryDataPoint>,
-    pub memory_history: Vec<CpuMemoryDataPoint>,
-    pub traffic_history: Vec<TrafficDataPoint>,
 }
 
 /// Metrics for a specific relay configuration
@@ -542,20 +538,6 @@ pub struct ConnectedClient {
     pub last_activity: DateTime<Utc>,
 }
 
-/// Data point for CPU/Memory usage graphs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CpuMemoryDataPoint {
-    pub timestamp: DateTime<Utc>,
-    pub value: f64, // Percentage for CPU (0-100), MB for memory
-}
-
-/// Data point for traffic graphs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrafficDataPoint {
-    pub timestamp: DateTime<Utc>,
-    pub bytes_in: u64,  // Bytes received from upstream
-    pub bytes_out: u64, // Bytes delivered to clients
-}
 
 impl RelayProfile {
 

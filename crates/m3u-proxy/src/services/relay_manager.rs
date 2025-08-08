@@ -9,11 +9,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use sysinfo::{Pid, PidExt, ProcessExt, System, SystemExt};
+use sysinfo::{Pid, PidExt, ProcessExt, SystemExt};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use crate::utils::uuid_parser::parse_uuid_flexible;
+use crate::utils::SystemManager;
 
 use crate::config::Config;
 use crate::database::Database;
@@ -29,7 +30,7 @@ pub struct RelayManager {
     ffmpeg_wrapper: FFmpegProcessWrapper,
     metrics_logger: Arc<MetricsLogger>,
     cleanup_interval: Duration,
-    system: Arc<tokio::sync::RwLock<System>>,
+    system_manager: SystemManager,
     #[allow(dead_code)]
     config: Config,
     ffmpeg_available: bool,
@@ -53,7 +54,6 @@ impl RelayManager {
         database: Database,
         temp_manager: SandboxedManager,
         metrics_logger: Arc<MetricsLogger>,
-        _system: Arc<tokio::sync::RwLock<System>>, // Not used anymore
         config: Config,
     ) -> Self {
         // Get FFmpeg command from config
@@ -114,7 +114,7 @@ impl RelayManager {
             ),
             metrics_logger,
             cleanup_interval: Duration::from_secs(10),
-            system: Arc::new(tokio::sync::RwLock::new(System::new_all())),
+            system_manager: SystemManager::new(Duration::from_secs(5)),
             config,
             ffmpeg_available,
             ffmpeg_version: ffmpeg_version.clone(),
@@ -422,12 +422,17 @@ impl RelayManager {
             };
 
             let pid = process.child.id().unwrap_or(0);
+            
+            // Get channel name from database
+            let channel_name = self.get_channel_name(&process.config.config.channel_id.to_string()).await;
+            
             let health = RelayProcessHealth {
                 config_id: *config_id,
                 profile_id: process.config.profile.id,
                 profile_name: process.config.profile.name.clone(),
                 proxy_id: Some(process.config.config.proxy_id),
                 source_url: format!("Channel {}", process.config.config.channel_id), // Mock source URL since we don't have it in config
+                channel_name,
                 status,
                 pid: Some(pid),
                 uptime_seconds: uptime,
@@ -488,12 +493,17 @@ impl RelayManager {
             };
 
             let pid = process.child.id().unwrap_or(0);
+            
+            // Get channel name from database
+            let channel_name = self.get_channel_name(&process.config.config.channel_id.to_string()).await;
+            
             let health = RelayProcessHealth {
                 config_id,
                 profile_id: process.config.profile.id,
                 profile_name: process.config.profile.name.clone(),
                 proxy_id: Some(process.config.config.proxy_id),
                 source_url: format!("Channel {}", process.config.config.channel_id), // Mock source URL since we don't have it in config
+                channel_name,
                 status,
                 pid: Some(pid),
                 uptime_seconds: uptime,
@@ -517,25 +527,12 @@ impl RelayManager {
         }
     }
 
-    /// Get system load average
-    #[allow(dead_code)]
-    async fn get_system_load(&self) -> Option<f64> {
-        let system = self.system.read().await;
-        Some(system.load_average().one)
-    }
-
-    /// Get total system memory usage in MB
-    #[allow(dead_code)]
-    async fn get_system_memory_usage(&self) -> Option<f64> {
-        let system = self.system.read().await;
-        let used_memory = system.used_memory();
-        Some(used_memory as f64 / 1024.0 / 1024.0)
-    }
 
     /// Get memory usage for a specific process (in MB)
     async fn get_process_memory_usage(&self, process_id: Option<u32>) -> Option<f64> {
         let process_id = process_id?;
-        let mut system = self.system.write().await;
+        let system = self.system_manager.get_system();
+        let mut system = system.write().await;
         system.refresh_process(Pid::from_u32(process_id));
 
         if let Some(process) = system.process(Pid::from_u32(process_id)) {
@@ -552,8 +549,8 @@ impl RelayManager {
     /// process uses multiple cores.
     async fn get_process_cpu_usage(&self, process_id: Option<u32>) -> Option<f64> {
         let process_id = process_id?;
-        let mut system = self.system.write().await;
-        system.refresh_process(Pid::from_u32(process_id));
+        let system = self.system_manager.get_system();
+        let system = system.read().await;
 
         if let Some(process) = system.process(Pid::from_u32(process_id)) {
             // sysinfo's cpu_usage() returns percentage where 100% = 1 full CPU core
@@ -1067,7 +1064,8 @@ impl RelayManager {
     
     /// Get number of CPU cores
     pub async fn get_cpu_count(&self) -> u32 {
-        let system = self.system.read().await;
+        let system = self.system_manager.get_system();
+        let system = system.read().await;
         system.cpus().len() as u32
     }
 }

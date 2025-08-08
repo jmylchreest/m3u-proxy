@@ -646,10 +646,17 @@ impl StreamSourceRepository {
 
             let channel_count: i64 = row.try_get("channel_count")?;
             
+            // Calculate next scheduled update from cron expression
+            let next_scheduled_update = if !source.update_cron.is_empty() {
+                crate::utils::calculate_next_scheduled_time(&source.update_cron)
+            } else {
+                None
+            };
+            
             results.push(crate::models::StreamSourceWithStats {
                 source,
                 channel_count: channel_count,
-                next_scheduled_update: None, // TODO: Implement scheduling info
+                next_scheduled_update,
             });
         }
 

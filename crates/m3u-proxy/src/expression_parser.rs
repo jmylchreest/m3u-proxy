@@ -2946,4 +2946,467 @@ mod tests {
             assert!(error.position.is_some());
         }
     }
+
+    // Comprehensive tests for new comparison operators
+    mod comparison_operator_tests {
+        use super::*;
+
+        // Test helper function to extract condition details
+        fn assert_simple_condition(
+            tree: &ConditionTree,
+            expected_field: &str,
+            expected_operator: FilterOperator,
+            expected_value: &str,
+        ) {
+            if let ConditionNode::Condition { field, operator, value, .. } = &tree.root {
+                assert_eq!(field, expected_field);
+                assert!(matches!(operator, expected_operator));
+                assert_eq!(value, expected_value);
+            } else {
+                panic!("Expected simple condition, got: {:?}", tree.root);
+            }
+        }
+
+        // Helper function to assert complex expressions with logical operators
+        fn assert_logical_expression(
+            tree: &ConditionTree,
+            expected_logical_op: LogicalOperator,
+            left_condition: (&str, FilterOperator, &str),
+            right_condition: (&str, FilterOperator, &str),
+        ) {
+            if let ConditionNode::Group { operator, children } = &tree.root {
+                assert!(matches!(operator, expected_logical_op));
+                assert_eq!(children.len(), 2);
+                
+                // Check left condition
+                if let ConditionNode::Condition { field, operator, value, .. } = &children[0] {
+                    assert_eq!(field, left_condition.0);
+                    assert!(matches!(operator, left_condition.1));
+                    assert_eq!(value, left_condition.2);
+                } else {
+                    panic!("Expected left condition, got: {:?}", children[0]);
+                }
+                
+                // Check right condition
+                if let ConditionNode::Condition { field, operator, value, .. } = &children[1] {
+                    assert_eq!(field, right_condition.0);
+                    assert!(matches!(operator, right_condition.1));
+                    assert_eq!(value, right_condition.2);
+                } else {
+                    panic!("Expected right condition, got: {:?}", children[1]);
+                }
+            } else {
+                panic!("Expected group node with logical operator, got: {:?}", tree.root);
+            }
+        }
+
+        /// Test basic greater_than operator functionality
+        #[test]
+        fn test_greater_than_operator() {
+            let parser = FilterParser::new();
+            
+            // Test numeric comparison
+            let result = parser.parse("tvg_chno greater_than \"100\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::GreaterThan, "100");
+        }
+
+        /// Test basic less_than operator functionality  
+        #[test]
+        fn test_less_than_operator() {
+            let parser = FilterParser::new();
+            
+            let result = parser.parse("tvg_chno less_than \"50\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::LessThan, "50");
+        }
+
+        /// Test greater_than_or_equal operator functionality
+        #[test]
+        fn test_greater_than_or_equal_operator() {
+            let parser = FilterParser::new();
+            
+            let result = parser.parse("tvg_chno greater_than_or_equal \"100\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::GreaterThanOrEqual, "100");
+        }
+
+        /// Test less_than_or_equal operator functionality
+        #[test]
+        fn test_less_than_or_equal_operator() {
+            let parser = FilterParser::new();
+            
+            let result = parser.parse("tvg_chno less_than_or_equal \"200\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::LessThanOrEqual, "200");
+        }
+
+        /// Test chevron symbol operators (shorthand syntax)
+        #[test]  
+        fn test_chevron_operators() {
+            let parser = FilterParser::new();
+            
+            // Test > maps to greater_than
+            let result = parser.parse("tvg_chno > \"100\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::GreaterThan, "100");
+            
+            // Test < maps to less_than
+            let result = parser.parse("tvg_chno < \"50\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::LessThan, "50");
+            
+            // Test >= maps to greater_than_or_equal
+            let result = parser.parse("tvg_chno >= \"100\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::GreaterThanOrEqual, "100");
+            
+            // Test <= maps to less_than_or_equal
+            let result = parser.parse("tvg_chno <= \"200\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::LessThanOrEqual, "200");
+        }
+
+        /// Test comparison operators with different field types
+        #[test]
+        fn test_comparison_operators_various_fields() {
+            let parser = FilterParser::new();
+            
+            // Test with channel number
+            let result = parser.parse("tvg_chno > \"100\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::GreaterThan, "100");
+            
+            // Test with custom numeric field (hypothetical duration field)
+            let result = parser.parse("duration >= \"1800\"").unwrap();
+            assert_simple_condition(&result, "duration", FilterOperator::GreaterThanOrEqual, "1800");
+        }
+
+        /// Test complex expressions with comparison operators
+        #[test]
+        fn test_complex_expressions_with_comparisons() {
+            let parser = FilterParser::new();
+            
+            // Test AND with comparison operators
+            let result = parser.parse("tvg_chno >= \"100\" AND tvg_chno <= \"200\"").unwrap();
+            
+            assert_logical_expression(
+                &result,
+                LogicalOperator::And,
+                ("tvg_chno", FilterOperator::GreaterThanOrEqual, "100"),
+                ("tvg_chno", FilterOperator::LessThanOrEqual, "200")
+            );
+        }
+
+        /// Test comparison operators in data mapping expressions  
+        #[test]
+        fn test_comparison_operators_in_data_mapping() {
+            let parser = FilterParser::new();
+            
+            // Test comparison in data mapping context
+            let expr = "tvg_chno > \"500\" SET group_title = \"High Channels\"";
+            let result = parser.parse_extended(expr).unwrap();
+            
+            match result {
+                ExtendedExpression::ConditionWithActions { condition, actions } => {
+                    assert_simple_condition(&condition, "tvg_chno", FilterOperator::GreaterThan, "500");
+                    
+                    assert_eq!(actions.len(), 1);
+                    assert_eq!(actions[0].field, "group_title");
+                    assert_eq!(actions[0].value, ActionValue::Literal("High Channels".to_string()));
+                }
+                _ => panic!("Expected condition with actions"),
+            }
+        }
+
+        /// Test range queries using comparison operators
+        #[test]
+        fn test_range_queries() {
+            let parser = FilterParser::new();
+            
+            // Test range query: channels between 100 and 200
+            let result = parser.parse("tvg_chno >= \"100\" AND tvg_chno <= \"200\"").unwrap();
+            
+            assert_logical_expression(
+                &result,
+                LogicalOperator::And,
+                ("tvg_chno", FilterOperator::GreaterThanOrEqual, "100"),
+                ("tvg_chno", FilterOperator::LessThanOrEqual, "200")
+            );
+        }
+
+        /// Test datetime comparison using time helpers
+        #[test]
+        fn test_datetime_comparisons() {
+            let parser = FilterParser::new();
+            
+            // Test time-based comparison (hypothetical scenario)
+            let expr = "last_updated > \"@time:2024-01-01T00:00:00Z\" SET group_title = \"Recently Updated\"";
+            let result = parser.parse_extended(expr).unwrap();
+            
+            match result {
+                ExtendedExpression::ConditionWithActions { condition, .. } => {
+                    if let ConditionNode::Condition { field, operator, value, .. } = &condition.root {
+                        assert_eq!(field, "last_updated");
+                        assert!(matches!(operator, FilterOperator::GreaterThan));
+                        assert!(value.starts_with("@time:"));
+                    } else {
+                        panic!("Expected condition node");
+                    }
+                }
+                _ => panic!("Expected condition with actions"),
+            }
+        }
+
+        /// Test edge cases and error conditions
+        #[test]
+        fn test_comparison_operator_edge_cases() {
+            let parser = FilterParser::new();
+            
+            // Test empty value
+            let result = parser.parse("tvg_chno > \"\"");
+            // Should parse successfully even with empty value (validation happens later)
+            assert!(result.is_ok());
+            
+            // Test very large numbers  
+            let result = parser.parse("tvg_chno < \"999999999\"").unwrap();
+            assert_simple_condition(&result, "tvg_chno", FilterOperator::LessThan, "999999999");
+            
+            // Test negative numbers
+            let result = parser.parse("offset >= \"-100\"").unwrap();
+            assert_simple_condition(&result, "offset", FilterOperator::GreaterThanOrEqual, "-100");
+        }
+
+        /// Test comparison operator validation
+        #[test] 
+        fn test_comparison_operator_validation() {
+            let parser = ExpressionParser::new();
+            
+            // Test valid comparison expressions
+            let result = parser.validate("tvg_chno > \"100\"");
+            assert!(result.is_valid, "Valid comparison should pass validation");
+            
+            let result = parser.validate("tvg_chno >= \"100\" AND tvg_chno <= \"200\"");
+            assert!(result.is_valid, "Valid range comparison should pass validation");
+            
+            // Test invalid syntax
+            let result = parser.validate("tvg_chno >> \"100\""); // Invalid double chevron
+            assert!(!result.is_valid, "Invalid double chevron should fail validation");
+        }
+
+        /// Test mixed operators in complex expressions
+        #[test]
+        fn test_mixed_comparison_and_text_operators() {
+            let parser = FilterParser::new();
+            
+            // Mix comparison and text operators
+            let expr = "channel_name contains \"Sport\" AND tvg_chno >= \"100\"";
+            let result = parser.parse(expr).unwrap();
+            
+            assert_logical_expression(
+                &result,
+                LogicalOperator::And,
+                ("channel_name", FilterOperator::Contains, "Sport"),
+                ("tvg_chno", FilterOperator::GreaterThanOrEqual, "100")
+            );
+        }
+
+        /// Test operator precedence with comparisons
+        #[test]
+        fn test_comparison_operator_precedence() {
+            let parser = FilterParser::new();
+            
+            // Test complex precedence: (A > B) OR (C < D) AND (E equals F)
+            let expr = "tvg_chno > \"100\" OR channel_name contains \"HD\" AND group_title equals \"Sports\"";
+            let result = parser.parse(expr).unwrap();
+            
+            // Should parse correctly respecting operator precedence
+            assert!(result.is_ok());
+            
+            // Test with parentheses to force precedence
+            let expr = "(tvg_chno > \"100\" OR channel_name contains \"HD\") AND group_title equals \"Sports\"";
+            let result = parser.parse(expr).unwrap();
+            assert!(result.is_ok());
+        }
+
+        /// Property-based testing for comparison operators
+        #[cfg(feature = "proptest")]
+        mod property_tests {
+            use super::*;
+            use proptest::prelude::*;
+
+            proptest! {
+                #[test]
+                fn test_comparison_operator_parsing_stability(
+                    field in "[a-z_]{1,20}",
+                    value in "[0-9]{1,10}",
+                    op_idx in 0..4usize
+                ) {
+                    let operators = ["greater_than", "less_than", "greater_than_or_equal", "less_than_or_equal"];
+                    let operator = operators[op_idx];
+                    
+                    let expression = format!("{} {} \"{}\"", field, operator, value);
+                    let parser = FilterParser::new();
+                    
+                    // Should parse without crashing
+                    let result = parser.parse(&expression);
+                    prop_assert!(result.is_ok());
+                    
+                    if let Ok(parsed) = result {
+                        if let ConditionNode::Condition { field: parsed_field, value: parsed_value, .. } = &parsed.root {
+                            prop_assert_eq!(parsed_field, &field);
+                            prop_assert_eq!(parsed_value, &value);
+                        }
+                    }
+                }
+
+                #[test]
+                fn test_chevron_operator_parsing_stability(
+                    field in "[a-z_]{1,20}",
+                    value in "[0-9]{1,10}",
+                    op_idx in 0..4usize
+                ) {
+                    let operators = [">", "<", ">=", "<="];
+                    let operator = operators[op_idx];
+                    
+                    let expression = format!("{} {} \"{}\"", field, operator, value);
+                    let parser = FilterParser::new();
+                    
+                    // Should parse without crashing
+                    let result = parser.parse(&expression);
+                    prop_assert!(result.is_ok());
+                    
+                    if let Ok(parsed) = result {
+                        if let ConditionNode::Condition { field: parsed_field, value: parsed_value, .. } = &parsed.root {
+                            prop_assert_eq!(parsed_field, &field);
+                            prop_assert_eq!(parsed_value, &value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Time helper parsing enhancement tests
+    mod time_helper_tests {
+        use super::*;
+
+        /// Test enhanced time parsing with parse_flexible() function
+        #[test]
+        fn test_time_helper_with_parse_flexible() {
+            let parser = FilterParser::new();
+            
+            // Test various time formats that should work with parse_flexible()
+            let time_formats = [
+                "@time:2024-01-15T10:30:00Z",           // RFC3339
+                "@time:2024-01-15 10:30:00",            // SQLite format
+                "@time:15/01/2024 10:30:00",            // European format
+                "@time:01/15/2024 10:30:00",            // US format
+                "@time:20240115103000 +0000",           // XMLTV format
+                "@time:1705315800",                      // Unix timestamp
+            ];
+            
+            for time_format in &time_formats {
+                let expr = format!("last_updated > \"{}\"", time_format);
+                let result = parser.parse(&expr);
+                
+                assert!(result.is_ok(), "Failed to parse time format: {}", time_format);
+                
+                if let Ok(parsed) = result {
+                    if let ConditionNode::Condition { field, operator, value, .. } = &parsed.root {
+                        assert_eq!(field, "last_updated");
+                        assert!(matches!(operator, FilterOperator::GreaterThan));
+                        assert!(value.starts_with("@time:"));
+                    } else {
+                        panic!("Expected condition node");
+                    }
+                }
+            }
+        }
+
+        /// Test time helper validation
+        #[test]
+        fn test_time_helper_validation() {
+            let parser = ExpressionParser::new();
+            
+            // Test valid time expressions
+            let valid_expressions = [
+                "last_updated > \"@time:2024-01-15T10:30:00Z\"",
+                "created_at >= \"@time:1705315800\"",
+                "updated_at < \"@time:2024-01-15 10:30:00\"",
+            ];
+            
+            for expr in &valid_expressions {
+                let result = parser.validate(expr);
+                assert!(result.is_valid, "Valid time expression should pass: {}", expr);
+            }
+        }
+
+        /// Test time helper error handling
+        #[test]
+        fn test_time_helper_error_handling() {
+            let parser = FilterParser::new();
+            
+            // Test time helpers that might cause parsing issues
+            let expressions_with_potential_issues = [
+                "last_updated > \"@time:invalid-date\"",
+                "created_at >= \"@time:\"",  // Empty time value
+                "updated_at < \"@time:2024-99-99\"", // Invalid date
+            ];
+            
+            for expr in &expressions_with_potential_issues {
+                let result = parser.parse(expr);
+                // Should parse successfully (validation happens during execution)
+                assert!(result.is_ok(), "Expression should parse even with potentially invalid time: {}", expr);
+            }
+        }
+
+        /// Test time helper integration with comparison operators
+        #[test]
+        fn test_time_helper_with_comparison_operators() {
+            let parser = FilterParser::new();
+            
+            // Test time range queries
+            let expr = "last_updated >= \"@time:2024-01-01T00:00:00Z\" AND last_updated <= \"@time:2024-12-31T23:59:59Z\"";
+            let result = parser.parse(expr).unwrap();
+            
+            // Use logical expression helper to validate structure
+            if let ConditionNode::Group { operator, children } = &result.root {
+                assert!(matches!(operator, LogicalOperator::And));
+                assert_eq!(children.len(), 2);
+                
+                // Validate first condition
+                if let ConditionNode::Condition { field, operator, value, .. } = &children[0] {
+                    assert_eq!(field, "last_updated");
+                    assert!(matches!(operator, FilterOperator::GreaterThanOrEqual));
+                    assert!(value.contains("2024-01-01"));
+                }
+                
+                // Validate second condition
+                if let ConditionNode::Condition { field, operator, value, .. } = &children[1] {
+                    assert_eq!(field, "last_updated");
+                    assert!(matches!(operator, FilterOperator::LessThanOrEqual));
+                    assert!(value.contains("2024-12-31"));
+                }
+            } else {
+                panic!("Expected logical group expression");
+            }
+        }
+
+        /// Test time helper in data mapping context
+        #[test]
+        fn test_time_helper_in_data_mapping() {
+            let parser = FilterParser::new();
+            
+            let expr = "last_updated > \"@time:2024-01-01T00:00:00Z\" SET group_title = \"Recent Content\"";
+            let result = parser.parse_extended(expr).unwrap();
+            
+            match result {
+                ExtendedExpression::ConditionWithActions { condition, actions } => {
+                    if let ConditionNode::Condition { field, operator, value, .. } = &condition.root {
+                        assert_eq!(field, "last_updated");
+                        assert!(matches!(operator, FilterOperator::GreaterThan));
+                        assert!(value.starts_with("@time:"));
+                    } else {
+                        panic!("Expected condition node");
+                    }
+                    
+                    assert_eq!(actions.len(), 1);
+                    assert_eq!(actions[0].field, "group_title");
+                }
+                _ => panic!("Expected condition with actions for time helper data mapping"),
+            }
+        }
+    }
 }

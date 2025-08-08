@@ -18,12 +18,12 @@ pub async fn get_memory_breakdown(
         sys.refresh_memory();
         sys.refresh_processes();
 
-        let total_memory = sys.total_memory() as f64 / 1024.0 / 1024.0; // Convert to MB
-        let used_memory = sys.used_memory() as f64 / 1024.0 / 1024.0;
-        let free_memory = sys.free_memory() as f64 / 1024.0 / 1024.0;
-        let available_memory = sys.available_memory() as f64 / 1024.0 / 1024.0;
-        let swap_used = sys.used_swap() as f64 / 1024.0 / 1024.0;
-        let swap_total = sys.total_swap() as f64 / 1024.0 / 1024.0;
+        let total_memory = sys.total_memory() as f64 / (1024.0 * 1024.0); // Convert from bytes to MB
+        let used_memory = sys.used_memory() as f64 / (1024.0 * 1024.0);
+        let free_memory = sys.free_memory() as f64 / (1024.0 * 1024.0);
+        let available_memory = sys.available_memory() as f64 / (1024.0 * 1024.0);
+        let swap_used = sys.used_swap() as f64 / (1024.0 * 1024.0);
+        let swap_total = sys.total_swap() as f64 / (1024.0 * 1024.0);
         let current_pid = std::process::id();
         
         (total_memory, used_memory, free_memory, available_memory, swap_used, swap_total, current_pid)
@@ -58,7 +58,7 @@ async fn calculate_process_memory(
 
     // Get main process memory
     if let Some(process) = system.process(Pid::from(main_pid as usize)) {
-        main_process_memory = process.memory() as f64 / 1024.0; // Convert from KB to MB
+        main_process_memory = process.memory() as f64 / (1024.0 * 1024.0); // Convert from bytes to MB
     }
 
     // Get memory usage from relay processes (FFmpeg children)
@@ -77,7 +77,7 @@ async fn calculate_process_memory(
     let additional_children = find_child_processes(system, main_pid);
     for child_pid in additional_children {
         if let Some(process) = system.process(Pid::from(child_pid as usize)) {
-            let child_memory = process.memory() as f64 / 1024.0; // Convert from KB to MB
+            let child_memory = process.memory() as f64 / (1024.0 * 1024.0); // Convert from bytes to MB
             child_processes_memory += child_memory;
             child_process_count += 1;
         }
@@ -86,7 +86,7 @@ async fn calculate_process_memory(
     let total_process_tree_memory = main_process_memory + child_processes_memory;
     
     // Calculate percentage of system memory
-    let total_system_memory = system.total_memory() as f64 / 1024.0; // Convert to MB
+    let total_system_memory = system.total_memory() as f64 / (1024.0 * 1024.0); // Convert from bytes to MB
     let percentage_of_system = if total_system_memory > 0.0 {
         (total_process_tree_memory / total_system_memory) * 100.0
     } else {

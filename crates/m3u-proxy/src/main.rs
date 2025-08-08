@@ -345,7 +345,6 @@ async fn main() -> Result<()> {
             database.clone(),
             temp_file_manager.clone(),
             std::sync::Arc::new(m3u_proxy::metrics::MetricsLogger::new(database.pool())),
-            system_manager.get_system(),
             config.clone(),
         )
         .await,

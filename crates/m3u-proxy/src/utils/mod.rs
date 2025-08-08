@@ -3,6 +3,7 @@
 //! This module contains reusable utilities that can be used
 //! across different parts of the system.
 
+pub mod cron_helper;
 pub mod database_operations;
 pub mod database_retry;
 pub mod datetime;
@@ -29,6 +30,7 @@ pub mod validation;
 pub mod xmltv_parser;
 
 // Re-export commonly used types for convenience
+pub use cron_helper::{calculate_next_scheduled_time, calculate_next_scheduled_time_validated};
 pub use database_operations::DatabaseOperations;
 pub use database_retry::{RetryConfig, with_retry};
 pub use decompression::{CompressionFormat, DecompressionService};

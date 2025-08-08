@@ -83,40 +83,6 @@ impl XtreamSourceHandler {
     }
 
 
-    /// Basic connection test (lighter than full test_authentication)
-    #[allow(dead_code)]
-    async fn test_connection_basic(&self, source: &StreamSource) -> AppResult<()> {
-        let base_url = self.get_api_base_url(source)?;
-        let auth_params = self.get_auth_params(source)?;
-        let mut url = reqwest::Url::parse(&base_url)
-            .map_err(|e| AppError::validation(format!("Invalid Xtream URL: {}", e)))?;
-        
-        // Add authentication parameters
-        for (key, value) in &auth_params {
-            url.query_pairs_mut().append_pair(key, value);
-        }
-
-        // Quick connection test with shorter timeout
-        let response = self.raw_client
-            .get(url)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .map_err(|e| {
-                let error_msg = e.to_string();
-                let obfuscated_msg = crate::utils::url::UrlUtils::obfuscate_credentials(&error_msg);
-                AppError::ExternalService { 
-                    service: "xtream_api".to_string(), 
-                    message: obfuscated_msg 
-                }
-            })?;
-
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(AppError::source_error(format!("Server returned status: {}", response.status())))
-        }
-    }
 
     /// Build authentication parameters for API calls
     fn get_auth_params(&self, source: &StreamSource) -> AppResult<HashMap<String, String>> {
@@ -258,25 +224,6 @@ impl XtreamSourceHandler {
         Ok(result)
     }
 
-    /// Get categories from Xtream server
-    #[allow(dead_code)]
-    async fn get_categories(&self, source: &StreamSource) -> AppResult<Vec<XtreamCategory>> {
-        let base_url = self.get_api_base_url(source)?;
-        let auth_params = self.get_auth_params(source)?;
-
-        let mut url = reqwest::Url::parse(&base_url)
-            .map_err(|e| AppError::validation(format!("Invalid Xtream URL: {}", e)))?;
-
-        for (key, value) in &auth_params {
-            url.query_pairs_mut().append_pair(key, value);
-        }
-        url.query_pairs_mut().append_pair("action", "get_live_categories");
-
-        let categories: Vec<XtreamCategory> = self.http_client.fetch_json(url.as_str()).await
-            .map_err(|e| e)?; // Pass through the original HTTP error
-
-        Ok(categories)
-    }
 }
 
 /// Xtream server information response
@@ -346,14 +293,6 @@ struct XtreamChannel {
     pub direct_source: Option<String>,
 }
 
-/// Xtream category information
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct XtreamCategory {
-    pub category_id: String,
-    pub category_name: String,
-    pub parent_id: Option<i32>,
-}
 
 // Helper functions for deserialization
 fn default_stream_type() -> String {

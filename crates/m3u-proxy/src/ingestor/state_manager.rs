@@ -6,10 +6,6 @@ use uuid::Uuid;
 
 use crate::models::*;
 
-#[allow(dead_code)]
-pub type ProgressSender = broadcast::Sender<IngestionProgress>;
-#[allow(dead_code)]
-pub type ProgressReceiver = broadcast::Receiver<IngestionProgress>;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProcessingInfo {
@@ -38,7 +34,7 @@ impl std::fmt::Display for ProcessingTrigger {
 #[derive(Clone)]
 pub struct IngestionStateManager {
     states: Arc<RwLock<HashMap<Uuid, IngestionProgress>>>,
-    progress_tx: ProgressSender,
+    progress_tx: broadcast::Sender<IngestionProgress>,
     cancellation_tokens: Arc<RwLock<HashMap<Uuid, broadcast::Sender<()>>>>,
     processing_info: Arc<RwLock<HashMap<Uuid, ProcessingInfo>>>,
 }
@@ -55,10 +51,6 @@ impl IngestionStateManager {
     }
 
 
-    #[allow(dead_code)]
-    pub fn subscribe(&self) -> ProgressReceiver {
-        self.progress_tx.subscribe()
-    }
 
     /// Try to start processing for a source. Returns true if processing was started,
     /// false if already processing or in backoff period.
@@ -328,18 +320,6 @@ impl IngestionStateManager {
         Ok(false)
     }
 
-    #[allow(dead_code)]
-    pub async fn cleanup_completed(&self, max_age_hours: i64) {
-        let cutoff = Utc::now() - chrono::Duration::hours(max_age_hours);
-
-        let mut states = self.states.write().await;
-        states.retain(|_, progress| {
-            match progress.completed_at {
-                Some(completed_at) => completed_at > cutoff,
-                None => true, // Keep in-progress items
-            }
-        });
-    }
 }
 
 impl Default for IngestionStateManager {

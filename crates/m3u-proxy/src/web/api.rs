@@ -53,22 +53,6 @@ pub struct FilterQueryParams {
 
 
 
-// Helper function to get the resolved value for a field from a MappedChannel
-#[allow(dead_code)]
-fn get_resolved_value(
-    mc: &crate::models::data_mapping::MappedChannel,
-    field: &str,
-) -> Option<String> {
-    match field {
-        "channel_name" => Some(mc.mapped_channel_name.clone()),
-        "tvg_id" => mc.mapped_tvg_id.clone(),
-        "tvg_name" => mc.mapped_tvg_name.clone(),
-        "tvg_logo" => mc.mapped_tvg_logo.clone(),
-        "tvg_shift" => mc.mapped_tvg_shift.clone(),
-        "group_title" => mc.mapped_group_title.clone(),
-        _ => None,
-    }
-}
 
 // Helper function to transform MappedChannel to frontend-compatible format
 fn mapped_channel_to_frontend_format(

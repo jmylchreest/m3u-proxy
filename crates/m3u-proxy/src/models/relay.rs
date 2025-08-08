@@ -479,6 +479,8 @@ pub struct RelayProcessHealth {
     pub proxy_id: Option<Uuid>,
     #[schema(example = "http://example.com/stream.m3u8")]
     pub source_url: String,
+    #[schema(example = "CNN HD")]
+    pub channel_name: Option<String>,
     pub status: RelayHealthStatus,
     #[schema(example = "12345")]
     pub pid: Option<u32>,

@@ -1,6 +1,6 @@
 //! Time utilities for timezone detection and offset parsing
 
-use chrono::{DateTime, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 use chrono_tz::Tz;
 use regex::Regex;
 
@@ -227,40 +227,6 @@ fn parse_fixed_offset(offset_str: &str) -> Result<FixedOffset, String> {
     FixedOffset::east_opt(total_seconds).ok_or_else(|| "Invalid timezone offset".to_string())
 }
 
-/// Convert a datetime string with timezone to UTC
-#[allow(dead_code)]
-pub fn parse_datetime_with_timezone(
-    dt_str: &str,
-    tz_str: &str,
-    offset_seconds: i32,
-) -> Result<DateTime<Utc>, String> {
-    // First try to parse as XMLTV format (YYYYMMDDHHMMSS)
-    if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(dt_str, "%Y%m%d%H%M%S") {
-        let dt_with_tz = if let Ok(tz) = tz_str.parse::<Tz>() {
-            tz.from_local_datetime(&naive_dt)
-                .single()
-                .ok_or_else(|| format!("Ambiguous local time: {}", dt_str))?
-                .with_timezone(&Utc)
-        } else if let Ok(fixed_offset) = parse_fixed_offset(tz_str) {
-            fixed_offset
-                .from_local_datetime(&naive_dt)
-                .single()
-                .ok_or_else(|| format!("Invalid local time: {}", dt_str))?
-                .with_timezone(&Utc)
-        } else {
-            return Err(format!("Invalid timezone: {}", tz_str));
-        };
-
-        return Ok(apply_time_offset(dt_with_tz, offset_seconds));
-    }
-
-    // Try flexible datetime parsing (includes ISO 8601/RFC3339 and SQLite formats)
-    if let Ok(dt) = crate::utils::datetime::DateTimeParser::parse_flexible(dt_str) {
-        return Ok(apply_time_offset(dt, offset_seconds));
-    }
-
-    Err(format!("Unable to parse datetime: {}", dt_str))
-}
 
 /// Format duration in seconds to human readable string
 fn format_duration(seconds: i32) -> String {
@@ -286,21 +252,6 @@ fn format_duration(seconds: i32) -> String {
     }
 }
 
-/// Convert UTC time to local display timezone
-#[allow(dead_code)]
-pub fn convert_to_local_timezone(
-    utc_time: DateTime<Utc>,
-    local_tz_str: &str,
-) -> Result<DateTime<Utc>, String> {
-    // Parse the local timezone
-    if let Ok(local_tz) = local_tz_str.parse::<Tz>() {
-        // Convert UTC to local timezone, then back to UTC with local time
-        let local_time = utc_time.with_timezone(&local_tz);
-        Ok(local_time.with_timezone(&Utc))
-    } else {
-        Err(format!("Invalid local timezone: {}", local_tz_str))
-    }
-}
 
 /// Format datetime for display in local timezone
 #[allow(dead_code)]

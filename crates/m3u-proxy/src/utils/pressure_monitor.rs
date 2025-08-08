@@ -299,9 +299,9 @@ impl SimpleMemoryMonitor {
         };
 
         // Get system memory
-        let total_memory_mb = system.total_memory() as f64 / 1024.0 / 1024.0;
-        let used_memory_mb = system.used_memory() as f64 / 1024.0 / 1024.0;
-        let available_memory_mb = system.available_memory() as f64 / 1024.0 / 1024.0;
+        let total_memory_mb = system.total_memory() as f64 / (1024.0 * 1024.0); // Convert from bytes to MB
+        let used_memory_mb = system.used_memory() as f64 / (1024.0 * 1024.0);
+        let available_memory_mb = system.available_memory() as f64 / (1024.0 * 1024.0);
         let system_memory_percent = (used_memory_mb / total_memory_mb) * 100.0;
 
         // Get CPU usage

@@ -612,11 +612,18 @@ impl EpgSourceRepository {
             let channel_count: i64 = row.try_get("channel_count")?;
             let program_count: i64 = row.try_get("program_count")?;
             
+            // Calculate next scheduled update from cron expression
+            let next_scheduled_update = if !source.update_cron.is_empty() {
+                crate::utils::calculate_next_scheduled_time(&source.update_cron)
+            } else {
+                None
+            };
+            
             results.push(crate::models::EpgSourceWithStats {
                 source,
                 channel_count,
                 program_count,
-                next_scheduled_update: None, // TODO: Implement scheduling info
+                next_scheduled_update,
             });
         }
 

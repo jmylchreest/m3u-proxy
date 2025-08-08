@@ -1,0 +1,100 @@
+[database]
+url = "sqlite://./m3u-proxy.db"
+max_connections = 10
+busy_timeout = "30s"
+cache_size = "64MB"
+wal_autocheckpoint = 1000
+
+[database.batch_sizes]
+epg_programs = 1800
+stream_channels = 500
+
+[web]
+host = "0.0.0.0"
+port = 8080
+base_url = "http://localhost:8080"
+request_timeout = "30s"
+max_request_size = "10MB"
+
+[storage]
+m3u_path = "./data/m3u"
+m3u_retention = "30d"
+m3u_cleanup_interval = "4h"
+uploaded_logo_path = "./data/logos/uploaded"
+cached_logo_path = "./data/logos/cached"
+cached_logo_retention = "90d"
+cached_logo_cleanup_interval = "12h"
+proxy_versions_to_keep = 3
+temp_path = "./data/temp"
+temp_retention = "5m"
+temp_cleanup_interval = "1m"
+pipeline_path = "./data/pipeline"
+pipeline_retention = "10m"
+pipeline_cleanup_interval = "2m"
+clean_orphan_logos = true
+
+[ingestion]
+progress_update_interval = 1000
+run_missed_immediately = true
+use_new_source_handlers = true
+
+[data_mapping_engine]
+precheck_special_chars = "+-@#$%&*=<>!~`€£{}[]."
+minimum_literal_length = 2
+
+[proxy_generation]
+enable_memory_tracking = true
+enable_profiling = false
+
+[proxy_generation.memory]
+max_memory_mb = 512
+batch_size = 1000
+enable_parallel_processing = true
+memory_check_interval = 100
+warning_threshold = 0.8
+
+[proxy_generation.epg]
+include_past_programs = false
+days_ahead = 7
+days_behind = 1
+deduplicate_programs = true
+max_programs_per_channel = 1000
+
+[pipeline]
+max_memory_mb = 512
+suspension_duration = "5m"
+logo_batch_size = 1000
+channel_batch_size = 100
+epg_batch_size = 1000
+max_retries = 3
+
+[metrics]
+raw_log_retention = "7d"
+hourly_stats_retention = "30d"
+daily_stats_retention = "365d"
+session_timeout = "15s"
+housekeeper_interval = "1m"
+
+[relay]
+ffmpeg_command = "ffmpeg"
+ffprobe_command = "ffprobe"
+analyzeduration = "10s"
+probesize = "10MB"
+
+[relay.buffer]
+max_buffer_size = 52428800
+max_chunks = 1000
+chunk_timeout_seconds = 60
+client_timeout_seconds = 30
+cleanup_interval_seconds = 5
+enable_file_spill = false
+max_file_spill_size = 524288000
+
+[operational]
+log_buffer_size = 200
+similarity_threshold = 0.6
+
+[operational.progress_intervals]
+logo_progress_interval = 10
+channel_debug_interval = 1000
+epg_progress_interval = 10000

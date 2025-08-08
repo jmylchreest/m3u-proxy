@@ -3,7 +3,6 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
-use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -24,6 +23,7 @@ pub mod progress_events;
 
 use crate::data_mapping::DataMappingService;
 use crate::models::*;
+use crate::repositories::traits::Repository;
 
 #[derive(Debug, Deserialize)]
 pub struct ChannelQueryParams {
@@ -35,6 +35,9 @@ pub struct ChannelQueryParams {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct DataMappingPreviewRequest {
     pub source_type: String,
+    /// Source IDs - array of UUIDs to filter by (empty array means all sources)
+    pub source_ids: Vec<Uuid>,
+    pub expression: Option<String>,
     pub limit: Option<u32>,
 }
 
@@ -48,11 +51,6 @@ pub struct FilterQueryParams {
     pub order: Option<String>,
 }
 
-#[derive(Debug, Deserialize, IntoParams, ToSchema)]
-pub struct FilterFieldsQueryParams {
-    /// Filter fields by source type (stream or epg)
-    pub source_type: Option<String>,
-}
 
 
 // Helper function to get the resolved value for a field from a MappedChannel
@@ -368,10 +366,11 @@ pub async fn list_filters(
         }
     });
 
-    match state.database.get_filters_with_usage_filtered(source_type, params.sort, params.order).await {
+    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
+    match filter_repo.get_filters_with_usage_filtered(source_type, params.sort, params.order).await {
         Ok(filters) => {
             // Get available fields for expression parsing
-            let available_fields = match state.database.get_available_filter_fields().await {
+            let available_fields = match filter_repo.get_available_filter_fields().await {
                 Ok(fields) => fields.into_iter().map(|f| f.name).collect::<Vec<String>>(),
                 Err(_) => vec![], // Fallback to empty if fields can't be retrieved
             };
@@ -414,42 +413,338 @@ pub async fn list_filters(
     }
 }
 
+/// Get available filter fields for stream sources
 #[utoipa::path(
     get,
-    path = "/filters/fields",
+    path = "/filters/fields/stream",
     tag = "filters",
-    summary = "Get available filter fields",
-    description = "Retrieve list of fields available for filtering operations",
-    params(FilterFieldsQueryParams),
+    summary = "Get stream filter fields",
+    description = "Retrieve list of fields available for stream filtering operations",
     responses(
-        (status = 200, description = "List of available filter fields"),
+        (status = 200, description = "List of available stream filter fields"),
         (status = 500, description = "Internal server error")
     )
 )]
-pub async fn get_filter_fields(
-    Query(params): Query<FilterFieldsQueryParams>,
+pub async fn get_stream_filter_fields(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<FilterFieldInfo>>, StatusCode> {
-    match state.database.get_available_filter_fields().await {
+    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
+    match filter_repo.get_available_filter_fields().await {
         Ok(mut fields) => {
-            // Filter fields by source_type if specified
-            if let Some(source_type_str) = &params.source_type {
-                let source_type = match source_type_str.as_str() {
-                    "stream" => Some(FilterSourceType::Stream),
-                    "epg" => Some(FilterSourceType::Epg),
-                    _ => None,
-                };
-                if let Some(st) = source_type {
-                    fields.retain(|field| field.source_type == st);
-                }
-            }
+            fields.retain(|field| field.source_type == FilterSourceType::Stream);
             Ok(Json(fields))
         }
         Err(e) => {
-            error!("Failed to get filter fields: {}", e);
+            error!("Failed to get stream filter fields: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+/// Get available filter fields for EPG sources
+#[utoipa::path(
+    get,
+    path = "/filters/fields/epg",
+    tag = "filters",
+    summary = "Get EPG filter fields",
+    description = "Retrieve list of fields available for EPG filtering operations",
+    responses(
+        (status = 200, description = "List of available EPG filter fields"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_epg_filter_fields(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<FilterFieldInfo>>, StatusCode> {
+    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
+    match filter_repo.get_available_filter_fields().await {
+        Ok(mut fields) => {
+            fields.retain(|field| field.source_type == FilterSourceType::Epg);
+            Ok(Json(fields))
+        }
+        Err(e) => {
+            error!("Failed to get EPG filter fields: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Get available data mapping helper functions
+#[utoipa::path(
+    get,
+    path = "/data-mapping/helpers",
+    tag = "data-mapping",
+    summary = "Get available helper functions",
+    description = "Retrieve list of helper functions available in data mapping expressions like @logo:, @time:, etc.",
+    responses(
+        (status = 200, description = "List of available helper functions"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_data_mapping_helpers(State(state): State<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Get the base URL for completion endpoints
+    let base_url = format!("{}/api/v1", state.config.web.base_url.trim_end_matches('/'));
+    
+    let helpers = vec![
+        serde_json::json!({
+            "name": "logo",
+            "prefix": "@logo:",
+            "description": "Insert logo reference by UUID",
+            "example": "@logo:550e8400-e29b-41d4-a716-446655440000",
+            "category": "assets",
+            "completion": {
+                "type": "search",
+                "endpoint": format!("{}/data-mapping/helpers/logo/search", base_url),
+                "query_param": "q",
+                "display_field": "name",
+                "value_field": "id",
+                "preview_field": "url",
+                "min_chars": 2,
+                "description": "Search available logo assets by name or description"
+            }
+        }),
+        serde_json::json!({
+            "name": "time",
+            "prefix": "@time:",
+            "description": "Time and date functions with epoch conversion",
+            "example": "@time:now()",
+            "category": "time",
+            "completion": {
+                "type": "static",
+                "options": [
+                    {
+                        "label": "now()",
+                        "value": "now()",
+                        "description": "Current timestamp as epoch seconds"
+                    },
+                    {
+                        "label": "parse(\"datestring\")",
+                        "value": "parse(\"2024-01-01 12:00:00\")",
+                        "description": "Parse date string to epoch seconds"
+                    },
+                    {
+                        "label": "epoch timestamp",
+                        "value": "1704110400",
+                        "description": "Use epoch timestamp directly"
+                    },
+                    {
+                        "label": "now() + offset",
+                        "value": "now() + 3600",
+                        "description": "Add seconds to current time"
+                    },
+                    {
+                        "label": "now() - offset",
+                        "value": "now() - 1800",
+                        "description": "Subtract seconds from current time"
+                    }
+                ]
+            },
+            "functions": [
+                {
+                    "name": "now()",
+                    "description": "Current timestamp as epoch seconds",
+                    "example": "@time:now()"
+                },
+                {
+                    "name": "parse(\"datestring\")",
+                    "description": "Parse date string to epoch seconds",
+                    "example": "@time:parse(\"2024-01-01 12:00:00\")",
+                    "supported_formats": [
+                        "YYYY-MM-DD HH:MM:SS",
+                        "YYYY-MM-DDTHH:MM:SSZ",
+                        "YYYY-MM-DD",
+                        "DD/MM/YYYY HH:MM:SS",
+                        "MM/DD/YYYY HH:MM:SS",
+                        "YYYYMMDDHHMMSS"
+                    ]
+                },
+                {
+                    "name": "epoch",
+                    "description": "Use epoch timestamp directly",
+                    "example": "@time:1704110400"
+                },
+                {
+                    "name": "offset",
+                    "description": "Add/subtract seconds from now()",
+                    "examples": ["@time:now() + 3600", "@time:now() - 1800"]
+                }
+            ]
+        }),
+        serde_json::json!({
+            "name": "date",
+            "prefix": "@date:",
+            "description": "Date formatting functions",
+            "example": "@date:format(YYYY-MM-DD)",
+            "category": "time",
+            "completion": {
+                "type": "function",
+                "endpoint": format!("{}/data-mapping/helpers/date/complete", base_url),
+                "context_fields": ["current_date", "timezone", "field_value"],
+                "description": "Dynamic date formatting based on context and available date fields"
+            },
+            "functions": [
+                {
+                    "name": "format(pattern)",
+                    "description": "Format date using pattern",
+                    "examples": [
+                        "@date:format(YYYY-MM-DD)",
+                        "@date:format(DD/MM/YYYY)",
+                        "@date:format(MM-DD-YYYY HH:mm)"
+                    ]
+                }
+            ]
+        })
+    ];
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "helpers": helpers
+    })))
+}
+
+/// Search logo assets for autocomplete
+#[utoipa::path(
+    get,
+    path = "/data-mapping/helpers/logo/search",
+    tag = "data-mapping",
+    summary = "Search logo assets for helper completion",
+    description = "Search available logo assets for @logo: helper autocomplete",
+    params(
+        ("q" = String, Query, description = "Search query for logo name or description"),
+        ("limit" = Option<u32>, Query, description = "Maximum number of results (default: 20)")
+    ),
+    responses(
+        (status = 200, description = "Logo search results"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn search_logo_assets_for_helper(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let query = params.get("q").cloned().unwrap_or_default();
+    let limit = params.get("limit")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(20)
+        .min(100); // Cap at 100 results
+
+    if query.len() < 2 {
+        return Ok(Json(serde_json::json!({
+            "success": true,
+            "results": []
+        })));
+    }
+
+    // Create search request using existing model
+    let search_request = crate::models::logo_asset::LogoAssetSearchRequest {
+        query: Some(query),
+        limit: Some(limit),
+        include_cached: Some(false),
+    };
+
+    // Search logo assets using existing service
+    match state.logo_asset_service.search_assets(search_request, &state.config.web.base_url).await {
+        Ok(search_result) => {
+            let results: Vec<serde_json::Value> = search_result.assets.into_iter().map(|logo_with_url| {
+                let logo = &logo_with_url.asset;
+                serde_json::json!({
+                    "id": logo.id,
+                    "name": logo.name,
+                    "description": logo.description.as_ref().unwrap_or(&format!("Logo asset: {}", logo.name)),
+                    "url": logo_with_url.url,
+                    "preview": logo_with_url.url.clone()
+                })
+            }).collect();
+
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "results": results
+            })))
+        }
+        Err(e) => {
+            tracing::error!("Failed to search logo assets: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Get date formatting completions
+#[utoipa::path(
+    post,
+    path = "/data-mapping/helpers/date/complete",
+    tag = "data-mapping", 
+    summary = "Get date formatting completions",
+    description = "Get dynamic date formatting completions based on context",
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, description = "Date completion options"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_date_completion_options(
+    Json(context): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Extract context information
+    let current_date = context.get("current_date").and_then(|v| v.as_str()).unwrap_or("");
+    let timezone = context.get("timezone").and_then(|v| v.as_str()).unwrap_or("UTC");
+    let field_value = context.get("field_value").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Generate dynamic completions based on context
+    let mut options = vec![
+        serde_json::json!({
+            "label": "format(YYYY-MM-DD)",
+            "value": "format(YYYY-MM-DD)",
+            "description": "ISO date format (2024-01-15)"
+        }),
+        serde_json::json!({
+            "label": "format(DD/MM/YYYY)",
+            "value": "format(DD/MM/YYYY)",
+            "description": "European date format (15/01/2024)"
+        }),
+        serde_json::json!({
+            "label": "format(MM-DD-YYYY)",
+            "value": "format(MM-DD-YYYY)",
+            "description": "US date format (01-15-2024)"
+        }),
+        serde_json::json!({
+            "label": "format(YYYY-MM-DD HH:mm)",
+            "value": "format(YYYY-MM-DD HH:mm)",
+            "description": "Date with 24-hour time (2024-01-15 14:30)"
+        }),
+        serde_json::json!({
+            "label": "format(DD/MM/YYYY hh:mm A)",
+            "value": "format(DD/MM/YYYY hh:mm A)",
+            "description": "Date with 12-hour time (15/01/2024 02:30 PM)"
+        })
+    ];
+
+    // Add context-specific options if field_value contains date info
+    if !field_value.is_empty() {
+        options.push(serde_json::json!({
+            "label": "format(relative)",
+            "value": "format(relative)",
+            "description": "Relative format (2 hours ago, tomorrow, etc.)"
+        }));
+    }
+
+    // Add timezone-specific options
+    if timezone != "UTC" {
+        options.push(serde_json::json!({
+            "label": format!("format(YYYY-MM-DD HH:mm {})", timezone),
+            "value": format!("format(YYYY-MM-DD HH:mm {})", timezone),
+            "description": format!("Date with timezone (2024-01-15 14:30 {})", timezone)
+        }));
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "options": options,
+        "context": {
+            "current_date": current_date,
+            "timezone": timezone,
+            "field_value": field_value
+        }
+    })))
 }
 
 /// Create a new filter
@@ -470,7 +765,8 @@ pub async fn create_filter(
     State(state): State<AppState>,
     Json(payload): Json<FilterCreateRequest>,
 ) -> Result<Json<Filter>, StatusCode> {
-    match state.database.create_filter(&payload).await {
+    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
+    match filter_repo.create(payload).await {
         Ok(filter) => Ok(Json(filter)),
         Err(e) => {
             error!("Failed to create filter: {}", e);
@@ -498,10 +794,11 @@ pub async fn get_filter(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.database.get_filter(id).await {
+    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
+    match filter_repo.find_by_id(id).await {
         Ok(Some(filter)) => {
             // Get usage count for this filter
-            let usage_count = match state.database.get_filter_usage_count(id).await {
+            let usage_count = match filter_repo.get_filter_usage_count(id).await {
                 Ok(count) => count,
                 Err(e) => {
                     warn!("Failed to get usage count for filter {}: {}", id, e);
@@ -511,7 +808,7 @@ pub async fn get_filter(
 
             // Parse expression to condition_tree for UI compatibility
             let condition_tree = if !filter.expression.trim().is_empty() {
-                let available_fields = match state.database.get_available_filter_fields().await {
+                let available_fields = match filter_repo.get_available_filter_fields().await {
                     Ok(fields) => fields.into_iter().map(|f| f.name).collect::<Vec<String>>(),
                     Err(_) => vec![],
                 };
@@ -566,9 +863,9 @@ pub async fn update_filter(
     State(state): State<AppState>,
     Json(payload): Json<FilterUpdateRequest>,
 ) -> Result<Json<Filter>, StatusCode> {
-    match state.database.update_filter(id, &payload).await {
-        Ok(Some(filter)) => Ok(Json(filter)),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
+    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
+    match filter_repo.update(id, payload).await {
+        Ok(filter) => Ok(Json(filter)),
         Err(e) => {
             error!("Failed to update filter {}: {}", id, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -595,9 +892,9 @@ pub async fn delete_filter(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
-    match state.database.delete_filter(id).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err(StatusCode::NOT_FOUND),
+    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
+    match filter_repo.delete(id).await {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
         Err(e) => {
             error!("Failed to delete filter {}: {}", id, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -610,11 +907,11 @@ pub async fn delete_filter(
     path = "/filters/test",
     tag = "filters",
     summary = "Test filter expression",
-    description = "Test a filter expression against sample data to validate functionality",
+    description = "Test a filter expression against all channels from the specified source. Validates source_id matches the source_type.",
     request_body = FilterTestRequest,
     responses(
         (status = 200, description = "Filter test result", body = FilterTestResult),
-        (status = 400, description = "Invalid filter expression"),
+        (status = 400, description = "Invalid filter expression or source_id doesn't match source_type"),
         (status = 500, description = "Internal server error")
     )
 )]
@@ -622,9 +919,9 @@ pub async fn test_filter(
     State(state): State<AppState>,
     Json(payload): Json<FilterTestRequest>,
 ) -> Result<Json<FilterTestResult>, StatusCode> {
-    match state
-        .database
-        .test_filter_pattern(payload.source_id, &payload)
+    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
+    match filter_repo
+        .test_filter_pattern(&payload.filter_expression, payload.source_type, Some(payload.source_id))
         .await
     {
         Ok(result) => Ok(Json(result)),
@@ -1015,9 +1312,11 @@ pub async fn delete_data_mapping_rule(
     path = "/data-mapping/reorder",
     tag = "data-mapping",
     summary = "Reorder data mapping rules",
-    description = "Update the order/priority of data mapping rules",
+    description = "Update the order/priority of data mapping rules. Accepts an array of tuples with rule ID and new sort order.",
+    request_body(content = Vec<(Uuid, i32)>, description = "Array of [rule_id, sort_order] pairs", content_type = "application/json"),
     responses(
         (status = 204, description = "Data mapping rules reordered successfully"),
+        (status = 400, description = "Invalid request - empty array or malformed UUIDs"),
         (status = 500, description = "Internal server error")
     )
 )]
@@ -1025,6 +1324,11 @@ pub async fn reorder_data_mapping_rules(
     State(state): State<AppState>,
     Json(payload): Json<Vec<(Uuid, i32)>>,
 ) -> Result<StatusCode, StatusCode> {
+    // Validate request
+    if payload.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    
     match state.data_mapping_service.reorder_rules(payload).await {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(e) => {
@@ -1291,9 +1595,9 @@ pub async fn test_data_mapping_rule(
 ) -> Result<Json<crate::models::data_mapping::DataMappingTestResult>, StatusCode> {
     use crate::pipeline::engines::DataMappingTestService;
 
-    // Get channels from the source
-    let channels = match state
-        .database
+    // Get channels from the source using ChannelRepository
+    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
+    let channels = match channel_repo
         .get_channels_for_source(payload.source_id)
         .await
     {
@@ -1403,8 +1707,9 @@ pub async fn apply_stream_source_data_mapping(
         }
     };
 
-    // Get source
-    let source = match state.database.get_stream_source(source_uuid).await {
+    // Get source using StreamSourceRepository
+    let stream_source_repo = crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    let source = match stream_source_repo.find_by_id(source_uuid).await {
         Ok(Some(source)) => source,
         Ok(None) => {
             error!("Stream source {} not found", source_uuid);
@@ -1416,8 +1721,9 @@ pub async fn apply_stream_source_data_mapping(
         }
     };
 
-    // Get original channels
-    let channels = match state.database.get_source_channels(source_uuid).await {
+    // Get original channels using ChannelRepository
+    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
+    let channels = match channel_repo.get_channels_for_source(source_uuid).await {
         Ok(channels) => channels,
         Err(e) => {
             error!("Failed to get channels for source {}: {}", source_uuid, e);
@@ -1653,8 +1959,9 @@ pub async fn apply_epg_source_data_mapping(
         }
     };
 
-    // Get EPG source
-    let source = match state.database.get_epg_source(source_uuid).await {
+    // Get EPG source using EpgSourceRepository
+    let epg_source_repo = crate::repositories::EpgSourceRepository::new(state.database.pool().clone());
+    let source = match epg_source_repo.find_by_id(source_uuid).await {
         Ok(Some(source)) => source,
         Ok(None) => {
             error!("EPG source {} not found", source_uuid);
@@ -1666,8 +1973,9 @@ pub async fn apply_epg_source_data_mapping(
         }
     };
 
-    // Check if the source has programs (this is our primary EPG data now)
-    let program_count = match state.database.get_epg_source_channel_count(source_uuid).await {
+    // Check if the source has programs using generic helper
+    use crate::repositories::traits::RepositoryHelpers;
+    let program_count = match RepositoryHelpers::get_channel_count_for_source(&state.database.pool(), "epg_programs", source_uuid).await {
         Ok(count) => count,
         Err(e) => {
             error!(
@@ -1713,11 +2021,12 @@ pub async fn apply_epg_source_data_mapping(
     post,
     path = "/data-mapping/preview",
     tag = "data-mapping",
-    summary = "Apply data mapping rules (POST)",
-    description = "Apply data mapping rules to preview transformations with request body",
+    summary = "Preview custom data mapping expression",
+    description = "Test a custom data mapping expression against channels from specified sources",
+    request_body = DataMappingPreviewRequest,
     responses(
-        (status = 200, description = "Data mapping preview result"),
-        (status = 400, description = "Invalid request"),
+        (status = 200, description = "Data mapping expression preview result"),
+        (status = 400, description = "Invalid request or missing expression"),
         (status = 500, description = "Internal server error")
     )
 )]
@@ -1725,7 +2034,33 @@ pub async fn apply_data_mapping_rules_post(
     State(state): State<AppState>,
     Json(payload): Json<DataMappingPreviewRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    apply_data_mapping_rules_impl(state, &payload.source_type, payload.limit).await
+    // Extract all needed values first to avoid borrow checker issues
+    let source_ids = payload.source_ids;
+    let source_type = payload.source_type.clone();
+    let limit = payload.limit;
+    
+    // Test custom expression mode (this is the primary use case for the POST endpoint)
+    let expression = match payload.expression {
+        Some(expr) => expr,
+        None => {
+            error!("Expression is required for data mapping preview");
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": "Expression is required for data mapping preview",
+                "source_type": source_type,
+                "source_info": {
+                    "source_count": 0,
+                    "source_names": [],
+                    "source_ids": []
+                },
+                "total_channels": 0,
+                "affected_channels": 0,
+                "sample_changes": []
+            })));
+        }
+    };
+
+    preview_data_mapping_expression(state, &source_type, source_ids, &expression, limit).await
 }
 
 #[utoipa::path(
@@ -1754,25 +2089,46 @@ pub async fn apply_data_mapping_rules(
 
     let limit = params.get("limit").and_then(|s| s.parse::<u32>().ok());
 
-    apply_data_mapping_rules_impl(state, &source_type, limit).await
+    apply_data_mapping_rules_impl(state, &source_type, None, limit).await
 }
 
 async fn apply_data_mapping_rules_impl(
     state: AppState,
     source_type: &str,
+    source_id: Option<Uuid>,
     limit: Option<u32>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     match source_type {
         "stream" => {
-            // Get all active stream sources
-            let sources = match state.database.list_stream_sources().await {
-                Ok(sources) => sources
-                    .into_iter()
-                    .filter(|s| s.is_active)
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    error!("Failed to get stream sources for preview: {}", e);
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            // Get stream sources for preview (filter by source_id if specified)
+            let stream_source_repo = crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+            let sources = if let Some(source_id) = source_id {
+                // Get specific source by ID
+                match stream_source_repo.find_by_id(source_id).await {
+                    Ok(Some(source)) => vec![source],
+                    Ok(None) => {
+                        return Ok(Json(serde_json::json!({
+                            "success": false,
+                            "message": format!("Stream source not found: {}", source_id),
+                            "total_sources": 0,
+                            "total_channels": 0,
+                            "final_channels": []
+                        })));
+                    }
+                    Err(e) => {
+                        error!("Failed to get stream source {}: {}", source_id, e);
+                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                    }
+                }
+            } else {
+                // Get all sources for preview (ignore is_active status for testing purposes)
+                let query = crate::repositories::stream_source::StreamSourceQuery::new(); // No .enabled() filter for preview
+                match stream_source_repo.find_all(query).await {
+                    Ok(sources) => sources,
+                    Err(e) => {
+                        error!("Failed to get stream sources for preview: {}", e);
+                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                    }
                 }
             };
 
@@ -1791,8 +2147,9 @@ async fn apply_data_mapping_rules_impl(
             let mut combined_performance_data = std::collections::HashMap::new();
 
             // Process all sources
+            let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
             for source in sources.iter() {
-                let channels = match state.database.get_source_channels(source.id).await {
+                let channels = match channel_repo.get_channels_for_source(source.id).await {
                     Ok(channels) => channels,
                     Err(_) => continue,
                 };
@@ -1980,12 +2337,11 @@ async fn apply_data_mapping_rules_impl(
             })))
         }
         "epg" => {
-            // Get all active EPG sources
-            let sources = match state.database.list_epg_sources().await {
-                Ok(sources) => sources
-                    .into_iter()
-                    .filter(|s| s.is_active)
-                    .collect::<Vec<_>>(),
+            // Get all active EPG sources using EpgSourceRepository
+            let epg_source_repo = crate::repositories::EpgSourceRepository::new(state.database.pool().clone());
+            let query = crate::repositories::epg_source::EpgSourceQuery::new().active(true);
+            let sources = match epg_source_repo.find_all(query).await {
+                Ok(sources) => sources,
                 Err(e) => {
                     error!("Failed to get EPG sources for preview: {}", e);
                     return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -2468,9 +2824,9 @@ pub async fn update_logo_asset(
     path = "/logos/{id}",
     tag = "logos",
     summary = "Delete logo asset",
-    description = "Delete a logo asset and its file",
+    description = "Delete a logo asset and its file. Supports both database-stored logos (UUID) and cached logos (string ID)",
     params(
-        ("id" = String, Path, description = "Logo asset ID (UUID)"),
+        ("id" = String, Path, description = "Logo asset ID (UUID for database logos, string ID for cached logos)"),
     ),
     responses(
         (status = 204, description = "Logo asset deleted successfully"),
@@ -2479,57 +2835,88 @@ pub async fn update_logo_asset(
     )
 )]
 pub async fn delete_logo_asset(
-    Path(id): Path<Uuid>,
+    Path(id_str): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
-    // Get asset first to get file path
-    let asset = match state.logo_asset_service.get_asset(id).await {
-        Ok(asset) => asset,
-        Err(_) => return Err(StatusCode::NOT_FOUND),
-    };
+    // First try to parse as UUID for database logos
+    if let Ok(uuid_id) = id_str.parse::<Uuid>() {
+        // Try database logo deletion
+        match state.logo_asset_service.get_asset(uuid_id).await {
+            Ok(asset) => {
+                // Get linked assets before deleting from database
+                let linked_assets = match state.logo_asset_service.get_linked_assets(uuid_id).await {
+                    Ok(linked) => linked,
+                    Err(e) => {
+                        error!("Failed to get linked assets for {}: {}", uuid_id, e);
+                        Vec::new()
+                    }
+                };
 
-    // Get linked assets before deleting from database
-    let linked_assets = match state.logo_asset_service.get_linked_assets(id).await {
-        Ok(linked) => linked,
-        Err(e) => {
-            error!("Failed to get linked assets for {}: {}", id, e);
-            Vec::new()
-        }
-    };
+                // Delete from database
+                match state.logo_asset_service.delete_asset(uuid_id).await {
+                    Ok(_) => {
+                        // Delete main asset file from storage
+                        if let Err(e) = state.logo_asset_storage.delete_file(&asset.file_path).await {
+                            error!("Failed to delete logo file {}: {}", asset.file_path, e);
+                        }
 
-    // Delete from database
-    match state.logo_asset_service.delete_asset(id).await {
-        Ok(_) => {
-            // Delete main asset file from storage
-            if let Err(e) = state.logo_asset_storage.delete_file(&asset.file_path).await {
-                error!("Failed to delete logo file {}: {}", asset.file_path, e);
-            }
+                        // Delete linked asset files from storage
+                        for linked_asset in linked_assets {
+                            if let Err(e) = state
+                                .logo_asset_storage
+                                .delete_file(&linked_asset.file_path)
+                                .await
+                            {
+                                error!(
+                                    "Failed to delete linked logo file {}: {}",
+                                    linked_asset.file_path, e
+                                );
+                            }
+                        }
 
-            // Delete linked asset files from storage
-            for linked_asset in linked_assets {
-                if let Err(e) = state
-                    .logo_asset_storage
-                    .delete_file(&linked_asset.file_path)
-                    .await
-                {
-                    error!(
-                        "Failed to delete linked logo file {}: {}",
-                        linked_asset.file_path, e
-                    );
+                        return Ok(StatusCode::NO_CONTENT);
+                    }
+                    Err(e) => {
+                        error!("Failed to delete logo asset {}: {}", uuid_id, e);
+                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                    }
                 }
             }
-
-            Ok(StatusCode::NO_CONTENT)
+            Err(_) => {
+                // Database logo not found, fall through to try cached logo deletion
+                debug!("Database logo not found: {}, trying cached logo deletion", uuid_id);
+            }
         }
-        Err(e) => {
-            error!("Failed to delete logo asset {}: {}", id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+    
+    // Try cached logo deletion (for non-UUID IDs or if database logo not found)
+    let extensions = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+    let mut deleted_any = false;
+    
+    for ext in &extensions {
+        let filename = format!("{}.{}", id_str, ext);
+        match state.logo_file_manager.remove_file(&filename).await {
+            Ok(_) => {
+                info!("Deleted cached logo: {}", filename);
+                deleted_any = true;
+            }
+            Err(_) => {
+                // File doesn't exist or error deleting, continue trying other extensions
+                continue;
+            }
         }
+    }
+    
+    if deleted_any {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        debug!("Logo not found in database or cache: {}", id_str);
+        Err(StatusCode::NOT_FOUND)
     }
 }
 
 /// Get cached logo asset by cache ID
-/// This endpoint serves logos cached by the WASM plugin system using the sandboxed file manager
+/// This endpoint serves logos cached by the system using the sandboxed file manager
 /// Normalized format: cache_id.png, with fallback to legacy formats
 #[utoipa::path(
     get,
@@ -2610,6 +2997,7 @@ pub async fn get_cached_logo_asset(
     Ok((headers, file_data))
 }
 
+
 /// Legacy health check endpoint
 #[utoipa::path(
     get,
@@ -2629,97 +3017,6 @@ pub async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
     })))
 }
 
-/// Refresh stream source
-#[utoipa::path(
-    post,
-    path = "/sources/stream/{id}/refresh",
-    tag = "sources",
-    summary = "Refresh stream source",
-    description = "Manually trigger a refresh of a stream source to reload channels",
-    params(
-        ("id" = String, Path, description = "Stream source ID (UUID)"),
-    ),
-    responses(
-        (status = 200, description = "Refresh initiated successfully"),
-        (status = 404, description = "Stream source not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn refresh_stream_source(
-    Path(id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.database.get_stream_source(id).await {
-        Ok(Some(source)) => {
-            // Create progress manager for manual refresh operation
-            let progress_manager = match state.progress_service.create_staged_progress_manager(
-                source.id, // Use source ID as owner
-                "stream_source".to_string(),
-                crate::services::progress_service::OperationType::StreamIngestion,
-                format!("Manual Refresh: {}", source.name),
-            ).await {
-                Ok(manager) => {
-                    // Add ingestion stage
-                    let manager_with_stage = manager.add_stage("stream_ingestion", "Stream Ingestion").await;
-                    Some((manager_with_stage, manager.get_stage_updater("stream_ingestion").await))
-                },
-                Err(e) => {
-                    warn!("Failed to create progress manager for stream source manual refresh {}: {} - continuing without progress", source.name, e);
-                    None
-                }
-            };
-            
-            let progress_updater = progress_manager.as_ref().and_then(|(_, updater)| updater.as_ref());
-            
-            // Call stream source service refresh with progress tracking
-            match state.stream_source_service.refresh_with_progress_updater(&source, progress_updater).await {
-                Ok(_channel_count) => {
-                    // Complete progress operation if it was created
-                    if let Some((manager, _)) = progress_manager {
-                        manager.complete().await;
-                    }
-                    
-                    // Emit scheduler event for manual refresh trigger
-                    state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
-                    Ok(Json(serde_json::json!({
-                        "success": true,
-                        "message": "Stream source refresh started",
-                        "source_id": id
-                    })))
-                }
-                Err(e) => {
-                    // Fail progress operation if it was created
-                    if let Some((manager, _)) = progress_manager {
-                        manager.fail(&format!("Stream source refresh failed: {}", e)).await;
-                    }
-                    
-                    error!("Failed to refresh stream source {}: {}", source.id, e);
-                    // Check if it's an operation in progress error
-                    if let Some(app_error) = e.downcast_ref::<crate::errors::AppError>() {
-                        match app_error {
-                            crate::errors::AppError::OperationInProgress { .. } => {
-                                return Err(StatusCode::CONFLICT);
-                            }
-                            _ => {}
-                        }
-                    }
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                }
-            }
-        }
-        Ok(None) => Ok(Json(serde_json::json!({
-            "success": false,
-            "message": "Stream source not found"
-        }))),
-        Err(e) => {
-            error!("Failed to get stream source {}: {}", id, e);
-            Ok(Json(serde_json::json!({
-                "success": false,
-                "message": "Failed to get stream source"
-            })))
-        }
-    }
-}
 
 /// Cancel stream source ingestion
 /// Cancel stream source ingestion
@@ -2834,8 +3131,8 @@ pub async fn get_stream_source_channels(
     let limit = params.limit.unwrap_or(50);
     let filter = params.filter.as_deref();
 
-    match state
-        .database
+    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
+    match channel_repo
         .get_source_channels_paginated(id, page, limit, filter)
         .await
     {
@@ -2869,7 +3166,8 @@ pub async fn refresh_epg_source_unified(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.database.get_epg_source(id).await {
+    let epg_source_repo = crate::repositories::EpgSourceRepository::new(state.database.pool().clone());
+    match epg_source_repo.find_by_id(id).await {
         Ok(Some(source)) => {
             // Create progress manager for manual refresh operation
             let progress_manager = match state.progress_service.create_staged_progress_manager(
@@ -3016,7 +3314,8 @@ pub async fn list_all_sources(
     let mut unified_sources = Vec::new();
 
     // Get stream sources
-    match state.database.list_stream_sources_with_stats().await {
+    let stream_source_repo = crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    match stream_source_repo.list_with_stats().await {
         Ok(stream_sources) => {
             for stream_source in stream_sources {
                 unified_sources.push(UnifiedSourceWithStats::from_stream(stream_source));
@@ -3029,7 +3328,8 @@ pub async fn list_all_sources(
     }
 
     // Get EPG sources
-    match state.database.list_epg_sources_with_stats().await {
+    let epg_source_repo = crate::repositories::EpgSourceRepository::new(state.database.pool().clone());
+    match epg_source_repo.list_with_stats().await {
         Ok(epg_sources) => {
             for epg_source in epg_sources {
                 unified_sources.push(UnifiedSourceWithStats::from_epg(epg_source));
@@ -3236,235 +3536,7 @@ pub async fn generate_cached_logo_metadata(
     }
 }
 
-// EPG Sources API
-
-#[utoipa::path(
-    get,
-    path = "/epg/viewer",
-    tag = "epg",
-    summary = "Get EPG viewer data",
-    description = "Retrieve EPG program data for the viewer interface within specified time range",
-    params(
-        ("start_time" = String, Query, description = "Start time in RFC3339 format"),
-        ("end_time" = String, Query, description = "End time in RFC3339 format"),
-        ("source_id" = Option<String>, Query, description = "EPG source ID to filter by")
-    ),
-    responses(
-        (status = 200, description = "EPG viewer data"),
-        (status = 400, description = "Invalid time format"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_epg_viewer_data(
-    Query(request): Query<EpgViewerRequest>,
-    State(state): State<AppState>,
-) -> Result<Json<EpgViewerResponse>, StatusCode> {
-    // Parse datetime strings
-    let start_time = match DateTime::parse_from_rfc3339(&request.start_time) {
-        Ok(dt) => dt.with_timezone(&Utc),
-        Err(_) => {
-            error!("Invalid start_time format: {}", request.start_time);
-            return Err(StatusCode::BAD_REQUEST);
-        }
-    };
-
-    let end_time = match DateTime::parse_from_rfc3339(&request.end_time) {
-        Ok(dt) => dt.with_timezone(&Utc),
-        Err(_) => {
-            error!("Invalid end_time format: {}", request.end_time);
-            return Err(StatusCode::BAD_REQUEST);
-        }
-    };
-
-    let parsed_request = EpgViewerRequestParsed {
-        start_time,
-        end_time,
-        channel_filter: request.channel_filter,
-        source_ids: request.source_ids,
-    };
-
-    match state
-        .database
-        .get_epg_data_for_viewer(&parsed_request)
-        .await
-    {
-        Ok(response) => Ok(Json(response)),
-        Err(e) => {
-            error!("Failed to get EPG viewer data: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-// Linked Xtream Sources API
-/// List linked Xtream sources
-#[utoipa::path(
-    get,
-    path = "/sources/linked-xtream",
-    tag = "sources",
-    summary = "List linked Xtream sources",
-    description = "Get all linked Xtream Codes sources",
-    responses(
-        (status = 200, description = "Linked Xtream sources retrieved"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn list_linked_xtream_sources(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<LinkedXtreamSources>>, StatusCode> {
-    match state.database.list_linked_xtream_sources().await {
-        Ok(sources) => Ok(Json(sources)),
-        Err(e) => {
-            error!("Failed to list linked Xtream sources: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Create linked Xtream source
-#[utoipa::path(
-    post,
-    path = "/sources/linked-xtream",
-    tag = "sources",
-    summary = "Create linked Xtream source",
-    description = "Create a new linked Xtream Codes source",
-    request_body = XtreamCodesCreateRequest,
-    responses(
-        (status = 201, description = "Linked Xtream source created"),
-        (status = 400, description = "Invalid request data"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn create_linked_xtream_source(
-    State(state): State<AppState>,
-    Json(payload): Json<XtreamCodesCreateRequest>,
-) -> Result<Json<XtreamCodesCreateResponse>, StatusCode> {
-    match state.database.create_linked_xtream_sources(&payload).await {
-        Ok(response) => {
-            if response.success {
-                // Invalidate scheduler cache since we may have added new sources
-                let _ = state.cache_invalidation_tx.send(());
-            }
-            Ok(Json(response))
-        }
-        Err(e) => {
-            error!("Failed to create linked Xtream source: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Get linked Xtream source by ID
-#[utoipa::path(
-    get,
-    path = "/sources/linked-xtream/{link_id}",
-    tag = "sources",
-    summary = "Get linked Xtream source",
-    description = "Get a specific linked Xtream Codes source by ID",
-    params(
-        ("link_id" = String, Path, description = "Linked Xtream source ID")
-    ),
-    responses(
-        (status = 200, description = "Linked Xtream source retrieved"),
-        (status = 404, description = "Linked Xtream source not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_linked_xtream_source(
-    Path(link_id): Path<String>,
-    State(state): State<AppState>,
-) -> Result<Json<LinkedXtreamSources>, StatusCode> {
-    match state.database.get_linked_xtream_source(&link_id).await {
-        Ok(Some(sources)) => Ok(Json(sources)),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to get linked Xtream source {}: {}", link_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Update linked Xtream source
-#[utoipa::path(
-    put,
-    path = "/sources/linked-xtream/{link_id}",
-    tag = "sources",
-    summary = "Update linked Xtream source",
-    description = "Update an existing linked Xtream Codes source",
-    params(
-        ("link_id" = String, Path, description = "Linked Xtream source ID")
-    ),
-    request_body = XtreamCodesUpdateRequest,
-    responses(
-        (status = 200, description = "Linked Xtream source updated"),
-        (status = 404, description = "Linked Xtream source not found"),
-        (status = 400, description = "Invalid request data"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn update_linked_xtream_source(
-    Path(link_id): Path<String>,
-    State(state): State<AppState>,
-    Json(payload): Json<XtreamCodesUpdateRequest>,
-) -> Result<StatusCode, StatusCode> {
-    match state
-        .database
-        .update_linked_xtream_sources(&link_id, &payload)
-        .await
-    {
-        Ok(true) => {
-            // Invalidate scheduler cache since sources were updated
-            let _ = state.cache_invalidation_tx.send(());
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to update linked Xtream source {}: {}", link_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-/// Delete linked Xtream source
-#[utoipa::path(
-    delete,
-    path = "/sources/linked-xtream/{link_id}",
-    tag = "sources",
-    summary = "Delete linked Xtream source",
-    description = "Delete a linked Xtream Codes source",
-    params(
-        ("link_id" = String, Path, description = "Linked Xtream source ID")
-    ),
-    responses(
-        (status = 200, description = "Linked Xtream source deleted"),
-        (status = 404, description = "Linked Xtream source not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn delete_linked_xtream_source(
-    Path(link_id): Path<String>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    let _delete_sources = params
-        .get("delete_sources")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-
-    match state.database.delete_linked_xtream_sources(&link_id).await {
-        Ok(true) => {
-            // Invalidate scheduler cache since sources may have been deleted
-            let _ = state.cache_invalidation_tx.send(());
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            error!("Failed to delete linked Xtream source {}: {}", link_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
+// EPG Sources API (viewer functionality removed as not needed)
 
 /// Count conditions in a condition tree
 fn count_conditions_in_tree(tree: &crate::models::ConditionTree) -> usize {
@@ -3551,6 +3623,10 @@ fn generate_condition_node_expression(node: &crate::models::ConditionNode) -> St
                 crate::models::FilterOperator::NotMatches => "not_matches",
                 crate::models::FilterOperator::NotStartsWith => "not_starts_with",
                 crate::models::FilterOperator::NotEndsWith => "not_ends_with",
+                crate::models::FilterOperator::GreaterThan => "greater_than",
+                crate::models::FilterOperator::LessThan => "less_than",
+                crate::models::FilterOperator::GreaterThanOrEqual => "greater_than_or_equal",
+                crate::models::FilterOperator::LessThanOrEqual => "less_than_or_equal",
             };
             
             let neg_prefix = if *negate { "NOT " } else { "" };
@@ -3594,12 +3670,11 @@ fn generate_condition_node_expression(node: &crate::models::ConditionNode) -> St
 pub async fn get_sources_progress(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Get progress for all active stream sources
-    let stream_sources = match state.database.list_stream_sources().await {
-        Ok(sources) => sources
-            .into_iter()
-            .filter(|s| s.is_active)
-            .collect::<Vec<_>>(),
+    // Get progress for all active stream sources using StreamSourceRepository
+    let stream_source_repo = crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    let query = crate::repositories::stream_source::StreamSourceQuery::new().enabled(true);
+    let stream_sources = match stream_source_repo.find_all(query).await {
+        Ok(sources) => sources,
         Err(e) => {
             error!("Failed to list stream sources for progress: {}", e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -3641,12 +3716,11 @@ pub async fn get_sources_progress(
 pub async fn get_epg_progress(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Get progress for all active EPG sources
-    let epg_sources = match state.database.list_epg_sources().await {
-        Ok(sources) => sources
-            .into_iter()
-            .filter(|s| s.is_active)
-            .collect::<Vec<_>>(),
+    // Get progress for all active EPG sources using EpgSourceRepository
+    let epg_source_repo = crate::repositories::EpgSourceRepository::new(state.database.pool().clone());
+    let query = crate::repositories::epg_source::EpgSourceQuery::new().active(true);
+    let epg_sources = match epg_source_repo.find_all(query).await {
+        Ok(sources) => sources,
         Err(e) => {
             error!("Failed to list EPG sources for progress: {}", e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -3908,15 +3982,17 @@ impl Drop for RequestCleanupGuard {
 }
 
 
-/// Get available fields based on validation context using existing database APIs
+/// Get available fields based on validation context using FilterRepository
 async fn get_fields_for_validation_context(
     state: &AppState,
     context: &ValidationContext
 ) -> Result<Vec<String>, StatusCode> {
+    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
+    
     match context {
         ValidationContext::Stream => {
-            // Use existing stream filter fields API
-            match state.database.get_available_filter_fields().await {
+            // Use FilterRepository to get stream filter fields
+            match filter_repo.get_available_filter_fields().await {
                 Ok(fields) => {
                     let stream_fields: Vec<String> = fields
                         .into_iter()
@@ -3932,8 +4008,8 @@ async fn get_fields_for_validation_context(
             }
         },
         ValidationContext::Epg => {
-            // Use existing EPG filter fields API
-            match state.database.get_available_filter_fields().await {
+            // Use FilterRepository to get EPG filter fields
+            match filter_repo.get_available_filter_fields().await {
                 Ok(fields) => {
                     let epg_fields: Vec<String> = fields
                         .into_iter()
@@ -3969,8 +4045,8 @@ async fn get_fields_for_validation_context(
             Ok(combined_fields)
         },
         ValidationContext::Generic => {
-            // Use existing generic filter fields API for backward compatibility
-            match state.database.get_available_filter_fields().await {
+            // Use FilterRepository for generic filter fields
+            match filter_repo.get_available_filter_fields().await {
                 Ok(fields) => Ok(fields.into_iter().map(|f| f.name).collect()),
                 Err(e) => {
                     error!("Failed to get filter fields: {}", e);
@@ -4120,6 +4196,401 @@ mod validation_tests {
         assert!(!expected_response.errors.is_empty());
         assert_eq!(expected_response.errors[0].category, crate::models::ExpressionErrorCategory::Syntax);
         assert!(expected_response.expression_tree.is_none());
+    }
+}
+
+/// Preview data mapping with a custom expression
+async fn preview_data_mapping_expression(
+    state: AppState,
+    source_type: &str,
+    source_ids: Vec<Uuid>,
+    expression: &str,
+    limit: Option<u32>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Parse and validate the expression
+    let parser = crate::expression_parser::ExpressionParser::for_data_mapping(vec![
+        "channel_name".to_string(), "tvg_name".to_string(), "tvg_id".to_string(),
+        "tvg_logo".to_string(), "group_title".to_string(), "tvg_chno".to_string()
+    ]);
+    
+    let parsed_expression = match parser.parse_extended(expression) {
+        Ok(expr) => expr,
+        Err(e) => {
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": format!("Expression parse error: {}", e),
+                "expression": expression,
+                "affected_channels": 0,
+                "sample_changes": []
+            })));
+        }
+    };
+
+    // Get channels from specified source(s)
+    let (channels, source_info) = match source_type {
+        "stream" => {
+            let stream_source_repo = crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+            let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
+            
+            let sources = if source_ids.is_empty() {
+                // Get all stream sources if no specific IDs provided
+                let query = crate::repositories::stream_source::StreamSourceQuery::new();
+                match stream_source_repo.find_all(query).await {
+                    Ok(sources) => sources,
+                    Err(e) => {
+                        error!("Failed to get stream sources: {}", e);
+                        return Ok(Json(serde_json::json!({
+                            "success": false,
+                            "message": "Failed to retrieve stream sources from database",
+                            "expression": expression,
+                            "source_type": source_type,
+                            "source_info": {
+                                "source_count": 0,
+                                "source_names": [],
+                                "source_ids": []
+                            },
+                            "total_channels": 0,
+                            "affected_channels": 0,
+                            "sample_changes": []
+                        })));
+                    }
+                }
+            } else {
+                // Get specific sources by IDs
+                let mut sources = Vec::new();
+                for source_id in &source_ids {
+                    match stream_source_repo.find_by_id(*source_id).await {
+                        Ok(Some(source)) => sources.push(source),
+                        Ok(None) => {
+                            error!("Stream source not found: {}", source_id);
+                            // Continue with other source IDs instead of failing completely
+                        }
+                        Err(e) => {
+                            error!("Error fetching stream source {}: {}", source_id, e);
+                            // Continue with other source IDs instead of failing completely
+                        }
+                    }
+                }
+                
+                if sources.is_empty() {
+                    return Ok(Json(serde_json::json!({
+                        "success": false,
+                        "message": format!("No valid stream sources found from provided IDs: {:?}", source_ids),
+                        "expression": expression,
+                        "source_info": {
+                            "source_count": 0,
+                            "source_names": [],
+                            "requested_ids": source_ids
+                        },
+                        "total_channels": 0,
+                        "affected_channels": 0,
+                        "sample_changes": []
+                    })));
+                }
+                
+                sources
+            };
+
+            let mut all_channels = Vec::new();
+            for source in &sources {
+                match channel_repo.get_channels_for_source(source.id).await {
+                    Ok(channels) => all_channels.extend(channels),
+                    Err(e) => error!("Failed to get channels for source {}: {}", source.id, e),
+                }
+            }
+
+            (all_channels, serde_json::json!({
+                "source_count": sources.len(),
+                "source_names": sources.iter().map(|s| &s.name).collect::<Vec<_>>(),
+                "source_ids": sources.iter().map(|s| s.id).collect::<Vec<_>>()
+            }))
+        },
+        _ => {
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": format!("Unsupported source type: '{}'. Supported types: stream", source_type),
+                "expression": expression,
+                "source_type": source_type,
+                "source_info": {
+                    "source_count": 0,
+                    "source_names": [],
+                    "source_ids": []
+                },
+                "total_channels": 0,
+                "affected_channels": 0,
+                "sample_changes": []
+            })));
+        }
+    };
+
+    if channels.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "No channels found in specified source(s)",
+            "expression": expression,
+            "source_info": source_info,
+            "affected_channels": 0,
+            "total_channels": 0,
+            "sample_changes": []
+        })));
+    }
+
+    // Apply the expression to channels and track changes
+    let mut affected_channels = 0;
+    let mut sample_changes = Vec::new();
+    let max_samples = limit.unwrap_or(10).min(50); // Limit samples for response size
+    
+    for channel in &channels {
+        // Apply the parsed expression to the channel
+        let original_metadata = serde_json::to_value(channel).unwrap_or(serde_json::Value::Null);
+        let mut modified_channel = channel.clone();
+        
+        // Apply the expression to the channel using the data mapping engine
+        let was_modified = match apply_expression_to_channel(&parsed_expression, &mut modified_channel) {
+            Ok(modified) => modified,
+            Err(e) => {
+                error!("Failed to apply expression to channel {}: {}", channel.channel_name, e);
+                false
+            }
+        };
+        
+        if was_modified {
+            affected_channels += 1;
+            
+            if sample_changes.len() < max_samples as usize {
+                let modified_metadata = serde_json::to_value(&modified_channel).unwrap_or(serde_json::Value::Null);
+                sample_changes.push(serde_json::json!({
+                    "channel_id": channel.id,
+                    "channel_name": channel.channel_name,
+                    "original": original_metadata,
+                    "modified": modified_metadata,
+                    "changes": calculate_field_changes(&original_metadata, &modified_metadata)
+                }));
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": format!("Expression applied to {} channels", channels.len()),
+        "expression": expression,
+        "source_info": source_info,
+        "source_type": source_type,
+        "total_channels": channels.len(),
+        "affected_channels": affected_channels,
+        "sample_changes": sample_changes
+    })))
+}
+
+/// Calculate what fields changed between original and modified channel
+fn calculate_field_changes(original: &serde_json::Value, modified: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut changes = Vec::new();
+    
+    if let (Some(orig_obj), Some(mod_obj)) = (original.as_object(), modified.as_object()) {
+        for (key, mod_value) in mod_obj {
+            if let Some(orig_value) = orig_obj.get(key) {
+                if orig_value != mod_value {
+                    changes.push(serde_json::json!({
+                        "field": key,
+                        "from": orig_value,
+                        "to": mod_value
+                    }));
+                }
+            } else if !mod_value.is_null() {
+                changes.push(serde_json::json!({
+                    "field": key,
+                    "from": null,
+                    "to": mod_value
+                }));
+            }
+        }
+    }
+    
+    changes
+}
+
+/// Apply a single parsed expression to a channel and return whether it was modified
+fn apply_expression_to_channel(
+    expression: &crate::models::ExtendedExpression,
+    channel: &mut crate::models::Channel,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    use crate::models::ExtendedExpression;
+    
+    // Track if any field was modified
+    let mut was_modified = false;
+    
+    match expression {
+        ExtendedExpression::ConditionWithActions { condition, actions } => {
+            // Check if the condition matches this channel
+            let matches = evaluate_condition_for_channel(condition, channel)?;
+            
+            if matches {
+                // Apply all actions
+                for action in actions {
+                    if apply_action_to_channel(action, channel)? {
+                        was_modified = true;
+                    }
+                }
+            }
+        }
+        ExtendedExpression::ConditionOnly(_condition) => {
+            // Just a condition without actions, no modifications possible
+            // This type of expression is not suitable for data mapping
+        }
+        ExtendedExpression::ConditionalActionGroups(_groups) => {
+            // Complex conditional action groups - not implemented in this simple preview
+            // This would require more complex logic to handle multiple condition groups
+        }
+    }
+    
+    Ok(was_modified)
+}
+
+/// Evaluate a condition against a channel
+fn evaluate_condition_for_channel(
+    condition: &crate::models::ConditionTree,
+    channel: &crate::models::Channel,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    use crate::models::ConditionNode;
+    
+    fn evaluate_node(node: &ConditionNode, channel: &crate::models::Channel) -> Result<bool, Box<dyn std::error::Error>> {
+        match node {
+            ConditionNode::Condition { operator, field, value, .. } => {
+                let field_value = get_channel_field_value(channel, field);
+                evaluate_operator(operator, &field_value, value)
+            }
+            ConditionNode::Group { operator, children } => {
+                use crate::models::LogicalOperator;
+                match operator {
+                    LogicalOperator::And => {
+                        for child in children {
+                            if !evaluate_node(child, channel)? {
+                                return Ok(false);
+                            }
+                        }
+                        Ok(true)
+                    }
+                    LogicalOperator::Or => {
+                        for child in children {
+                            if evaluate_node(child, channel)? {
+                                return Ok(true);
+                            }
+                        }
+                        Ok(false)
+                    }
+                }
+            }
+        }
+    }
+    
+    evaluate_node(&condition.root, channel)
+}
+
+/// Get a field value from a channel
+fn get_channel_field_value(channel: &crate::models::Channel, field: &str) -> String {
+    match field {
+        "channel_name" => channel.channel_name.clone(),
+        "tvg_name" => channel.tvg_name.clone().unwrap_or_default(),
+        "tvg_id" => channel.tvg_id.clone().unwrap_or_default(),
+        "tvg_logo" => channel.tvg_logo.clone().unwrap_or_default(),
+        "group_title" => channel.group_title.clone().unwrap_or_default(),
+        "tvg_chno" => channel.tvg_chno.clone().unwrap_or_default(),
+        "tvg_shift" => channel.tvg_shift.clone().unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// Evaluate a filter operator
+fn evaluate_operator(operator: &FilterOperator, field_value: &str, expected_value: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    use crate::models::FilterOperator;
+    
+    match operator {
+        FilterOperator::Contains => Ok(field_value.to_lowercase().contains(&expected_value.to_lowercase())),
+        FilterOperator::NotContains => Ok(!field_value.to_lowercase().contains(&expected_value.to_lowercase())),
+        FilterOperator::Equals => Ok(field_value.eq_ignore_ascii_case(expected_value)),
+        FilterOperator::NotEquals => Ok(!field_value.eq_ignore_ascii_case(expected_value)),
+        FilterOperator::StartsWith => Ok(field_value.to_lowercase().starts_with(&expected_value.to_lowercase())),
+        FilterOperator::EndsWith => Ok(field_value.to_lowercase().ends_with(&expected_value.to_lowercase())),
+        FilterOperator::Matches => {
+            match regex::Regex::new(expected_value) {
+                Ok(regex) => Ok(regex.is_match(field_value)),
+                Err(_) => Ok(false),
+            }
+        },
+        FilterOperator::NotMatches => {
+            match regex::Regex::new(expected_value) {
+                Ok(regex) => Ok(!regex.is_match(field_value)),
+                Err(_) => Ok(true),
+            }
+        },
+        _ => Ok(false), // Other operators not supported in this simple implementation
+    }
+}
+
+/// Apply an action to a channel
+fn apply_action_to_channel(
+    action: &crate::models::Action,
+    channel: &mut crate::models::Channel,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    
+    
+    // For now, only handle SET operations (operator should be ActionOperator::Set)
+    use crate::models::{ActionOperator, ActionValue};
+    
+    if matches!(action.operator, ActionOperator::Set) {
+        let value_str = match &action.value {
+            ActionValue::Literal(s) => s.clone(),
+            ActionValue::Function(_) | ActionValue::Variable(_) => {
+                // Function calls and variable references not supported in this simple preview
+                return Ok(false);
+            }
+            ActionValue::Null => String::new(),
+        };
+        
+        set_channel_field_value(channel, &action.field, &value_str)
+    } else {
+        // Other operators not supported in this simple preview
+        Ok(false)
+    }
+}
+
+/// Set a field value on a channel, returning true if it was actually changed
+fn set_channel_field_value(channel: &mut crate::models::Channel, field: &str, new_value: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    let current_value = get_channel_field_value(channel, field);
+    if current_value == new_value {
+        return Ok(false); // No change needed
+    }
+    
+    match field {
+        "channel_name" => {
+            channel.channel_name = new_value.to_string();
+            Ok(true)
+        }
+        "tvg_name" => {
+            channel.tvg_name = if new_value.is_empty() { None } else { Some(new_value.to_string()) };
+            Ok(true)
+        }
+        "tvg_id" => {
+            channel.tvg_id = if new_value.is_empty() { None } else { Some(new_value.to_string()) };
+            Ok(true)
+        }
+        "tvg_logo" => {
+            channel.tvg_logo = if new_value.is_empty() { None } else { Some(new_value.to_string()) };
+            Ok(true)
+        }
+        "group_title" => {
+            channel.group_title = if new_value.is_empty() { None } else { Some(new_value.to_string()) };
+            Ok(true)
+        }
+        "tvg_chno" => {
+            channel.tvg_chno = if new_value.is_empty() { None } else { Some(new_value.to_string()) };
+            Ok(true)
+        }
+        "tvg_shift" => {
+            channel.tvg_shift = if new_value.is_empty() { None } else { Some(new_value.to_string()) };
+            Ok(true)
+        }
+        _ => Ok(false), // Unknown field, no change
     }
 }
 

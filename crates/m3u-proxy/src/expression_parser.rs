@@ -35,6 +35,11 @@ impl ExpressionParser {
                 "contains".to_string(),
                 "equals".to_string(),
                 "matches".to_string(),
+                // Comparison operators
+                "greater_than".to_string(),
+                "less_than".to_string(),
+                "greater_than_or_equal".to_string(),
+                "less_than_or_equal".to_string(),
             ],
             logical_operators: vec!["AND".to_string(), "OR".to_string()],
             valid_fields: vec![], // Empty by default, will be set via with_fields
@@ -465,6 +470,10 @@ impl ExpressionParser {
                             "not_matches" => FilterOperator::NotMatches,
                             "not_starts_with" => FilterOperator::NotStartsWith,
                             "not_ends_with" => FilterOperator::NotEndsWith,
+                            "greater_than" => FilterOperator::GreaterThan,
+                            "less_than" => FilterOperator::LessThan,
+                            "greater_than_or_equal" => FilterOperator::GreaterThanOrEqual,
+                            "less_than_or_equal" => FilterOperator::LessThanOrEqual,
                             _ => {
                                 errors.push(ExpressionValidationError {
                                     category: ExpressionErrorCategory::Operator,
@@ -499,6 +508,9 @@ impl ExpressionParser {
                 ("end_with", "ends_with"), ("finish_with", "ends_with"),
                 ("!=", "not_equals"), ("not_equal", "not_equals"),
                 ("!", "not_"), ("~", "not_"), ("does_not", "not_"),
+                // Comparison operators
+                (">", "greater_than"), (">=", "greater_than_or_equal"),
+                ("<", "less_than"), ("<=", "less_than_or_equal"),
             ];
 
             for (typo, correct) in &common_operator_typos {
@@ -1230,6 +1242,10 @@ impl ExpressionParser {
                             "not_matches" => FilterOperator::NotMatches,
                             "not_starts_with" => FilterOperator::NotStartsWith,
                             "not_ends_with" => FilterOperator::NotEndsWith,
+                            "greater_than" => FilterOperator::GreaterThan,
+                            "less_than" => FilterOperator::LessThan,
+                            "greater_than_or_equal" => FilterOperator::GreaterThanOrEqual,
+                            "less_than_or_equal" => FilterOperator::LessThanOrEqual,
                             _ => return Err(anyhow!("Unknown filter operator: {}", op)),
                         };
                         tokens.push(Token::Operator(filter_op));
@@ -1372,6 +1388,11 @@ impl ExpressionParser {
                         FilterOperator::NotMatches => FilterOperator::Matches,
                         FilterOperator::NotStartsWith => FilterOperator::StartsWith,
                         FilterOperator::NotEndsWith => FilterOperator::EndsWith,
+                        // Comparison operators don't have negated versions, so return error
+                        FilterOperator::GreaterThan | FilterOperator::LessThan | 
+                        FilterOperator::GreaterThanOrEqual | FilterOperator::LessThanOrEqual => {
+                            return Err(anyhow!("Cannot negate comparison operators"));
+                        }
                     }
                 } else {
                     base_operator
@@ -1459,6 +1480,11 @@ impl ExpressionParser {
                         FilterOperator::NotMatches => FilterOperator::Matches,
                         FilterOperator::NotStartsWith => FilterOperator::StartsWith,
                         FilterOperator::NotEndsWith => FilterOperator::EndsWith,
+                        // Comparison operators don't have negated versions, so return error
+                        FilterOperator::GreaterThan | FilterOperator::LessThan | 
+                        FilterOperator::GreaterThanOrEqual | FilterOperator::LessThanOrEqual => {
+                            return Err(anyhow!("Cannot negate comparison operators"));
+                        }
                     }
                 } else {
                     base_operator

@@ -322,11 +322,35 @@ impl EngineBasedDataMappingService {
         Ok(rule)
     }
 
-    /// Legacy compatibility: Reorder rules (simplified implementation)
-    pub async fn reorder_rules(&self, _rule_orders: Vec<(uuid::Uuid, i32)>) -> Result<(), sqlx::Error> {
-        // For now, just return success
-        // TODO: Implement actual rule reordering if needed
-        tracing::warn!("reorder_rules is using simplified implementation - actual reordering not implemented");
+    /// Reorder data mapping rules by updating their sort_order values
+    pub async fn reorder_rules(&self, rule_orders: Vec<(uuid::Uuid, i32)>) -> Result<(), sqlx::Error> {
+        if rule_orders.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+        
+        let rule_count = rule_orders.len();
+        
+        // Update each rule's sort_order in a transaction
+        for (rule_id, new_sort_order) in rule_orders {
+            sqlx::query(
+                r#"
+                UPDATE data_mapping_rules 
+                SET sort_order = ?, updated_at = ?
+                WHERE id = ?
+                "#
+            )
+            .bind(new_sort_order)
+            .bind(chrono::Utc::now())
+            .bind(rule_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        }
+        
+        tx.commit().await?;
+        
+        tracing::info!("Successfully reordered {} data mapping rules", rule_count);
         Ok(())
     }
 }

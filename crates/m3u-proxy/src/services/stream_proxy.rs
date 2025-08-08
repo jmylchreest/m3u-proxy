@@ -214,7 +214,7 @@ impl StreamProxyService {
         let config_resolver = crate::proxy::config_resolver::ProxyConfigResolver::new(
             self.proxy_repo.clone(),
             self.stream_source_repo.clone(),
-            self.database.clone(),
+            self.filter_repo.clone(),
         );
 
         // Resolve preview configuration (no database writes!)
@@ -278,8 +278,8 @@ impl StreamProxyService {
         // Calculate source statistics from resolved config
         for source_config in &resolved_config.sources {
             let source_channels = self
-                .database
-                .get_source_channels(source_config.source.id)
+                .channel_repo
+                .get_channels_for_source(source_config.source.id)
                 .await
                 .unwrap_or_default();
             channels_by_source.insert(source_config.source.name.clone(), source_channels.len());

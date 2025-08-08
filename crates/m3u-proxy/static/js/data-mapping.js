@@ -2156,6 +2156,20 @@ class ExpressionAutocomplete {
         value: "logo:",
         insertValue: "@logo:", // What gets inserted when selected
       },
+      {
+        type: "helper",
+        name: "time:",
+        description: "Time functions with epoch conversion",
+        value: "time:",
+        insertValue: "@time:", // What gets inserted when selected
+        examples: [
+          "@time:now()",
+          "@time:parse(\"2024-01-01 12:00:00\")",
+          "@time:1704110400",
+          "@time:now() + 3600",
+          "@time:now() - 1800"
+        ]
+      },
       // Future helpers following the same UUID pattern:
       // {
       //   type: 'helper',

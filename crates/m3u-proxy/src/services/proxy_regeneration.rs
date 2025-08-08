@@ -553,7 +553,7 @@ impl ProxyRegenerationService {
         info!("Regenerating proxy {} using pipeline factory (sequential queue)", proxy_id);
         
         // Use provided progress manager
-        if let Some(ref pm) = progress_manager {
+        if let Some(ref _pm) = progress_manager {
             info!("Using provided ProgressManager for proxy {} regeneration", proxy_id);
         }
         
@@ -605,6 +605,7 @@ impl ProxyRegenerationService {
 
 
     /// Execute the actual proxy regeneration using the new pipeline
+    #[allow(dead_code)]
     async fn execute_regeneration(
         &self,
         pool: SqlitePool, 
@@ -643,6 +644,7 @@ impl ProxyRegenerationService {
     }
 
     /// Regenerate a single proxy using the new pipeline
+    #[allow(dead_code)]
     async fn regenerate_single_proxy(
         &self,
         pool: SqlitePool,
@@ -720,6 +722,14 @@ impl ProxyRegenerationService {
                 
                 // CRITICAL FIX: Unregister orchestrator after successful completion
                 factory_for_cleanup.unregister_orchestrator(proxy_id).await;
+                
+                // Update the proxy's last_generated_at timestamp
+                let stream_proxy_repo = crate::repositories::StreamProxyRepository::new(self.pool.clone());
+                if let Err(e) = stream_proxy_repo.update_last_generated(proxy_id).await {
+                    warn!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
+                } else {
+                    info!("Updated last_generated_at timestamp for proxy {}", proxy_id);
+                }
                 
                 let updater = progress_manager.get_stage_updater("proxy_regeneration").await
                     .or(progress_manager.get_stage_updater("manual_regeneration").await);
@@ -1194,6 +1204,7 @@ impl ProxyRegenerationService {
     }
 
     /// Check if there are any active ingestions in progress
+    #[allow(dead_code)]
     async fn has_active_ingestions(&self) -> Result<bool, Box<dyn std::error::Error>> {
         // Use the injected ingestion state manager to check for active ingestions
         self.ingestion_state_manager.has_active_ingestions().await

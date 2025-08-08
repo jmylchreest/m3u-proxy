@@ -10,18 +10,22 @@ use tracing::{error, info, warn};
 use crate::database::Database;
 use crate::models::{EpgSource, EpgSourceCreateRequest, EpgSourceUpdateRequest};
 use crate::utils::DatabaseOperations;
+use crate::repositories::{UrlLinkingRepository, EpgSourceRepository, Repository};
 
 /// Service for managing EPG sources with business logic
 pub struct EpgSourceService {
     database: Database,
+    epg_source_repo: EpgSourceRepository,
     cache_invalidation_tx: broadcast::Sender<()>,
 }
 
 impl EpgSourceService {
     /// Create a new EPG source service
     pub fn new(database: Database, cache_invalidation_tx: broadcast::Sender<()>) -> Self {
+        let epg_source_repo = EpgSourceRepository::new(database.pool());
         Self {
             database,
+            epg_source_repo,
             cache_invalidation_tx,
         }
     }
@@ -34,7 +38,8 @@ impl EpgSourceService {
         info!("Creating EPG source: {}", request.name);
 
         // Create the EPG source (this includes auto-stream creation logic)
-        let source = self.database.create_epg_source(&request).await?;
+        let source = self.epg_source_repo.create(request).await
+            .map_err(|e| anyhow::anyhow!("Failed to create EPG source: {}", e))?;
 
         // Auto-populate credentials from linked stream sources if this is an Xtream source
         let final_source = if source.source_type == crate::models::EpgSourceType::Xtream {
@@ -76,7 +81,15 @@ impl EpgSourceService {
 
         // Update linked sources first if requested
         if request.update_linked {
-            match self.database.update_linked_sources(id, "epg", &request, request.update_linked).await {
+            let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
+            match url_linking_repo.update_linked_sources(
+                id,
+                "epg",
+                Some(&request.url),
+                request.username.as_ref(),
+                request.password.as_ref(),
+                request.update_linked,
+            ).await {
                 Ok(count) if count > 0 => {
                     info!("Updated {} linked sources for EPG source {}", count, id);
                 }
@@ -90,17 +103,8 @@ impl EpgSourceService {
         }
 
         // Update the EPG source
-        let updated = self.database.update_epg_source(id, &request).await?;
-        if !updated {
-            return Err(anyhow::anyhow!("EPG source not found"));
-        }
-
-        // Get the updated source
-        let source = self
-            .database
-            .get_epg_source(id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("EPG source not found after update"))?;
+        let source = self.epg_source_repo.update(id, request).await
+            .map_err(|e| anyhow::anyhow!("Failed to update EPG source: {}", e))?;
 
         // Invalidate cache
         let _ = self.cache_invalidation_tx.send(());
@@ -118,10 +122,8 @@ impl EpgSourceService {
         info!("Deleting EPG source: {}", id);
 
         // Delete the EPG source (this will cascade to linked sources)
-        let deleted = self.database.delete_epg_source(id).await?;
-        if !deleted {
-            return Err(anyhow::anyhow!("EPG source not found"));
-        }
+        self.epg_source_repo.delete(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to delete EPG source: {}", e))?;
 
         // Invalidate cache
         let _ = self.cache_invalidation_tx.send(());
@@ -132,7 +134,8 @@ impl EpgSourceService {
 
     /// List EPG sources with statistics
     pub async fn list_with_stats(&self) -> Result<Vec<EpgSourceWithStats>> {
-        let sources_with_stats = self.database.list_epg_sources_with_stats().await?;
+        let sources_with_stats = self.epg_source_repo.list_with_stats().await
+            .map_err(|e| anyhow::anyhow!("Failed to list EPG sources with stats: {}", e))?;
 
         let mut result = Vec::new();
         for source_with_stats in sources_with_stats {
@@ -151,13 +154,12 @@ impl EpgSourceService {
 
     /// Get an EPG source with detailed information
     pub async fn get_with_details(&self, id: uuid::Uuid) -> Result<EpgSourceWithDetails> {
-        let source = self
-            .database
-            .get_epg_source(id)
-            .await?
+        let source = self.epg_source_repo.find_by_id(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to get EPG source: {}", e))?
             .ok_or_else(|| anyhow::anyhow!("EPG source not found"))?;
 
-        let channel_count = self.database.get_epg_source_channel_count(id).await? as u64;
+        let channel_count = self.epg_source_repo.get_channel_count(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to get channel count: {}", e))? as u64;
         
         // Find linked stream sources using URL-based matching
         let linked_stream = if source.source_type == crate::models::EpgSourceType::Xtream {
@@ -180,20 +182,23 @@ impl EpgSourceService {
 
     /// Get EPG source by ID
     pub async fn get(&self, id: uuid::Uuid) -> Result<EpgSource> {
-        self.database
-            .get_epg_source(id)
-            .await?
+        self.epg_source_repo.find_by_id(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to get EPG source: {}", e))?
             .ok_or_else(|| anyhow::anyhow!("EPG source not found"))
     }
 
     /// List all EPG sources
     pub async fn list(&self) -> Result<Vec<EpgSource>> {
-        self.database.list_epg_sources().await
+        use crate::repositories::epg_source::EpgSourceQuery;
+        self.epg_source_repo.find_all(EpgSourceQuery::new()).await
+            .map_err(|e| anyhow::anyhow!("Failed to list EPG sources: {}", e))
     }
 
     /// Check if an EPG source exists
     pub async fn exists(&self, id: uuid::Uuid) -> Result<bool> {
-        Ok(self.database.get_epg_source(id).await?.is_some())
+        Ok(self.epg_source_repo.find_by_id(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to check EPG source existence: {}", e))?
+            .is_some())
     }
 
     /// Test connection to an EPG source
@@ -444,15 +449,7 @@ impl EpgSourceService {
             }
             
             // Update the source's last_ingested_at timestamp
-            let now = chrono::Utc::now();
-            if let Err(e) = sqlx::query(
-                "UPDATE epg_sources SET last_ingested_at = ?, updated_at = ? WHERE id = ?"
-            )
-            .bind(now)
-            .bind(now)
-            .bind(source.id.to_string())
-            .execute(&self.database.pool())
-            .await {
+            if let Err(e) = self.epg_source_repo.update_last_ingested(source.id).await {
                 warn!("Failed to update last_ingested_at for EPG source '{}': {}", source.name, e);
             } else {
                 info!("Updated last_ingested_at for EPG source '{}'", source.name);

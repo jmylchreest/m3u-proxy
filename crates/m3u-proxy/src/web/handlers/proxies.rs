@@ -99,6 +99,7 @@ pub struct UpdateStreamProxyRequest {
     pub cache_channel_logos: bool,
     #[serde(default)]
     pub cache_program_logos: bool,
+    #[serde(deserialize_with = "crate::utils::deserialize_optional_uuid")]
     pub relay_profile_id: Option<Uuid>,
 }
 
@@ -1308,9 +1309,9 @@ pub async fn proxy_stream(
         }
     };
 
-    // 2. Look up channel within proxy context
-    let channel = match state
-        .database
+    // 2. Look up channel within proxy context using repository
+    let stream_proxy_repo = crate::repositories::StreamProxyRepository::new(state.database.pool());
+    let channel = match stream_proxy_repo
         .get_channel_for_proxy(&resolved_proxy_uuid.to_string(), channel_id)
         .await
     {

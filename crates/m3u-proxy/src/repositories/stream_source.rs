@@ -150,7 +150,7 @@ impl StreamSourceRepository {
         }
 
         if let Some(enabled) = query.enabled {
-            conditions.push("enabled = ?".to_string());
+            conditions.push("is_active = ?".to_string());
             params.push(enabled.to_string());
         }
 
@@ -600,5 +600,104 @@ impl PaginatedRepository<StreamSource, Uuid> for StreamSourceRepository {
         let items = self.find_all(paginated_query).await?;
 
         Ok(PaginatedResult::new(items, page, limit, total_count))
+    }
+}
+
+impl StreamSourceRepository {
+    /// Additional domain-specific methods for stream source operations
+    
+    /// Get stream sources with statistics (channel counts, health info, etc.)
+    pub async fn list_with_stats(&self) -> RepositoryResult<Vec<crate::models::StreamSourceWithStats>> {
+        let rows = sqlx::query(
+            "SELECT ss.id, ss.name, ss.source_type, ss.url, ss.max_concurrent_streams, ss.update_cron,
+             ss.username, ss.password, ss.field_map, ss.ignore_channel_numbers, ss.created_at, 
+             ss.updated_at, ss.last_ingested_at, ss.is_active,
+             COUNT(c.id) as channel_count
+             FROM stream_sources ss
+             LEFT JOIN channels c ON ss.id = c.source_id
+             GROUP BY ss.id
+             ORDER BY ss.name"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let source = StreamSource {
+                id: crate::utils::uuid_parser::parse_uuid_flexible(&row.try_get::<String, _>("id")?)?,
+                name: row.try_get("name")?,
+                source_type: match row.try_get::<String, _>("source_type")?.as_str() {
+                    "m3u" => StreamSourceType::M3u,
+                    "xtream" => StreamSourceType::Xtream,
+                    _ => return Err(RepositoryError::query_failed("invalid_source_type", "Unknown source type")),
+                },
+                url: row.try_get("url")?,
+                max_concurrent_streams: row.try_get("max_concurrent_streams")?,
+                update_cron: row.try_get("update_cron")?,
+                username: row.try_get("username")?,
+                password: row.try_get("password")?,
+                field_map: row.try_get("field_map")?,
+                ignore_channel_numbers: row.try_get("ignore_channel_numbers")?,
+                created_at: row.get_datetime("created_at"),
+                updated_at: row.get_datetime("updated_at"),
+                last_ingested_at: row.get_datetime_opt("last_ingested_at"),
+                is_active: row.try_get("is_active")?,
+            };
+
+            let channel_count: i64 = row.try_get("channel_count")?;
+            
+            results.push(crate::models::StreamSourceWithStats {
+                source,
+                channel_count: channel_count,
+                next_scheduled_update: None, // TODO: Implement scheduling info
+            });
+        }
+
+        Ok(results)
+    }
+
+    /// Get channel count for a specific stream source
+    pub async fn get_channel_count(&self, source_id: Uuid) -> RepositoryResult<i64> {
+        use crate::repositories::traits::RepositoryHelpers;
+        RepositoryHelpers::get_channel_count_for_source(&self.pool, "channels", source_id).await
+    }
+
+    /// Update the last ingested timestamp for a source
+    pub async fn update_last_ingested(&self, source_id: Uuid) -> RepositoryResult<chrono::DateTime<chrono::Utc>> {
+        use crate::repositories::traits::RepositoryHelpers;
+        RepositoryHelpers::update_last_ingested(&self.pool, "stream_sources", source_id).await
+    }
+
+    /// Get channels for a specific stream source
+    pub async fn get_channels(&self, source_id: Uuid) -> RepositoryResult<Vec<crate::models::Channel>> {
+        let rows = sqlx::query(
+            "SELECT id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift,
+             group_title, channel_name, stream_url, created_at, updated_at
+             FROM channels WHERE source_id = ? ORDER BY channel_name"
+        )
+        .bind(source_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut channels = Vec::new();
+        for row in rows {
+            let channel = crate::models::Channel {
+                id: crate::utils::uuid_parser::parse_uuid_flexible(&row.try_get::<String, _>("id")?)?,
+                source_id: crate::utils::uuid_parser::parse_uuid_flexible(&row.try_get::<String, _>("source_id")?)?,
+                tvg_id: row.try_get("tvg_id")?,
+                tvg_name: row.try_get("tvg_name")?,
+                tvg_chno: row.try_get("tvg_chno")?,
+                tvg_logo: row.try_get("tvg_logo")?,
+                tvg_shift: row.try_get("tvg_shift")?,
+                group_title: row.try_get("group_title")?,
+                channel_name: row.try_get("channel_name")?,
+                stream_url: row.try_get("stream_url")?,
+                created_at: row.get_datetime("created_at"),
+                updated_at: row.get_datetime("updated_at"),
+            };
+            channels.push(channel);
+        }
+
+        Ok(channels)
     }
 }

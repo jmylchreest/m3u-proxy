@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::errors::{AppError, AppResult};
+use crate::errors::AppResult;
 use crate::models::{StreamSourceType, EpgSourceType};
 use super::traits::{SourceHandler, FullSourceHandler, EpgSourceHandler, FullEpgSourceHandler, EpgSourceHandlerSummary};
 use super::m3u::M3uSourceHandler;
@@ -210,75 +210,6 @@ impl SourceHandlerFactory {
     }
 }
 
-/// Registry for dynamic source handler registration
-///
-/// This allows for runtime registration of new source handlers, supporting
-/// plugin-style architectures. Currently not used but provided for future
-/// extensibility.
-pub struct SourceHandlerRegistry {
-    handlers: std::collections::HashMap<StreamSourceType, fn() -> Arc<dyn FullSourceHandler>>,
-}
-
-impl SourceHandlerRegistry {
-    /// Create a new empty registry
-    pub fn new() -> Self {
-        Self {
-            handlers: std::collections::HashMap::new(),
-        }
-    }
-
-    /// Register a handler factory function for a source type
-    ///
-    /// # Arguments
-    /// * `source_type` - The source type to register
-    /// * `factory_fn` - Function that creates the handler instance
-    pub fn register_handler(
-        &mut self,
-        source_type: StreamSourceType,
-        factory_fn: fn() -> Arc<dyn FullSourceHandler>,
-    ) {
-        self.handlers.insert(source_type, factory_fn);
-    }
-
-    /// Create a handler using the registry
-    ///
-    /// # Arguments
-    /// * `source_type` - The source type to create a handler for
-    ///
-    /// # Returns
-    /// A boxed source handler if the type is registered
-    ///
-    /// # Errors
-    /// Returns an error if the source type is not registered
-    pub fn create_handler(&self, source_type: &StreamSourceType) -> AppResult<Arc<dyn FullSourceHandler>> {
-        let factory_fn = self.handlers.get(source_type)
-            .ok_or_else(|| AppError::validation(format!("Source type {:?} is not registered", source_type)))?;
-        
-        Ok(factory_fn())
-    }
-
-    /// Get all registered source types
-    pub fn get_registered_types(&self) -> Vec<StreamSourceType> {
-        self.handlers.keys().cloned().collect()
-    }
-}
-
-impl Default for SourceHandlerRegistry {
-    fn default() -> Self {
-        let mut registry = Self::new();
-        
-        // Register default handlers
-        registry.register_handler(StreamSourceType::M3u, || {
-            Arc::new(M3uSourceHandler::new())
-        });
-        
-        registry.register_handler(StreamSourceType::Xtream, || {
-            Arc::new(XtreamSourceHandler::new())
-        });
-        
-        registry
-    }
-}
 
 #[cfg(test)]
 mod tests {

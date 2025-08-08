@@ -119,7 +119,7 @@ pub struct ProgressEvent {
 /// Stream real-time progress events via SSE
 #[utoipa::path(
     get,
-    path = "/api/v1/progress/events",
+    path = "/progress/events",
     params(ProgressEventQuery),
     responses(
         (status = 200, description = "Progress events stream (SSE)", content_type = "text/event-stream"),

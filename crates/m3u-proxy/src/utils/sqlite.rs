@@ -6,6 +6,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
+use crate::utils::datetime::DateTimeParser;
 
 /// Trait for extracting typed values from SQLite rows consistently
 pub trait SqliteRowExt {
@@ -23,13 +24,13 @@ pub trait SqliteRowExt {
 impl SqliteRowExt for sqlx::sqlite::SqliteRow {
     fn get_datetime(&self, column: &str) -> DateTime<Utc> {
         let datetime_str: String = self.get(column);
-        parse_sqlite_datetime(&datetime_str)
+        DateTimeParser::parse_flexible(&datetime_str)
             .unwrap_or_else(|_| panic!("Failed to parse datetime from column '{}': '{}'", column, datetime_str))
     }
     
     fn get_datetime_opt(&self, column: &str) -> Option<DateTime<Utc>> {
         let datetime_str: Option<String> = self.get(column);
-        datetime_str.and_then(|s| parse_sqlite_datetime(&s).ok())
+        datetime_str.and_then(|s| DateTimeParser::parse_flexible(&s).ok())
     }
     
     fn get_uuid(&self, column: &str) -> Result<Uuid, uuid::Error> {
@@ -38,27 +39,3 @@ impl SqliteRowExt for sqlx::sqlite::SqliteRow {
     }
 }
 
-/// Parse a datetime string from SQLite in various formats
-fn parse_sqlite_datetime(datetime_str: &str) -> Result<DateTime<Utc>, String> {
-    // Try RFC3339 format first (our preferred format)
-    if let Ok(dt) = DateTime::parse_from_rfc3339(datetime_str) {
-        return Ok(dt.with_timezone(&Utc));
-    }
-    
-    // Try SQLite's default format: "YYYY-MM-DD HH:MM:SS"
-    if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(datetime_str, "%Y-%m-%d %H:%M:%S") {
-        return Ok(DateTime::from_naive_utc_and_offset(naive_dt, Utc));
-    }
-    
-    // Try ISO 8601 with 'T' separator: "YYYY-MM-DDTHH:MM:SS"
-    if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(datetime_str, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(DateTime::from_naive_utc_and_offset(naive_dt, Utc));
-    }
-    
-    Err(format!("Unable to parse datetime: '{}'", datetime_str))
-}
-
-/// Format a DateTime<Utc> for SQLite storage (RFC3339 format)
-pub fn format_datetime_for_sqlite(dt: DateTime<Utc>) -> String {
-    dt.to_rfc3339()
-}

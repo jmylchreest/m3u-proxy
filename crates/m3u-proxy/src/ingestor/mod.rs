@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::repositories::{ChannelRepository, traits::RepositoryHelpers};
 use crate::services::ProgressService;
 use crate::sources::SourceHandlerFactory;
 use anyhow::Result;
@@ -27,12 +28,14 @@ pub trait SourceIngestor {
 /// Generic orchestrator service for source ingestion using new source handlers
 pub struct IngestorService {
     progress_service: Arc<ProgressService>,
+    channel_repo: ChannelRepository,
 }
 
 impl IngestorService {
-    pub fn new(progress_service: Arc<ProgressService>) -> Self {
+    pub fn new(progress_service: Arc<ProgressService>, channel_repo: ChannelRepository) -> Self {
         Self { 
             progress_service,
+            channel_repo,
         }
     }
 
@@ -107,8 +110,8 @@ impl IngestorService {
 
         // Save channels to database
         info!("Saving {} channels to database for '{}'", channel_count, source_name);
-        database
-            .update_source_channels(source_id, &channels, Some(&*self.get_state_manager()))
+        self.channel_repo
+            .update_source_channels(source_id, &channels)
             .await
             .map_err(|e| {
                 error!("Failed to save channels to database for '{}': {}", source_name, e);
@@ -117,9 +120,9 @@ impl IngestorService {
 
         info!("Successfully saved {} channels to database for Stream source '{}'", channel_count, source_name);
 
-        // Update last ingested timestamp
+        // Update last ingested timestamp using generic helper
         info!("Updating last_ingested_at timestamp for Stream source '{}'", source_name);
-        if let Err(e) = database.update_source_last_ingested(source_id).await {
+        if let Err(e) = RepositoryHelpers::update_last_ingested(&database.pool(), "stream_sources", source_id).await {
             error!("Failed to update last_ingested_at for stream source '{}': {}", source_name, e);
         } else {
             info!("Updated timestamp for Stream source '{}'", source_name);
@@ -215,9 +218,9 @@ impl IngestorService {
             }
         };
         
-        // Always update timestamp, even if some data operations failed
+        // Always update timestamp, even if some data operations failed - using generic helper
         info!("Updating last_ingested_at timestamp for EPG source '{}'", source_name);
-        if let Err(e) = database.update_epg_source_last_ingested(source_id).await {
+        if let Err(e) = RepositoryHelpers::update_last_ingested(&database.pool(), "epg_sources", source_id).await {
             warn!("Failed to update last_ingested_at for EPG source '{}': {}", source_name, e);
         } else {
             info!("Updated timestamp for EPG source '{}'", source_name);

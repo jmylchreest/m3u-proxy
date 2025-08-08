@@ -73,6 +73,22 @@ pub enum RepositoryError {
     #[error("Query failed: {query} - {message}")]
     QueryFailed { query: String, message: String },
     
+    /// Database errors from sqlx
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
+    
+    /// UUID parsing errors
+    #[error("UUID parsing error: {0}")]
+    UuidParse(#[from] anyhow::Error),
+    
+    /// DateTime parsing errors  
+    #[error("DateTime parsing error: {0}")]
+    DateTimeParse(#[from] crate::utils::datetime::DateTimeError),
+    
+    /// Chrono parsing errors
+    #[error("Chrono parsing error: {0}")]
+    ChronoParse(#[from] chrono::ParseError),
+    
     /// Data serialization/deserialization failures
     #[error("Serialization failed: {0}")]
     SerializationFailed(#[from] serde_json::Error),

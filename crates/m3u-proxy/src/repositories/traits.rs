@@ -320,7 +320,7 @@ impl QueryParams {
 }
 
 /// Standard paginated result structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PaginatedResult<T> {
     /// The items for this page
     pub items: Vec<T>,
@@ -359,5 +359,60 @@ impl<T> PaginatedResult<T> {
             has_next,
             has_previous,
         }
+    }
+}
+
+/// Generic repository helpers for common patterns
+pub struct RepositoryHelpers;
+
+impl RepositoryHelpers {
+    /// Generic method to update last_ingested_at timestamp for any source table
+    pub async fn update_last_ingested(
+        pool: &sqlx::Pool<sqlx::Sqlite>,
+        table_name: &str,
+        source_id: uuid::Uuid,
+    ) -> crate::errors::RepositoryResult<chrono::DateTime<chrono::Utc>> {
+        let now = chrono::Utc::now();
+        let query = format!("UPDATE {} SET last_ingested_at = ?, updated_at = ? WHERE id = ?", table_name);
+        
+        sqlx::query(&query)
+            .bind(now.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .bind(source_id.to_string())
+            .execute(pool)
+            .await?;
+
+        Ok(now)
+    }
+
+    /// Generic method to get channel count for any source
+    pub async fn get_channel_count_for_source(
+        pool: &sqlx::Pool<sqlx::Sqlite>,
+        channel_table: &str,
+        source_id: uuid::Uuid,
+    ) -> crate::errors::RepositoryResult<i64> {
+        let query = format!("SELECT COUNT(*) FROM {} WHERE source_id = ?", channel_table);
+        let count: i64 = sqlx::query_scalar(&query)
+            .bind(source_id.to_string())
+            .fetch_one(pool)
+            .await?;
+
+        Ok(count)
+    }
+
+    /// Generic method to get usage count for any entity in a relation table
+    pub async fn get_usage_count(
+        pool: &sqlx::Pool<sqlx::Sqlite>,
+        relation_table: &str,
+        entity_id_column: &str,
+        entity_id: uuid::Uuid,
+    ) -> crate::errors::RepositoryResult<i64> {
+        let query = format!("SELECT COUNT(*) FROM {} WHERE {} = ?", relation_table, entity_id_column);
+        let count: i64 = sqlx::query_scalar(&query)
+            .bind(entity_id.to_string())
+            .fetch_one(pool)
+            .await?;
+
+        Ok(count)
     }
 }

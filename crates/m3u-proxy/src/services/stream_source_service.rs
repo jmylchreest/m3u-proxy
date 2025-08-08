@@ -11,10 +11,13 @@ use tracing::{debug, error, info, warn};
 use crate::database::Database;
 use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceUpdateRequest};
 use crate::services::EpgSourceService;
+use crate::repositories::{ChannelRepository, UrlLinkingRepository, StreamSourceRepository, Repository};
 
 /// Service for managing stream sources with business logic
 pub struct StreamSourceService {
     database: Database,
+    stream_source_repo: StreamSourceRepository,
+    channel_repo: ChannelRepository,
     #[allow(dead_code)]
     epg_service: Arc<EpgSourceService>,
     cache_invalidation_tx: broadcast::Sender<()>,
@@ -27,8 +30,12 @@ impl StreamSourceService {
         epg_service: Arc<EpgSourceService>,
         cache_invalidation_tx: broadcast::Sender<()>,
     ) -> Self {
+        let stream_source_repo = StreamSourceRepository::new(database.pool());
+        let channel_repo = ChannelRepository::new(database.pool());
         Self {
             database,
+            stream_source_repo,
+            channel_repo,
             epg_service,
             cache_invalidation_tx,
         }
@@ -42,12 +49,11 @@ impl StreamSourceService {
         info!("Creating stream source: {}", request.name);
 
         // Create the stream source
-        let source = self.database.create_stream_source(&request).await?;
+        let source = self.stream_source_repo.create(request).await
+            .map_err(|e| anyhow::anyhow!("Failed to create stream source: {}", e))?;
 
-        // Auto-link with existing EPG sources if this is an Xtream source
-        if let Err(e) = self.database.auto_link_stream_source(&source).await {
-            error!("Failed to auto-link stream source '{}': {}", source.name, e);
-        }
+        // Auto-linking for Xtream sources is now handled automatically by URL linking
+        // No explicit action needed - credentials will be auto-populated as needed
 
         // Invalidate cache since we added a new source
         let _ = self.cache_invalidation_tx.send(());
@@ -70,7 +76,15 @@ impl StreamSourceService {
 
         // Update linked sources first if requested
         if request.update_linked {
-            match self.database.update_linked_sources(id, "stream", &request, request.update_linked).await {
+            let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
+            match url_linking_repo.update_linked_sources(
+                id,
+                "stream",
+                Some(&request.url),
+                request.username.as_ref(),
+                request.password.as_ref(),
+                request.update_linked,
+            ).await {
                 Ok(count) if count > 0 => {
                     info!("Updated {} linked sources for stream source {}", count, id);
                 }
@@ -84,11 +98,8 @@ impl StreamSourceService {
         }
 
         // Update the stream source
-        let source = self
-            .database
-            .update_stream_source(id, &request)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Stream source not found"))?;
+        let source = self.stream_source_repo.update(id, request).await
+            .map_err(|e| anyhow::anyhow!("Failed to update stream source: {}", e))?;
 
         // Invalidate cache
         let _ = self.cache_invalidation_tx.send(());
@@ -106,10 +117,8 @@ impl StreamSourceService {
         info!("Deleting stream source: {}", id);
 
         // Delete the stream source (this will cascade to linked sources)
-        let deleted = self.database.delete_stream_source(id).await?;
-        if !deleted {
-            return Err(anyhow::anyhow!("Stream source not found"));
-        }
+        self.stream_source_repo.delete(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to delete stream source: {}", e))?;
 
         // Invalidate cache
         let _ = self.cache_invalidation_tx.send(());
@@ -120,7 +129,8 @@ impl StreamSourceService {
 
     /// List stream sources with statistics
     pub async fn list_with_stats(&self) -> Result<Vec<StreamSourceWithStats>> {
-        let sources_with_stats = self.database.list_stream_sources_with_stats().await?;
+        let sources_with_stats = self.stream_source_repo.list_with_stats().await
+            .map_err(|e| anyhow::anyhow!("Failed to list stream sources with stats: {}", e))?;
 
         let mut result = Vec::new();
         for source_with_stats in sources_with_stats {
@@ -138,14 +148,17 @@ impl StreamSourceService {
 
     /// Get a stream source with detailed information
     pub async fn get_with_details(&self, id: uuid::Uuid) -> Result<StreamSourceWithDetails> {
-        let source = self
-            .database
-            .get_stream_source(id)
-            .await?
+        let source = self.stream_source_repo.find_by_id(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to get stream source: {}", e))?
             .ok_or_else(|| anyhow::anyhow!("Stream source not found"))?;
 
-        let channel_count = self.database.get_source_channel_count(id).await? as u64;
-        let linked_epg = self.database.find_linked_epg_by_stream_id(id).await?;
+        let channel_count = self.stream_source_repo.get_channel_count(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to get channel count: {}", e))? as u64;
+        
+        // Use repository pattern for URL linking
+        let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
+        let linked_epgs = url_linking_repo.find_linked_epg_sources(&source).await.unwrap_or_default();
+        let linked_epg = linked_epgs.into_iter().next();
 
         Ok(StreamSourceWithDetails {
             source: source.clone(),
@@ -159,20 +172,23 @@ impl StreamSourceService {
 
     /// Get stream source by ID
     pub async fn get(&self, id: uuid::Uuid) -> Result<StreamSource> {
-        self.database
-            .get_stream_source(id)
-            .await?
+        self.stream_source_repo.find_by_id(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to get stream source: {}", e))?
             .ok_or_else(|| anyhow::anyhow!("Stream source not found"))
     }
 
     /// List all stream sources
     pub async fn list(&self) -> Result<Vec<StreamSource>> {
-        self.database.list_stream_sources().await
+        use crate::repositories::stream_source::StreamSourceQuery;
+        self.stream_source_repo.find_all(StreamSourceQuery::new()).await
+            .map_err(|e| anyhow::anyhow!("Failed to list stream sources: {}", e))
     }
 
     /// Check if a stream source exists
     pub async fn exists(&self, id: uuid::Uuid) -> Result<bool> {
-        Ok(self.database.get_stream_source(id).await?.is_some())
+        Ok(self.stream_source_repo.find_by_id(id).await
+            .map_err(|e| anyhow::anyhow!("Failed to check stream source existence: {}", e))?
+            .is_some())
     }
 
     /// Test connection to a stream source
@@ -290,7 +306,7 @@ impl StreamSourceService {
 
 
     
-    /// Save channels to database
+    /// Save channels to database using ChannelRepository
     async fn save_channels(
         &self,
         source_id: uuid::Uuid,
@@ -298,42 +314,15 @@ impl StreamSourceService {
     ) -> Result<usize> {
         use tracing::debug;
         
-        let mut tx = self.database.pool().begin().await?;
+        debug!("Saving {} channels to database using ChannelRepository", channels.len());
         
-        // Delete existing channels for this source
-        sqlx::query("DELETE FROM channels WHERE source_id = ?")
-            .bind(source_id.to_string())
-            .execute(&mut *tx)
-            .await?;
+        // Use ChannelRepository to replace channels for this source
+        let channels_saved = self.channel_repo
+            .update_source_channels(source_id, &channels)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to update source channels: {}", e))?;
         
-        debug!("Deleted existing channels for source {}", source_id);
-        
-        let mut channels_saved = 0;
-        for channel in channels {
-            sqlx::query(
-                "INSERT INTO channels (id, source_id, channel_name, stream_url, tvg_chno, group_title, tvg_id, tvg_name, tvg_logo, tvg_shift, created_at, updated_at) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(channel.id.to_string())
-            .bind(source_id.to_string())
-            .bind(&channel.channel_name)
-            .bind(&channel.stream_url)
-            .bind(channel.tvg_chno.as_deref())
-            .bind(channel.group_title.as_deref())
-            .bind(channel.tvg_id.as_deref())
-            .bind(channel.tvg_name.as_deref())
-            .bind(channel.tvg_logo.as_deref())
-            .bind(channel.tvg_shift.as_deref())
-            .bind(channel.created_at)
-            .bind(channel.updated_at)
-            .execute(&mut *tx)
-            .await?;
-            
-            channels_saved += 1;
-        }
-        
-        tx.commit().await?;
-        debug!("Successfully saved {} channels", channels_saved);
+        debug!("Successfully saved {} channels using ChannelRepository", channels_saved);
         
         Ok(channels_saved)
     }
@@ -390,15 +379,7 @@ impl StreamSourceService {
         }
         
         // Update the source's last_ingested_at timestamp
-        let now = chrono::Utc::now();
-        if let Err(e) = sqlx::query(
-            "UPDATE stream_sources SET last_ingested_at = ?, updated_at = ? WHERE id = ?"
-        )
-        .bind(now)
-        .bind(now)
-        .bind(source.id.to_string())
-        .execute(&self.database.pool())
-        .await {
+        if let Err(e) = self.stream_source_repo.update_last_ingested(source.id).await {
             warn!("Failed to update last_ingested_at for stream source '{}': {}", source.name, e);
         } else {
             info!("Updated last_ingested_at for stream source '{}'", source.name);

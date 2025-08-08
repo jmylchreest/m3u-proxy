@@ -518,12 +518,14 @@ impl RelayManager {
     }
 
     /// Get system load average
+    #[allow(dead_code)]
     async fn get_system_load(&self) -> Option<f64> {
         let system = self.system.read().await;
         Some(system.load_average().one)
     }
 
     /// Get total system memory usage in MB
+    #[allow(dead_code)]
     async fn get_system_memory_usage(&self) -> Option<f64> {
         let system = self.system.read().await;
         let used_memory = system.used_memory();

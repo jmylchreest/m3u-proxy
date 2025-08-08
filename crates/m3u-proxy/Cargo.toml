@@ -86,5 +86,23 @@ xz2 = "0.1"
 zip = "2.1"
 lz4 = "1.24"
 
+[dev-dependencies]
+# Testing framework and utilities
+tokio-test = "0.4"
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+rstest = "0.22"
+serial_test = "3.1"
+mockall = "0.12"
+
+# Additional test utilities
+test-log = "0.2"
+env_logger = "0.11"
+tracing-test = "0.2"
+
+[[bench]]
+name = "repository_benchmarks"
+harness = false
+
 [build-dependencies]
 toml = "0.9"

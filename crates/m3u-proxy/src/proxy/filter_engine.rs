@@ -461,6 +461,12 @@ impl FilterEngine {
                     !field_value.to_lowercase().ends_with(&value.to_lowercase())
                 }
             }
+            FilterOperator::GreaterThan | FilterOperator::LessThan |
+            FilterOperator::GreaterThanOrEqual | FilterOperator::LessThanOrEqual => {
+                // Comparison operators not supported in legacy filter engine
+                warn!("Comparison operators not supported in legacy filter engine. Use new pipeline instead.");
+                false
+            }
         };
 
         let final_result = if negate { !result } else { result };

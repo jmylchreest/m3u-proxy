@@ -315,6 +315,48 @@ impl StreamRuleProcessor {
                             }
                         }
                     },
+                    FilterOperator::GreaterThan => {
+                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Greater) {
+                            Ok(result) => (result, None),
+                            Err(e) => {
+                                warn!("RULE_PROCESSOR:   > Comparison failed: {}", e);
+                                (false, None)
+                            }
+                        }
+                    },
+                    FilterOperator::LessThan => {
+                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Less) {
+                            Ok(result) => (result, None),
+                            Err(e) => {
+                                warn!("RULE_PROCESSOR:   > Comparison failed: {}", e);
+                                (false, None)
+                            }
+                        }
+                    },
+                    FilterOperator::GreaterThanOrEqual => {
+                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Greater) {
+                            Ok(result) => {
+                                let equal = field_value_str.eq_ignore_ascii_case(value);
+                                (result || equal, None)
+                            },
+                            Err(e) => {
+                                warn!("RULE_PROCESSOR:   > Comparison failed: {}", e);
+                                (false, None)
+                            }
+                        }
+                    },
+                    FilterOperator::LessThanOrEqual => {
+                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Less) {
+                            Ok(result) => {
+                                let equal = field_value_str.eq_ignore_ascii_case(value);
+                                (result || equal, None)
+                            },
+                            Err(e) => {
+                                warn!("RULE_PROCESSOR:   > Comparison failed: {}", e);
+                                (false, None)
+                            }
+                        }
+                    },
                 };
                 
                 
@@ -603,6 +645,26 @@ impl StreamRuleProcessor {
             _ => return Err(anyhow::anyhow!("Cannot clear unknown field: {}", field_name).into()),
         }
         Ok(())
+    }
+    
+    /// Compare two values using numeric or datetime comparison
+    /// First tries to parse as Unix timestamps, then falls back to string comparison
+    fn compare_values(&self, field_value: &str, expected_value: &str, ordering: std::cmp::Ordering) -> Result<bool, Box<dyn std::error::Error>> {
+        use crate::utils::time::{resolve_time_functions, parse_time_string};
+        
+        // Resolve any @time: functions in the expected value
+        let resolved_expected = resolve_time_functions(expected_value)?;
+        
+        // Try numeric comparison first (Unix timestamps)
+        if let (Ok(field_num), Ok(expected_num)) = (
+            parse_time_string(field_value),
+            parse_time_string(&resolved_expected)
+        ) {
+            return Ok(field_num.cmp(&expected_num) == ordering);
+        }
+        
+        // Fall back to lexicographic string comparison
+        Ok(field_value.cmp(&resolved_expected) == ordering)
     }
 }
 

@@ -246,6 +246,13 @@ pub fn internal_error(message: &str) -> impl IntoResponse {
     )
 }
 
+pub fn conflict(message: &str) -> impl IntoResponse {
+    (
+        StatusCode::CONFLICT,
+        Json(ApiResponse::<()>::error(message.to_string())),
+    )
+}
+
 /// Validation error response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationErrorResponse {

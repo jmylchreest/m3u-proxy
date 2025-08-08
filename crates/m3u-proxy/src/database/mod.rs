@@ -9,11 +9,6 @@ use tokio::sync::{Mutex, mpsc};
 use tracing;
 use uuid::Uuid;
 use crate::utils::uuid_parser::parse_uuid_flexible;
-pub mod epg_sources;
-pub mod filters;
-pub mod linked_xtream;
-pub mod stream_sources;
-pub mod url_linking;
 
 #[derive(Clone)]
 pub struct Database {
@@ -104,7 +99,12 @@ impl Database {
 
     pub async fn migrate(&self) -> Result<()> {
         self.run_embedded_migrations().await?;
-        self.ensure_default_filters().await?;
+        
+        // Ensure default filters using FilterRepository
+        let filter_repo = crate::repositories::FilterRepository::new(self.pool.clone());
+        filter_repo.ensure_default_filters().await
+            .map_err(|e| anyhow::anyhow!("Failed to ensure default filters: {}", e))?;
+        
         Ok(())
     }
 
@@ -409,14 +409,12 @@ impl Database {
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
-                created_at: chrono::DateTime::parse_from_rfc3339(
-                    &row.get::<String, _>("created_at"),
-                )?
-                .with_timezone(&chrono::Utc),
-                updated_at: chrono::DateTime::parse_from_rfc3339(
-                    &row.get::<String, _>("updated_at"),
-                )?
-                .with_timezone(&chrono::Utc),
+                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("created_at")
+                ).map_err(|e| anyhow::anyhow!("Failed to parse created_at: {}", e))?,
+                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("updated_at")
+                ).map_err(|e| anyhow::anyhow!("Failed to parse updated_at: {}", e))?,
             })),
             None => Ok(None),
         }
@@ -616,6 +614,30 @@ impl Database {
         }
 
         Ok(programs)
+    }
+
+    // Temporary wrapper methods for URL linking functionality
+    // These delegate to the UrlLinkingRepository until services are fully migrated
+    
+    /// Auto-populate EPG source credentials from linked stream sources
+    pub async fn auto_populate_epg_credentials(&self, epg_source_id: Uuid) -> Result<Option<EpgSource>> {
+        let url_linking_repo = crate::repositories::UrlLinkingRepository::new(self.pool.clone());
+        url_linking_repo.auto_populate_epg_credentials(epg_source_id).await
+            .map_err(|e| anyhow::anyhow!("Repository error: {}", e))
+    }
+
+    /// Find linked stream sources by EPG source
+    pub async fn find_linked_stream_sources(&self, epg_source: &EpgSource) -> Result<Vec<StreamSource>> {
+        let url_linking_repo = crate::repositories::UrlLinkingRepository::new(self.pool.clone());
+        url_linking_repo.find_linked_stream_sources(epg_source).await
+            .map_err(|e| anyhow::anyhow!("Repository error: {}", e))
+    }
+
+    /// Find linked EPG sources by stream source
+    pub async fn find_linked_epg_sources(&self, stream_source: &StreamSource) -> Result<Vec<EpgSource>> {
+        let url_linking_repo = crate::repositories::UrlLinkingRepository::new(self.pool.clone());
+        url_linking_repo.find_linked_epg_sources(stream_source).await
+            .map_err(|e| anyhow::anyhow!("Repository error: {}", e))
     }
 
 }

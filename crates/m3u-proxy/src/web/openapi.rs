@@ -20,7 +20,7 @@ use utoipa::OpenApi;
 
 A modern IPTV proxy service with comprehensive OpenAPI documentation.
 
-## 🚀 Features
+## Features
 
 This API provides complete OpenAPI documentation:
 - **Handler annotations** with `#[utoipa::path]` for endpoint documentation
@@ -28,7 +28,7 @@ This API provides complete OpenAPI documentation:
 - **RapiDoc integration** provides interactive documentation
 - **Comprehensive coverage** of all API endpoints
 
-## 📋 Features
+## Features
 
 - **Multi-source aggregation**: Combine M3U playlists and Xtream Codes APIs
 - **Advanced filtering**: Channel filtering with complex conditions  
@@ -38,7 +38,7 @@ This API provides complete OpenAPI documentation:
 - **Real-time streaming**: Efficient proxy streaming with health monitoring
 - **Relay system**: Channel restreaming with transcoding
 
-## 🔧 Adding New Endpoints
+## Adding New Endpoints
 
 To add a new endpoint to this documentation:
 
@@ -46,7 +46,7 @@ To add a new endpoint to this documentation:
    ```rust
    #[utoipa::path(
        get,
-       path = \"/api/v1/your-endpoint\",
+       path = \"/your-endpoint\",
        tag = \"your-tag\",
        summary = \"Your endpoint summary\"
    )]
@@ -55,11 +55,15 @@ To add a new endpoint to this documentation:
    }
    ```
 
+   **IMPORTANT**: Use relative paths (e.g., \"/filters\", \"/progress/events\") 
+   NOT absolute paths with /api/v1 prefix. The server URL \"/api/v1\" 
+   is configured in the OpenAPI spec and will be automatically prepended.
+
 2. **Include in the paths section** below (if using path-based documentation)
 
 3. **Handler annotations are used** to generate comprehensive documentation
 
-## 📊 Current API Coverage
+## Current API Coverage
 
 All endpoints are documented with utoipa annotations.
 Check the endpoints below to see the complete API surface.
@@ -139,7 +143,6 @@ Check the endpoints below to see the complete API surface.
             
             // Filter query parameters
             crate::web::api::FilterQueryParams,
-            crate::web::api::FilterFieldsQueryParams,
             
         )
     ),
@@ -154,7 +157,7 @@ Check the endpoints below to see the complete API surface.
         crate::web::handlers::stream_sources::get_stream_source_capabilities,
         
         // Source operations (refresh, channels, etc.)
-        crate::web::api::refresh_stream_source,
+        crate::web::handlers::stream_sources::refresh_stream_source,
         crate::web::api::refresh_epg_source_unified,
         crate::web::api::get_stream_source_channels,
         crate::web::api::get_epg_source_channels_unified,
@@ -191,7 +194,8 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::update_filter,
         crate::web::api::delete_filter,
         crate::web::api::test_filter,
-        crate::web::api::get_filter_fields,
+        crate::web::api::get_stream_filter_fields,
+        crate::web::api::get_epg_filter_fields,
         
         // Data mapping endpoints
         crate::web::api::list_data_mapping_rules,
@@ -203,6 +207,9 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::validate_data_mapping_expression,
         crate::web::api::get_data_mapping_stream_fields,
         crate::web::api::get_data_mapping_epg_fields,
+        crate::web::api::get_data_mapping_helpers,
+        crate::web::api::search_logo_assets_for_helper,
+        crate::web::api::get_date_completion_options,
         
         // Expression validation endpoints
         crate::web::api::validate_stream_expression,
@@ -218,7 +225,7 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::get_pipeline_stage_fields,
         
         // EPG viewer
-        crate::web::api::get_epg_viewer_data,
+        // EPG viewer functionality removed
         
         // Proxy endpoints
         crate::web::handlers::proxies::list_proxies,
@@ -259,12 +266,6 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::cancel_stream_source_ingestion,
         crate::web::api::get_stream_source_processing_info,
         
-        // Linked sources
-        crate::web::api::list_linked_xtream_sources,
-        crate::web::api::create_linked_xtream_source,
-        crate::web::api::get_linked_xtream_source,
-        crate::web::api::update_linked_xtream_source,
-        crate::web::api::delete_linked_xtream_source,
         
         // Proxy management
         crate::web::api::preview_proxies,
@@ -313,25 +314,25 @@ pub fn get_comprehensive_openapi_spec() -> utoipa::openapi::OpenApi {
 
 A modern IPTV proxy service with comprehensive OpenAPI documentation.
 
-## ✨ Key Benefits
+## Key Benefits
 
-- **📚 Always Up-to-Date**: Documentation is generated from source code annotations
-- **🔧 Easy to Extend**: Add `#[utoipa::path]` annotations to functions  
-- **⚡ Fast**: Schema generation happens at compile time, not runtime
-- **📖 Interactive**: Full RapiDoc integration with try-it-out functionality
+- **Always Up-to-Date**: Documentation is generated from source code annotations
+- **Easy to Extend**: Add `#[utoipa::path]` annotations to functions  
+- **Fast**: Schema generation happens at compile time, not runtime
+- **Interactive**: Full RapiDoc integration with try-it-out functionality
 
-## 🏗️ Architecture
+## Architecture
 
 - **Version**: {}
-- **Schema Generation**: ✅ Compile-time via `#[derive(ToSchema)]`
-- **Documentation UI**: ✅ RapiDoc interactive interface
-- **Handler Annotations**: ✅ Complete endpoint documentation
+- **Schema Generation**: Compile-time via `#[derive(ToSchema)]`
+- **Documentation UI**: RapiDoc interactive interface
+- **Handler Annotations**: Complete endpoint documentation
 
-## 📍 Current Endpoints
+## Current Endpoints
 
 All endpoints are documented with utoipa annotations.
 
-## 🚀 Getting Started
+## Getting Started
 
 Visit `/docs` for the interactive API documentation.
         ",

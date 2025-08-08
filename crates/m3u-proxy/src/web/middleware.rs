@@ -94,27 +94,6 @@ pub async fn error_handling_middleware(
     }
 }
 
-/// Rate limiting middleware
-///
-/// Implements basic rate limiting per IP address
-pub async fn rate_limiting_middleware(
-    headers: HeaderMap,
-    request: Request,
-    next: Next,
-) -> Response {
-    // Extract client IP
-    let client_ip = headers
-        .get("x-real-ip")
-        .or_else(|| headers.get("x-forwarded-for"))
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown");
-
-    // Rate limiting not implemented - placeholder that always allows requests
-    
-    info!(client_ip = client_ip, "Rate limit check passed");
-
-    next.run(request).await
-}
 
 /// Request size limiting middleware
 ///
@@ -276,8 +255,6 @@ impl MiddlewareStack {
                 .layer(axum::middleware::from_fn(security_headers_middleware))
                 // Request logging middleware
                 .layer(axum::middleware::from_fn(request_logging_middleware))
-                // Rate limiting middleware  
-                .layer(axum::middleware::from_fn(rate_limiting_middleware))
         }
     }
 

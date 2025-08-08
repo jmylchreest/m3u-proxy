@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use serde::Deserialize;
 use uuid::Uuid;
 
 /// Trait for types that can be converted to UUID flexibly
@@ -100,6 +101,36 @@ pub fn uuid_to_base64(uuid: &Uuid) -> String {
 /// Convert UUID to 32-character hex string (no hyphens)
 pub fn uuid_to_hex32(uuid: &Uuid) -> String {
     uuid.simple().to_string()
+}
+
+/// Serde helper for deserializing optional UUID fields that may contain empty strings
+///
+/// Use with `#[serde(deserialize_with = "deserialize_optional_uuid")]`
+/// 
+/// Handles:
+/// - null/missing: returns None
+/// - empty string "": returns None  
+/// - valid UUID string: returns Some(uuid)
+pub fn deserialize_optional_uuid<'de, D>(
+    deserializer: D,
+) -> Result<Option<Uuid>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    match opt {
+        Some(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                parse_uuid_flexible(trimmed)
+                    .map(Some)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+        None => Ok(None),
+    }
 }
 
 

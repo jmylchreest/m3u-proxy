@@ -4,6 +4,7 @@
 //! across different parts of the system.
 
 pub mod database_operations;
+pub mod database_retry;
 pub mod datetime;
 pub mod decompression;
 pub mod deterministic_uuid;
@@ -29,6 +30,7 @@ pub mod xmltv_parser;
 
 // Re-export commonly used types for convenience
 pub use database_operations::DatabaseOperations;
+pub use database_retry::{RetryConfig, with_retry};
 pub use decompression::{CompressionFormat, DecompressionService};
 pub use deterministic_uuid::{generate_channel_uuid, generate_deterministic_uuid, generate_proxy_config_uuid, generate_relay_config_uuid};
 pub use http_client::{DecompressingHttpClient, StandardHttpClient, FallbackHttpClient};
@@ -40,4 +42,4 @@ pub use memory_cleanup::{
 // but not exposed to prevent accidental usage
 pub use regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
 pub use system_manager::SystemManager;
-pub use uuid_parser::{resolve_proxy_id, uuid_to_base64, uuid_to_hex32};
+pub use uuid_parser::{resolve_proxy_id, uuid_to_base64, uuid_to_hex32, deserialize_optional_uuid};

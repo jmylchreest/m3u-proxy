@@ -130,19 +130,6 @@ pub fn parse_source_type(source_type: &str) -> Result<crate::models::StreamSourc
     }
 }
 
-/// Rate limiting helper (placeholder for future implementation)
-pub struct RateLimiter;
-
-impl RateLimiter {
-    pub fn new() -> Self {
-        Self
-    }
-    
-    pub async fn check_rate_limit(&self, _key: &str) -> Result<(), String> {
-        // Rate limiting not implemented yet
-        Ok(())
-    }
-}
 
 /// Request size validation
 pub fn validate_request_size(content_length: Option<usize>, max_size: usize) -> Result<(), String> {

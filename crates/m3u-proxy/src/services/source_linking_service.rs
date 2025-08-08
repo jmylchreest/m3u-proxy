@@ -9,11 +9,15 @@ use tracing::{debug, error, info};
 
 use crate::database::Database;
 use crate::models::{EpgSource, EpgSourceType, StreamSource, StreamSourceType};
+use crate::repositories::{UrlLinkingRepository, StreamSourceRepository, EpgSourceRepository};
+use crate::repositories::traits::Repository;
 
 /// Service for managing links between stream and EPG sources
 pub struct SourceLinkingService {
     database: Database,
     client: reqwest::Client,
+    stream_source_repo: StreamSourceRepository,
+    epg_source_repo: EpgSourceRepository,
 }
 
 impl SourceLinkingService {
@@ -24,7 +28,10 @@ impl SourceLinkingService {
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { database, client }
+        let stream_source_repo = StreamSourceRepository::new(database.pool().clone());
+        let epg_source_repo = EpgSourceRepository::new(database.pool().clone());
+
+        Self { database, client, stream_source_repo, epg_source_repo }
     }
 
     /// Auto-link Xtream sources (both directions)
@@ -33,9 +40,14 @@ impl SourceLinkingService {
 
         let mut stats = LinkingStats::default();
 
-        // Get all Xtream sources
-        let stream_sources = self.database.list_stream_sources().await?;
-        let epg_sources = self.database.list_epg_sources().await?;
+        // Get all Xtream sources using repositories
+        let stream_query = crate::repositories::stream_source::StreamSourceQuery::new();
+        let epg_query = crate::repositories::epg_source::EpgSourceQuery::new();
+        
+        let stream_sources = self.stream_source_repo.find_all(stream_query).await
+            .map_err(|e| anyhow::anyhow!("Failed to get stream sources: {}", e))?;
+        let epg_sources = self.epg_source_repo.find_all(epg_query).await
+            .map_err(|e| anyhow::anyhow!("Failed to get EPG sources: {}", e))?;
 
         let xtream_streams: Vec<_> = stream_sources
             .into_iter()
@@ -102,12 +114,10 @@ impl SourceLinkingService {
         stream_source: &StreamSource,
         epg_sources: &[EpgSource],
     ) -> Result<bool> {
-        // Check if already linked
-        if let Some(_) = self
-            .database
-            .find_linked_epg_by_stream_id(stream_source.id)
-            .await?
-        {
+        // Check if already linked using repository pattern
+        let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
+        let linked_epgs = url_linking_repo.find_linked_epg_sources(stream_source).await.unwrap_or_default();
+        if !linked_epgs.is_empty() {
             return Ok(false);
         }
 
@@ -148,12 +158,10 @@ impl SourceLinkingService {
         epg_source: &EpgSource,
         stream_sources: &[StreamSource],
     ) -> Result<bool> {
-        // Check if already linked
-        if let Some(_) = self
-            .database
-            .find_linked_stream_by_epg_id(epg_source.id)
-            .await?
-        {
+        // Check if already linked using repository pattern
+        let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
+        let linked_streams = url_linking_repo.find_linked_stream_sources(epg_source).await.unwrap_or_default();
+        if !linked_streams.is_empty() {
             return Ok(false);
         }
 
@@ -342,7 +350,8 @@ impl SourceLinkingService {
             time_offset: None,
         };
 
-        self.database.create_epg_source(&epg_request).await
+        self.epg_source_repo.create(epg_request).await
+            .map_err(|e| anyhow::anyhow!("Failed to create EPG source: {}", e))
     }
 
     /// Create a stream source from an EPG source
@@ -359,14 +368,20 @@ impl SourceLinkingService {
             ignore_channel_numbers: true, // Default to true for Xtream sources
         };
 
-        self.database.create_stream_source(&stream_request).await
+        self.stream_source_repo.create(stream_request).await
+            .map_err(|e| anyhow::anyhow!("Failed to create stream source: {}", e))
     }
 
     /// Get linking statistics
     pub async fn get_linking_stats(&self) -> Result<LinkingStats> {
-        // Get counts using existing methods
-        let stream_sources_list = self.database.list_stream_sources().await?;
-        let epg_sources_list = self.database.list_epg_sources().await?;
+        // Get counts using repositories
+        let stream_query = crate::repositories::stream_source::StreamSourceQuery::new();
+        let epg_query = crate::repositories::epg_source::EpgSourceQuery::new();
+        
+        let stream_sources_list = self.stream_source_repo.find_all(stream_query).await
+            .map_err(|e| anyhow::anyhow!("Failed to get stream sources for stats: {}", e))?;
+        let epg_sources_list = self.epg_source_repo.find_all(epg_query).await
+            .map_err(|e| anyhow::anyhow!("Failed to get EPG sources for stats: {}", e))?;
 
         let total_links = 0; // TODO: Implement proper count
         let stream_sources = stream_sources_list.len() as u64;

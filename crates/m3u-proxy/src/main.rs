@@ -331,7 +331,6 @@ async fn main() -> Result<()> {
     );
     info!("Scheduler service initialized");
 
-    // Native pipeline only - no plugin system needed
 
     // Clone proxy regeneration service for background processing
     let bg_proxy_regeneration_service = proxy_regeneration_service.clone();

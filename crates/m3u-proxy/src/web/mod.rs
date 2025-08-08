@@ -254,10 +254,10 @@ impl WebServer {
                 "/sources/epg/validate",
                 post(handlers::epg_sources::validate_epg_source),
             )
-            // Additional routes that don't have utoipa annotations yet
+            // Stream source refresh route
             .route(
                 "/sources/stream/{id}/refresh",
-                post(api::refresh_stream_source),
+                post(handlers::stream_sources::refresh_stream_source),
             )
             .route(
                 "/sources/stream/{id}/channels",
@@ -312,7 +312,8 @@ impl WebServer {
                     .delete(api::delete_filter),
             )
             .route("/filters/test", post(api::test_filter))
-            .route("/filters/fields", get(api::get_filter_fields))
+            .route("/filters/fields/stream", get(api::get_stream_filter_fields))
+            .route("/filters/fields/epg", get(api::get_epg_filter_fields))
             // Data mapping
             .route(
                 "/data-mapping",
@@ -325,10 +326,9 @@ impl WebServer {
                     .delete(api::delete_data_mapping_rule),
             )
             .route("/data-mapping/test", post(api::test_data_mapping_rule))
-            .route(
-                "/data-mapping/validate",
-                post(api::validate_data_mapping_expression),
-            )
+            .route("/data-mapping/helpers", get(api::get_data_mapping_helpers))
+            .route("/data-mapping/helpers/logo/search", get(api::search_logo_assets_for_helper))
+            .route("/data-mapping/helpers/date/complete", post(api::get_date_completion_options))
             .route(
                 "/data-mapping/preview",
                 get(api::apply_data_mapping_rules).post(api::apply_data_mapping_rules_post),
@@ -342,8 +342,7 @@ impl WebServer {
             // Generalized pipeline validation endpoints
             .route("/pipeline/validate", post(api::validate_pipeline_expression))
             .route("/pipeline/fields/{stage}", get(api::get_pipeline_stage_fields))
-            // EPG viewer
-            .route("/epg/viewer", get(api::get_epg_viewer_data))
+            // EPG viewer functionality removed
             // Proxies
             .route(
                 "/proxies",

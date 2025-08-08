@@ -1,6 +1,6 @@
 //! Time utilities for timezone detection and offset parsing
 
-use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use chrono_tz::Tz;
 use regex::Regex;
 
@@ -254,9 +254,9 @@ pub fn parse_datetime_with_timezone(
         return Ok(apply_time_offset(dt_with_tz, offset_seconds));
     }
 
-    // Try ISO 8601 format
-    if let Ok(dt) = DateTime::parse_from_rfc3339(dt_str) {
-        return Ok(apply_time_offset(dt.with_timezone(&Utc), offset_seconds));
+    // Try flexible datetime parsing (includes ISO 8601/RFC3339 and SQLite formats)
+    if let Ok(dt) = crate::utils::datetime::DateTimeParser::parse_flexible(dt_str) {
+        return Ok(apply_time_offset(dt, offset_seconds));
     }
 
     Err(format!("Unable to parse datetime: {}", dt_str))
@@ -343,47 +343,19 @@ pub fn log_timezone_detection(source_name: &str, detected_tz: Option<&str>, fina
 }
 
 /// Parse various time string formats to Unix epoch timestamp
-/// Supports multiple formats commonly used in filtering and data mapping
+/// Uses the flexible datetime parser for comprehensive format support
 pub fn parse_time_string(time_str: &str) -> Result<i64, String> {
-    // Try different common formats
-    let formats = [
-        "%Y-%m-%d %H:%M:%S",     // 2024-01-01 12:00:00
-        "%Y-%m-%dT%H:%M:%S",     // 2024-01-01T12:00:00
-        "%Y-%m-%dT%H:%M:%SZ",    // 2024-01-01T12:00:00Z
-        "%Y-%m-%d",              // 2024-01-01 (midnight)
-        "%d/%m/%Y %H:%M:%S",     // 01/01/2024 12:00:00
-        "%d/%m/%Y",              // 01/01/2024 (midnight)
-        "%m/%d/%Y %H:%M:%S",     // 01/01/2024 12:00:00 (US format)
-        "%m/%d/%Y",              // 01/01/2024 (US format, midnight)
-        "%Y%m%d%H%M%S",          // XMLTV format: 20240101120000
-        "%Y%m%d",                // XMLTV date only: 20240101
-    ];
-    
-    // Try parsing with UTC timezone first
-    for format in &formats {
-        if let Ok(dt) = DateTime::parse_from_str(&format!("{}+00:00", time_str), &format!("{}%z", format)) {
-            return Ok(dt.timestamp());
-        }
-    }
-    
-    // Try parsing as naive datetime and assume UTC
-    for format in &formats {
-        if let Ok(naive_dt) = NaiveDateTime::parse_from_str(time_str, format) {
-            return Ok(naive_dt.and_utc().timestamp());
-        }
-    }
-    
-    // Try parsing as RFC3339/ISO8601
-    if let Ok(dt) = DateTime::parse_from_rfc3339(time_str) {
-        return Ok(dt.timestamp());
-    }
-    
-    // Try parsing as Unix timestamp
+    // Try parsing as Unix timestamp first (fastest check)
     if let Ok(epoch) = time_str.parse::<i64>() {
         return Ok(epoch);
     }
     
-    Err(format!("Unable to parse time string: '{}'. Supported formats include YYYY-MM-DD HH:MM:SS, ISO8601, Unix timestamps, and XMLTV format", time_str))
+    // Use flexible datetime parser which supports all common formats
+    if let Ok(dt) = crate::utils::datetime::DateTimeParser::parse_flexible(time_str) {
+        return Ok(dt.timestamp());
+    }
+    
+    Err(format!("Unable to parse time string: '{}'. Supported formats include Unix timestamps, RFC3339/ISO8601, SQLite datetime, European/US formats, and XMLTV format", time_str))
 }
 
 /// Resolve @time: functions in expressions to their numeric epoch values

@@ -13,6 +13,8 @@ use super::IngestorService;
 use crate::database::Database;
 use crate::models::*;
 use crate::services::{ProxyRegenerationService, StreamSourceBusinessService, EpgSourceService};
+use crate::repositories::{ChannelRepository, UrlLinkingRepository, StreamSourceRepository, EpgSourceRepository};
+use crate::repositories::traits::Repository;
 
 pub type CacheInvalidationSender = broadcast::Sender<()>;
 pub type CacheInvalidationReceiver = broadcast::Receiver<()>;
@@ -88,6 +90,8 @@ pub struct SchedulerService {
     stream_source_service: Arc<StreamSourceBusinessService>,
     epg_source_service: Arc<EpgSourceService>,
     database: Database,
+    stream_source_repo: StreamSourceRepository,
+    epg_source_repo: EpgSourceRepository,
     run_missed_immediately: bool,
     cached_sources: Arc<RwLock<HashMap<Uuid, CachedSource>>>,
     last_cache_refresh: Arc<RwLock<DateTime<Utc>>>,
@@ -108,13 +112,18 @@ impl SchedulerService {
         cache_invalidation_rx: Option<CacheInvalidationReceiver>,
         proxy_regeneration_service: Option<ProxyRegenerationService>,
     ) -> Self {
-        let ingestor = IngestorService::new(progress_service);
+        let channel_repo = ChannelRepository::new(database.pool().clone());
+        let ingestor = IngestorService::new(progress_service, channel_repo);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let stream_source_repo = StreamSourceRepository::new(database.pool().clone());
+        let epg_source_repo = EpgSourceRepository::new(database.pool().clone());
         Self {
             ingestor,
             stream_source_service,
             epg_source_service,
             database,
+            stream_source_repo,
+            epg_source_repo,
             run_missed_immediately,
             cached_sources: Arc::new(RwLock::new(HashMap::new())),
             last_cache_refresh: Arc::new(RwLock::new(Utc::now())),
@@ -199,9 +208,14 @@ impl SchedulerService {
     async fn refresh_cache(&self) -> Result<()> {
         debug!("Refreshing scheduler cache from database");
 
-        // Load both stream and EPG sources
-        let stream_sources = self.database.list_stream_sources().await?;
-        let epg_sources = self.database.list_epg_sources().await?;
+        // Load both stream and EPG sources using repositories
+        let stream_query = crate::repositories::stream_source::StreamSourceQuery::new();
+        let epg_query = crate::repositories::epg_source::EpgSourceQuery::new();
+        
+        let stream_sources = self.stream_source_repo.find_all(stream_query).await
+            .map_err(|e| anyhow::anyhow!("Failed to get stream sources: {}", e))?;
+        let epg_sources = self.epg_source_repo.find_all(epg_query).await
+            .map_err(|e| anyhow::anyhow!("Failed to get EPG sources: {}", e))?;
         let now = Utc::now();
 
         let mut cache = self.cached_sources.write().await;
@@ -412,11 +426,9 @@ impl SchedulerService {
 
                 // If this stream source has a linked EPG source, refresh it too
                 // BUT only if it hasn't been updated recently (prevent cascading loops)
-                if let Ok(Some(linked_epg)) = self
-                    .database
-                    .find_linked_epg_by_stream_id(stream_source.id)
-                    .await
-                {
+                let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
+                let linked_epgs = url_linking_repo.find_linked_epg_sources(&stream_source).await.unwrap_or_default();
+                if let Some(linked_epg) = linked_epgs.into_iter().next() {
                     // Check if linked EPG was updated recently (within last 5 minutes)
                     // Use scheduler cache to get more accurate timing
                     let should_refresh_linked = {
@@ -452,11 +464,9 @@ impl SchedulerService {
 
                 // If this EPG source has a linked stream source, refresh it too
                 // BUT only if it hasn't been updated recently (prevent cascading loops)
-                if let Ok(Some(linked_stream)) = self
-                    .database
-                    .find_linked_stream_by_epg_id(epg_source.id)
-                    .await
-                {
+                let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
+                let linked_streams = url_linking_repo.find_linked_stream_sources(&epg_source).await.unwrap_or_default();
+                if let Some(linked_stream) = linked_streams.into_iter().next() {
                     // Check if linked stream was updated recently (within last 5 minutes)
                     // Use scheduler cache to get more accurate timing
                     let should_refresh_linked = {
@@ -530,7 +540,7 @@ impl SchedulerService {
                         if let SchedulableSource::Stream(stream_src) = &mut cached_source.source {
                             // Refresh the cached timestamp from database
                             if let Ok(Some(updated_source)) =
-                                self.database.get_stream_source(source.id).await
+                                self.stream_source_repo.find_by_id(source.id).await
                             {
                                 stream_src.last_ingested_at = updated_source.last_ingested_at;
                                 debug!(
@@ -623,7 +633,7 @@ impl SchedulerService {
                         if let SchedulableSource::Epg(epg_src) = &mut cached_source.source {
                             // Refresh the cached timestamp from database
                             if let Ok(Some(updated_source)) =
-                                self.database.get_epg_source(source.id).await
+                                self.epg_source_repo.find_by_id(source.id).await
                             {
                                 epg_src.last_ingested_at = updated_source.last_ingested_at;
                                 debug!(
@@ -902,8 +912,8 @@ impl SchedulerService {
 
     /// Refresh a single source in the cache
     async fn refresh_single_source_in_cache(&self, source_id: Uuid) -> Result<()> {
-        // Fetch updated source from database
-        if let Ok(Some(stream_source)) = self.database.get_stream_source(source_id).await {
+        // Fetch updated source from database using repositories
+        if let Ok(Some(stream_source)) = self.stream_source_repo.find_by_id(source_id).await {
             let schedulable_source = SchedulableSource::Stream(stream_source);
             let source_name = schedulable_source.name().to_string(); // Store name before move
             
@@ -927,7 +937,7 @@ impl SchedulerService {
             }
             
             info!("Refreshed source '{}' in cache", source_name);
-        } else if let Ok(Some(epg_source)) = self.database.get_epg_source(source_id).await {
+        } else if let Ok(Some(epg_source)) = self.epg_source_repo.find_by_id(source_id).await {
             let schedulable_source = SchedulableSource::Epg(epg_source);
             let source_name = schedulable_source.name().to_string(); // Store name before move
             

@@ -8,11 +8,10 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::{
-    database::Database,
     errors::types::AppError,
     models::*,
     repositories::{
-        StreamProxyRepository, StreamSourceRepository, traits::Repository,
+        FilterRepository, StreamProxyRepository, StreamSourceRepository, traits::Repository,
     },
     web::handlers::proxies::PreviewProxyRequest,
 };
@@ -21,19 +20,19 @@ use crate::{
 pub struct ProxyConfigResolver {
     proxy_repo: StreamProxyRepository,
     stream_source_repo: StreamSourceRepository,
-    database: Database,
+    filter_repo: FilterRepository,
 }
 
 impl ProxyConfigResolver {
     pub fn new(
         proxy_repo: StreamProxyRepository,
         stream_source_repo: StreamSourceRepository,
-        database: Database,
+        filter_repo: FilterRepository,
     ) -> Self {
         Self {
             proxy_repo,
             stream_source_repo,
-            database,
+            filter_repo,
         }
     }
 
@@ -91,10 +90,10 @@ impl ProxyConfigResolver {
         let mut filters = Vec::new();
         for proxy_filter in proxy_filters {
             if let Some(filter) = self
-                .database
-                .get_filter(proxy_filter.filter_id)
+                .filter_repo
+                .find_by_id(proxy_filter.filter_id)
                 .await
-                .map_err(|e| AppError::Internal { message: e.to_string() })?
+                .map_err(|e| AppError::Repository(e))?
             {
                 filters.push(ProxyFilterConfig {
                     filter,
@@ -217,10 +216,10 @@ impl ProxyConfigResolver {
         let mut filters = Vec::new();
         for filter_req in &request.filters {
             if let Some(filter) = self
-                .database
-                .get_filter(filter_req.filter_id)
+                .filter_repo
+                .find_by_id(filter_req.filter_id)
                 .await
-                .map_err(|e| AppError::Internal { message: e.to_string() })?
+                .map_err(|e| AppError::Repository(e))?
             {
                 filters.push(ProxyFilterConfig {
                     filter,

@@ -533,6 +533,14 @@ pub enum FilterOperator {
     NotStartsWith, // Does not start with
     #[serde(rename = "not_ends_with")]
     NotEndsWith, // Does not end with
+    #[serde(rename = "greater_than")]
+    GreaterThan, // Greater than (numeric/datetime comparison)
+    #[serde(rename = "less_than")]
+    LessThan, // Less than (numeric/datetime comparison)
+    #[serde(rename = "greater_than_or_equal")]
+    GreaterThanOrEqual, // Greater than or equal (numeric/datetime comparison)
+    #[serde(rename = "less_than_or_equal")]
+    LessThanOrEqual, // Less than or equal (numeric/datetime comparison)
 }
 
 impl std::fmt::Display for FilterOperator {
@@ -548,6 +556,10 @@ impl std::fmt::Display for FilterOperator {
             FilterOperator::NotContains => write!(f, "not_contains"),
             FilterOperator::NotStartsWith => write!(f, "not_starts_with"),
             FilterOperator::NotEndsWith => write!(f, "not_ends_with"),
+            FilterOperator::GreaterThan => write!(f, "greater_than"),
+            FilterOperator::LessThan => write!(f, "less_than"),
+            FilterOperator::GreaterThanOrEqual => write!(f, "greater_than_or_equal"),
+            FilterOperator::LessThanOrEqual => write!(f, "less_than_or_equal"),
         }
     }
 }
@@ -1182,51 +1194,7 @@ pub struct EpgRefreshResponse {
     pub program_count: usize,
 }
 
-// Xtream Codes Integration Models
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct XtreamCodesCreateRequest {
-    pub name: String,
-    pub url: String,
-    pub username: String,
-    pub password: String,
-    pub max_concurrent_streams: i32,
-    pub update_cron: String,
-    pub timezone: Option<String>,
-    pub time_offset: Option<String>,
-    pub create_stream_source: bool,
-    pub create_epg_source: bool,
-    pub is_active: bool,
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct XtreamCodesCreateResponse {
-    pub success: bool,
-    pub message: String,
-    pub stream_source: Option<StreamSource>,
-    pub epg_source: Option<EpgSource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct XtreamCodesUpdateRequest {
-    pub name: String,
-    pub url: String,
-    pub username: String,
-    pub password: String,
-    pub max_concurrent_streams: i32,
-    pub update_cron: String,
-    pub timezone: String,
-    pub time_offset: String,
-    pub is_active: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LinkedXtreamSources {
-    pub stream_source: Option<StreamSource>,
-    pub epg_source: Option<EpgSource>,
-    pub link_id: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
 
 // Unified Source API Models
 #[derive(Debug, Clone, Serialize, Deserialize)]

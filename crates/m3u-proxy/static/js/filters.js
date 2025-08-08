@@ -87,7 +87,7 @@ class FiltersManager {
 
   async loadFilterFields() {
     try {
-      const response = await fetch("/api/v1/filters/fields");
+      const response = await fetch("/api/v1/filters/fields/stream");
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }

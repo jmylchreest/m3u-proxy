@@ -10,11 +10,13 @@ use uuid::Uuid;
 use crate::{
     errors::{RepositoryError, RepositoryResult},
     models::{
-        ProxyEpgSource, ProxyFilter, ProxySource, StreamProxy, StreamProxyCreateRequest,
-        StreamProxyMode, StreamProxyUpdateRequest,
+        Channel, EpgSource, ProxyEpgSource, ProxyFilter, ProxyFilterWithDetails, ProxySource, 
+        StreamProxy, StreamProxyCreateRequest, StreamProxyMode, StreamProxyUpdateRequest, 
+        StreamSource, Filter, FilterSourceType, EpgSourceType
     },
     repositories::traits::{QueryParams, Repository},
     utils::sqlite::SqliteRowExt,
+    utils::uuid_parser::parse_uuid_flexible,
 };
 
 #[derive(Clone)]
@@ -603,6 +605,249 @@ impl StreamProxyRepository {
             Some(row) => Ok(Some(Self::stream_proxy_from_row(&row)?)),
             None => Ok(None),
         }
+    }
+
+    /// Get all active stream proxies
+    pub async fn get_all_active(&self) -> RepositoryResult<Vec<StreamProxy>> {
+        let rows = sqlx::query(
+            "SELECT id, name, created_at, updated_at, last_generated_at, is_active,
+             auto_regenerate, cache_channel_logos, proxy_mode, upstream_timeout,
+             buffer_size, max_concurrent_streams, starting_channel_number,
+             description, cache_program_logos, relay_profile_id
+             FROM stream_proxies
+             WHERE is_active = 1",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut proxies = Vec::new();
+        for row in rows {
+            let proxy = StreamProxy {
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                name: row.get("name"),
+                description: row.get("description"),
+                proxy_mode: match row.get::<String, _>("proxy_mode").as_str() {
+                    "redirect" => StreamProxyMode::Redirect,
+                    "proxy" => StreamProxyMode::Proxy,
+                    "relay" => StreamProxyMode::Relay,
+                    _ => StreamProxyMode::Redirect,
+                },
+                upstream_timeout: row
+                    .get::<Option<i64>, _>("upstream_timeout")
+                    .map(|v| v as i32),
+                buffer_size: row.get::<Option<i64>, _>("buffer_size").map(|v| v as i32),
+                max_concurrent_streams: row
+                    .get::<Option<i64>, _>("max_concurrent_streams")
+                    .map(|v| v as i32),
+                starting_channel_number: row.get::<i64, _>("starting_channel_number") as i32,
+                created_at: row.get_datetime("created_at"),
+                updated_at: row.get_datetime("updated_at"),
+                last_generated_at: row.get_datetime_opt("last_generated_at"),
+                is_active: row.get("is_active"),
+                auto_regenerate: row.get("auto_regenerate"),
+                cache_channel_logos: row.get("cache_channel_logos"),
+                cache_program_logos: row.get("cache_program_logos"),
+                relay_profile_id: row
+                    .get::<Option<String>, _>("relay_profile_id")
+                    .map(|s| parse_uuid_flexible(&s).ok())
+                    .flatten(),
+            };
+            proxies.push(proxy);
+        }
+
+        Ok(proxies)
+    }
+
+    /// Get proxy sources with full StreamSource details
+    pub async fn get_proxy_sources_with_details(&self, proxy_id: Uuid) -> RepositoryResult<Vec<StreamSource>> {
+        let rows = sqlx::query(
+            "SELECT s.id, s.name, s.source_type, s.url, s.max_concurrent_streams, s.update_cron,
+             s.username, s.password, s.field_map, s.created_at, s.updated_at, s.last_ingested_at, s.is_active
+             FROM stream_sources s
+             JOIN proxy_sources ps ON s.id = ps.source_id
+             WHERE ps.proxy_id = ? AND s.is_active = 1
+             ORDER BY s.name"
+        )
+        .bind(proxy_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut sources = Vec::new();
+        for row in rows {
+            let source_type_str: String = row.get("source_type");
+            let source_type = match source_type_str.as_str() {
+                "m3u" => crate::models::StreamSourceType::M3u,
+                "xtream" => crate::models::StreamSourceType::Xtream,
+                _ => continue,
+            };
+
+            let source = StreamSource {
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                name: row.get("name"),
+                source_type,
+                url: row.get("url"),
+                max_concurrent_streams: row.get("max_concurrent_streams"),
+                update_cron: row.get("update_cron"),
+                username: row.get("username"),
+                password: row.get("password"),
+                field_map: row.get("field_map"),
+                ignore_channel_numbers: row.get("ignore_channel_numbers"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+                last_ingested_at: row.get("last_ingested_at"),
+                is_active: row.get("is_active"),
+            };
+            sources.push(source);
+        }
+
+        Ok(sources)
+    }
+
+    /// Update the last_generated_at timestamp for a proxy
+    pub async fn update_last_generated(&self, proxy_id: Uuid) -> RepositoryResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("UPDATE stream_proxies SET last_generated_at = ?, updated_at = ? WHERE id = ?")
+            .bind(&now)
+            .bind(&now)  
+            .bind(proxy_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Get proxy filters with full details (including filter information)
+    pub async fn get_proxy_filters_with_details(
+        &self,
+        proxy_id: Uuid,
+    ) -> RepositoryResult<Vec<ProxyFilterWithDetails>> {
+        let rows = sqlx::query(
+            "SELECT pf.proxy_id, pf.filter_id, pf.priority_order, pf.is_active, pf.created_at,
+                    f.name, f.starting_channel_number, f.is_inverse, f.is_system_default, f.expression, f.updated_at as filter_updated_at
+             FROM proxy_filters pf
+             JOIN filters f ON pf.filter_id = f.id
+             WHERE pf.proxy_id = ? AND pf.is_active = 1
+             ORDER BY pf.priority_order"
+        )
+        .bind(proxy_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            let proxy_filter = ProxyFilter {
+                proxy_id: parse_uuid_flexible(&row.get::<String, _>("proxy_id"))?,
+                filter_id: parse_uuid_flexible(&row.get::<String, _>("filter_id"))?,
+                priority_order: row.get("priority_order"),
+                is_active: row.get("is_active"),
+                created_at: row.get("created_at"),
+            };
+
+            let filter = Filter {
+                id: proxy_filter.filter_id,
+                name: row.get("name"),
+                source_type: FilterSourceType::Stream, // Default, could be enhanced
+                is_inverse: row.get("is_inverse"),
+                is_system_default: row.get("is_system_default"),
+                expression: row.get("expression"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("filter_updated_at"),
+            };
+
+            result.push(ProxyFilterWithDetails {
+                proxy_filter,
+                filter,
+            });
+        }
+
+        Ok(result)
+    }
+
+    /// Get a channel by ID within the context of a specific proxy
+    /// This validates that the channel belongs to one of the proxy's sources
+    pub async fn get_channel_for_proxy(
+        &self,
+        proxy_id: &str,
+        channel_id: Uuid,
+    ) -> RepositoryResult<Option<Channel>> {
+        let row = sqlx::query(
+            "SELECT c.id, c.source_id, c.tvg_id, c.tvg_name, c.tvg_chno, c.tvg_logo, c.tvg_shift,
+             c.group_title, c.channel_name, c.stream_url, c.created_at, c.updated_at
+             FROM channels c
+             JOIN proxy_sources ps ON c.source_id = ps.source_id
+             JOIN stream_proxies sp ON ps.proxy_id = sp.id
+             WHERE sp.id = ? AND c.id = ? AND sp.is_active = 1",
+        )
+        .bind(proxy_id.to_string())
+        .bind(channel_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(Channel {
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                source_id: parse_uuid_flexible(&row.get::<String, _>("source_id"))?,
+                tvg_id: row.get("tvg_id"),
+                tvg_name: row.get("tvg_name"),
+                tvg_chno: row.try_get("tvg_chno").unwrap_or(None),
+                tvg_logo: row.get("tvg_logo"),
+                tvg_shift: row.get("tvg_shift"),
+                group_title: row.get("group_title"),
+                channel_name: row.get("channel_name"),
+                stream_url: row.get("stream_url"),
+                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("created_at")
+                ).map_err(|e| crate::errors::RepositoryError::query_failed("parse created_at", e.to_string()))?,
+                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
+                    &row.get::<String, _>("updated_at")
+                ).map_err(|e| crate::errors::RepositoryError::query_failed("parse updated_at", e.to_string()))?,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    /// Get EPG sources associated with a proxy (with full EpgSource details)
+    pub async fn get_proxy_epg_sources_with_details(&self, proxy_id: Uuid) -> RepositoryResult<Vec<EpgSource>> {
+        let rows = sqlx::query(
+            "SELECT e.id, e.name, e.source_type, e.url, e.update_cron, e.username, e.password,
+             e.original_timezone, e.time_offset, e.created_at, e.updated_at,
+             e.last_ingested_at, e.is_active
+             FROM epg_sources e
+             JOIN proxy_epg_sources pes ON e.id = pes.epg_source_id
+             WHERE pes.proxy_id = ? AND e.is_active = 1
+             ORDER BY pes.priority_order",
+        )
+        .bind(proxy_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut sources = Vec::new();
+        for row in rows {
+            let source_type_str: String = row.get("source_type");
+            let source_type = match source_type_str.as_str() {
+                "xmltv" => EpgSourceType::Xmltv,
+                "xtream" => EpgSourceType::Xtream,
+                _ => continue,
+            };
+
+            let source = EpgSource {
+                id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
+                name: row.get("name"),
+                source_type,
+                url: row.get("url"),
+                update_cron: row.get("update_cron"),
+                username: row.get("username"),
+                password: row.get("password"),
+                original_timezone: row.get("original_timezone"),
+                time_offset: row.get("time_offset"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+                last_ingested_at: row.get("last_ingested_at"),
+                is_active: row.get("is_active"),
+            };
+            sources.push(source);
+        }
+
+        Ok(sources)
     }
 }
 

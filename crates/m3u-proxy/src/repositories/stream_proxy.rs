@@ -849,6 +849,124 @@ impl StreamProxyRepository {
 
         Ok(sources)
     }
+
+    /// Get all proxies that use a specific stream source (for regeneration triggers)
+    pub async fn find_proxies_by_stream_source(&self, source_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
+        let source_id_str = source_id.to_string();
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT sp.id
+            FROM stream_proxies sp
+            JOIN proxy_sources ps ON sp.id = ps.proxy_id
+            WHERE ps.source_id = ? AND sp.is_active = 1 AND sp.auto_regenerate = 1
+            "#,
+        )
+        .bind(&source_id_str)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| RepositoryError::QueryFailed {
+            query: "find_proxies_by_stream_source".to_string(),
+            message: e.to_string(),
+        })?;
+
+        let mut proxy_ids = Vec::new();
+        for row in rows {
+            let proxy_id = parse_uuid_flexible(&row.get::<String, _>("id")).map_err(|e| {
+                RepositoryError::QueryFailed {
+                    query: "find_proxies_by_stream_source".to_string(),
+                    message: format!("Failed to parse proxy_id: {}", e),
+                }
+            })?;
+            proxy_ids.push(proxy_id);
+        }
+
+        Ok(proxy_ids)
+    }
+
+    /// Get all proxies that use a specific EPG source (for regeneration triggers)
+    pub async fn find_proxies_by_epg_source(&self, epg_source_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
+        let epg_source_id_str = epg_source_id.to_string();
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT sp.id
+            FROM stream_proxies sp
+            JOIN proxy_epg_sources pes ON sp.id = pes.proxy_id  
+            WHERE pes.epg_source_id = ? AND sp.is_active = 1 AND sp.auto_regenerate = 1
+            "#,
+        )
+        .bind(&epg_source_id_str)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| RepositoryError::QueryFailed {
+            query: "find_proxies_by_epg_source".to_string(),
+            message: e.to_string(),
+        })?;
+
+        let mut proxy_ids = Vec::new();
+        for row in rows {
+            let proxy_id = parse_uuid_flexible(&row.get::<String, _>("id")).map_err(|e| {
+                RepositoryError::QueryFailed {
+                    query: "find_proxies_by_epg_source".to_string(),
+                    message: format!("Failed to parse proxy_id: {}", e),
+                }
+            })?;
+            proxy_ids.push(proxy_id);
+        }
+
+        Ok(proxy_ids)
+    }
+
+    /// Get all stream source IDs associated with a proxy (lightweight query for regeneration)
+    pub async fn get_stream_source_ids(&self, proxy_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
+        let proxy_id_str = proxy_id.to_string();
+        let rows = sqlx::query("SELECT source_id FROM proxy_sources WHERE proxy_id = ?")
+            .bind(&proxy_id_str)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryFailed {
+                query: "get_stream_source_ids".to_string(),
+                message: e.to_string(),
+            })?;
+
+        let mut source_ids = Vec::new();
+        for row in rows {
+            let source_id = parse_uuid_flexible(&row.get::<String, _>("source_id")).map_err(|e| {
+                RepositoryError::QueryFailed {
+                    query: "get_stream_source_ids".to_string(),
+                    message: format!("Failed to parse source_id: {}", e),
+                }
+            })?;
+            source_ids.push(source_id);
+        }
+
+        Ok(source_ids)
+    }
+
+    /// Get all EPG source IDs associated with a proxy (lightweight query for regeneration)
+    pub async fn get_epg_source_ids(&self, proxy_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
+        let proxy_id_str = proxy_id.to_string();
+        let rows = sqlx::query("SELECT epg_source_id FROM proxy_epg_sources WHERE proxy_id = ?")
+            .bind(&proxy_id_str)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryFailed {
+                query: "get_epg_source_ids".to_string(),
+                message: e.to_string(),
+            })?;
+
+        let mut source_ids = Vec::new();
+        for row in rows {
+            let epg_source_id = parse_uuid_flexible(&row.get::<String, _>("epg_source_id")).map_err(|e| {
+                RepositoryError::QueryFailed {
+                    query: "get_epg_source_ids".to_string(),
+                    message: format!("Failed to parse epg_source_id: {}", e),
+                }
+            })?;
+            source_ids.push(epg_source_id);
+        }
+
+        Ok(source_ids)
+    }
 }
 
 #[async_trait]

@@ -593,6 +593,16 @@ impl ChannelRepository {
         Ok(result.rows_affected())
     }
 
+    /// Get channel name by ID (lightweight query for display purposes)
+    pub async fn get_channel_name(&self, channel_id: Uuid) -> RepositoryResult<Option<String>> {
+        let result = sqlx::query_scalar::<_, String>("SELECT channel_name FROM channels WHERE id = ?")
+            .bind(channel_id.to_string())
+            .fetch_optional(&self.pool)
+            .await?;
+        
+        Ok(result)
+    }
+
     /// Convert from Channel model to ChannelCreateRequest
     pub fn from_channel(channel: &Channel) -> ChannelCreateRequest {
         ChannelCreateRequest {

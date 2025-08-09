@@ -4,7 +4,6 @@
 //! and serving content from active relays.
 
 use anyhow::Result;
-use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -20,6 +19,7 @@ use crate::database::Database;
 use crate::metrics::MetricsLogger;
 use crate::models::relay::*;
 use crate::proxy::session_tracker::ClientInfo;
+use crate::repositories::channel::ChannelRepository;
 use crate::services::ffmpeg_wrapper::{FFmpegProcess, FFmpegProcessWrapper};
 use sandboxed_file_manager::SandboxedManager;
 
@@ -205,7 +205,7 @@ impl RelayManager {
             let process_metrics = RelayProcessMetrics {
                 config_id: *config_id,
                 profile_name: process.config.profile.name.clone(),
-                channel_name: self.get_channel_name(&process.config.config.channel_id.to_string())
+                channel_name: self.get_channel_name(process.config.config.channel_id)
                     .await
                     .unwrap_or_else(|| format!("Channel {}", process.config.config.channel_id)),
                 is_running: true, // If it's in the map, it's running
@@ -264,7 +264,7 @@ impl RelayManager {
             let pid = process.child.id().unwrap_or(0);
             
             // Get channel name from database
-            let channel_name = self.get_channel_name(&process.config.config.channel_id.to_string()).await;
+            let channel_name = self.get_channel_name(process.config.config.channel_id).await;
             
             let health = RelayProcessHealth {
                 config_id: *config_id,
@@ -335,7 +335,7 @@ impl RelayManager {
             let pid = process.child.id().unwrap_or(0);
             
             // Get channel name from database
-            let channel_name = self.get_channel_name(&process.config.config.channel_id.to_string()).await;
+            let channel_name = self.get_channel_name(process.config.config.channel_id).await;
             
             let health = RelayProcessHealth {
                 config_id,
@@ -404,16 +404,12 @@ impl RelayManager {
         }
     }
 
-    /// Get channel name from database
-    async fn get_channel_name(&self, channel_id: &str) -> Option<String> {
-        let result = sqlx::query("SELECT channel_name FROM channels WHERE id = ?")
-            .bind(channel_id)
-            .fetch_optional(&self.database.pool())
-            .await;
-
-        match result {
-            Ok(Some(row)) => row.get::<String, _>("channel_name").into(),
-            _ => None,
+    /// Get channel name from database using repository
+    async fn get_channel_name(&self, channel_id: Uuid) -> Option<String> {
+        let channel_repo = ChannelRepository::new(self.database.pool());
+        match channel_repo.get_channel_name(channel_id).await {
+            Ok(name) => name,
+            Err(_) => None,
         }
     }
 
@@ -491,18 +487,11 @@ impl RelayManager {
                     let bytes_received = buffer_stats.bytes_received_from_upstream;
                     let bytes_delivered = buffer_stats.total_bytes_written;
                     
-                    // Get actual channel name from database, fallback to config channel_id
-                    let channel_id_str = process.config.config.channel_id.to_string();
-                    let channel_name = {
-                        let result = sqlx::query("SELECT channel_name FROM channels WHERE id = ?")
-                            .bind(&channel_id_str)
-                            .fetch_optional(&database.pool())
-                            .await;
-                        
-                        match result {
-                            Ok(Some(row)) => row.get::<String, _>("channel_name"),
-                            _ => format!("Channel {}", process.config.config.channel_id),
-                        }
+                    // Get actual channel name using repository
+                    let channel_repo = ChannelRepository::new(database.pool());
+                    let channel_name = match channel_repo.get_channel_name(process.config.config.channel_id).await {
+                        Ok(Some(name)) => name,
+                        _ => format!("Channel {}", process.config.config.channel_id),
                     };
                     
                     // Get FFmpeg PID and process stats if available using shared system manager

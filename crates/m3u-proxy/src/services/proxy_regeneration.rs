@@ -14,6 +14,7 @@ use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::config::Config;
+use crate::repositories::stream_proxy::StreamProxyRepository;
 use crate::services::progress_service::{ProgressManager, ProgressService, OperationType};
 use crate::ingestor::IngestionStateManager;
 
@@ -54,6 +55,7 @@ impl Default for RegenerationConfig {
 #[derive(Clone)]
 pub struct ProxyRegenerationService {
     pool: SqlitePool,
+    proxy_repository: StreamProxyRepository,
     config: RegenerationConfig,
     app_config: Config,
     /// Active delayed regeneration timers
@@ -88,6 +90,7 @@ impl ProxyRegenerationService {
         
         let service = Self {
             pool: pool.clone(),
+            proxy_repository: StreamProxyRepository::new(pool.clone()),
             config: config.unwrap_or_default(),
             app_config,
             pending_regenerations: Arc::new(Mutex::new(HashMap::new())),
@@ -781,72 +784,46 @@ impl ProxyRegenerationService {
         source_id: Uuid,
         source_type: &str,
     ) -> Result<Vec<Uuid>, sqlx::Error> {
-        let source_id_str = source_id.to_string();
-
-        let query = match source_type {
+        match source_type {
             "stream" => {
-                "SELECT DISTINCT sp.id as proxy_id
-                 FROM stream_proxies sp
-                 JOIN proxy_sources ps ON sp.id = ps.proxy_id
-                 WHERE ps.source_id = ? AND sp.is_active = 1 AND sp.auto_regenerate = 1"
+                self.proxy_repository.find_proxies_by_stream_source(source_id)
+                    .await
+                    .map_err(|e| sqlx::Error::RowNotFound)
             }
             "epg" => {
-                "SELECT DISTINCT sp.id as proxy_id
-                 FROM stream_proxies sp
-                 JOIN proxy_epg_sources pes ON sp.id = pes.proxy_id  
-                 WHERE pes.epg_source_id = ? AND sp.is_active = 1 AND sp.auto_regenerate = 1"
+                self.proxy_repository.find_proxies_by_epg_source(source_id)
+                    .await
+                    .map_err(|e| sqlx::Error::RowNotFound)
             }
-            _ => return Err(sqlx::Error::TypeNotFound { type_name: format!("Invalid source_type: {}", source_type) }),
-        };
-
-        let rows = sqlx::query(query)
-            .bind(&source_id_str)
-            .fetch_all(&self.pool)
-            .await?;
-
-        let proxy_ids = rows
-            .into_iter()
-            .filter_map(|row| {
-                let proxy_id_str: String = row.get("proxy_id");
-                proxy_id_str.parse::<Uuid>().ok()
-            })
-            .collect();
-
-        Ok(proxy_ids)
+            _ => Err(sqlx::Error::TypeNotFound { type_name: format!("Invalid source_type: {}", source_type) }),
+        }
     }
 
     /// Get all sources (stream and EPG) associated with a specific proxy
     async fn get_proxy_sources(&self, proxy_id: Uuid) -> Result<HashSet<(Uuid, String)>, sqlx::Error> {
-        let proxy_id_str = proxy_id.to_string();
         let mut sources = HashSet::new();
         
-        // Get stream sources
-        let stream_rows = sqlx::query(
-            "SELECT source_id FROM proxy_sources WHERE proxy_id = ?"
-        )
-        .bind(&proxy_id_str)
-        .fetch_all(&self.pool)
-        .await?;
-        
-        for row in stream_rows {
-            let source_id_str: String = row.get("source_id");
-            if let Ok(source_id) = source_id_str.parse::<Uuid>() {
-                sources.insert((source_id, "stream".to_string()));
+        // Get stream sources using repository
+        match self.proxy_repository.get_stream_source_ids(proxy_id).await {
+            Ok(stream_ids) => {
+                for source_id in stream_ids {
+                    sources.insert((source_id, "stream".to_string()));
+                }
+            }
+            Err(_) => {
+                return Err(sqlx::Error::RowNotFound);
             }
         }
         
-        // Get EPG sources
-        let epg_rows = sqlx::query(
-            "SELECT epg_source_id FROM proxy_epg_sources WHERE proxy_id = ?"
-        )
-        .bind(&proxy_id_str)
-        .fetch_all(&self.pool)
-        .await?;
-        
-        for row in epg_rows {
-            let source_id_str: String = row.get("epg_source_id");
-            if let Ok(source_id) = source_id_str.parse::<Uuid>() {
-                sources.insert((source_id, "epg".to_string()));
+        // Get EPG sources using repository
+        match self.proxy_repository.get_epg_source_ids(proxy_id).await {
+            Ok(epg_ids) => {
+                for source_id in epg_ids {
+                    sources.insert((source_id, "epg".to_string()));
+                }
+            }
+            Err(_) => {
+                return Err(sqlx::Error::RowNotFound);
             }
         }
         

@@ -40,7 +40,6 @@ pub mod error_fallback;
 pub mod ffmpeg_wrapper;
 pub mod file_categories;
 pub mod logo_cache_scanner;
-// pub mod metrics_housekeeper; // Disabled - historical statistics removed
 pub mod progress_service;
 pub mod proxy_regeneration;
 pub mod relay_manager;
@@ -57,7 +56,6 @@ pub use cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient, CyclicBu
 pub use epg_source_service::EpgSourceService;
 pub use error_fallback::{ErrorFallbackGenerator, StreamHealthMonitor};
 pub use ffmpeg_wrapper::FFmpegProcessWrapper;
-// pub use metrics_housekeeper::MetricsHousekeeper; // Disabled - historical statistics removed
 pub use progress_service::{ProgressService, OperationType};
 pub use proxy_regeneration::ProxyRegenerationService;
 pub use relay_manager::RelayManager;

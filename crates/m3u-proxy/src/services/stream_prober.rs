@@ -27,6 +27,13 @@ pub struct StreamInfo {
     pub channel_layout: Option<String>, // audio only
 }
 
+/// Error information from ffprobe
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeError {
+    pub code: Option<i32>,
+    pub string: Option<String>,
+}
+
 /// Complete probe result for an input stream
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeResult {
@@ -38,6 +45,7 @@ pub struct ProbeResult {
     pub has_audio: bool,
     pub video_streams: Vec<StreamInfo>,
     pub audio_streams: Vec<StreamInfo>,
+    pub error: Option<ProbeError>,
 }
 
 /// Stream mapping strategy based on probe results
@@ -73,8 +81,8 @@ impl StreamProber {
         cmd.args([
             "-v", "quiet",
             "-print_format", "json",
-            "-show_streams",
-            "-show_format",
+            "-show_error",
+            "-show_entries", "stream=index,codec_type,codec_name,codec_tag_string,duration,bit_rate,width,height,r_frame_rate,sample_rate,channels,channel_layout:format=format_name,duration,bit_rate",
             "-analyzeduration", "5000000",  // 5 seconds
             "-probesize", "5000000",        // 5MB
             input_url
@@ -87,17 +95,43 @@ impl StreamProber {
             .map_err(|_| anyhow::anyhow!("FFprobe timeout after {:?}", self.probe_timeout))?
             .map_err(|e| anyhow::anyhow!("Failed to execute ffprobe: {}", e))?;
         
-        if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        
+        // Parse JSON output even if command failed - ffprobe may still provide structured error info
+        let probe_data: serde_json::Value = if stdout.trim().is_empty() {
+            // If no JSON output, create minimal error structure
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("FFprobe failed for {}: {}", input_url, stderr);
-            return Err(anyhow::anyhow!("FFprobe failed: {}", stderr));
+            serde_json::json!({
+                "error": {
+                    "code": output.status.code().unwrap_or(-1),
+                    "string": stderr.to_string()
+                }
+            })
+        } else {
+            serde_json::from_str(&stdout)
+                .map_err(|e| anyhow::anyhow!("Failed to parse ffprobe output: {}", e))?
+        };
+        
+        let result = self.parse_probe_result(probe_data)?;
+        
+        // Check for structured errors in the result
+        if let Some(error) = &result.error {
+            let error_msg = error.string.as_deref().unwrap_or("Unknown ffprobe error");
+            warn!("FFprobe reported error for {}: {} (code: {:?})", input_url, error_msg, error.code);
+            
+            // Still return error for compatibility, but now with structured info
+            return Err(anyhow::anyhow!("FFprobe error: {} (code: {:?})", error_msg, error.code));
         }
         
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let probe_data: serde_json::Value = serde_json::from_str(&stdout)
-            .map_err(|e| anyhow::anyhow!("Failed to parse ffprobe output: {}", e))?;
+        // Log success with useful info
+        debug!("Successfully probed {}: {} streams ({} video, {} audio), format: {:?}", 
+               input_url, 
+               result.streams.len(), 
+               result.video_streams.len(), 
+               result.audio_streams.len(),
+               result.format_name);
         
-        self.parse_probe_result(probe_data)
+        Ok(result)
     }
     
     /// Parse ffprobe JSON output into our ProbeResult structure
@@ -106,13 +140,22 @@ impl StreamProber {
         let mut video_streams = Vec::new();
         let mut audio_streams = Vec::new();
         
+        // Parse error section first
+        let error = data.get("error").map(|error_obj| {
+            ProbeError {
+                code: error_obj.get("code").and_then(|v| v.as_i64()).map(|v| v as i32),
+                string: error_obj.get("string").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            }
+        });
+        
+        // Parse streams section - may be empty if there was an error
         if let Some(streams_array) = data.get("streams").and_then(|v| v.as_array()) {
             for (index, stream) in streams_array.iter().enumerate() {
                 let codec_type = stream.get("codec_type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
                 let codec_name = stream.get("codec_name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
                 
                 let stream_info = StreamInfo {
-                    index: index as u32,
+                    index: stream.get("index").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(index as u32),
                     codec_type: codec_type.clone(),
                     codec_name: codec_name.clone(),
                     codec_tag_string: stream.get("codec_tag_string").and_then(|v| v.as_str()).map(|s| s.to_string()),
@@ -136,6 +179,7 @@ impl StreamProber {
             }
         }
         
+        // Parse format section - may be empty if there was an error
         let format = data.get("format").and_then(|v| v.as_object());
         let format_name = format
             .and_then(|f| f.get("format_name"))
@@ -159,6 +203,7 @@ impl StreamProber {
             format_name,
             duration,
             bit_rate,
+            error,
         })
     }
     
@@ -348,5 +393,79 @@ mod tests {
         
         // Copy target
         assert!(should_copy_audio_stream("aac", "copy", Some(128000), Some(128)));
+    }
+
+    #[test]
+    fn test_parse_probe_result_with_error() {
+        let prober = StreamProber::new(None);
+        
+        // Test error parsing
+        let error_data = serde_json::json!({
+            "error": {
+                "code": 1,
+                "string": "Connection refused"
+            }
+        });
+        
+        let result = prober.parse_probe_result(error_data).unwrap();
+        assert!(result.error.is_some());
+        assert_eq!(result.error.as_ref().unwrap().code, Some(1));
+        assert_eq!(result.error.as_ref().unwrap().string, Some("Connection refused".to_string()));
+        assert!(result.streams.is_empty());
+    }
+
+    #[test] 
+    fn test_parse_probe_result_success() {
+        let prober = StreamProber::new(None);
+        
+        // Test successful parsing with limited fields (from show_entries)
+        let success_data = serde_json::json!({
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1920,
+                    "height": 1080,
+                    "r_frame_rate": "25/1",
+                    "bit_rate": "2000000"
+                },
+                {
+                    "index": 1,
+                    "codec_type": "audio", 
+                    "codec_name": "aac",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                    "bit_rate": "128000"
+                }
+            ],
+            "format": {
+                "format_name": "mpegts",
+                "duration": "3600.0",
+                "bit_rate": "2128000"
+            }
+        });
+        
+        let result = prober.parse_probe_result(success_data).unwrap();
+        assert!(result.error.is_none());
+        assert_eq!(result.streams.len(), 2);
+        assert_eq!(result.video_streams.len(), 1);
+        assert_eq!(result.audio_streams.len(), 1);
+        assert!(result.has_video);
+        assert!(result.has_audio);
+        assert_eq!(result.format_name, Some("mpegts".to_string()));
+        assert_eq!(result.duration, Some(3600.0));
+        assert_eq!(result.bit_rate, Some(2128000));
+        
+        // Check stream details
+        let video = &result.video_streams[0];
+        assert_eq!(video.codec_name, "h264");
+        assert_eq!(video.width, Some(1920));
+        assert_eq!(video.height, Some(1080));
+        
+        let audio = &result.audio_streams[0];
+        assert_eq!(audio.codec_name, "aac");
+        assert_eq!(audio.channels, Some(2));
+        assert_eq!(audio.sample_rate, Some(48000));
     }
 }

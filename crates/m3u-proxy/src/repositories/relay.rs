@@ -13,12 +13,11 @@ use crate::{
     errors::{RepositoryError, RepositoryResult},
     models::relay::{
         AudioCodec, ChannelRelayConfig, CreateChannelRelayConfigRequest, CreateRelayProfileRequest,
-        RelayProfile, RelayOutputFormat, RelayRuntimeStatus, UpdateChannelRelayConfigRequest,
+        RelayProfile, RelayOutputFormat, UpdateChannelRelayConfigRequest,
         UpdateRelayProfileRequest, VideoCodec,
     },
     repositories::traits::{QueryParams, Repository},
     utils::sqlite::SqliteRowExt,
-    utils::datetime::DateTimeParser,
 };
 
 #[derive(Clone)]
@@ -450,149 +449,6 @@ impl RelayRepository {
         Ok(())
     }
 
-    /// Update runtime status for a relay configuration
-    pub async fn update_runtime_status(
-        &self,
-        config_id: Uuid,
-        status: &RelayRuntimeStatus,
-    ) -> RepositoryResult<()> {
-        let config_id_str = config_id.to_string();
-        let started_at_str = status.started_at.map(|dt| dt.to_rfc3339());
-        let last_heartbeat_str = status.last_heartbeat.map(|dt| dt.to_rfc3339());
-        let updated_at_str = status.updated_at.to_rfc3339();
-
-        sqlx::query(
-            r#"
-            INSERT OR REPLACE INTO relay_runtime_status (
-                channel_relay_config_id, process_id, sandbox_path, is_running,
-                started_at, client_count, bytes_served, error_message,
-                last_heartbeat, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&config_id_str)
-        .bind(&status.process_id)
-        .bind(&status.sandbox_path)
-        .bind(status.is_running)
-        .bind(&started_at_str)
-        .bind(status.client_count)
-        .bind(status.bytes_served)
-        .bind(&status.error_message)
-        .bind(&last_heartbeat_str)
-        .bind(&updated_at_str)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| RepositoryError::QueryFailed {
-            query: "update_runtime_status".to_string(),
-            message: e.to_string(),
-        })?;
-
-        Ok(())
-    }
-
-    /// Get runtime status for a relay configuration
-    pub async fn get_runtime_status(&self, config_id: Uuid) -> RepositoryResult<Option<RelayRuntimeStatus>> {
-        let config_id_str = config_id.to_string();
-        let row = sqlx::query(
-            r#"
-            SELECT channel_relay_config_id, process_id, sandbox_path, is_running,
-                   started_at, client_count, bytes_served, error_message,
-                   last_heartbeat, updated_at
-            FROM relay_runtime_status
-            WHERE channel_relay_config_id = ?
-            "#,
-        )
-        .bind(config_id_str)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| RepositoryError::QueryFailed {
-            query: "get_runtime_status".to_string(),
-            message: e.to_string(),
-        })?;
-
-        match row {
-            Some(row) => {
-                let started_at = row
-                    .get::<Option<String>, _>("started_at")
-                    .and_then(|s| DateTimeParser::parse_flexible(&s).ok());
-                let last_heartbeat = row
-                    .get::<Option<String>, _>("last_heartbeat")
-                    .and_then(|s| DateTimeParser::parse_flexible(&s).ok());
-                let updated_at = row.get_datetime("updated_at");
-
-                Ok(Some(RelayRuntimeStatus {
-                    channel_relay_config_id: row
-                        .get_uuid("channel_relay_config_id")
-                        .map_err(|e| RepositoryError::QueryFailed {
-                            query: "get_runtime_status".to_string(),
-                            message: format!("Failed to parse channel_relay_config_id: {}", e),
-                        })?,
-                    process_id: row.get("process_id"),
-                    sandbox_path: row.get("sandbox_path"),
-                    is_running: row.get("is_running"),
-                    started_at,
-                    client_count: row.get("client_count"),
-                    bytes_served: row.get("bytes_served"),
-                    error_message: row.get("error_message"),
-                    last_heartbeat,
-                    updated_at,
-                }))
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Get all active runtime statuses
-    pub async fn get_all_runtime_statuses(&self) -> RepositoryResult<Vec<RelayRuntimeStatus>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT channel_relay_config_id, process_id, sandbox_path, is_running,
-                   started_at, client_count, bytes_served, error_message,
-                   last_heartbeat, updated_at
-            FROM relay_runtime_status
-            WHERE is_running = 1
-            ORDER BY started_at DESC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| RepositoryError::QueryFailed {
-            query: "get_all_runtime_statuses".to_string(),
-            message: e.to_string(),
-        })?;
-
-        let mut statuses = Vec::new();
-        for row in rows {
-            let started_at = row
-                .get::<Option<String>, _>("started_at")
-                .and_then(|s| DateTimeParser::parse_flexible(&s).ok());
-            let last_heartbeat = row
-                .get::<Option<String>, _>("last_heartbeat")
-                .and_then(|s| DateTimeParser::parse_flexible(&s).ok());
-            let updated_at = row.get_datetime("updated_at");
-
-            statuses.push(RelayRuntimeStatus {
-                channel_relay_config_id: row
-                    .get_uuid("channel_relay_config_id")
-                    .map_err(|e| RepositoryError::QueryFailed {
-                        query: "get_all_runtime_statuses".to_string(),
-                        message: format!("Failed to parse channel_relay_config_id: {}", e),
-                    })?,
-                process_id: row.get("process_id"),
-                sandbox_path: row.get("sandbox_path"),
-                is_running: row.get("is_running"),
-                started_at,
-                client_count: row.get("client_count"),
-                bytes_served: row.get("bytes_served"),
-                error_message: row.get("error_message"),
-                last_heartbeat,
-                updated_at,
-            });
-        }
-
-        Ok(statuses)
-    }
 }
 
 #[async_trait]

@@ -331,7 +331,7 @@ impl LogoCachingStage {
                                 }
                                 Err(e) => {
                                     cache_failures += 1;
-                                    warn!("Failed to cache logo for channel {}: {} - Error: {}", 
+                                    debug!("Failed to cache logo for channel {}: {} - Error: {}", 
                                         channel.channel_name, logo_url, e);
                                     // Keep original URL on cache failure
                                 }

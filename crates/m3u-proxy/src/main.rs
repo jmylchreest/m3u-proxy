@@ -183,17 +183,17 @@ async fn main() -> Result<()> {
 
     // Create state manager for ingestion progress tracking
     let state_manager = std::sync::Arc::new(IngestionStateManager::new());
-    info!("Ingestion state manager initialized");
+    tracing::debug!("Ingestion state manager initialized");
     
     // Create universal progress service
     let progress_service = std::sync::Arc::new(
         m3u_proxy::services::progress_service::ProgressService::new(state_manager.clone())
     );
-    info!("Universal progress service initialized");
+    tracing::debug!("Universal progress service initialized");
 
     // Initialize data mapping service
     let data_mapping_service = DataMappingService::new(database.pool());
-    info!("Data mapping service initialized");
+    tracing::debug!("Data mapping service initialized");
 
     // Initialize logo asset service and storage using config paths
     let logo_asset_storage = LogoAssetStorage::new(
@@ -205,7 +205,7 @@ async fn main() -> Result<()> {
     // Create cache invalidation channel for scheduler
     let (cache_invalidation_tx, cache_invalidation_rx) = create_cache_invalidation_channel();
 
-    info!("Logo asset service and storage initialized");
+    tracing::debug!("Logo asset service and storage initialized");
 
     // Initialize sandboxed file managers directly from storage config
     use sandboxed_file_manager::{CleanupPolicy, TimeMatch};
@@ -335,8 +335,7 @@ async fn main() -> Result<()> {
     // Clone proxy regeneration service for background processing
     let bg_proxy_regeneration_service = proxy_regeneration_service.clone();
 
-    // Clone again for metrics housekeeper
-    let metrics_database = database.clone();
+    // Configuration for services
     let metrics_config = config.clone();
 
     // Initialize relay manager with shared system
@@ -424,26 +423,11 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Start metrics housekeeper service if configured
-    if let Some(metrics_config_section) = &metrics_config.metrics {
-        info!("Starting metrics housekeeper service");
-        let housekeeper_db = metrics_database.pool();
-        let housekeeper_config = metrics_config_section.clone();
-        tokio::spawn(async move {
-            match m3u_proxy::services::MetricsHousekeeper::from_config(
-                housekeeper_db,
-                &housekeeper_config,
-            ) {
-                Ok(housekeeper) => {
-                    housekeeper.start().await;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to start metrics housekeeper: {}", e);
-                }
-            }
-        });
+    // Metrics housekeeper service disabled - historical statistics tracking removed
+    if metrics_config.metrics.is_some() {
+        info!("Metrics housekeeper disabled (historical statistics removed)");
     } else {
-        info!("Metrics housekeeper disabled (no configuration found)");
+        tracing::debug!("Metrics housekeeper disabled (no configuration found)");
     }
 
     info!("All services started successfully");

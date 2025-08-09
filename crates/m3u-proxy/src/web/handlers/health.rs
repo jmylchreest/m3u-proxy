@@ -261,14 +261,14 @@ async fn get_relay_manager_capabilities(
     relay_manager: &crate::services::relay_manager::RelayManager,
 ) -> (bool, Option<String>, bool, Option<String>, bool, crate::web::responses::DetailedHwAccelCapabilities) {
     // Get capabilities from relay manager (which already detected them at startup)
-    let ffmpeg_available = relay_manager.is_ffmpeg_available();
-    let ffmpeg_version = relay_manager.get_ffmpeg_version();
-    let ffprobe_available = relay_manager.is_ffprobe_available();
-    let ffprobe_version = relay_manager.get_ffprobe_version();
-    let hwaccel_available = relay_manager.is_hwaccel_available();
+    let ffmpeg_available = relay_manager.ffmpeg_available;
+    let ffmpeg_version = relay_manager.ffmpeg_version.clone();
+    let ffprobe_available = relay_manager.ffprobe_available;
+    let ffprobe_version = relay_manager.ffprobe_version.clone();
+    let hwaccel_available = relay_manager.hwaccel_available;
     
     // Convert HwAccelCapabilities to DetailedHwAccelCapabilities
-    let hwaccel_capabilities = convert_hwaccel_capabilities(relay_manager.get_hwaccel_capabilities());
+    let hwaccel_capabilities = convert_hwaccel_capabilities(&relay_manager.hwaccel_capabilities);
     
     (ffmpeg_available, ffmpeg_version, ffprobe_available, ffprobe_version, hwaccel_available, hwaccel_capabilities)
 }

@@ -79,23 +79,8 @@ pub struct ResolvedRelayConfig {
     pub config: ChannelRelayConfig,
     pub profile: RelayProfile,
     pub effective_args: Vec<String>, // Resolved FFmpeg arguments
-    pub is_temporary: bool, // Flag to indicate if this is a temporary config
 }
 
-/// Runtime status of active relay processes
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RelayRuntimeStatus {
-    pub channel_relay_config_id: Uuid,
-    pub process_id: Option<String>,
-    pub sandbox_path: String,
-    pub is_running: bool,
-    pub started_at: Option<DateTime<Utc>>,
-    pub client_count: i32,
-    pub bytes_served: i64,
-    pub error_message: Option<String>,
-    pub last_heartbeat: Option<DateTime<Utc>>,
-    pub updated_at: DateTime<Utc>,
-}
 
 /// Relay event for tracking lifecycle and metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -515,13 +500,6 @@ impl Default for RelayHealthStatus {
     }
 }
 
-/// Client information for relay sessions
-#[derive(Debug, Clone)]
-pub struct ClientInfo {
-    pub ip: String,
-    pub user_agent: Option<String>,
-    pub referer: Option<String>,
-}
 
 /// Connected client information for metrics
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -541,12 +519,9 @@ pub struct ConnectedClient {
 
 impl RelayProfile {
 
-    /// Create a new relay profile with validation
+    /// Create a new relay profile
     pub fn new(request: CreateRelayProfileRequest) -> Result<Self, String> {
-        // Validate Transport Stream compatibility
-        Self::validate_ts_compatibility(&request.video_codec, &request.audio_codec)?;
-        
-        // Validate manual args if provided
+        // Validate manual args if provided (basic security check)
         if let Some(ref manual_args) = request.manual_args {
             if let Ok(args_vec) = serde_json::from_str::<Vec<String>>(manual_args) {
                 Self::validate_ffmpeg_args(&args_vec)?;
@@ -589,22 +564,6 @@ impl RelayProfile {
         })
     }
 
-    /// Validate Transport Stream compatibility
-    pub fn validate_ts_compatibility(video_codec: &VideoCodec, audio_codec: &AudioCodec) -> Result<(), String> {
-        // All our defined codecs are TS-compatible, but we validate anyway
-        match video_codec {
-            VideoCodec::H264 | VideoCodec::H265 | VideoCodec::AV1 | 
-            VideoCodec::MPEG2 | VideoCodec::MPEG4 | VideoCodec::Copy => {},
-        }
-        
-        match audio_codec {
-            AudioCodec::AAC | AudioCodec::MP3 | AudioCodec::AC3 | 
-            AudioCodec::EAC3 | AudioCodec::MPEG2Audio | AudioCodec::DTS | 
-            AudioCodec::Copy => {},
-        }
-        
-        Ok(())
-    }
     
     /// Validate FFmpeg arguments for security and correctness (legacy support)
     pub fn validate_ffmpeg_args(args: &[String]) -> Result<(), String> {
@@ -715,11 +674,6 @@ impl ChannelRelayConfig {
 impl ResolvedRelayConfig {
     /// Create a resolved configuration by combining profile and channel config
     pub fn new(config: ChannelRelayConfig, profile: RelayProfile) -> Result<Self, String> {
-        Self::new_with_temporary_flag(config, profile, false)
-    }
-    
-    /// Create a resolved configuration with a temporary flag
-    pub fn new_with_temporary_flag(config: ChannelRelayConfig, profile: RelayProfile, is_temporary: bool) -> Result<Self, String> {
         // For codec-based profiles, we generate them dynamically in generate_ffmpeg_command()
         let effective_args = {
             // New codec-based profile - args generated dynamically
@@ -730,7 +684,6 @@ impl ResolvedRelayConfig {
             config,
             profile,
             effective_args,
-            is_temporary,
         })
     }
 
@@ -945,7 +898,6 @@ impl ResolvedRelayConfig {
             "hardware_acceleration": self.profile.enable_hardware_acceleration,
             "preferred_hwaccel": self.profile.preferred_hwaccel,
             "output_format": self.profile.output_format.to_string(),
-            "is_temporary": self.is_temporary,
             "created_at": chrono::Utc::now()
         });
         
@@ -999,9 +951,6 @@ impl ResolvedRelayConfig {
         
         // Add hardware acceleration flag
         args.extend(["-hwaccel".to_string(), hwaccel.clone()]);
-        
-        // NOTE: Video filters (-vf) are now added after the input and codec specifications
-        // in the generate_hwaccel_video_filters method
         
         Some(args)
     }
@@ -1092,24 +1041,11 @@ impl ResolvedRelayConfig {
 /// Error types for relay operations
 #[derive(Debug, thiserror::Error)]
 pub enum RelayError {
-    #[error("Relay configuration not found: {0}")]
-    ConfigNotFound(Uuid),
-    
-    #[error("Relay profile not found: {0}")]
-    ProfileNotFound(Uuid),
-    
     #[error("Relay process not found: {0}")]
     ProcessNotFound(Uuid),
     
-    #[error("Invalid FFmpeg argument: {0}")]
-    InvalidArgument(String),
-    
-    
     #[error("Invalid path: {0}")]
     InvalidPath(String),
-    
-    #[error("Segment not found: {0}")]
-    SegmentNotFound(String),
     
     #[error("FFmpeg process failed: {0}")]
     ProcessFailed(String),

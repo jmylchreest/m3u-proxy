@@ -9,13 +9,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
     models::{StreamProxy, StreamProxyMode},
-    models::relay::{VideoCodec, AudioCodec},
     proxy::session_tracker::{ClientInfo, SessionStats},
+    repositories::traits::Repository,
     utils::{resolve_proxy_id, url::UrlUtils, uuid_parser::parse_uuid_flexible},
     web::{
         AppState,
@@ -977,9 +976,9 @@ pub async fn serve_proxy_m3u(
     use crate::utils::resolve_proxy_id;
     use axum::http::{HeaderMap, StatusCode};
     use tokio::fs;
-    use tracing::{error, info, warn};
+    use tracing::{error, info, trace, warn};
 
-    info!("Serving static M3U8 for proxy: {}", id);
+    trace!("Serving static M3U8 for proxy: {}", id);
 
     // 1. Resolve proxy ID from any format and look up proxy
     let resolved_uuid = match resolve_proxy_id(&id) {
@@ -1366,7 +1365,6 @@ pub async fn proxy_stream(
 
     // Note: Relay logic is now handled in the match statement below based on proxy_mode
 
-    info!("Proxy mode for proxy {}: {:?}", proxy.id, proxy.proxy_mode);
     match proxy.proxy_mode {
         StreamProxyMode::Redirect => {
             info!(
@@ -1521,8 +1519,8 @@ pub async fn proxy_stream(
             };
 
             // Get relay profile from database
-            let relay_profile =
-                match get_relay_profile_by_id_internal(&state.database, relay_profile_id).await {
+            let relay_repo = crate::repositories::RelayRepository::new(state.database.pool());
+            let relay_profile = match relay_repo.find_by_id(relay_profile_id).await {
                     Ok(Some(profile)) => profile,
                     Ok(None) => {
                         error!("Relay profile {} not found", relay_profile_id);
@@ -1563,11 +1561,10 @@ pub async fn proxy_stream(
                 updated_at: chrono::Utc::now(),
             };
 
-            // Create ResolvedRelayConfig as temporary
-            let resolved_config = match crate::models::relay::ResolvedRelayConfig::new_with_temporary_flag(
+            // Create ResolvedRelayConfig
+            let resolved_config = match crate::models::relay::ResolvedRelayConfig::new(
                 channel_relay_config,
                 relay_profile,
-                true // Mark as temporary
             ) {
                 Ok(config) => config,
                 Err(e) => {
@@ -1627,10 +1624,6 @@ pub async fn proxy_stream(
                 .await
             {
                 Ok(_) => {
-                    info!(
-                        "FFmpeg relay process started for channel {}",
-                        channel.channel_name
-                    );
                 }
                 Err(e) => {
                     error!("Failed to start FFmpeg relay process: {}", e);
@@ -1653,9 +1646,8 @@ pub async fn proxy_stream(
             }
 
             // Serve content using relay manager directly
-            info!("Serving relay content with profile: {}", resolved_config.profile.name);
             
-            let client_info = crate::models::relay::ClientInfo {
+            let client_info = crate::proxy::session_tracker::ClientInfo {
                 ip: client_ip.clone(),
                 user_agent: user_agent.clone(),
                 referer: referer.clone(),
@@ -2168,68 +2160,6 @@ async fn proxy_http_stream(
 
 
 
-/// Helper function to get relay profile by ID
-async fn get_relay_profile_by_id_internal(
-    database: &crate::database::Database,
-    id: Uuid,
-) -> Result<Option<crate::models::relay::RelayProfile>, sqlx::Error> {
-    let query = r#"
-        SELECT id, name, description,
-               video_codec, audio_codec, video_profile, video_preset,
-               video_bitrate, audio_bitrate, audio_sample_rate, audio_channels,
-               enable_hardware_acceleration, preferred_hwaccel,
-               manual_args,
-               output_format, segment_duration, max_segments, input_timeout,
-               is_system_default, is_active, created_at, updated_at
-        FROM relay_profiles
-        WHERE id = ? AND is_active = true
-    "#;
-
-    let row = sqlx::query(query)
-        .bind(id.to_string())
-        .fetch_optional(&database.pool())
-        .await?;
-
-    if let Some(row) = row {
-        let profile = crate::models::relay::RelayProfile {
-            id: parse_uuid_flexible(&row.get::<String, _>("id")).unwrap(),
-            name: row.get("name"),
-            description: row.get("description"),
-            
-            // Codec settings
-            video_codec: row.get::<String, _>("video_codec").parse().unwrap_or(VideoCodec::Copy),
-            audio_codec: row.get::<String, _>("audio_codec").parse().unwrap_or(AudioCodec::Copy),
-            video_profile: row.get("video_profile"),
-            video_preset: row.get("video_preset"),
-            video_bitrate: row.get::<Option<i32>, _>("video_bitrate").map(|v| v as u32),
-            audio_bitrate: row.get::<Option<i32>, _>("audio_bitrate").map(|v| v as u32),
-            audio_sample_rate: row.get::<Option<i32>, _>("audio_sample_rate").map(|v| v as u32),
-            audio_channels: row.get::<Option<i32>, _>("audio_channels").map(|v| v as u32),
-            
-            // Hardware acceleration
-            enable_hardware_acceleration: row.get("enable_hardware_acceleration"),
-            preferred_hwaccel: row.get("preferred_hwaccel"),
-            
-            // Manual override
-            manual_args: row.get("manual_args"),
-            
-            // Container settings
-            output_format: row.get::<String, _>("output_format").parse().unwrap_or(crate::models::relay::RelayOutputFormat::TransportStream),
-            segment_duration: row.get("segment_duration"),
-            max_segments: row.get("max_segments"),
-            input_timeout: row.get("input_timeout"),
-            
-            // System flags
-            is_system_default: row.get("is_system_default"),
-            is_active: row.get("is_active"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-        };
-        Ok(Some(profile))
-    } else {
-        Ok(None)
-    }
-}
 
 /// Diagnose why a channel is not accessible in a proxy
 async fn diagnose_channel_proxy_issue(

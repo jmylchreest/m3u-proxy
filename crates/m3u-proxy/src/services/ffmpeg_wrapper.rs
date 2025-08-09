@@ -18,7 +18,7 @@ use std::task::{Context, Poll};
 
 use crate::metrics::MetricsLogger;
 use crate::models::relay::*;
-use crate::services::relay_manager::RelayMetricsExt;
+use crate::proxy::session_tracker::ClientInfo;
 use crate::services::cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient};
 use crate::services::error_fallback::{ErrorFallbackGenerator, StreamHealthMonitor};
 use crate::services::stream_prober::StreamProber;
@@ -131,16 +131,18 @@ pub struct FFmpegProcessWrapper {
     hwaccel_capabilities: HwAccelCapabilities,
     buffer_config: BufferConfig,
     stream_prober: Option<StreamProber>,
+    ffmpeg_command: String,
 }
 
 impl FFmpegProcessWrapper {
-    pub fn new(temp_manager: SandboxedManager, metrics: Arc<MetricsLogger>, hwaccel_capabilities: HwAccelCapabilities, buffer_config: BufferConfig, stream_prober: Option<StreamProber>) -> Self {
+    pub fn new(temp_manager: SandboxedManager, metrics: Arc<MetricsLogger>, hwaccel_capabilities: HwAccelCapabilities, buffer_config: BufferConfig, stream_prober: Option<StreamProber>, ffmpeg_command: String) -> Self {
         Self {
             temp_manager,
             metrics,
             hwaccel_capabilities,
             buffer_config,
             stream_prober,
+            ffmpeg_command,
         }
     }
 
@@ -245,9 +247,8 @@ impl FFmpegProcessWrapper {
         debug!("Starting FFmpeg process for relay {} with args: {:?}", 
                config.config.id, resolved_args);
 
-        // Build FFmpeg command (use ffmpeg_command from config or default)
-        let ffmpeg_command = "ffmpeg"; // TODO: Get from config
-        let mut cmd = TokioCommand::new(ffmpeg_command);
+        // Build FFmpeg command using the configured command
+        let mut cmd = TokioCommand::new(&self.ffmpeg_command);
         cmd.args(&resolved_args);
         cmd.kill_on_drop(true);
         cmd.stdout(Stdio::piped());
@@ -279,11 +280,10 @@ impl FFmpegProcessWrapper {
         let error_fallback = Arc::new(ErrorFallbackGenerator::new(fallback_config.clone(), cyclic_buffer.clone()));
         let health_monitor = Arc::new(StreamHealthMonitor::new(config.config.id, fallback_config));
         
-        // Start monitoring stderr for errors
+        // Start monitoring stderr for errors with message accumulation
         if let Some(stderr) = child.stderr.take() {
             let config_id = config.config.id;
-            let is_temporary = config.is_temporary;
-            let metrics = self.metrics.clone();
+            let _metrics = self.metrics.clone();
             let error_count_clone = error_count.clone();
             let health_monitor_clone = health_monitor.clone();
             let error_fallback_clone = error_fallback.clone();
@@ -291,14 +291,23 @@ impl FFmpegProcessWrapper {
             tokio::spawn(async move {
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
+                let mut accumulated_lines = Vec::new();
+                let mut last_flush = tokio::time::Instant::now();
+                let accumulation_period = tokio::time::Duration::from_millis(100);
                 
                 while let Ok(Some(line)) = lines.next_line().await {
                     let line_lower = line.to_lowercase();
+                    accumulated_lines.push(line.clone());
                     
+                    // Handle critical errors immediately
                     if line_lower.contains("error") || line_lower.contains("failed") || 
                        line_lower.contains("invalid") || line_lower.contains("could not") ||
                        line_lower.contains("unable to") || line_lower.contains("not found") {
-                        error!("FFmpeg error for relay {}: {}", config_id, line);
+                        
+                        // Flush accumulated messages as structured log
+                        Self::flush_ffmpeg_messages(&accumulated_lines, config_id, "error").await;
+                        accumulated_lines.clear();
+                        last_flush = tokio::time::Instant::now();
                         
                         // Increment error count
                         error_count_clone.fetch_add(1, Ordering::SeqCst);
@@ -306,52 +315,45 @@ impl FFmpegProcessWrapper {
                         // Update health monitor and check for fallback
                         let health = health_monitor_clone.record_error(&line).await;
                         if health_monitor_clone.should_activate_fallback() {
-                            warn!("Activating error fallback for relay {} due to health status: {:?}", config_id, health);
+                            warn!("relay_id={} status=fallback_activated health={:?}", config_id, health);
                             
                             // Start error fallback
                             if let Err(e) = error_fallback_clone.start_fallback(&line, config_id).await {
-                                error!("Failed to start error fallback for relay {}: {}", config_id, e);
+                                error!("relay_id={} status=fallback_failed error={}", config_id, e);
                             } else {
-                                // Log fallback activation (only for persistent configs)
-                                if !is_temporary {
-                                    if let Err(e) = metrics.log_relay_event(
-                                        config_id,
-                                        RelayEventType::FallbackActivated,
-                                        Some(&format!("Fallback activated due to: {}", line))
-                                    ).await {
-                                        error!("Failed to log fallback activation event: {}", e);
-                                    }
-                                }
                                 
                                 // Mark health monitor as in fallback mode
                                 health_monitor_clone.mark_fallback(&line).await;
                             }
                         }
                         
-                        // Log error event (only for persistent configs)
-                        if !is_temporary {
-                            if let Err(e) = metrics.log_relay_event(
-                                config_id,
-                                RelayEventType::Error,
-                                Some(&line)
-                            ).await {
-                                error!("Failed to log relay error event: {}", e);
-                            }
-                        }
                     } else if line_lower.contains("warning") || line_lower.contains("deprecated") {
-                        warn!("FFmpeg warning for relay {}: {}", config_id, line);
-                    } else if line_lower.contains("opening") || line_lower.contains("input") ||
-                              line_lower.contains("output") || line_lower.contains("stream") ||
-                              line_lower.contains("encoder") || line_lower.contains("decoder") ||
-                              line_lower.contains("fps=") || line_lower.contains("bitrate=") ||
-                              line_lower.contains("time=") || line_lower.contains("speed=") {
-                        info!("FFmpeg status for relay {}: {}", config_id, line);
-                        
+                        // Flush accumulated messages as warning
+                        Self::flush_ffmpeg_messages(&accumulated_lines, config_id, "warning").await;
+                        accumulated_lines.clear();
+                        last_flush = tokio::time::Instant::now();
+                    } else {
                         // Mark as healthy if we see good status messages
-                        health_monitor_clone.mark_healthy().await;
-                    } else if !line.trim().is_empty() {
-                        debug!("FFmpeg output for relay {}: {}", config_id, line);
+                        if line_lower.contains("opening") || line_lower.contains("input") ||
+                           line_lower.contains("output") || line_lower.contains("stream") ||
+                           line_lower.contains("encoder") || line_lower.contains("decoder") {
+                            health_monitor_clone.mark_healthy().await;
+                        }
+                        
+                        // Check if we should flush accumulated messages
+                        if last_flush.elapsed() >= accumulation_period {
+                            if !accumulated_lines.is_empty() {
+                                Self::flush_ffmpeg_messages(&accumulated_lines, config_id, "status").await;
+                                accumulated_lines.clear();
+                            }
+                            last_flush = tokio::time::Instant::now();
+                        }
                     }
+                }
+                
+                // Flush any remaining messages
+                if !accumulated_lines.is_empty() {
+                    Self::flush_ffmpeg_messages(&accumulated_lines, config_id, "status").await;
                 }
             });
         }
@@ -389,7 +391,6 @@ impl FFmpegProcessWrapper {
 
         // Store the process ID for monitoring
         let process_id = child.id();
-        info!("Started FFmpeg process for relay {} with PID: {:?}", config.config.id, process_id);
 
         // Create process wrapper
         let process = FFmpegProcess {
@@ -410,10 +411,155 @@ impl FFmpegProcessWrapper {
             config_snapshot: config.create_config_snapshot(input_url),
         };
 
-        info!("Started FFmpeg process for relay {} using profile '{}' with command: {:?}", 
-              config.config.id, config.profile.name, resolved_args);
+        // Single consolidated log with PID and command
+        info!("Started FFmpeg process for relay {} using profile '{}' with PID: {:?} command: {:?}", 
+              config.config.id, config.profile.name, process_id, resolved_args);
 
         Ok(process)
+    }
+
+    /// Flush accumulated FFmpeg messages as structured log entries
+    async fn flush_ffmpeg_messages(lines: &[String], relay_id: Uuid, level: &str) {
+        if lines.is_empty() {
+            return;
+        }
+        
+        // Extract key information from FFmpeg output
+        let mut video_codec = None;
+        let mut audio_codec = None;
+        let mut resolution = None;
+        let mut fps = None;
+        let mut bitrate = None;
+        let mut input_info = None;
+        
+        for line in lines {
+            // All parsing is wrapped in safe blocks that never panic
+            let line_lower = line.to_lowercase();
+            
+            // Extract video codec info - safe string matching only
+            if line_lower.contains("video:") {
+                if line_lower.contains("h264") {
+                    video_codec = Some("h264");
+                } else if line_lower.contains("h265") || line_lower.contains("hevc") {
+                    video_codec = Some("h265");
+                } else if line_lower.contains("av1") {
+                    video_codec = Some("av1");
+                }
+            }
+            
+            // Extract audio codec info - safe string matching only  
+            if line_lower.contains("audio:") {
+                if line_lower.contains("aac") {
+                    audio_codec = Some("aac");
+                } else if line_lower.contains("mp3") {
+                    audio_codec = Some("mp3");
+                } else if line_lower.contains("ac3") {
+                    audio_codec = Some("ac3");
+                }
+            }
+            
+            // Extract resolution - with safe bounds checking
+            if resolution.is_none() { // Only try once to avoid overwriting
+                if let Some(res_start) = line.find(", ") {
+                    if let Some(res_end) = line.get(res_start..).and_then(|s| s.find(" [")) {
+                        if let Some(res_part) = line.get(res_start + 2..res_start + res_end) {
+                            if res_part.contains("x") && 
+                               res_part.len() > 3 && res_part.len() < 20 && 
+                               res_part.chars().any(|c| c.is_ascii_digit()) {
+                                resolution = Some(res_part);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Extract FPS - with safe parsing
+            if fps.is_none() { // Only try once to avoid overwriting
+                if let Some(fps_pos) = line_lower.find(" fps") {
+                    if let Some(fps_start) = line.get(..fps_pos).and_then(|s| s.rfind(' ')) {
+                        if let Some(fps_str) = line.get(fps_start + 1..fps_pos) {
+                            // Safe parsing - ignore any parse errors
+                            if let Ok(fps_val) = fps_str.parse::<f32>() {
+                                if fps_val > 0.0 && fps_val < 1000.0 { // Reasonable bounds
+                                    fps = Some(fps_val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Extract bitrate from progress lines - with safe bounds
+            if line_lower.contains("bitrate=") {
+                if let Some(br_start) = line_lower.find("bitrate=") {
+                    if let Some(remaining) = line.get(br_start + 8..) {
+                        let br_value = if let Some(br_end) = remaining.find(" ") {
+                            remaining.get(..br_end).unwrap_or("").trim()
+                        } else {
+                            remaining.trim()
+                        };
+                        
+                        // Only set if non-empty and reasonable length
+                        if !br_value.is_empty() && br_value.len() < 50 {
+                            bitrate = Some(br_value);
+                        }
+                    }
+                }
+            }
+            
+            // Extract input info - safe string operations only
+            if input_info.is_none() && line_lower.starts_with("input #") {
+                input_info = Some(line.trim());
+            }
+        }
+        
+        // Create structured log entry - guaranteed to succeed
+        let full_output = lines.join("\n");
+        
+        // Skip logging if output is empty, only whitespace, or repetition messages
+        let trimmed_output = full_output.trim();
+        if trimmed_output.is_empty() || 
+           trimmed_output.starts_with("Last message repeated") ||
+           trimmed_output.contains("message repeated") {
+            return;
+        }
+        
+        // Build log message safely - each field is optional and safe
+        let mut log_parts = vec![format!("relay_id={} event=ffmpeg_{}", relay_id, level)];
+        
+        if let Some(v) = video_codec {
+            log_parts.push(format!(" video_codec={}", v));
+        }
+        if let Some(a) = audio_codec {
+            log_parts.push(format!(" audio_codec={}", a));
+        }
+        if let Some(r) = resolution {
+            log_parts.push(format!(" resolution={}", r));
+        }
+        if let Some(f) = fps {
+            log_parts.push(format!(" fps={:.1}", f));
+        }
+        if let Some(b) = bitrate {
+            log_parts.push(format!(" bitrate={}", b));
+        }
+        if let Some(i) = input_info {
+            // Escape quotes in input info to avoid breaking log parsing
+            let escaped_input = i.replace('"', "'");
+            log_parts.push(format!(" input=\"{}\"", escaped_input));
+        }
+        
+        // Always add space before output= for proper formatting
+        let log_msg = format!("{} output={}", 
+            log_parts.join(""), 
+            full_output
+        );
+        
+        // Log at appropriate level - guaranteed to work
+        match level {
+            "error" => error!("{}", log_msg),
+            "warning" => warn!("{}", log_msg), 
+            _ => info!("{}", log_msg),
+        }
     }
 
     // Note: Hardware acceleration logic moved to ResolvedRelayConfig::generate_ffmpeg_command()
@@ -448,14 +594,6 @@ impl FFmpegProcess {
         // Create a relay session ID for tracking
         let relay_session_id = format!("relay_{}_{}", self.config.config.id, Uuid::new_v4());
         
-        // Log client connection event (only for persistent configs)
-        if !self.config.is_temporary {
-            self.metrics.log_relay_event(
-                self.config.config.id,
-                RelayEventType::ClientConnect,
-                Some(&format!("Client: {} - {}", client_info.ip, client_info.user_agent.as_deref().unwrap_or("unknown")))
-            ).await.ok();
-        }
 
         match self.config.profile.output_format {
             RelayOutputFormat::TransportStream => {
@@ -519,15 +657,7 @@ impl FFmpegProcess {
         let remaining = self.client_count.fetch_sub(1, Ordering::Relaxed).saturating_sub(1);
         if remaining == 0 {
             // Log that all clients have disconnected
-            let metrics = self.metrics.clone();
-            let config_id = self.config.config.id;
-            tokio::spawn(async move {
-                metrics.log_relay_event(
-                    config_id,
-                    RelayEventType::ClientDisconnect,
-                    Some("All clients disconnected")
-                ).await.ok();
-            });
+            let _metrics = self.metrics.clone();
         }
         remaining
     }
@@ -579,15 +709,6 @@ impl FFmpegProcess {
                 // Process has exited - log the exit status and potentially trigger fallback
                 if status.success() {
                     info!("FFmpeg process for relay {} exited successfully", self.config.config.id);
-                    let metrics = self.metrics.clone();
-                    let config_id = self.config.config.id;
-                    tokio::spawn(async move {
-                        metrics.log_relay_event(
-                            config_id,
-                            RelayEventType::Stop,
-                            Some("FFmpeg process exited successfully")
-                        ).await.ok();
-                    });
                 } else {
                     error!("FFmpeg process for relay {} exited with error: {:?}", self.config.config.id, status);
                     
@@ -595,7 +716,6 @@ impl FFmpegProcess {
                     let error_message = format!("FFmpeg process exited with error: {:?}", status);
                     let health_monitor = self.health_monitor.clone();
                     let error_fallback = self.error_fallback.clone();
-                    let metrics = self.metrics.clone();
                     let config_id = self.config.config.id;
                     
                     tokio::spawn(async move {
@@ -609,24 +729,11 @@ impl FFmpegProcess {
                             error!("Failed to start error fallback for relay {}: {}", config_id, e);
                         } else {
                             // Log fallback activation
-                            if let Err(e) = metrics.log_relay_event(
-                                config_id,
-                                RelayEventType::FallbackActivated,
-                                Some(&format!("Fallback activated due to process exit: {:?}", status))
-                            ).await {
-                                error!("Failed to log fallback activation event: {}", e);
-                            }
                             
                             // Mark health monitor as in fallback mode
                             health_monitor.mark_fallback(&error_message).await;
                         }
                         
-                        // Log error event
-                        metrics.log_relay_event(
-                            config_id,
-                            RelayEventType::Error,
-                            Some(&error_message)
-                        ).await.ok();
                     });
                 }
                 false
@@ -639,7 +746,6 @@ impl FFmpegProcess {
                 let error_message = format!("Error checking FFmpeg process status: {}", e);
                 let health_monitor = self.health_monitor.clone();
                 let error_fallback = self.error_fallback.clone();
-                let metrics = self.metrics.clone();
                 let config_id = self.config.config.id;
                 
                 tokio::spawn(async move {
@@ -651,14 +757,6 @@ impl FFmpegProcess {
                         if let Err(e) = error_fallback.start_fallback(&error_message, config_id).await {
                             error!("Failed to start error fallback for relay {}: {}", config_id, e);
                         } else {
-                            // Log fallback activation
-                            if let Err(e) = metrics.log_relay_event(
-                                config_id,
-                                RelayEventType::FallbackActivated,
-                                Some(&format!("Fallback activated due to monitoring error: {}", e))
-                            ).await {
-                                error!("Failed to log fallback activation event: {}", e);
-                            }
                             
                             // Mark health monitor as in fallback mode
                             health_monitor.mark_fallback(&error_message).await;
@@ -681,23 +779,6 @@ impl FFmpegProcess {
             return Err(RelayError::ProcessFailed(format!("Failed to kill process: {}", e)));
         }
 
-        // Log stop event (only for persistent configs)
-        if !self.config.is_temporary {
-            self.metrics.log_relay_event(
-                self.config.config.id,
-                RelayEventType::Stop,
-                Some("Process killed")
-            ).await.ok();
-        }
-
-        // Log fallback deactivation if it was active (only for persistent configs)
-        if self.error_fallback.is_fallback_active() && !self.config.is_temporary {
-            self.metrics.log_relay_event(
-                self.config.config.id,
-                RelayEventType::FallbackDeactivated,
-                Some("Fallback stopped due to process termination")
-            ).await.ok();
-        }
 
         info!("Killed FFmpeg process for relay {}", self.config.config.id);
         Ok(())

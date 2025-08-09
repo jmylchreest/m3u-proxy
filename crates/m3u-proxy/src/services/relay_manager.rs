@@ -13,13 +13,13 @@ use sysinfo::{Pid, PidExt, ProcessExt, SystemExt};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
-use crate::utils::uuid_parser::parse_uuid_flexible;
 use crate::utils::SystemManager;
 
 use crate::config::Config;
 use crate::database::Database;
 use crate::metrics::MetricsLogger;
 use crate::models::relay::*;
+use crate::proxy::session_tracker::ClientInfo;
 use crate::services::ffmpeg_wrapper::{FFmpegProcess, FFmpegProcessWrapper};
 use sandboxed_file_manager::SandboxedManager;
 
@@ -31,21 +31,12 @@ pub struct RelayManager {
     metrics_logger: Arc<MetricsLogger>,
     cleanup_interval: Duration,
     system_manager: SystemManager,
-    #[allow(dead_code)]
-    config: Config,
-    ffmpeg_available: bool,
-    #[allow(dead_code)]
-    ffmpeg_version: Option<String>,
-    #[allow(dead_code)]
-    ffmpeg_command: String,
-    #[allow(dead_code)]
-    ffprobe_available: bool,
-    #[allow(dead_code)]
-    ffprobe_version: Option<String>,
-    #[allow(dead_code)]
-    ffprobe_command: String,
-    hwaccel_available: bool,
-    hwaccel_capabilities: HwAccelCapabilities,
+    pub ffmpeg_available: bool,
+    pub ffmpeg_version: Option<String>,
+    pub ffprobe_available: bool,
+    pub ffprobe_version: Option<String>,
+    pub hwaccel_available: bool,
+    pub hwaccel_capabilities: HwAccelCapabilities,
 }
 
 impl RelayManager {
@@ -111,17 +102,15 @@ impl RelayManager {
                 hwaccel_capabilities.clone(),
                 config.relay.as_ref().map(|r| r.buffer.clone()).unwrap_or_default(),
                 stream_prober,
+                ffmpeg_command.clone(),
             ),
             metrics_logger,
             cleanup_interval: Duration::from_secs(10),
             system_manager: SystemManager::new(Duration::from_secs(5)),
-            config,
             ffmpeg_available,
             ffmpeg_version: ffmpeg_version.clone(),
-            ffmpeg_command: ffmpeg_command.clone(),
             ffprobe_available,
             ffprobe_version: ffprobe_version.clone(),
-            ffprobe_command: ffprobe_command.clone(),
             hwaccel_available,
             hwaccel_capabilities,
         };
@@ -137,100 +126,6 @@ impl RelayManager {
         manager
     }
 
-    /// Get relay configuration for a specific channel from proxy-level relay profile
-    pub async fn get_relay_config_for_channel(
-        &self,
-        proxy_id: Uuid,
-        channel_id: Uuid,
-    ) -> Result<Option<ResolvedRelayConfig>, RelayError> {
-        let query = r#"
-            SELECT
-                sp.id as proxy_id, sp.name as proxy_name, sp.relay_profile_id,
-                rp.id as profile_id, rp.name as profile_name, rp.description as profile_description,
-                rp.video_codec, rp.audio_codec, rp.video_profile, rp.video_preset,
-                rp.video_bitrate, rp.audio_bitrate, rp.audio_sample_rate, rp.audio_channels,
-                rp.enable_hardware_acceleration, rp.preferred_hwaccel, rp.manual_args,
-                rp.output_format, rp.segment_duration, rp.max_segments,
-                rp.input_timeout, rp.is_system_default,
-                rp.is_active as profile_is_active, rp.created_at as profile_created_at,
-                rp.updated_at as profile_updated_at
-            FROM stream_proxies sp
-            JOIN relay_profiles rp ON sp.relay_profile_id = rp.id
-            WHERE sp.id = ? AND sp.is_active = true AND rp.is_active = true
-        "#;
-
-        let row = sqlx::query(query)
-            .bind(proxy_id.to_string())
-            .fetch_optional(&self.database.pool())
-            .await?;
-
-        if let Some(row) = row {
-            // Build config from proxy data (creating a synthetic config)
-            let profile_id = parse_uuid_flexible(&row.get::<String, _>("profile_id"))
-                .map_err(|e| RelayError::InvalidArgument(format!("Invalid profile_id UUID: {}", e)))?;
-            let config = ChannelRelayConfig {
-                id: crate::utils::generate_relay_config_uuid(&proxy_id, &channel_id, &profile_id),
-                proxy_id,
-                channel_id,
-                profile_id,
-                name: format!("{} - Channel {}", row.get::<String, _>("proxy_name"), channel_id),
-                description: Some(format!("Auto-generated relay config for proxy {} channel {}", proxy_id, channel_id)),
-                custom_args: None, // No custom args at proxy level
-                is_active: true,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            };
-
-            // Build profile from row data
-            let profile = RelayProfile {
-                id: parse_uuid_flexible(&row.get::<String, _>("profile_id"))
-                    .map_err(|e| RelayError::InvalidArgument(format!("Invalid profile_id UUID: {}", e)))?,
-                name: row.get("profile_name"),
-                description: row.get("profile_description"),
-                
-                // Codec settings
-                video_codec: row.get::<String, _>("video_codec").parse()
-                    .map_err(|e| RelayError::InvalidArgument(e))?,
-                audio_codec: row.get::<String, _>("audio_codec").parse()
-                    .map_err(|e| RelayError::InvalidArgument(e))?,
-                video_profile: row.get("video_profile"),
-                video_preset: row.get("video_preset"),
-                video_bitrate: row.get::<Option<i32>, _>("video_bitrate").map(|v| v as u32),
-                audio_bitrate: row.get::<Option<i32>, _>("audio_bitrate").map(|v| v as u32),
-                audio_sample_rate: row.get::<Option<i32>, _>("audio_sample_rate").map(|v| v as u32),
-                audio_channels: row.get::<Option<i32>, _>("audio_channels").map(|v| v as u32),
-                
-                // Hardware acceleration
-                enable_hardware_acceleration: row.get("enable_hardware_acceleration"),
-                preferred_hwaccel: row.get("preferred_hwaccel"),
-                
-                // Manual override and legacy
-                manual_args: row.get("manual_args"),
-                
-                // Container settings
-                output_format: row
-                    .get::<String, _>("output_format")
-                    .parse()
-                    .map_err(|e| RelayError::InvalidArgument(e))?,
-                segment_duration: row.get("segment_duration"),
-                max_segments: row.get("max_segments"),
-                input_timeout: row.get("input_timeout"),
-                
-                // System flags
-                is_system_default: row.get("is_system_default"),
-                is_active: row.get("profile_is_active"),
-                created_at: row.get("profile_created_at"),
-                updated_at: row.get("profile_updated_at"),
-            };
-
-            // Create resolved config
-            let resolved_config = ResolvedRelayConfig::new(config, profile)
-                .map_err(|e| RelayError::InvalidArgument(e))?;
-            Ok(Some(resolved_config))
-        } else {
-            Ok(None)
-        }
-    }
 
     /// Ensure a relay process is running for the given configuration
     pub async fn ensure_relay_running(
@@ -255,21 +150,8 @@ impl RelayManager {
             .await
             .insert(config_id, process);
 
-        // Update runtime status (only for persistent configs)
-        if !config.is_temporary {
-            self.update_runtime_status(config_id, true).await?;
-        }
 
-        // Log relay start event
-        self.metrics_logger
-            .log_relay_event_if_persistent(config, RelayEventType::Start, Some(&config.profile.name))
-            .await
-            .ok();
 
-        info!(
-            "Started relay {} using profile '{}'",
-            config_id, config.profile.name
-        );
         Ok(())
     }
 
@@ -291,39 +173,6 @@ impl RelayManager {
             
             let content = process.serve_content(path, client_info).await?;
 
-            // Track content delivery metrics
-            match &content {
-                RelayContent::Playlist(playlist) => {
-                    self.metrics_logger
-                        .log_relay_event(
-                            config_id,
-                            RelayEventType::ClientConnect,
-                            Some(&format!("HLS playlist delivered: {} bytes", playlist.len())),
-                        )
-                        .await
-                        .ok();
-                }
-                RelayContent::Segment(segment) => {
-                    self.metrics_logger
-                        .log_relay_event(
-                            config_id,
-                            RelayEventType::ClientConnect,
-                            Some(&format!("Content segment delivered: {} bytes", segment.len())),
-                        )
-                        .await
-                        .ok();
-                }
-                RelayContent::Stream(_) => {
-                    self.metrics_logger
-                        .log_relay_event(
-                            config_id,
-                            RelayEventType::ClientConnect,
-                            Some("Stream content delivered (buffered)"),
-                        )
-                        .await
-                        .ok();
-                }
-            }
 
             Ok(content)
         } else {
@@ -334,13 +183,8 @@ impl RelayManager {
     /// Stop a relay process
     pub async fn stop_relay(&self, config_id: Uuid) -> Result<(), RelayError> {
         if let Some(mut process) = self.active_processes.write().await.remove(&config_id) {
-            let is_temporary = process.config.is_temporary;
             process.kill().await?;
             
-            // Only update runtime status for persistent configs
-            if !is_temporary {
-                self.update_runtime_status(config_id, false).await?;
-            }
             
             info!("Stopped relay process for config {}", config_id);
         }
@@ -573,60 +417,12 @@ impl RelayManager {
         }
     }
 
-    /// Update runtime status in database (only for persistent configs)
-    async fn update_runtime_status(
-        &self,
-        config_id: Uuid,
-        is_running: bool,
-    ) -> Result<(), RelayError> {
-        let now = chrono::Utc::now().to_rfc3339();
-
-        if is_running {
-            let query = r#"
-                INSERT INTO relay_runtime_status (
-                    channel_relay_config_id, sandbox_path, is_running, started_at,
-                    client_count, bytes_served, last_heartbeat, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(channel_relay_config_id) DO UPDATE SET
-                    is_running = excluded.is_running,
-                    started_at = excluded.started_at,
-                    last_heartbeat = excluded.last_heartbeat,
-                    updated_at = excluded.updated_at
-            "#;
-
-            sqlx::query(query)
-                .bind(config_id.to_string())
-                .bind(format!("relay_{}", config_id))
-                .bind(true)
-                .bind(&now)
-                .bind(0i32) // client_count
-                .bind(0i64) // bytes_served
-                .bind(&now)
-                .bind(&now)
-                .execute(&self.database.pool())
-                .await?;
-        } else {
-            let query = r#"
-                UPDATE relay_runtime_status
-                SET is_running = false, updated_at = ?
-                WHERE channel_relay_config_id = ?
-            "#;
-
-            sqlx::query(query)
-                .bind(&now)
-                .bind(config_id.to_string())
-                .execute(&self.database.pool())
-                .await?;
-        }
-
-        Ok(())
-    }
 
     /// Start the cleanup task for idle processes
     fn start_cleanup_task(&self) {
         let processes = self.active_processes.clone();
-        let database = self.database.clone();
-        let metrics_logger = self.metrics_logger.clone();
+        let _database = self.database.clone();
+        let _metrics_logger = self.metrics_logger.clone();
         let interval = self.cleanup_interval;
 
         tokio::spawn(async move {
@@ -641,7 +437,7 @@ impl RelayManager {
                         // Check if process is still running
                         if !process.is_running() {
                             warn!("FFmpeg process for relay {} has died", config_id);
-                            to_remove.push((*config_id, process.config.is_temporary));
+                            to_remove.push(*config_id);
                             continue;
                         }
 
@@ -653,35 +449,21 @@ impl RelayManager {
                             && process.last_activity.elapsed() > Duration::from_secs(60)
                         {
                             info!("Relay {} is idle (no clients for 1 minute), scheduling for cleanup", config_id);
-                            to_remove.push((*config_id, process.config.is_temporary));
+                            to_remove.push(*config_id);
                         }
                     }
 
                     // Remove processes that should be cleaned up
-                    for (config_id, _) in &to_remove {
+                    for config_id in &to_remove {
                         if let Some(mut process) = processes_guard.remove(config_id) {
                             let _ = process.kill().await;
                         }
                     }
                 }
 
-                // Update runtime status for cleaned up processes (only persistent ones)
-                for (config_id, is_temporary) in to_remove {
-                    if !is_temporary {
-                        let _ = Self::update_runtime_status_static(&database, config_id, false).await;
-                    }
-                    
-                    // Log cleanup event (will be handled appropriately by log_relay_event_if_persistent)
-                    // For now, just log to application logs since we don't have access to the full config here
-                    if is_temporary {
-                        info!("Cleaned up temporary relay process: {}", config_id);
-                    } else {
-                        metrics_logger
-                            .log_relay_event(config_id, RelayEventType::Stop, Some("idle_cleanup"))
-                            .await
-                            .ok();
-                        info!("Cleaned up persistent relay process: {}", config_id);
-                    }
+                // Log cleanup for removed processes
+                for config_id in to_remove {
+                    info!("Cleaned up relay process: {}", config_id);
                 }
             }
         });
@@ -691,6 +473,7 @@ impl RelayManager {
     fn start_status_logging_task(&self) {
         let processes = self.active_processes.clone();
         let database = self.database.clone();
+        let system = self.system_manager.get_system();
         
         tokio::spawn(async move {
             let mut status_interval = tokio::time::interval(Duration::from_secs(30));
@@ -701,9 +484,6 @@ impl RelayManager {
                 if processes_guard.is_empty() {
                     continue;
                 }
-                
-                info!("=== Relay Status Report ===");
-                info!("Active relays: {}", processes_guard.len());
                 
                 for (config_id, process) in processes_guard.iter() {
                     let buffer_stats = process.cyclic_buffer.get_stats().await;
@@ -725,47 +505,48 @@ impl RelayManager {
                         }
                     };
                     
-                    // Use first 8 characters of config_id for relay identifier (more readable than full UUID)
-                    let relay_short_id = config_id.to_string().chars().take(8).collect::<String>();
+                    // Get FFmpeg PID and process stats if available using shared system manager
+                    let (ffmpeg_pid, cpu_usage, memory_mb) = match process.child.id() {
+                        Some(pid) => {
+                            let pid_str = pid.to_string();
+                            
+                            // Use the shared system manager for process stats
+                            let system_guard = system.read().await;
+                            
+                            if let Some(process_info) = system_guard.process(Pid::from_u32(pid)) {
+                                let cpu = format!("{:.1}%", process_info.cpu_usage());
+                                let memory = format!("{:.1}MB", process_info.memory() as f64 / 1024.0 / 1024.0);
+                                (pid_str, cpu, memory)
+                            } else {
+                                (pid_str, "N/A".to_string(), "N/A".to_string())
+                            }
+                        },
+                        None => ("N/A".to_string(), "N/A".to_string(), "N/A".to_string())
+                    };
                     
+                    // Format bandwidth in human-readable format
+                    let rx_formatted = crate::utils::human_format::format_memory(bytes_received as f64);
+                    let tx_formatted = crate::utils::human_format::format_memory(bytes_delivered as f64);
+                    
+                    // Use structured logging with key-value pairs including process metrics
                     info!(
-                        "  Relay {}: {} | Profile: {} | Clients: {} | Rx: {} | Tx: {}",
-                        relay_short_id,
+                        "relay_id={} channel=\"{}\" profile=\"{}\" clients={} ffmpeg_pid={} cpu_usage={} memory_usage={} stream_url=\"{}\" rx_total={} tx_total={}",
+                        config_id,
                         channel_name,
                         process.config.profile.name,
                         client_count,
-                        crate::utils::human_format::format_memory(bytes_received as f64),
-                        crate::utils::human_format::format_memory(bytes_delivered as f64)
+                        ffmpeg_pid,
+                        cpu_usage,
+                        memory_mb,
+                        process.input_url,
+                        rx_formatted,
+                        tx_formatted
                     );
                 }
-                info!("=== End Relay Status ===");
             }
         });
     }
 
-    /// Static version of update_runtime_status for use in cleanup task (only for persistent configs)
-    async fn update_runtime_status_static(
-        database: &Database,
-        config_id: Uuid,
-        is_running: bool,
-    ) -> Result<(), RelayError> {
-        let now = chrono::Utc::now().to_rfc3339();
-
-        let query = r#"
-            UPDATE relay_runtime_status
-            SET is_running = ?, updated_at = ?
-            WHERE channel_relay_config_id = ?
-        "#;
-
-        sqlx::query(query)
-            .bind(is_running)
-            .bind(&now)
-            .bind(config_id.to_string())
-            .execute(&database.pool())
-            .await?;
-
-        Ok(())
-    }
 
     /// Check if FFprobe is available and get version information (static version for initialization)
     async fn check_ffprobe_availability_static(ffprobe_command: &str) -> (bool, Option<String>) {
@@ -1028,112 +809,13 @@ impl RelayManager {
         }
     }
     
-    /// Get FFmpeg availability status
-    pub fn is_ffmpeg_available(&self) -> bool {
-        self.ffmpeg_available
-    }
-    
-    /// Get FFmpeg version
-    pub fn get_ffmpeg_version(&self) -> Option<String> {
-        self.ffmpeg_version.clone()
-    }
-    
-    /// Get FFprobe availability status
-    pub fn is_ffprobe_available(&self) -> bool {
-        self.ffprobe_available
-    }
-    
-    /// Get FFprobe version
-    pub fn get_ffprobe_version(&self) -> Option<String> {
-        self.ffprobe_version.clone()
-    }
-    
-    /// Get hardware acceleration availability status
-    pub fn is_hwaccel_available(&self) -> bool {
-        self.hwaccel_available
-    }
-    
-    /// Get hardware acceleration capabilities
-    pub fn get_hwaccel_capabilities(&self) -> &HwAccelCapabilities {
-        &self.hwaccel_capabilities
-    }
-    
-    /// Get number of CPU cores
-    pub async fn get_cpu_count(&self) -> u32 {
-        let system = self.system_manager.get_system();
-        let system = system.read().await;
-        system.cpus().len() as u32
-    }
 }
 
-/// Extension trait for MetricsLogger to add relay-specific logging
-pub trait RelayMetricsExt {
-    fn log_relay_event(
-        &self,
-        config_id: Uuid,
-        event_type: RelayEventType,
-        details: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<(), RelayError>> + Send;
-    
-    fn log_relay_event_if_persistent(
-        &self,
-        config: &ResolvedRelayConfig,
-        event_type: RelayEventType,
-        details: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<(), RelayError>> + Send;
-}
-
-impl RelayMetricsExt for MetricsLogger {
-    async fn log_relay_event(
-        &self,
-        config_id: Uuid,
-        event_type: RelayEventType,
-        details: Option<&str>,
-    ) -> Result<(), RelayError> {
-        let query = r#"
-            INSERT INTO relay_events (config_id, event_type, details, timestamp)
-            VALUES (?, ?, ?, ?)
-        "#;
-
-        sqlx::query(query)
-            .bind(config_id.to_string())
-            .bind(event_type.to_string())
-            .bind(details)
-            .bind(chrono::Utc::now().to_rfc3339())
-            .execute(self.pool())
-            .await?;
-
-        Ok(())
-    }
-    
-    async fn log_relay_event_if_persistent(
-        &self,
-        config: &ResolvedRelayConfig,
-        event_type: RelayEventType,
-        details: Option<&str>,
-    ) -> Result<(), RelayError> {
-        if config.is_temporary {
-            // Just log to application logs for temporary configs
-            info!("Temporary relay config {}: {} - {}", 
-                  config.config.id, event_type.to_string(), details.unwrap_or(""));
-            return Ok(());
-        }
-        
-        // Log to database for persistent configs
-        self.log_relay_event(config.config.id, event_type, details).await
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_relay_manager_creation() {
-        // This test would require mocking the database and temp manager
-        // For now, it's a placeholder to show the testing structure
-        assert!(true);
-    }
 
     #[test]
     fn test_relay_event_type_serialization() {

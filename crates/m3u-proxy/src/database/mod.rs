@@ -129,7 +129,7 @@ impl Database {
         let migrations = MigrationAssets::get_migrations();
         
         // Debug: Log what migrations are available
-        tracing::info!("Available migrations: {:?}", migrations.iter().map(|(name, _)| name).collect::<Vec<_>>());
+        tracing::debug!("Available migrations: {:?}", migrations.iter().map(|(name, _)| name).collect::<Vec<_>>());
 
         for (name, content) in migrations {
             // Extract version from filename (e.g., "001_initial_schema.sql" -> 1)
@@ -639,5 +639,6 @@ impl Database {
         url_linking_repo.find_linked_epg_sources(stream_source).await
             .map_err(|e| anyhow::anyhow!("Repository error: {}", e))
     }
+
 
 }

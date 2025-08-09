@@ -287,7 +287,7 @@ impl ProxyRegenerationService {
             app_config.clone(),
         ).await {
             Ok(()) => {
-                info!("Successfully completed regeneration for proxy {}", proxy_id);
+                debug!("Successfully completed regeneration for proxy {}", proxy_id);
             }
             Err(e) => {
                 error!("Failed to regenerate proxy {}: {}", proxy_id, e);
@@ -505,7 +505,7 @@ impl ProxyRegenerationService {
                 app_config,
             ).await {
                 Ok(()) => {
-                    info!("Successfully completed regeneration for proxy {}", proxy_id);
+                    debug!("Successfully completed regeneration for proxy {}", proxy_id);
                 }
                 Err(e) => {
                     error!("Failed to regenerate proxy {}: {}", proxy_id, e);

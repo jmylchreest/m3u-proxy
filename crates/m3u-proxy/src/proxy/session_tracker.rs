@@ -158,23 +158,21 @@ impl SessionTracker {
         let session_id = session_stats.session_id.clone();
         
         debug!(
-            "Starting proxy session: {} | Client: {} | Proxy: {} ({}) | Channel: {} ({}) | Upstream: {}",
+            "session_id={} event=session_start client_ip={} proxy_name=\"{}\" proxy_id={} channel_name=\"{}\" channel_id={} upstream_url=\"{}\"{}{}",
             session_id,
             session_stats.client_info.ip,
             session_stats.proxy_name,
             session_stats.proxy_id,
             session_stats.channel_name,
             session_stats.channel_id,
-            session_stats.upstream_url
+            session_stats.upstream_url,
+            session_stats.client_info.user_agent.as_ref()
+                .map(|ua| format!(" user_agent=\"{}\"", ua))
+                .unwrap_or_default(),
+            session_stats.client_info.referer.as_ref()
+                .map(|ref_| format!(" referer=\"{}\"", ref_))
+                .unwrap_or_default()
         );
-        
-        if let Some(user_agent) = &session_stats.client_info.user_agent {
-            debug!("Client User-Agent: {} | Session: {}", user_agent, session_id);
-        }
-        
-        if let Some(referer) = &session_stats.client_info.referer {
-            debug!("Client Referer: {} | Session: {}", referer, session_id);
-        }
         
         self.sessions.write().await.insert(session_id, session_stats);
     }
@@ -192,12 +190,13 @@ impl SessionTracker {
             session.record_error(error);
             
             warn!(
-                "Session error: {} | Client: {} | Proxy: {} | Channel: {} | Error: {}",
+                "session_id={} event=session_error client_ip={} proxy_name=\"{}\" channel_name=\"{}\" error=\"{}\" total_errors={}",
                 session_id,
                 session.client_info.ip,
                 session.proxy_name,
                 session.channel_name,
-                session.last_error.as_ref().unwrap_or(&"Unknown".to_string())
+                session.last_error.as_ref().unwrap_or(&"Unknown".to_string()),
+                session.errors
             );
         }
     }
@@ -208,9 +207,9 @@ impl SessionTracker {
             session.record_connection_attempt();
             
             debug!(
-                "Connection attempt #{} | Session: {} | Client: {} | Proxy: {} | Channel: {}",
-                session.connection_attempts,
+                "session_id={} event=connection_attempt attempt_number={} client_ip={} proxy_name=\"{}\" channel_name=\"{}\"",
                 session_id,
+                session.connection_attempts,
                 session.client_info.ip,
                 session.proxy_name,
                 session.channel_name
@@ -222,7 +221,7 @@ impl SessionTracker {
     pub async fn end_session(&self, session_id: &str) {
         if let Some(session) = self.sessions.write().await.remove(session_id) {
             info!(
-                "Session ended: {} | Duration: {} | Data: {} | Avg bitrate: {:.2} kbps | Chunks: {} | Errors: {} | Client: {} | Proxy: {} | Channel: {}",
+                "session_id={} event=session_end duration={} data_served={} avg_bitrate_kbps={:.2} chunks_served={} errors={} client_ip={} proxy_name=\"{}\" channel_name=\"{}\"{}",
                 session_id,
                 session.format_duration(),
                 session.format_bytes(),
@@ -231,7 +230,10 @@ impl SessionTracker {
                 session.errors,
                 session.client_info.ip,
                 session.proxy_name,
-                session.channel_name
+                session.channel_name,
+                session.client_info.user_agent.as_ref()
+                    .map(|ua| format!(" user_agent=\"{}\"", ua))
+                    .unwrap_or(" user_agent=unknown".to_string())
             );
         }
     }
@@ -320,8 +322,8 @@ impl SessionTracker {
                     format!("{:.2} {}", size, UNITS[unit_index])
                 };
                 
-                info!(
-                    "Session Summary: {} active sessions | Total data: {} | Chunks: {} | Errors: {} | Proxies: {} | Channels: {} | Clients: {}",
+                debug!(
+                    "event=session_summary active_sessions={} total_data={} total_chunks={} total_errors={} unique_proxies={} unique_channels={} unique_clients={}",
                     session_count,
                     total_bytes_formatted,
                     total_chunks,
@@ -341,7 +343,7 @@ impl SessionTracker {
                         .map(|(name, count)| format!("{}: {}", name, count))
                         .collect();
                     
-                    debug!("Top proxies by sessions: [{}]", top_proxies.join(", "));
+                    debug!("event=top_proxies proxies=\"{}\"", top_proxies.join(", "));
                 }
                 
                 // Log top channels by session count
@@ -354,14 +356,14 @@ impl SessionTracker {
                         .map(|(name, count)| format!("{}: {}", name, count))
                         .collect();
                     
-                    debug!("Top channels by sessions: [{}]", top_channels.join(", "));
+                    debug!("event=top_channels channels=\"{}\"", top_channels.join(", "));
                 }
                 
                 // Log detailed per-session statistics (for debug level)
                 for session in sessions_read.values() {
                     if session.duration().as_secs() > 0 {
                         debug!(
-                            "Session detail: {} | Duration: {} | Data: {} | Bitrate: {:.2} kbps | Client: {} | Proxy: {} | Channel: {}",
+                            "session_id={} event=session_detail duration={} data_served={} avg_bitrate_kbps={:.2} client_ip={} proxy_name=\"{}\" channel_name=\"{}\"",
                             session.session_id,
                             session.format_duration(),
                             session.format_bytes(),
@@ -400,13 +402,21 @@ impl SessionTracker {
                 for session_id in to_remove {
                     if let Some(session) = sessions_write.remove(&session_id) {
                         warn!(
-                            "Session timeout: {} | Duration: {} | Data: {} | Client: {} | Proxy: {} | Channel: {}",
+                            "session_id={} event=session_timeout duration={} data_served={} client_ip={} proxy_name=\"{}\" channel_name=\"{}\" chunks_served={} errors={}{}{}",
                             session_id,
                             session.format_duration(),
                             session.format_bytes(),
                             session.client_info.ip,
                             session.proxy_name,
-                            session.channel_name
+                            session.channel_name,
+                            session.chunks_served,
+                            session.errors,
+                            session.client_info.user_agent.as_ref()
+                                .map(|ua| format!(" user_agent=\"{}\"", ua))
+                                .unwrap_or(" user_agent=unknown".to_string()),
+                            session.last_error.as_ref()
+                                .map(|err| format!(" last_error=\"{}\"", err))
+                                .unwrap_or_default()
                         );
                     }
                 }

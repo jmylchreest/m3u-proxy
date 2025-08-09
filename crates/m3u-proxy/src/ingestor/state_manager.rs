@@ -4,6 +4,8 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
+use crate::utils::jitter::generate_jitter_percent;
+
 use crate::models::*;
 
 
@@ -126,8 +128,7 @@ impl IngestionStateManager {
         let capped_delay = base_delay.min(max_delay);
 
         // Add 25% jitter
-        let jitter_range = capped_delay / 4;
-        let jitter = fastrand::u64(0..=jitter_range);
+        let jitter = generate_jitter_percent(capped_delay, 25);
 
         capped_delay + jitter
     }

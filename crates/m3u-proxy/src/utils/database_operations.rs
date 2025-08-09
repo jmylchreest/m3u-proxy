@@ -4,6 +4,7 @@ use tracing::{debug, info, trace};
 use tokio::time::sleep;
 
 use crate::errors::{AppError, AppResult};
+use crate::utils::jitter::generate_jitter_ms;
 
 /// Database operation utilities with retry logic and robust transaction management
 pub struct DatabaseOperations;
@@ -44,7 +45,7 @@ impl DatabaseOperations {
                             // Calculate exponential backoff with jitter
                             let base_delay = Duration::from_millis(100);
                             let exponential_delay = base_delay * 2_u32.pow(attempts - 1);
-                            let jitter = Duration::from_millis(fastrand::u64(0..=50));
+                            let jitter = Duration::from_millis(generate_jitter_ms(50));
                             let total_delay = exponential_delay + jitter;
                             
                             debug!(

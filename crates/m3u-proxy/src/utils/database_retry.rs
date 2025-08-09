@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, warn};
 use crate::errors::{RepositoryError, RepositoryResult};
+use crate::utils::jitter::generate_jitter_percent;
 
 /// Configuration for database retry behavior
 #[derive(Debug, Clone)]
@@ -181,8 +182,7 @@ fn calculate_delay(config: &RetryConfig, attempt: u32) -> Duration {
     
     let final_delay = if config.jitter {
         // Add up to 25% jitter to prevent thundering herd
-        let jitter_range = (delay_ms / 4).max(10); // At least 10ms jitter
-        let jitter = fastrand::u64(0..=jitter_range);
+        let jitter = generate_jitter_percent(delay_ms, 25);
         delay_ms + jitter
     } else {
         delay_ms

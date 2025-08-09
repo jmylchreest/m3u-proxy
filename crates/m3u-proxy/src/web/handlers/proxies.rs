@@ -14,7 +14,6 @@ use uuid::Uuid;
 use crate::{
     models::{StreamProxy, StreamProxyMode},
     proxy::session_tracker::{ClientInfo, SessionStats},
-    repositories::traits::Repository,
     utils::{resolve_proxy_id, url::UrlUtils, uuid_parser::parse_uuid_flexible},
     web::{
         AppState,
@@ -1518,54 +1517,12 @@ pub async fn proxy_stream(
                 }
             };
 
-            // Get relay profile from database
-            let relay_repo = crate::repositories::RelayRepository::new(state.database.pool());
-            let relay_profile = match relay_repo.find_by_id(relay_profile_id).await {
-                    Ok(Some(profile)) => profile,
-                    Ok(None) => {
-                        error!("Relay profile {} not found", relay_profile_id);
-                        return (StatusCode::NOT_FOUND, "Relay profile not found").into_response();
-                    }
-                    Err(e) => {
-                        error!("Database error getting relay profile: {}", e);
-                        return (StatusCode::INTERNAL_SERVER_ERROR, "Database error")
-                            .into_response();
-                    }
-                };
-
-            // Create a temporary ChannelRelayConfig for this request
-            // Use deterministic ID based on proxy + channel + profile to ensure same relay is reused
-            let deterministic_id = {
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut hasher = DefaultHasher::new();
-                proxy.id.hash(&mut hasher);
-                channel_id.hash(&mut hasher);
-                relay_profile_id.hash(&mut hasher);
-                let hash = hasher.finish();
-                uuid::Uuid::from_u128(hash as u128)
-            };
-            
-            let channel_relay_config = crate::models::relay::ChannelRelayConfig {
-                id: deterministic_id,
-                proxy_id: proxy.id,
-                channel_id,
-                profile_id: relay_profile_id,
-                name: format!("Temp relay config for {}", channel.channel_name),
-                description: Some(
-                    "Temporary relay configuration for stream proxy mode".to_string(),
-                ),
-                custom_args: None,
-                is_active: true,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            };
-
-            // Create ResolvedRelayConfig
-            let resolved_config = match crate::models::relay::ResolvedRelayConfig::new(
-                channel_relay_config,
-                relay_profile,
-            ) {
+            // Use RelayConfigResolver to get resolved configuration
+            let resolved_config = match state
+                .relay_config_resolver
+                .resolve_relay_config(proxy.id, channel_id, relay_profile_id)
+                .await
+            {
                 Ok(config) => config,
                 Err(e) => {
                     error!("Failed to create resolved relay config: {}", e);

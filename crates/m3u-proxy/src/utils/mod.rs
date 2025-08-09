@@ -11,6 +11,7 @@ pub mod decompression;
 pub mod deterministic_uuid;
 pub mod http_client;
 pub mod human_format;
+pub mod jitter;
 pub mod log_capture;
 pub mod logo;
 pub mod memory_cleanup;

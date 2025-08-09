@@ -191,8 +191,8 @@ impl RelayManager {
         Ok(())
     }
 
-    /// Get status of all active relay processes
-    pub async fn get_relay_status(&self) -> Result<Vec<RelayProcessMetrics>, RelayError> {
+    /// Get metrics for all active relay processes
+    pub async fn get_relay_metrics(&self) -> Result<Vec<RelayProcessMetrics>, RelayError> {
         let processes = self.active_processes.read().await;
         let mut metrics = Vec::new();
 

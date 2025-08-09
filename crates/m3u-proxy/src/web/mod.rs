@@ -82,6 +82,7 @@ impl WebServer {
         logos_cached_file_manager: SandboxedManager,
         proxy_output_file_manager: SandboxedManager,
         relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
+        relay_config_resolver: crate::services::relay_config_resolver::RelayConfigResolver,
         system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
         progress_service: std::sync::Arc<ProgressService>,
         stream_source_service: std::sync::Arc<crate::services::StreamSourceBusinessService>,
@@ -138,6 +139,7 @@ impl WebServer {
                 crate::proxy::session_tracker::SessionTracker::default(),
             ),
             relay_manager,
+            relay_config_resolver,
             system,
             // New service layer components
             stream_source_service,
@@ -450,6 +452,7 @@ pub struct AppState {
     pub logo_cache_scanner: Option<crate::services::logo_cache_scanner::LogoCacheScanner>,
     pub session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
     pub relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
+    pub relay_config_resolver: crate::services::relay_config_resolver::RelayConfigResolver,
     pub system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     // New service layer components
     pub stream_source_service: std::sync::Arc<crate::services::StreamSourceBusinessService>,

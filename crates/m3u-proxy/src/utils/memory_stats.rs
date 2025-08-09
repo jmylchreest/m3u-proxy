@@ -62,7 +62,7 @@ async fn calculate_process_memory(
     }
 
     // Get memory usage from relay processes (FFmpeg children)
-    if let Ok(relay_processes) = relay_manager.get_relay_status().await {
+    if let Ok(relay_processes) = relay_manager.get_relay_metrics().await {
         for _process_info in relay_processes {
             // RelayProcessMetrics doesn't have direct memory usage, 
             // so we'll calculate it from process IDs if available

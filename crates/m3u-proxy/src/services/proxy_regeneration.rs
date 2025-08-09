@@ -4,7 +4,6 @@
 //! associated sources (stream or EPG) are updated. It uses pure in-memory state
 //! with Tokio timers for delayed execution and deduplication.
 
-use chrono::Utc;
 // Serde imports removed - no longer needed after cleaning up legacy structs
 use sqlx::{SqlitePool, Row};
 use std::collections::{HashMap, HashSet};
@@ -326,13 +325,10 @@ impl ProxyRegenerationService {
             debug!("Cancelled existing regeneration timer for proxy {}", proxy_id);
         }
 
-        let _scheduled_at = Utc::now() + chrono::Duration::seconds(self.config.delay_seconds as i64);
-        
         // Start progress tracking using ProgressManager
-        let operation_name = format!(
-            "Regenerate Proxy {} (triggered by {} source {})",
-            proxy_id, trigger_source_type, trigger_source_id
-        );
+        let operation_name = Self::create_human_readable_operation_name(
+            &self.pool, proxy_id, trigger_source_type, trigger_source_id
+        ).await;
         let trigger_source_type_owned = trigger_source_type.to_string();
         
         // Initialize progress tracking using ProgressService
@@ -447,11 +443,12 @@ impl ProxyRegenerationService {
         }
 
         // Create progress manager for this manual regeneration
+        let operation_name = Self::create_human_readable_manual_operation_name(&self.pool, proxy_id).await;
         let progress_manager = self.progress_service.create_staged_progress_manager(
             proxy_id,
             "proxy".to_string(),
             OperationType::ProxyRegeneration,
-            format!("Manual Regeneration: Proxy {}", proxy_id),
+            operation_name,
         ).await?;
 
         // Check if already queued to prevent duplicates (after removing from auto queue)
@@ -678,11 +675,12 @@ impl ProxyRegenerationService {
             },
             None => {
                 // Only create new ProgressManager for manual regeneration paths
+                let operation_name = Self::create_human_readable_manual_operation_name(&self.pool, proxy_id).await;
                 let result = self.progress_service.create_staged_progress_manager(
                     proxy_id,
                     "proxy".to_string(),
                     OperationType::ProxyRegeneration,
-                    format!("Manual Regenerate Proxy {}", proxy_id),
+                    operation_name,
                 ).await;
                 
                 match result {
@@ -788,12 +786,12 @@ impl ProxyRegenerationService {
             "stream" => {
                 self.proxy_repository.find_proxies_by_stream_source(source_id)
                     .await
-                    .map_err(|e| sqlx::Error::RowNotFound)
+                    .map_err(|_e| sqlx::Error::RowNotFound)
             }
             "epg" => {
                 self.proxy_repository.find_proxies_by_epg_source(source_id)
                     .await
-                    .map_err(|e| sqlx::Error::RowNotFound)
+                    .map_err(|_e| sqlx::Error::RowNotFound)
             }
             _ => Err(sqlx::Error::TypeNotFound { type_name: format!("Invalid source_type: {}", source_type) }),
         }
@@ -1186,6 +1184,70 @@ impl ProxyRegenerationService {
         // Use the injected ingestion state manager to check for active ingestions
         self.ingestion_state_manager.has_active_ingestions().await
             .map_err(|e| format!("Failed to check ingestion status: {}", e).into())
+    }
+
+    /// Create human-readable operation name for progress tracking
+    async fn create_human_readable_operation_name(
+        pool: &SqlitePool,
+        proxy_id: Uuid,
+        trigger_source_type: &str,
+        trigger_source_id: Uuid,
+    ) -> String {
+        use crate::repositories::{StreamProxyRepository, StreamSourceRepository, EpgSourceRepository, traits::Repository};
+
+        // Get proxy name using repository
+        let proxy_repo = StreamProxyRepository::new(pool.clone());
+        let proxy_name = match proxy_repo.find_by_id(proxy_id).await {
+            Ok(Some(proxy)) => format!("'{}'", proxy.name),
+            _ => proxy_id.to_string(),
+        };
+
+        // Get source name based on type using repositories
+        let source_name = match trigger_source_type {
+            "stream" => {
+                let stream_repo = StreamSourceRepository::new(pool.clone());
+                match stream_repo.find_by_id(trigger_source_id).await {
+                    Ok(Some(source)) => format!("'{}'", source.name),
+                    _ => trigger_source_id.to_string(),
+                }
+            }
+            "epg" => {
+                let epg_repo = EpgSourceRepository::new(pool.clone());
+                match epg_repo.find_by_id(trigger_source_id).await {
+                    Ok(Some(source)) => format!("'{}'", source.name),
+                    _ => trigger_source_id.to_string(),
+                }
+            }
+            _ => trigger_source_id.to_string(),
+        };
+
+        let source_type_display = match trigger_source_type {
+            "stream" => "Stream Source",
+            "epg" => "EPG Source", 
+            _ => "Source",
+        };
+
+        format!(
+            "Regenerating Proxy {} (triggered by {}: {})",
+            proxy_name, source_type_display, source_name
+        )
+    }
+
+    /// Create human-readable operation name for manual regenerations
+    async fn create_human_readable_manual_operation_name(
+        pool: &SqlitePool,
+        proxy_id: Uuid,
+    ) -> String {
+        use crate::repositories::{StreamProxyRepository, traits::Repository};
+
+        // Get proxy name using repository
+        let proxy_repo = StreamProxyRepository::new(pool.clone());
+        let proxy_name = match proxy_repo.find_by_id(proxy_id).await {
+            Ok(Some(proxy)) => format!("'{}'", proxy.name),
+            _ => proxy_id.to_string(),
+        };
+
+        format!("Manual Regeneration: Proxy {}", proxy_name)
     }
 }
 

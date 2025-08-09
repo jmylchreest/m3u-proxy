@@ -30,6 +30,12 @@ impl RelayRepository {
         Self { pool }
     }
 
+    /// Find relay profile by ID (convenience method for RelayConfigResolver)
+    pub async fn find_profile_by_id(&self, profile_id: Uuid) -> RepositoryResult<Option<RelayProfile>> {
+        // Delegate to the Repository trait implementation
+        self.find_by_id(profile_id).await
+    }
+
     /// Helper function to construct a RelayProfile from a database row
     fn relay_profile_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<RelayProfile> {
         let video_codec_str = row.get::<String, _>("video_codec");
@@ -391,6 +397,41 @@ impl RelayRepository {
         }
 
         Ok(configs)
+    }
+
+    /// Find channel relay configuration by proxy, channel, and profile IDs (for RelayConfigResolver)
+    pub async fn find_channel_config(
+        &self,
+        proxy_id: Uuid,
+        channel_id: Uuid,
+        profile_id: Uuid,
+    ) -> RepositoryResult<Option<ChannelRelayConfig>> {
+        let proxy_id_str = proxy_id.to_string();
+        let channel_id_str = channel_id.to_string();
+        let profile_id_str = profile_id.to_string();
+        let row = sqlx::query(
+            r#"
+            SELECT id, proxy_id, channel_id, profile_id, name, description,
+                   custom_args, is_active, created_at, updated_at
+            FROM channel_relay_configs
+            WHERE proxy_id = ? AND channel_id = ? AND profile_id = ? AND is_active = 1
+            LIMIT 1
+            "#,
+        )
+        .bind(proxy_id_str)
+        .bind(channel_id_str)
+        .bind(profile_id_str)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| RepositoryError::QueryFailed {
+            query: "find_channel_config".to_string(),
+            message: e.to_string(),
+        })?;
+
+        match row {
+            Some(row) => Ok(Some(Self::channel_relay_config_from_row(&row)?)),
+            None => Ok(None),
+        }
     }
 
     /// Get channel relay configuration for a specific channel in a proxy

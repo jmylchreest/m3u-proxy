@@ -22,6 +22,7 @@ use crate::proxy::session_tracker::ClientInfo;
 use crate::services::cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient};
 use crate::services::error_fallback::{ErrorFallbackGenerator, StreamHealthMonitor};
 use crate::services::stream_prober::StreamProber;
+use crate::services::ffmpeg_command_builder::FFmpegCommandBuilder;
 use crate::models::relay::ErrorFallbackConfig;
 use crate::config::BufferConfig;
 use sandboxed_file_manager::SandboxedManager;
@@ -132,10 +133,21 @@ pub struct FFmpegProcessWrapper {
     buffer_config: BufferConfig,
     stream_prober: Option<StreamProber>,
     ffmpeg_command: String,
+    command_builder: FFmpegCommandBuilder,
 }
 
 impl FFmpegProcessWrapper {
     pub fn new(temp_manager: SandboxedManager, metrics: Arc<MetricsLogger>, hwaccel_capabilities: HwAccelCapabilities, buffer_config: BufferConfig, stream_prober: Option<StreamProber>, ffmpeg_command: String) -> Self {
+        // Create FFmpegCommandBuilder with its own stream prober instance
+        // For now, we'll create a separate prober if one was provided
+        let command_builder_prober = if stream_prober.is_some() {
+            // Create a new StreamProber instance for the command builder
+            Some(crate::services::StreamProber::new(None)) // Use default ffprobe command
+        } else {
+            None
+        };
+        let command_builder = FFmpegCommandBuilder::new(command_builder_prober);
+        
         Self {
             temp_manager,
             metrics,
@@ -143,6 +155,7 @@ impl FFmpegProcessWrapper {
             buffer_config,
             stream_prober,
             ffmpeg_command,
+            command_builder,
         }
     }
 
@@ -236,8 +249,9 @@ impl FFmpegProcessWrapper {
         };
 
         // For cyclic buffer mode, we don't need sandbox directories since we stream to stdout
-        // Generate complete FFmpeg command with hardware acceleration support
-        let resolved_args = config.generate_ffmpeg_command_with_mapping(
+        // Generate complete FFmpeg command using the command builder service
+        let resolved_args = self.command_builder.build_args(
+            config,
             input_url,
             "", // No output path needed for stdout streaming
             &self.hwaccel_capabilities,

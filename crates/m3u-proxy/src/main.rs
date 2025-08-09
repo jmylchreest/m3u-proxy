@@ -350,6 +350,11 @@ async fn main() -> Result<()> {
     );
     info!("Relay manager initialized with shared system monitoring");
 
+    // Initialize relay configuration resolver
+    let relay_repository = m3u_proxy::repositories::relay::RelayRepository::new(database.pool());
+    let relay_config_resolver = m3u_proxy::services::RelayConfigResolver::new(relay_repository);
+    info!("Relay configuration resolver initialized");
+
     let mut web_server = WebServer::new(
         config,
         database,
@@ -364,6 +369,7 @@ async fn main() -> Result<()> {
         logos_cached_file_manager,
         proxy_output_file_manager,
         relay_manager,
+        relay_config_resolver,
         system_manager.get_system(),
         progress_service.clone(),
         stream_source_service.clone(),

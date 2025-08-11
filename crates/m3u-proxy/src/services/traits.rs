@@ -287,6 +287,7 @@ pub trait ImportExportService<T, ID: Send + 'static>: Service<T, ID> {
 
 /// Options for import operations
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ImportOptions {
     /// Whether to update existing entities
     pub update_existing: bool,
@@ -298,16 +299,6 @@ pub struct ImportOptions {
     pub dry_run: bool,
 }
 
-impl Default for ImportOptions {
-    fn default() -> Self {
-        Self {
-            update_existing: false,
-            skip_validation_errors: false,
-            max_entities: None,
-            dry_run: false,
-        }
-    }
-}
 
 /// Standard service response for list operations
 #[derive(Debug, Clone)]

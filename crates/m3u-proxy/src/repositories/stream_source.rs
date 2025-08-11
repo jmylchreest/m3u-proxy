@@ -84,7 +84,7 @@ impl StreamSourceRepository {
             "xtream" => StreamSourceType::Xtream,
             _ => return Err(RepositoryError::QueryFailed {
                 query: "parse source_type".to_string(),
-                message: format!("Unknown source type: {}", source_type_str),
+                message: format!("Unknown source type: {source_type_str}"),
             }),
         };
 
@@ -100,7 +100,7 @@ impl StreamSourceRepository {
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| RepositoryError::QueryFailed {
                 query: "parse UUID".to_string(),
-                message: format!("Invalid UUID: {}", e),
+                message: format!("Invalid UUID: {e}"),
             })?;
 
         Ok(StreamSource {
@@ -146,7 +146,7 @@ impl StreamSourceRepository {
 
         if let Some(source_type) = &query.source_type {
             conditions.push("source_type = ?".to_string());
-            params.push(format!("{:?}", source_type).to_lowercase());
+            params.push(format!("{source_type:?}").to_lowercase());
         }
 
         if let Some(enabled) = query.enabled {
@@ -156,14 +156,14 @@ impl StreamSourceRepository {
 
         if let Some(search) = &query.base.search {
             conditions.push("(name LIKE ? OR description LIKE ? OR url LIKE ?)".to_string());
-            let search_pattern = format!("%{}%", search);
+            let search_pattern = format!("%{search}%");
             params.push(search_pattern.clone());
             params.push(search_pattern.clone());
             params.push(search_pattern);
         }
 
         for (key, value) in &query.base.filters {
-            conditions.push(format!("{} = ?", key));
+            conditions.push(format!("{key} = ?"));
             params.push(value.clone());
         }
 
@@ -180,7 +180,7 @@ impl StreamSourceRepository {
     fn build_order_clause(&self, query: &StreamSourceQuery) -> String {
         if let Some(sort_by) = &query.base.sort_by {
             let direction = if query.base.sort_ascending { "ASC" } else { "DESC" };
-            format!("ORDER BY {} {}", sort_by, direction)
+            format!("ORDER BY {sort_by} {direction}")
         } else {
             "ORDER BY created_at DESC".to_string()
         }
@@ -214,16 +214,16 @@ impl Repository<StreamSource, Uuid> for StreamSourceRepository {
         let (where_clause, params) = self.build_where_clause(&query);
         let order_clause = self.build_order_clause(&query);
         
-        let mut sql = format!("SELECT * FROM stream_sources {}", where_clause);
+        let mut sql = format!("SELECT * FROM stream_sources {where_clause}");
         if !order_clause.is_empty() {
             sql.push(' ');
             sql.push_str(&order_clause);
         }
 
         if let Some(limit) = query.base.limit {
-            sql.push_str(&format!(" LIMIT {}", limit));
+            sql.push_str(&format!(" LIMIT {limit}"));
             if let Some(offset) = query.base.offset {
-                sql.push_str(&format!(" OFFSET {}", offset));
+                sql.push_str(&format!(" OFFSET {offset}"));
             }
         }
 
@@ -300,7 +300,7 @@ impl Repository<StreamSource, Uuid> for StreamSourceRepository {
     async fn update(&self, id: Uuid, request: Self::UpdateRequest) -> RepositoryResult<StreamSource> {
         // First check if the entity exists
         if !self.exists(id).await? {
-            return Err(RepositoryError::record_not_found("stream_sources", "id", &id.to_string()));
+            return Err(RepositoryError::record_not_found("stream_sources", "id", id.to_string()));
         }
 
         let now = DateTimeParser::now_utc();
@@ -335,7 +335,7 @@ impl Repository<StreamSource, Uuid> for StreamSourceRepository {
 
         // Return the updated entity
         self.find_by_id(id).await?.ok_or_else(|| {
-            RepositoryError::record_not_found("stream_sources", "id", &id.to_string())
+            RepositoryError::record_not_found("stream_sources", "id", id.to_string())
         })
     }
 
@@ -352,7 +352,7 @@ impl Repository<StreamSource, Uuid> for StreamSourceRepository {
             })?;
 
         if result.rows_affected() == 0 {
-            return Err(RepositoryError::record_not_found("stream_sources", "id", &id.to_string()));
+            return Err(RepositoryError::record_not_found("stream_sources", "id", id.to_string()));
         }
 
         Ok(())
@@ -360,7 +360,7 @@ impl Repository<StreamSource, Uuid> for StreamSourceRepository {
 
     async fn count(&self, query: Self::Query) -> RepositoryResult<u64> {
         let (where_clause, params) = self.build_where_clause(&query);
-        let sql = format!("SELECT COUNT(*) as count FROM stream_sources {}", where_clause);
+        let sql = format!("SELECT COUNT(*) as count FROM stream_sources {where_clause}");
 
         let mut query_builder = sqlx::query(&sql);
         for param in params {
@@ -493,7 +493,7 @@ impl BulkRepository<StreamSource, Uuid> for StreamSourceRepository {
                 })?;
 
             if result.rows_affected() == 0 {
-                return Err(RepositoryError::record_not_found("stream_sources", "id", &id.to_string()));
+                return Err(RepositoryError::record_not_found("stream_sources", "id", id.to_string()));
             }
 
             // Get the updated source - we need to construct it since we're in a transaction
@@ -531,7 +531,7 @@ impl BulkRepository<StreamSource, Uuid> for StreamSourceRepository {
         }
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let query = format!("DELETE FROM stream_sources WHERE id IN ({})", placeholders);
+        let query = format!("DELETE FROM stream_sources WHERE id IN ({placeholders})");
 
         let mut query_builder = sqlx::query(&query);
         for id in ids {
@@ -553,7 +553,7 @@ impl BulkRepository<StreamSource, Uuid> for StreamSourceRepository {
         }
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let query = format!("SELECT * FROM stream_sources WHERE id IN ({})", placeholders);
+        let query = format!("SELECT * FROM stream_sources WHERE id IN ({placeholders})");
 
         let mut query_builder = sqlx::query(&query);
         for id in ids {
@@ -605,7 +605,6 @@ impl PaginatedRepository<StreamSource, Uuid> for StreamSourceRepository {
 
 impl StreamSourceRepository {
     /// Additional domain-specific methods for stream source operations
-    
     /// Get stream sources with statistics (channel counts, health info, etc.)
     pub async fn list_with_stats(&self) -> RepositoryResult<Vec<crate::models::StreamSourceWithStats>> {
         let rows = sqlx::query(
@@ -655,7 +654,7 @@ impl StreamSourceRepository {
             
             results.push(crate::models::StreamSourceWithStats {
                 source,
-                channel_count: channel_count,
+                channel_count,
                 next_scheduled_update,
             });
         }

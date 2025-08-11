@@ -39,7 +39,7 @@ fn print_version_info() {
     println!("Build Information:");
     println!("  Target: {}-{}", std::env::consts::ARCH, std::env::consts::OS);
     if let Ok(rustc_version) = std::env::var("RUSTC_VERSION") {
-        println!("  Rust: {}", rustc_version);
+        println!("  Rust: {rustc_version}");
     }
     println!();
     println!("Software Bill of Materials:");
@@ -70,7 +70,7 @@ fn print_version_info() {
                 println!("  (No external components found in SBOM)");
             } else {
                 for (name, version) in dependencies {
-                    println!("  {}: {}", name, version);
+                    println!("  {name}: {version}");
                 }
             }
         }
@@ -356,26 +356,28 @@ async fn main() -> Result<()> {
     info!("Relay configuration resolver initialized");
 
     let mut web_server = WebServer::new(
-        config,
-        database,
-        (*state_manager).clone(),
-        cache_invalidation_tx,
-        data_mapping_service,
-        logo_asset_service,
-        logo_asset_storage,
-        proxy_regeneration_service,
-        temp_file_manager.clone(), // Use temp for both temp and preview operations
-        pipeline_file_manager,
-        logos_cached_file_manager,
-        proxy_output_file_manager,
-        relay_manager,
-        relay_config_resolver,
-        system_manager.get_system(),
-        progress_service.clone(),
-        stream_source_service.clone(),
-        epg_source_service.clone(),
-        log_broadcaster,
-        runtime_settings_store,
+        m3u_proxy::web::WebServerBuilder {
+            config,
+            database,
+            state_manager: (*state_manager).clone(),
+            cache_invalidation_tx,
+            data_mapping_service,
+            logo_asset_service,
+            logo_asset_storage,
+            proxy_regeneration_service,
+            temp_file_manager: temp_file_manager.clone(),
+            pipeline_file_manager,
+            logos_cached_file_manager,
+            proxy_output_file_manager,
+            relay_manager,
+            relay_config_resolver,
+            system: system_manager.get_system(),
+            progress_service: progress_service.clone(),
+            stream_source_service: stream_source_service.clone(),
+            epg_source_service: epg_source_service.clone(),
+            log_broadcaster,
+            runtime_settings_store,
+        },
     )
     .await?;
     

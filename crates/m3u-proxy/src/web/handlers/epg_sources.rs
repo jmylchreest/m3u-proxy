@@ -236,7 +236,7 @@ pub async fn list_epg_sources(
         }
         Err(e) => {
             tracing::error!("Failed to list EPG sources: {}", e);
-            crate::web::responses::internal_error(&format!("Failed to list EPG sources: {}", e))
+            crate::web::responses::internal_error(&format!("Failed to list EPG sources: {e}"))
                 .into_response()
         }
     }
@@ -266,7 +266,7 @@ pub async fn get_epg_source(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::GET,
-        &format!("/api/v1/sources/epg/{}", id).parse().unwrap(),
+        &format!("/api/v1/sources/epg/{id}").parse().unwrap(),
         &context,
     );
 
@@ -329,7 +329,7 @@ pub async fn create_epg_source(
         }
         Err(e) => {
             tracing::error!("Failed to create EPG source: {}", e);
-            crate::web::responses::internal_error(&format!("Failed to create EPG source: {}", e))
+            crate::web::responses::internal_error(&format!("Failed to create EPG source: {e}"))
                 .into_response()
         }
     }
@@ -361,7 +361,7 @@ pub async fn update_epg_source(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::PUT,
-        &format!("/api/v1/sources/epg/{}", id).parse().unwrap(),
+        &format!("/api/v1/sources/epg/{id}").parse().unwrap(),
         &context,
     );
 
@@ -386,7 +386,7 @@ pub async fn update_epg_source(
         }
         Err(e) => {
             tracing::error!("Failed to update EPG source {}: {}", uuid, e);
-            crate::web::responses::internal_error(&format!("Failed to update EPG source: {}", e))
+            crate::web::responses::internal_error(&format!("Failed to update EPG source: {e}"))
                 .into_response()
         }
     }
@@ -416,7 +416,7 @@ pub async fn delete_epg_source(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::DELETE,
-        &format!("/api/v1/sources/epg/{}", id).parse().unwrap(),
+        &format!("/api/v1/sources/epg/{id}").parse().unwrap(),
         &context,
     );
 
@@ -432,7 +432,7 @@ pub async fn delete_epg_source(
         .into_response(),
         Err(e) => {
             tracing::error!("Failed to delete EPG source {}: {}", uuid, e);
-            crate::web::responses::internal_error(&format!("Failed to delete EPG source: {}", e))
+            crate::web::responses::internal_error(&format!("Failed to delete EPG source: {e}"))
                 .into_response()
         }
     }

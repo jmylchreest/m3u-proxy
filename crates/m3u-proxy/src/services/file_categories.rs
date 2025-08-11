@@ -116,13 +116,13 @@ fn normalize_logo_url(url: &str) -> String {
         } else {
             format!("?{}", 
                 query_pairs.iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
+                    .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>()
                     .join("&")
             )
         };
         
-        format!("{}{}{}", host, path_without_extension, query_string)
+        format!("{host}{path_without_extension}{query_string}")
     } else {
         // Fallback for malformed URLs - just remove common prefixes and normalize
         let cleaned = url
@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(FileCategory::Preview.as_str(), "preview");
         assert_eq!(FileCategory::LogoCached.subdirectory(), "logos/cached");
         assert_eq!(FileCategory::LogoUploaded.default_retention_minutes(), None);
-        assert_eq!(FileCategory::LogoCached.cleanup_on_last_access(), true);
+        assert!(FileCategory::LogoCached.cleanup_on_last_access());
     }
     
     #[test]
@@ -187,7 +187,7 @@ mod tests {
         
         let expected = "cdn.tv.com/logos/channel";
         for url in urls {
-            assert_eq!(normalize_logo_url(url), expected, "Failed for URL: {}", url);
+            assert_eq!(normalize_logo_url(url), expected, "Failed for URL: {url}");
         }
         
         // Parameter sorting

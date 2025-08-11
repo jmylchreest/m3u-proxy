@@ -124,17 +124,18 @@ pub struct ErrorFallbackConfig {
     pub error_threshold_seconds: u32,
 }
 
-impl ToString for RelayEventType {
-    fn to_string(&self) -> String {
-        match self {
-            RelayEventType::Start => "start".to_string(),
-            RelayEventType::Stop => "stop".to_string(),
-            RelayEventType::Error => "error".to_string(),
-            RelayEventType::ClientConnect => "client_connect".to_string(),
-            RelayEventType::ClientDisconnect => "client_disconnect".to_string(),
-            RelayEventType::FallbackActivated => "fallback_activated".to_string(),
-            RelayEventType::FallbackDeactivated => "fallback_deactivated".to_string(),
-        }
+impl std::fmt::Display for RelayEventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            RelayEventType::Start => "start",
+            RelayEventType::Stop => "stop",
+            RelayEventType::Error => "error",
+            RelayEventType::ClientConnect => "client_connect",
+            RelayEventType::ClientDisconnect => "client_disconnect",
+            RelayEventType::FallbackActivated => "fallback_activated",
+            RelayEventType::FallbackDeactivated => "fallback_deactivated",
+        };
+        write!(f, "{s}")
     }
 }
 
@@ -150,7 +151,7 @@ impl FromStr for RelayEventType {
             "client_disconnect" => Ok(RelayEventType::ClientDisconnect),
             "fallback_activated" => Ok(RelayEventType::FallbackActivated),
             "fallback_deactivated" => Ok(RelayEventType::FallbackDeactivated),
-            _ => Err(format!("Unknown relay event type: {}", s)),
+            _ => Err(format!("Unknown relay event type: {s}")),
         }
     }
 }
@@ -184,16 +185,17 @@ pub enum RelayOutputFormat {
     TransportStream,
 }
 
-impl ToString for VideoCodec {
-    fn to_string(&self) -> String {
-        match self {
-            VideoCodec::H264 => "h264".to_string(),
-            VideoCodec::H265 => "h265".to_string(),
-            VideoCodec::AV1 => "av1".to_string(),
-            VideoCodec::MPEG2 => "mpeg2".to_string(),
-            VideoCodec::MPEG4 => "mpeg4".to_string(),
-            VideoCodec::Copy => "copy".to_string(),
-        }
+impl std::fmt::Display for VideoCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            VideoCodec::H264 => "h264",
+            VideoCodec::H265 => "h265",
+            VideoCodec::AV1 => "av1",
+            VideoCodec::MPEG2 => "mpeg2",
+            VideoCodec::MPEG4 => "mpeg4",
+            VideoCodec::Copy => "copy",
+        };
+        write!(f, "{s}")
     }
 }
 
@@ -208,22 +210,23 @@ impl FromStr for VideoCodec {
             "mpeg2" => Ok(VideoCodec::MPEG2),
             "mpeg4" => Ok(VideoCodec::MPEG4),
             "copy" => Ok(VideoCodec::Copy),
-            _ => Err(format!("Unknown video codec: {}", s)),
+            _ => Err(format!("Unknown video codec: {s}")),
         }
     }
 }
 
-impl ToString for AudioCodec {
-    fn to_string(&self) -> String {
-        match self {
-            AudioCodec::AAC => "aac".to_string(),
-            AudioCodec::MP3 => "mp3".to_string(),
-            AudioCodec::AC3 => "ac3".to_string(),
-            AudioCodec::EAC3 => "eac3".to_string(),
-            AudioCodec::MPEG2Audio => "mpeg2audio".to_string(),
-            AudioCodec::DTS => "dts".to_string(),
-            AudioCodec::Copy => "copy".to_string(),
-        }
+impl std::fmt::Display for AudioCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            AudioCodec::AAC => "aac",
+            AudioCodec::MP3 => "mp3",
+            AudioCodec::AC3 => "ac3",
+            AudioCodec::EAC3 => "eac3",
+            AudioCodec::MPEG2Audio => "mpeg2audio",
+            AudioCodec::DTS => "dts",
+            AudioCodec::Copy => "copy",
+        };
+        write!(f, "{s}")
     }
 }
 
@@ -239,16 +242,17 @@ impl FromStr for AudioCodec {
             "mpeg2audio" => Ok(AudioCodec::MPEG2Audio),
             "dts" => Ok(AudioCodec::DTS),
             "copy" => Ok(AudioCodec::Copy),
-            _ => Err(format!("Unknown audio codec: {}", s)),
+            _ => Err(format!("Unknown audio codec: {s}")),
         }
     }
 }
 
-impl ToString for RelayOutputFormat {
-    fn to_string(&self) -> String {
-        match self {
-            RelayOutputFormat::TransportStream => "transport_stream".to_string(),
-        }
+impl std::fmt::Display for RelayOutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            RelayOutputFormat::TransportStream => "transport_stream",
+        };
+        write!(f, "{s}")
     }
 }
 
@@ -258,7 +262,7 @@ impl FromStr for RelayOutputFormat {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "transport_stream" => Ok(RelayOutputFormat::TransportStream),
-            _ => Err(format!("Unknown relay output format: {}", s)),
+            _ => Err(format!("Unknown relay output format: {s}")),
         }
     }
 }
@@ -388,6 +392,7 @@ pub struct RelayProcessMetrics {
 
 /// Metrics for a specific relay configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct RelayConfigMetrics {
     pub is_running: bool,
     pub client_count: i32,
@@ -397,36 +402,16 @@ pub struct RelayConfigMetrics {
     pub total_events: i64,
 }
 
-impl Default for RelayConfigMetrics {
-    fn default() -> Self {
-        Self {
-            is_running: false,
-            client_count: 0,
-            bytes_served: 0,
-            started_at: None,
-            last_heartbeat: None,
-            total_events: 0,
-        }
-    }
-}
 
 /// Hardware acceleration capabilities for FFmpeg
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct HwAccelCapabilities {
     pub accelerators: Vec<HwAccelerator>,
     pub codecs: Vec<String>,
     pub support_matrix: HashMap<String, Vec<String>>, // accelerator -> supported codecs
 }
 
-impl Default for HwAccelCapabilities {
-    fn default() -> Self {
-        Self {
-            accelerators: Vec::new(),
-            codecs: Vec::new(),
-            support_matrix: HashMap::new(),
-        }
-    }
-}
 
 /// Hardware accelerator information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -481,8 +466,10 @@ pub struct RelayProcessHealth {
 
 /// Health status enumeration
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Default)]
 pub enum RelayHealthStatus {
     #[serde(rename = "healthy")]
+    #[default]
     Healthy,
     #[serde(rename = "unhealthy")]
     Unhealthy,
@@ -494,11 +481,6 @@ pub enum RelayHealthStatus {
     Failed,
 }
 
-impl Default for RelayHealthStatus {
-    fn default() -> Self {
-        RelayHealthStatus::Healthy
-    }
-}
 
 
 /// Connected client information for metrics
@@ -570,7 +552,7 @@ impl RelayProfile {
         // Basic validation to prevent command injection
         for arg in args {
             if arg.contains("&&") || arg.contains("||") || arg.contains(";") || arg.contains("`") {
-                return Err(format!("Potentially dangerous argument: {}", arg));
+                return Err(format!("Potentially dangerous argument: {arg}"));
             }
         }
         
@@ -642,7 +624,7 @@ impl ChannelRelayConfig {
         
         let custom_args_json = if let Some(args) = request.custom_args {
             Some(serde_json::to_string(&args)
-                .map_err(|e| format!("Invalid custom arguments: {}", e))?)
+                .map_err(|e| format!("Invalid custom arguments: {e}"))?)
         } else {
             None
         };
@@ -799,7 +781,7 @@ impl ResolvedRelayConfig {
                 .or(self.profile.video_bitrate);
                 
             if let Some(bitrate) = target_bitrate {
-                args.extend(["-b:v".to_string(), format!("{}k", bitrate)]);
+                args.extend(["-b:v".to_string(), format!("{bitrate}k")]);
             }
             if let Some(ref preset) = self.profile.video_preset {
                 args.extend(["-preset".to_string(), preset.clone()]);
@@ -823,7 +805,7 @@ impl ResolvedRelayConfig {
                         .or(self.profile.audio_bitrate);
                     
                     if let Some(bitrate) = target_bitrate {
-                        args.extend(["-b:a".to_string(), format!("{}k", bitrate)]);
+                        args.extend(["-b:a".to_string(), format!("{bitrate}k")]);
                     }
                     
                     // Set explicit audio parameters to avoid codec parameter issues when transcoding
@@ -841,7 +823,7 @@ impl ResolvedRelayConfig {
             // Audio settings - only apply encoding parameters if we're not copying
             if self.profile.audio_codec != AudioCodec::Copy {
                 if let Some(bitrate) = self.profile.audio_bitrate {
-                    args.extend(["-b:a".to_string(), format!("{}k", bitrate)]);
+                    args.extend(["-b:a".to_string(), format!("{bitrate}k")]);
                 }
                 // Set explicit audio parameters to avoid codec parameter issues when transcoding
                 let sample_rate = self.profile.audio_sample_rate.unwrap_or(48000);

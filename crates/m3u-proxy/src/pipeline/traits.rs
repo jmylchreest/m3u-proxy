@@ -47,7 +47,7 @@ impl<'a> ProgressReporter<'a> {
             0.0
         };
         
-        let detailed_message = format!("{} ({}/{} items)", message, processed, total);
+        let detailed_message = format!("{message} ({processed}/{total} items)");
         self.report_stage_progress(stage_id, percentage, &detailed_message).await;
     }
     

@@ -14,6 +14,12 @@ pub struct FilterEngine {
     preprocessor: RegexPreprocessor,
 }
 
+impl Default for FilterEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FilterEngine {
     #[allow(dead_code)]
     pub fn new() -> Self {
@@ -230,7 +236,7 @@ impl FilterEngine {
 
     #[allow(dead_code)]
     fn get_or_compile_regex(&mut self, pattern: &str, case_sensitive: bool) -> Result<&Regex> {
-        let cache_key = format!("{}:{}", pattern, case_sensitive);
+        let cache_key = format!("{pattern}:{case_sensitive}");
         if !self.regex_cache.contains_key(&cache_key) {
             let regex = if case_sensitive {
                 Regex::new(pattern)?

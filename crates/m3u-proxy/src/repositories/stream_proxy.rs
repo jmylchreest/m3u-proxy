@@ -32,14 +32,14 @@ impl StreamProxyRepository {
     /// Helper function to construct a StreamProxy from a database row
     fn stream_proxy_from_row(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<StreamProxy> {
         let proxy_mode_str = row.get::<String, _>("proxy_mode");
-        let proxy_mode = StreamProxyMode::from_str(&proxy_mode_str);
+        let proxy_mode = proxy_mode_str.parse::<StreamProxyMode>().unwrap_or_default();
 
         Ok(StreamProxy {
             id: row
                 .get_uuid("id")
                 .map_err(|e| RepositoryError::QueryFailed {
                     query: "stream_proxy_from_row".to_string(),
-                    message: format!("Failed to parse id: {}", e),
+                    message: format!("Failed to parse id: {e}"),
                 })?,
             name: row.get("name"),
             description: row.get("description"),
@@ -415,13 +415,13 @@ impl StreamProxyRepository {
                     .get_uuid("proxy_id")
                     .map_err(|e| RepositoryError::QueryFailed {
                         query: "get_proxy_sources".to_string(),
-                        message: format!("Failed to parse proxy_id: {}", e),
+                        message: format!("Failed to parse proxy_id: {e}"),
                     })?,
                 source_id: row
                     .get_uuid("source_id")
                     .map_err(|e| RepositoryError::QueryFailed {
                         query: "get_proxy_sources".to_string(),
-                        message: format!("Failed to parse source_id: {}", e),
+                        message: format!("Failed to parse source_id: {e}"),
                     })?,
                 priority_order: row.get::<i64, _>("priority_order") as i32,
                 created_at: row.get_datetime("created_at"),
@@ -462,12 +462,12 @@ impl StreamProxyRepository {
                     .get_uuid("proxy_id")
                     .map_err(|e| RepositoryError::QueryFailed {
                         query: "get_proxy_epg_sources".to_string(),
-                        message: format!("Failed to parse proxy_id: {}", e),
+                        message: format!("Failed to parse proxy_id: {e}"),
                     })?,
                 epg_source_id: row.get_uuid("epg_source_id").map_err(|e| {
                     RepositoryError::QueryFailed {
                         query: "get_proxy_epg_sources".to_string(),
-                        message: format!("Failed to parse epg_source_id: {}", e),
+                        message: format!("Failed to parse epg_source_id: {e}"),
                     }
                 })?,
                 priority_order: row.get::<i64, _>("priority_order") as i32,
@@ -505,13 +505,13 @@ impl StreamProxyRepository {
                     .get_uuid("proxy_id")
                     .map_err(|e| RepositoryError::QueryFailed {
                         query: "get_proxy_filters".to_string(),
-                        message: format!("Failed to parse proxy_id: {}", e),
+                        message: format!("Failed to parse proxy_id: {e}"),
                     })?,
                 filter_id: row
                     .get_uuid("filter_id")
                     .map_err(|e| RepositoryError::QueryFailed {
                         query: "get_proxy_filters".to_string(),
-                        message: format!("Failed to parse filter_id: {}", e),
+                        message: format!("Failed to parse filter_id: {e}"),
                     })?,
                 priority_order: row.get::<i64, _>("priority_order") as i32,
                 is_active: row.get("is_active"),
@@ -559,7 +559,7 @@ impl StreamProxyRepository {
                         .get_uuid("id")
                         .map_err(|e| RepositoryError::QueryFailed {
                             query: "find_epg_source_by_id".to_string(),
-                            message: format!("Failed to parse id: {}", e),
+                            message: format!("Failed to parse id: {e}"),
                         })?,
                     name: row.get("name"),
                     source_type,
@@ -649,8 +649,7 @@ impl StreamProxyRepository {
                 cache_program_logos: row.get("cache_program_logos"),
                 relay_profile_id: row
                     .get::<Option<String>, _>("relay_profile_id")
-                    .map(|s| parse_uuid_flexible(&s).ok())
-                    .flatten(),
+                    .and_then(|s| parse_uuid_flexible(&s).ok()),
             };
             proxies.push(proxy);
         }
@@ -874,7 +873,7 @@ impl StreamProxyRepository {
             let proxy_id = parse_uuid_flexible(&row.get::<String, _>("id")).map_err(|e| {
                 RepositoryError::QueryFailed {
                     query: "find_proxies_by_stream_source".to_string(),
-                    message: format!("Failed to parse proxy_id: {}", e),
+                    message: format!("Failed to parse proxy_id: {e}"),
                 }
             })?;
             proxy_ids.push(proxy_id);
@@ -907,7 +906,7 @@ impl StreamProxyRepository {
             let proxy_id = parse_uuid_flexible(&row.get::<String, _>("id")).map_err(|e| {
                 RepositoryError::QueryFailed {
                     query: "find_proxies_by_epg_source".to_string(),
-                    message: format!("Failed to parse proxy_id: {}", e),
+                    message: format!("Failed to parse proxy_id: {e}"),
                 }
             })?;
             proxy_ids.push(proxy_id);
@@ -933,7 +932,7 @@ impl StreamProxyRepository {
             let source_id = parse_uuid_flexible(&row.get::<String, _>("source_id")).map_err(|e| {
                 RepositoryError::QueryFailed {
                     query: "get_stream_source_ids".to_string(),
-                    message: format!("Failed to parse source_id: {}", e),
+                    message: format!("Failed to parse source_id: {e}"),
                 }
             })?;
             source_ids.push(source_id);
@@ -959,7 +958,7 @@ impl StreamProxyRepository {
             let epg_source_id = parse_uuid_flexible(&row.get::<String, _>("epg_source_id")).map_err(|e| {
                 RepositoryError::QueryFailed {
                     query: "get_epg_source_ids".to_string(),
-                    message: format!("Failed to parse epg_source_id: {}", e),
+                    message: format!("Failed to parse epg_source_id: {e}"),
                 }
             })?;
             source_ids.push(epg_source_id);

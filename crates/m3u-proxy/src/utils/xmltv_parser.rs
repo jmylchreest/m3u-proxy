@@ -37,24 +37,21 @@ pub fn parse_xmltv_programs(content: &str) -> AppResult<Vec<SimpleXmltvProgram>>
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 let name = std::str::from_utf8(e.name().as_ref())
-                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in XML element name: {}", e)))?
+                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in XML element name: {e}")))?
                     .to_string();
                 
-                match name.as_str() {
-                    "programme" => {
-                        let attrs = parse_attributes(e);
-                        current_program = Some(SimpleXmltvProgram {
-                            channel: attrs.get("channel").cloned().unwrap_or_default(),
-                            start: attrs.get("start").cloned().unwrap_or_default(),
-                            stop: attrs.get("stop").cloned(),
-                            title: None,
-                            description: None,
-                            category: None,
-                            language: None,
-                            icon: None,
-                        });
-                    }
-                    _ => {}
+                if name.as_str() == "programme" {
+                    let attrs = parse_attributes(e);
+                    current_program = Some(SimpleXmltvProgram {
+                        channel: attrs.get("channel").cloned().unwrap_or_default(),
+                        start: attrs.get("start").cloned().unwrap_or_default(),
+                        stop: attrs.get("stop").cloned(),
+                        title: None,
+                        description: None,
+                        category: None,
+                        language: None,
+                        icon: None,
+                    });
                 }
                 
                 current_element_stack.push(name);
@@ -63,7 +60,7 @@ pub fn parse_xmltv_programs(content: &str) -> AppResult<Vec<SimpleXmltvProgram>>
             
             Ok(Event::End(ref e)) => {
                 let name = std::str::from_utf8(e.name().as_ref())
-                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in XML element name: {}", e)))?
+                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in XML element name: {e}")))?
                     .to_string();
                 
                 // Process the element we're closing
@@ -105,39 +102,36 @@ pub fn parse_xmltv_programs(content: &str) -> AppResult<Vec<SimpleXmltvProgram>>
             
             Ok(Event::Empty(ref e)) => {
                 let name = std::str::from_utf8(e.name().as_ref())
-                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in XML element name: {}", e)))?
+                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in XML element name: {e}")))?
                     .to_string();
                 
                 // Handle self-closing elements
                 if let Some(ref mut program) = current_program {
-                    match name.as_str() {
-                        "icon" => {
-                            let attrs = parse_attributes(e);
-                            if let Some(src) = attrs.get("src") {
-                                program.icon = Some(src.clone());
-                            }
+                    if name.as_str() == "icon" {
+                        let attrs = parse_attributes(e);
+                        if let Some(src) = attrs.get("src") {
+                            program.icon = Some(src.clone());
                         }
-                        _ => {}
                     }
                 }
             }
             
             Ok(Event::Text(e)) => {
                 let text = std::str::from_utf8(&e)
-                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in text: {}", e)))?;
+                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in text: {e}")))?;
                 current_text.push_str(text);
             }
             
             Ok(Event::CData(e)) => {
                 let text = std::str::from_utf8(&e)
-                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in CDATA: {}", e)))?;
+                    .map_err(|e| AppError::source_error(format!("Invalid UTF-8 in CDATA: {e}")))?;
                 current_text.push_str(text);
             }
             
             Ok(Event::Eof) => break,
             
             Err(e) => {
-                return Err(AppError::source_error(format!("XML parsing error: {}", e)));
+                return Err(AppError::source_error(format!("XML parsing error: {e}")));
             }
             
             _ => {} // Ignore other events (comments, processing instructions, etc.)
@@ -151,16 +145,13 @@ pub fn parse_xmltv_programs(content: &str) -> AppResult<Vec<SimpleXmltvProgram>>
 fn parse_attributes(element: &BytesStart) -> HashMap<String, String> {
     let mut attrs = HashMap::new();
     
-    for attr_result in element.attributes() {
-        if let Ok(attr) = attr_result {
-            if let (Ok(key), Ok(value)) = (
-                std::str::from_utf8(attr.key.as_ref()),
-                std::str::from_utf8(&attr.value)
-            ) {
-                attrs.insert(key.to_string(), value.to_string());
-            }
+    for attr in element.attributes().flatten() {
+        if let (Ok(key), Ok(value)) = (
+            std::str::from_utf8(attr.key.as_ref()),
+            std::str::from_utf8(&attr.value)
+        ) {
+            attrs.insert(key.to_string(), value.to_string());
         }
     }
-    
     attrs
 }

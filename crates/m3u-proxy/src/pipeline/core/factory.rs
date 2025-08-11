@@ -95,8 +95,7 @@ impl PipelineOrchestratorFactory {
             let active = self.active_orchestrators.lock().await;
             if let Some(existing_pipeline_id) = active.get(&proxy_id) {
                 let message = format!(
-                    "Pipeline orchestrator already exists for proxy {} (pipeline: {}). Preventing duplicate creation.",
-                    proxy_id, existing_pipeline_id
+                    "Pipeline orchestrator already exists for proxy {proxy_id} (pipeline: {existing_pipeline_id}). Preventing duplicate creation."
                 );
                 warn!("{}", message);
                 return Err(message.into());
@@ -153,7 +152,7 @@ impl PipelineOrchestratorFactory {
             Some(row) => {
                 // Parse proxy mode
                 let proxy_mode_str = row.get::<String, _>("proxy_mode");
-                let proxy_mode = crate::models::StreamProxyMode::from_str(&proxy_mode_str);
+                let proxy_mode = proxy_mode_str.parse::<crate::models::StreamProxyMode>().unwrap_or_default();
                 
                 // Build StreamProxy using flexible UUID parsing
                 let config = StreamProxy {
@@ -172,11 +171,9 @@ impl PipelineOrchestratorFactory {
                     created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("created_at"))?,
                     updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("updated_at"))?,
                     last_generated_at: row.get::<Option<String>, _>("last_generated_at")
-                        .map(|s| crate::utils::datetime::DateTimeParser::parse_flexible(&s).ok())
-                        .flatten(),
+                        .and_then(|s| crate::utils::datetime::DateTimeParser::parse_flexible(&s).ok()),
                     relay_profile_id: row.get::<Option<String>, _>("relay_profile_id")
-                        .map(|s| parse_uuid_flexible(&s).ok())
-                        .flatten(),
+                        .and_then(|s| parse_uuid_flexible(&s).ok()),
                 };
                 
                 debug!("Loaded configuration for proxy '{}' ({})", config.name, proxy_id);
@@ -184,7 +181,7 @@ impl PipelineOrchestratorFactory {
             }
             None => {
                 error!("Proxy {} not found or inactive", proxy_id);
-                Err(format!("Proxy {} not found or inactive", proxy_id).into())
+                Err(format!("Proxy {proxy_id} not found or inactive").into())
             }
         }
     }
@@ -221,9 +218,21 @@ impl PipelineOrchestratorFactory {
         pipeline_file_manager: SandboxedManager,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let storage_config = StorageConfig {
+            m3u_path: PathBuf::from("./m3u"),
+            m3u_retention: "30d".to_string(),
+            m3u_cleanup_interval: "4h".to_string(),
             uploaded_logo_path: PathBuf::from("./uploads/logos"),
             cached_logo_path: PathBuf::from("./uploads/logos/cached"),
-            ..Default::default()
+            cached_logo_retention: "90d".to_string(),
+            cached_logo_cleanup_interval: "12h".to_string(),
+            proxy_versions_to_keep: 3,
+            temp_path: Some("./temp".to_string()),
+            temp_retention: "5m".to_string(),
+            temp_cleanup_interval: "1m".to_string(),
+            pipeline_path: PathBuf::from("./pipeline"),
+            pipeline_retention: "10m".to_string(),
+            pipeline_cleanup_interval: "5m".to_string(),
+            clean_orphan_logos: true,
         };
 
         Self::from_components(db_pool, app_config, storage_config, pipeline_file_manager).await
@@ -240,7 +249,11 @@ mod tests {
     async fn test_factory_creation() {
         // Create test configuration
         let temp_dir = TempDir::new().unwrap();
-        let file_manager = SandboxedManager::new(temp_dir.path()).unwrap();
+        let file_manager = SandboxedManager::builder()
+            .base_directory(temp_dir.path())
+            .build()
+            .await
+            .unwrap();
         
         let app_config = Config {
             web: WebConfig {

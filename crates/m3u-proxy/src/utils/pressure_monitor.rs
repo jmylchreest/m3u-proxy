@@ -486,7 +486,13 @@ mod tests {
 
     #[test]
     fn test_memory_monitor_creation() {
-        let monitor = SimpleMemoryMonitor::new(Some(512));
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use sysinfo::System;
+        
+        let config = MemoryMonitoringConfig::default();
+        let system = Arc::new(RwLock::new(System::new()));
+        let monitor = SimpleMemoryMonitor::new(Some(512), config, system);
         assert_eq!(monitor.memory_limit_mb, Some(512));
     }
 
@@ -505,3 +511,4 @@ mod tests {
         assert!(summary.contains("within_limits: true"));
     }
 }
+

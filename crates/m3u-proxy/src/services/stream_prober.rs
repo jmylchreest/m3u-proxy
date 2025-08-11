@@ -227,7 +227,7 @@ impl StreamProber {
         
         // Handle video streams
         if let Some(video_stream) = probe_result.video_streams.first() {
-            strategy.video_mapping = Some(format!("0:v:0"));
+            strategy.video_mapping = Some("0:v:0".to_string());
             
             // Decide if we should copy video
             strategy.video_copy = should_copy_video_stream(
@@ -248,7 +248,7 @@ impl StreamProber {
         
         // Handle audio streams
         if let Some(audio_stream) = probe_result.audio_streams.first() {
-            strategy.audio_mapping = Some(format!("0:a:0"));
+            strategy.audio_mapping = Some("0:a:0".to_string());
             
             // Decide if we should copy audio
             strategy.audio_copy = should_copy_audio_stream(
@@ -324,8 +324,8 @@ fn should_copy_audio_stream(
         // Check if bitrate is acceptable - never upconvert audio
         if let (Some(input_br), Some(target_br)) = (input_bitrate, target_bitrate) {
             let input_kbps = (input_br / 1000) as u32;
-            // Copy if input bitrate is equal or lower than target
-            return input_kbps <= target_br;
+            // Copy if input bitrate is equal or higher than target (no upconversion)
+            return input_kbps >= target_br;
         }
         return true;
     }

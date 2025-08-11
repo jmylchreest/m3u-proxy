@@ -155,7 +155,7 @@ fn is_retryable_error(error: &RepositoryError) -> bool {
                 // Other database errors are generally not retryable
                 _ => {
                     // Check error message for common retryable patterns
-                    let error_msg = format!("{}", sqlx_error).to_lowercase();
+                    let error_msg = format!("{sqlx_error}").to_lowercase();
                     error_msg.contains("database is locked") ||
                     error_msg.contains("database is busy") ||
                     error_msg.contains("connection reset") ||
@@ -197,7 +197,6 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use std::time::Instant;
-    use tokio_test;
 
     /// Test that successful operations complete without retry
     #[tokio::test]
@@ -230,17 +229,17 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
         
-        let result = with_retry(
+        let result: Result<(), _> = with_retry(
             &config,
             || {
                 let counter = counter_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
                     Err(RepositoryError::SerializationFailed(
-                        serde_json::Error::from(serde_json::Error::io(std::io::Error::new(
+                        serde_json::Error::io(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             "test error"
-                        )))
+                        ))
                     ))
                 }
             },
@@ -303,7 +302,7 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
         
-        let result = with_retry(
+        let result: Result<(), _> = with_retry(
             &config,
             || {
                 let counter = counter_clone.clone();
@@ -449,10 +448,10 @@ mod tests {
 
         // Non-retryable errors
         let serialization_error = RepositoryError::SerializationFailed(
-            serde_json::Error::from(serde_json::Error::io(std::io::Error::new(
+            serde_json::Error::io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "test"
-            )))
+            ))
         );
         assert!(!is_retryable_error(&serialization_error));
 
@@ -508,7 +507,7 @@ mod tests {
     }
 
     /// Property-based test for retry configuration validation
-    #[cfg(feature = "proptest")]
+    #[cfg(test)]
     mod property_tests {
         use super::*;
         use proptest::prelude::*;
@@ -534,8 +533,9 @@ mod tests {
                 // Delay should never exceed max_delay
                 prop_assert!(delay <= config.max_delay);
                 
-                // Delay should be at least initial_delay
-                prop_assert!(delay >= config.initial_delay);
+                // Delay should be at least initial_delay, unless capped by max_delay
+                let expected_min_delay = config.initial_delay.min(config.max_delay);
+                prop_assert!(delay >= expected_min_delay);
             }
         }
     }

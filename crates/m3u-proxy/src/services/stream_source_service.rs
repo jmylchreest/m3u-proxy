@@ -220,8 +220,7 @@ impl StreamSourceService {
             // Make test API call
             let client = reqwest::Client::new();
             let test_url = format!(
-                "{}player_api.php?username={}&password={}&action=get_live_categories",
-                url, username, password
+                "{url}player_api.php?username={username}&password={password}&action=get_live_categories"
             );
 
             match client.get(&test_url).send().await {
@@ -239,7 +238,7 @@ impl StreamSourceService {
                 }),
                 Err(e) => Ok(TestConnectionResult {
                     success: false,
-                    message: format!("Connection failed: {}", e),
+                    message: format!("Connection failed: {e}"),
                     has_streams: false,
                     has_epg: false,
                 }),
@@ -278,7 +277,7 @@ impl StreamSourceService {
             }),
             Err(e) => Ok(TestConnectionResult {
                 success: false,
-                message: format!("Connection failed: {}", e),
+                message: format!("Connection failed: {e}"),
                 has_streams: false,
                 has_epg: false,
             }),
@@ -294,8 +293,7 @@ impl StreamSourceService {
     ) -> Result<bool> {
         let client = reqwest::Client::new();
         let epg_url = format!(
-            "{}xmltv.php?username={}&password={}",
-            url, username, password
+            "{url}xmltv.php?username={username}&password={password}"
         );
 
         match client.head(&epg_url).send().await {
@@ -374,7 +372,7 @@ impl StreamSourceService {
         
         // Final progress update
         if let Some(updater) = progress_updater {
-            updater.update_progress(100.0, &format!("Completed: {} channels saved", channels_saved)).await;
+            updater.update_progress(100.0, &format!("Completed: {channels_saved} channels saved")).await;
             updater.complete_stage().await;
         }
         
@@ -428,7 +426,6 @@ pub struct TestConnectionResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[tokio::test]
     async fn test_create_with_auto_epg() {

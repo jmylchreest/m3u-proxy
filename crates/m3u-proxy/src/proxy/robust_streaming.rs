@@ -424,7 +424,7 @@ impl UpstreamHealthMonitor {
     }
 
     async fn check_host_health(client: &Client, host: &str) -> bool {
-        let health_url = format!("http://{}/health", host);
+        let health_url = format!("http://{host}/health");
         match client.head(&health_url).send().await {
             Ok(response) => response.status().is_success(),
             Err(_) => false,

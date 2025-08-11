@@ -87,7 +87,7 @@ impl LogoCachingStage {
         use url::Url;
         
         let parsed_url = Url::parse(url).map_err(|e| {
-            format!("Invalid URL '{}': {}", url, e)
+            format!("Invalid URL '{url}': {e}")
         })?;
 
         // Start building normalized URL without scheme
@@ -139,7 +139,7 @@ impl LogoCachingStage {
             normalized.push('?');
             let param_string: Vec<String> = sorted_params
                 .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
+                .map(|(k, v)| format!("{k}={v}"))
                 .collect();
             normalized.push_str(&param_string.join("&"));
         }
@@ -149,7 +149,7 @@ impl LogoCachingStage {
         hasher.update(normalized.as_bytes());
         let hash = hasher.finalize();
 
-        Ok(format!("{:x}", hash))
+        Ok(format!("{hash:x}"))
     }
     pub async fn new(
         file_manager: SandboxedManager,
@@ -299,7 +299,7 @@ impl LogoCachingStage {
                             
                             // Check if logo already exists (cache hit detection)
                             let cache_id = Self::generate_cache_id_from_url(logo_url)?;
-                            let logo_file_path = format!("{}.png", cache_id);
+                            let logo_file_path = format!("{cache_id}.png");
                             let logo_exists = self.file_manager.exists(&logo_file_path).await.unwrap_or(false);
                             
                             if logo_exists {
@@ -381,7 +381,7 @@ impl LogoCachingStage {
                 
                 // Send SSE progress update with 5-95% range
                 let adjusted_progress = 5.0 + (progress_pct as f64 * 0.9); // Scale to 5-95% range
-                let progress_message = format!("Caching logos: {}/{} channels ({:.1}%)", processed_count, total_channels, progress_pct);
+                let progress_message = format!("Caching logos: {processed_count}/{total_channels} channels ({progress_pct:.1}%)");
                 self.report_progress(adjusted_progress, &progress_message).await;
             } else {
                 // Just log batch completion without full progress details
@@ -586,7 +586,7 @@ impl LogoCachingStage {
         let programs: Result<Vec<_>, _> = content
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str::<EpgProgram>(line))
+            .map(serde_json::from_str::<EpgProgram>)
             .collect();
         
         let programs = programs?;
@@ -683,6 +683,39 @@ impl LogoCachingStage {
     }
 }
 
+
+impl ProgressAware for LogoCachingStage {
+    fn get_progress_manager(&self) -> Option<&Arc<ProgressManager>> {
+        self.progress_manager.as_ref()
+    }
+}
+
+#[async_trait::async_trait]
+impl PipelineStage for LogoCachingStage {
+    async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
+        self.report_progress(5.0, "Initializing logo cache").await;
+        let result = self.process(input).await
+            .map_err(|e| PipelineError::stage_error("logo_caching", format!("Logo caching failed: {e}")))?;
+        self.report_progress(100.0, "Logo caching completed").await;
+        Ok(result)
+    }
+    
+    fn stage_id(&self) -> &'static str {
+        "logo_caching"
+    }
+    
+    fn stage_name(&self) -> &'static str {
+        "Logo Caching"
+    }
+    
+    async fn cleanup(&mut self) -> Result<(), PipelineError> {
+        Ok(())
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,6 +728,7 @@ mod tests {
             source_id: Uuid::new_v4(),
             tvg_id: None,
             tvg_name: None,
+            tvg_chno: None,
             tvg_logo: logo_url,
             tvg_shift: None,
             group_title: None,
@@ -772,38 +806,5 @@ mod tests {
         
         // This test demonstrates the expected processing logic
         // In a real test, we'd mock LogoAssetService to verify the behavior
-    }
-}
-
-impl ProgressAware for LogoCachingStage {
-    fn get_progress_manager(&self) -> Option<&Arc<ProgressManager>> {
-        self.progress_manager.as_ref()
-    }
-}
-
-#[async_trait::async_trait]
-impl PipelineStage for LogoCachingStage {
-    async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
-        self.report_progress(5.0, "Initializing logo cache").await;
-        let result = self.process(input).await
-            .map_err(|e| PipelineError::stage_error("logo_caching", format!("Logo caching failed: {}", e)))?;
-        self.report_progress(100.0, "Logo caching completed").await;
-        Ok(result)
-    }
-    
-    fn stage_id(&self) -> &'static str {
-        "logo_caching"
-    }
-    
-    fn stage_name(&self) -> &'static str {
-        "Logo Caching"
-    }
-    
-    async fn cleanup(&mut self) -> Result<(), PipelineError> {
-        Ok(())
-    }
-    
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }

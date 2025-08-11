@@ -427,7 +427,7 @@ impl SchedulerService {
                 // If this stream source has a linked EPG source, refresh it too
                 // BUT only if it hasn't been updated recently (prevent cascading loops)
                 let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
-                let linked_epgs = url_linking_repo.find_linked_epg_sources(&stream_source).await.unwrap_or_default();
+                let linked_epgs = url_linking_repo.find_linked_epg_sources(stream_source).await.unwrap_or_default();
                 if let Some(linked_epg) = linked_epgs.into_iter().next() {
                     // Check if linked EPG was updated recently (within last 5 minutes)
                     // Use scheduler cache to get more accurate timing
@@ -465,7 +465,7 @@ impl SchedulerService {
                 // If this EPG source has a linked stream source, refresh it too
                 // BUT only if it hasn't been updated recently (prevent cascading loops)
                 let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
-                let linked_streams = url_linking_repo.find_linked_stream_sources(&epg_source).await.unwrap_or_default();
+                let linked_streams = url_linking_repo.find_linked_stream_sources(epg_source).await.unwrap_or_default();
                 if let Some(linked_stream) = linked_streams.into_iter().next() {
                     // Check if linked stream was updated recently (within last 5 minutes)
                     // Use scheduler cache to get more accurate timing

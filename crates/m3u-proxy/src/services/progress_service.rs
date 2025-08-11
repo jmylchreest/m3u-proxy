@@ -502,7 +502,7 @@ impl ProgressManager {
             
             // Check for ID collision
             if stages.iter().any(|s| s.id == stage_id) {
-                panic!("Stage ID collision: '{}' already exists", stage_id);
+                panic!("Stage ID collision: '{stage_id}' already exists");
             }
             
             stages.push(ProgressStage {
@@ -619,6 +619,8 @@ impl ProgressManager {
     
     /// Get current progress state
     pub async fn get_progress(&self) -> UniversalProgress {
+        // Ensure state is up-to-date with current stage configuration
+        self.recalculate_and_broadcast().await;
         self.progress.read().await.clone()
     }
     
@@ -656,10 +658,9 @@ impl ProgressManager {
         
         // Update progress state with stages data
         let mut progress = self.progress.write().await;
-        progress.overall_percentage = total_progress.clamp(0.0, 100.0);
         progress.last_update = Utc::now();
         
-        // Update overall state when stages are active (but don't override current_stage)
+        // Update overall state based on stage count
         if stage_count > 0 {
             // If we have stages, we should be in processing state
             if progress.state == UniversalState::Idle {
@@ -668,7 +669,15 @@ impl ProgressManager {
             
             // Note: current_stage is now managed explicitly by the orchestrator
             // Don't automatically change it based on stage completion status
+        } else {
+            // No stages means nothing to process, so we're completed
+            if progress.state == UniversalState::Idle {
+                progress.set_state(UniversalState::Completed);
+            }
         }
+        
+        // Set percentage AFTER state to override set_state's automatic 100% setting
+        progress.overall_percentage = total_progress.clamp(0.0, 100.0);
         
         // CRITICAL FIX: Populate stages field from ProgressManager stages
         let stages_guard = self.stages.read().await;
@@ -818,7 +827,7 @@ impl ProgressService {
     ) -> Result<Arc<ProgressManager>, anyhow::Error> {
         // Check if operation already in progress
         if self.is_operation_in_progress(owner_id).await {
-            let error_msg = format!("Cannot create staged progress manager for owner {}: Operation already in progress", owner_id);
+            let error_msg = format!("Cannot create staged progress manager for owner {owner_id}: Operation already in progress");
             warn!("{}", error_msg);
             return Err(anyhow::anyhow!(error_msg));
         }
@@ -1120,15 +1129,15 @@ mod tests {
         
         let progress = progress_manager.get_progress().await;
         assert_eq!(progress.overall_percentage, 50.0);
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 50.0);
-        assert_eq!(progress.stage.as_ref().unwrap().stage_description.as_ref().unwrap(), "Half way done");
+        assert_eq!(progress.stages[0].percentage, 50.0);
+        assert_eq!(progress.stages[0].stage_step, "Half way done");
 
         // Complete the stage
         updater.complete_stage().await;
         
         let progress = progress_manager.get_progress().await;
         assert_eq!(progress.overall_percentage, 100.0);
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 100.0);
+        assert_eq!(progress.stages[0].percentage, 100.0);
 
         // Complete the entire operation
         progress_manager.complete_operation().await;
@@ -1136,7 +1145,7 @@ mod tests {
         let progress = progress_manager.get_progress().await;
         assert_eq!(progress.overall_percentage, 100.0);
         assert!(progress.is_complete());
-        assert!(progress.stage.is_none());
+        assert_eq!(progress.state, UniversalState::Completed);
     }
 
     #[tokio::test]
@@ -1180,7 +1189,7 @@ mod tests {
         
         let progress = progress_manager.get_progress().await;
         assert!((progress.overall_percentage - 37.5).abs() < 0.01);
-        assert_eq!(progress.stage.as_ref().unwrap().id, "stage2");
+        assert_eq!(progress.current_stage, "stage2");
 
         // Complete stages 2 and 3
         updater2.complete_stage().await;
@@ -1189,7 +1198,7 @@ mod tests {
         
         let progress = progress_manager.get_progress().await;
         assert!((progress.overall_percentage - 75.0).abs() < 0.01);
-        assert_eq!(progress.stage.as_ref().unwrap().id, "stage4");
+        assert_eq!(progress.current_stage, "stage4");
 
         // Complete final stage
         let updater4 = progress_manager.get_stage_updater("stage4").await.unwrap();
@@ -1218,15 +1227,15 @@ mod tests {
         
         let progress = progress_manager.get_progress().await;
         assert_eq!(progress.overall_percentage, 25.0);
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 25.0);
-        assert_eq!(progress.stage.as_ref().unwrap().stage_description.as_ref().unwrap(), "Processing data");
+        assert_eq!(progress.stages[0].percentage, 25.0);
+        assert_eq!(progress.stages[0].stage_step, "Processing data");
 
         // Process 100 out of 100 items (should be 100%)
         updater.update_items(100, Some(100), "Processing complete").await;
         
         let progress = progress_manager.get_progress().await;
         assert_eq!(progress.overall_percentage, 100.0);
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 100.0);
+        assert_eq!(progress.stages[0].percentage, 100.0);
     }
 
     #[tokio::test]
@@ -1239,7 +1248,7 @@ mod tests {
         assert!(!service.is_operation_in_progress(owner_id).await);
 
         // Start an operation
-        let progress_manager = service.create_staged_progress_manager("test_op", Some(owner_id)).await;
+        let progress_manager = service.create_staged_progress_manager(owner_id, "test_resource".to_string(), OperationType::Pipeline, "test_op".to_string()).await.unwrap();
         let _progress_manager = progress_manager.add_stage("stage1", "Stage 1").await;
 
         // Should detect operation in progress
@@ -1278,21 +1287,21 @@ mod tests {
 
         // Initially should show first stage
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().id, "data_mapping");
+        assert_eq!(progress.current_stage, "data_mapping");
 
         // Complete first stage, should move to second
         let updater1 = progress_manager.get_stage_updater("data_mapping").await.unwrap();
         updater1.complete_stage().await;
         
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().id, "filtering");
+        assert_eq!(progress.current_stage, "filtering");
 
         // Complete second stage, should move to third
         let updater2 = progress_manager.get_stage_updater("filtering").await.unwrap();
         updater2.complete_stage().await;
         
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().id, "generation");
+        assert_eq!(progress.current_stage, "generation");
 
         // Complete final stage
         let updater3 = progress_manager.get_stage_updater("generation").await.unwrap();
@@ -1325,7 +1334,7 @@ mod tests {
             let updater = updater1.clone();
             tokio::spawn(async move {
                 for i in 0..=10 {
-                    updater.update_progress(i as f64 * 10.0, &format!("Stage 1 at {}", i)).await;
+                    updater.update_progress(i as f64 * 10.0, &format!("Stage 1 at {i}")).await;
                     sleep(Duration::from_millis(1)).await;
                 }
                 updater.complete_stage().await;
@@ -1337,7 +1346,7 @@ mod tests {
             tokio::spawn(async move {
                 sleep(Duration::from_millis(5)).await; // Start slightly later
                 for i in 0..=10 {
-                    updater.update_progress(i as f64 * 10.0, &format!("Stage 2 at {}", i)).await;
+                    updater.update_progress(i as f64 * 10.0, &format!("Stage 2 at {i}")).await;
                     sleep(Duration::from_millis(1)).await;
                 }
                 updater.complete_stage().await;
@@ -1365,7 +1374,7 @@ mod tests {
         // Test with no stages
         let progress = progress_manager.get_progress().await;
         assert_eq!(progress.overall_percentage, 0.0);
-        assert!(progress.stage.is_none());
+        assert_eq!(progress.state, UniversalState::Completed);
 
         // Add stage and test clamping
         let progress_manager = progress_manager.add_stage("test_stage", "Test Stage").await;
@@ -1374,12 +1383,12 @@ mod tests {
         // Test negative percentage (should clamp to 0)
         updater.update_progress(-10.0, "Negative test").await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 0.0);
+        assert_eq!(progress.stages[0].percentage, 0.0);
 
         // Test > 100% (should clamp to 100)
         updater.update_progress(150.0, "Over 100 test").await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 100.0);
+        assert_eq!(progress.stages[0].percentage, 100.0);
 
         // Test invalid stage ID
         let invalid_updater = progress_manager.get_stage_updater("nonexistent").await;
@@ -1388,12 +1397,12 @@ mod tests {
         // Test update_items with 0 total
         updater.update_items(5, Some(0), "Zero total test").await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 0.0);
+        assert_eq!(progress.stages[0].percentage, 0.0);
 
         // Test update_items with None total
         updater.update_items(5, None, "None total test").await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 0.0);
+        assert_eq!(progress.stages[0].percentage, 0.0);
     }
 
     #[tokio::test]
@@ -1412,36 +1421,36 @@ mod tests {
 
         // Stage starts at 0%
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 0.0);
+        assert_eq!(progress.stages[0].percentage, 0.0);
 
         // Complete preprocessing (database fetch, setup) - sets to 5%
         updater.complete_preprocessing("Database fetch complete, starting processing").await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 5.0);
+        assert_eq!(progress.stages[0].percentage, 5.0);
 
         // Test with 1000 channels, 500 programs (1500 total)
         // Process 150 channels, 75 programs (225 total = 15% of 1500)
         // Expected: 5% + (15% * 90%) = 5% + 13.5% = 18.5%
         updater.update_channel_program_progress(150, 75, 1000, 500, "Processing 15%").await;
         let progress = progress_manager.get_progress().await;
-        assert!((progress.stage.as_ref().unwrap().percentage - 18.5).abs() < 0.01);
+        assert!((progress.stages[0].percentage - 18.5).abs() < 0.01);
 
         // Process 500 channels, 250 programs (750 total = 50% of 1500)
         // Expected: 5% + (50% * 90%) = 5% + 45% = 50%
         updater.update_channel_program_progress(500, 250, 1000, 500, "Processing 50%").await;
         let progress = progress_manager.get_progress().await;
-        assert!((progress.stage.as_ref().unwrap().percentage - 50.0).abs() < 0.01);
+        assert!((progress.stages[0].percentage - 50.0).abs() < 0.01);
 
         // Process all items (1000 channels, 500 programs = 100% of 1500)
         // Expected: 5% + (100% * 90%) = 5% + 90% = 95%
         updater.update_channel_program_progress(1000, 500, 1000, 500, "Processing complete").await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 95.0);
+        assert_eq!(progress.stages[0].percentage, 95.0);
 
         // Complete the stage (should go to 100%)
         updater.complete_stage().await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 100.0);
+        assert_eq!(progress.stages[0].percentage, 100.0);
     }
 
     #[tokio::test]
@@ -1460,22 +1469,22 @@ mod tests {
 
         // Stage starts at 0%
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 0.0);
+        assert_eq!(progress.stages[0].percentage, 0.0);
 
         // Complete preprocessing (database queries, setup)
         updater.complete_preprocessing("Loaded 1000 channels and 500 programs from database").await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 5.0);
+        assert_eq!(progress.stages[0].percentage, 5.0);
 
         // Now do main processing work
         updater.update_channel_program_progress(500, 250, 1000, 500, "Mapping 50% complete").await;
         let progress = progress_manager.get_progress().await;
-        assert!((progress.stage.as_ref().unwrap().percentage - 50.0).abs() < 0.01);
+        assert!((progress.stages[0].percentage - 50.0).abs() < 0.01);
 
         // Complete the stage (100%)
         updater.complete_stage().await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 100.0);
+        assert_eq!(progress.stages[0].percentage, 100.0);
     }
 
     #[tokio::test]
@@ -1498,21 +1507,21 @@ mod tests {
         // Test with no channels or programs (0 total) - should stay at 5%
         updater.update_channel_program_progress(0, 0, 0, 0, "No data to process").await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 5.0);
+        assert_eq!(progress.stages[0].percentage, 5.0);
 
         // Test with only channels (no programs)
         updater.update_channel_program_progress(50, 0, 100, 0, "Channels only").await;
         let progress = progress_manager.get_progress().await;
-        assert!((progress.stage.as_ref().unwrap().percentage - 50.0).abs() < 0.01); // 5% + (50% * 90%) = 50%
+        assert!((progress.stages[0].percentage - 50.0).abs() < 0.01); // 5% + (50% * 90%) = 50%
 
         // Test with only programs (no channels)
         updater.update_channel_program_progress(0, 25, 0, 100, "Programs only").await;
         let progress = progress_manager.get_progress().await;
-        assert!((progress.stage.as_ref().unwrap().percentage - 27.5).abs() < 0.01); // 5% + (25% * 90%) = 27.5%
+        assert!((progress.stages[0].percentage - 27.5).abs() < 0.01); // 5% + (25% * 90%) = 27.5%
 
         // Test boundary: exactly at 95% should not exceed
         updater.update_channel_program_progress(1000, 1000, 1000, 1000, "At boundary").await;
         let progress = progress_manager.get_progress().await;
-        assert_eq!(progress.stage.as_ref().unwrap().percentage, 95.0);
+        assert_eq!(progress.stages[0].percentage, 95.0);
     }
 }

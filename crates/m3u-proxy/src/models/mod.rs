@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -43,24 +44,29 @@ pub enum StreamSourceType {
     Xtream,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Hash, Default)]
 #[sqlx(type_name = "stream_proxy_mode", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum StreamProxyMode {
+    #[default]
     Redirect,
     Proxy,
     Relay,
 }
 
-impl StreamProxyMode {
-    /// Parse a string into a StreamProxyMode, defaulting to Redirect for unknown values
-    pub fn from_str(s: &str) -> Self {
-        match s {
+
+/// Implementation of FromStr trait for StreamProxyMode
+impl FromStr for StreamProxyMode {
+    type Err = ();
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let result = match s {
             "redirect" => StreamProxyMode::Redirect,
             "proxy" => StreamProxyMode::Proxy,
             "relay" => StreamProxyMode::Relay,
             _ => StreamProxyMode::Redirect,
-        }
+        };
+        Ok(result)
     }
 }
 
@@ -388,7 +394,7 @@ pub struct FilterTestRequest {
 // New generalized models
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ExpressionValidateRequest {
-    #[schema(example = "channel_name contains \"HD\" OR (group_title = \"Movies\" AND stream_url starts_with \"https\")")]
+    #[schema(example = "channel_name contains \"HD\" OR (group_title equals \"Movies\" AND stream_url starts_with \"https\")")]
     pub expression: String,
 }
 
@@ -510,7 +516,7 @@ pub struct FilterField {
     pub name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "text", rename_all = "snake_case")]
 pub enum FilterOperator {
     #[serde(rename = "matches")]
@@ -716,8 +722,8 @@ pub enum ActionOperator {
 /// // Future: Variable reference
 /// ActionValue::Variable(VariableRef { field_name: "tvg_id".to_string() })
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", content = "value")]
 pub enum ActionValue {
     /// Literal string value
     #[serde(rename = "literal")]
@@ -737,14 +743,14 @@ pub enum ActionValue {
 }
 
 // Future: Function call support
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FunctionCall {
     pub name: String,
     pub arguments: Vec<ActionValue>,
 }
 
 // Future: Variable reference support
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VariableRef {
     pub field_name: String,
 }
@@ -1024,9 +1030,9 @@ impl NumberedChannel {
                 self.assigned_number
             ),
             ChannelNumberAssignmentType::ExplicitIncremented => {
-                format!("Incremented due to conflict (original + offset)")
+                "Incremented due to conflict (original + offset)".to_string()
             }
-            ChannelNumberAssignmentType::Sequential => format!("Sequential assignment"),
+            ChannelNumberAssignmentType::Sequential => "Sequential assignment".to_string(),
         }
     }
 }
@@ -1042,6 +1048,12 @@ pub struct GenerationTiming {
     pub m3u_generation_ms: u128,
     pub file_writing_ms: u128,
     pub database_save_ms: u128,
+}
+
+impl Default for GenerationTiming {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GenerationTiming {
@@ -1654,7 +1666,7 @@ impl GenerationStats {
                     // Add memory info if available
                     if let Some(&memory_bytes) = self.stage_memory_usage.get(stage_key) {
                         let memory_mb = memory_bytes / (1024 * 1024);
-                        kv_pairs.push(format!("peak_memory={}MB", memory_mb));
+                        kv_pairs.push(format!("peak_memory={memory_mb}MB"));
                     }
 
                     lines.push(format!(
@@ -1674,7 +1686,7 @@ impl GenerationStats {
     pub fn detailed_summary(&self) -> String {
         let mut summary = Vec::new();
 
-        summary.push(format!("=== Generation Performance Summary ==="));
+        summary.push("=== Generation Performance Summary ===".to_string());
         summary.push(format!("Total Duration: {}ms", self.total_duration_ms));
         summary.push(format!(
             "Channels Processed: {} ({:.1} ch/s)",
@@ -1687,15 +1699,15 @@ impl GenerationStats {
         ));
 
         if !self.stage_timings.is_empty() {
-            summary.push(format!(""));
-            summary.push(format!("Stage Timings:"));
+            summary.push(String::new());
+            summary.push("Stage Timings:".to_string());
             for (stage, duration) in &self.stage_timings {
-                summary.push(format!("  {}: {}ms", stage, duration));
+                summary.push(format!("  {stage}: {duration}ms"));
             }
         }
 
         if let Some(peak_memory) = self.peak_memory_usage_mb {
-            summary.push(format!(""));
+            summary.push(String::new());
             summary.push(format!(
                 "Memory: Peak {:.1}MB | Efficiency: {:.1} ch/MB",
                 peak_memory,
@@ -1704,7 +1716,7 @@ impl GenerationStats {
         }
 
         if !self.warnings.is_empty() || !self.errors.is_empty() {
-            summary.push(format!(""));
+            summary.push(String::new());
             summary.push(format!(
                 "Issues: {} warnings, {} errors",
                 self.warnings.len(),

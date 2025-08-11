@@ -235,7 +235,7 @@ impl M3uSourceHandler {
         // Try to extract a name from the URL
         let name = url
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or("Unnamed Channel")
             .split('?')
             .next()
@@ -294,7 +294,7 @@ impl M3uSourceHandler {
                 }
             }
             Err(e) => {
-                result.errors.push(format!("Connection failed: {}", e));
+                result.errors.push(format!("Connection failed: {e}"));
                 result.is_valid = false;
             }
         }
@@ -375,12 +375,12 @@ impl SourceHandler for M3uSourceHandler {
                     // Validate known field mappings
                     for (source_field, target_field) in &field_map {
                         if target_field.is_empty() {
-                            result = result.with_warning(format!("Empty target field mapping for '{}'", source_field));
+                            result = result.with_warning(format!("Empty target field mapping for '{source_field}'"));
                         }
                     }
                 }
                 Err(e) => {
-                    result.errors.push(format!("Invalid field mapping JSON: {}", e));
+                    result.errors.push(format!("Invalid field mapping JSON: {e}"));
                     result.is_valid = false;
                 }
             }
@@ -431,7 +431,7 @@ impl ChannelIngestor for M3uSourceHandler {
     async fn ingest_channels(&self, source: &StreamSource) -> AppResult<Vec<Channel>> {
         // Fetch and parse M3U content directly
         let content = self.http_client.fetch_text(&source.url).await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch M3U: {}", e)))?;
+            .map_err(|e| AppError::source_error(format!("Failed to fetch M3U: {e}")))?;
         self.parse_m3u_content(&content, source).await
     }
 
@@ -483,10 +483,8 @@ impl HealthChecker for M3uSourceHandler {
         let mut metrics = HashMap::new();
 
         // Try to get additional metrics
-        if let Ok(estimated_channels) = self.estimate_channel_count(source).await {
-            if let Some(count) = estimated_channels {
-                metrics.insert("estimated_channels".to_string(), count.to_string());
-            }
+        if let Ok(Some(count)) = self.estimate_channel_count(source).await {
+            metrics.insert("estimated_channels".to_string(), count.to_string());
         }
 
         if let Ok(source_info) = self.get_source_info(source).await {

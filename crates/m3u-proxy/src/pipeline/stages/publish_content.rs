@@ -169,10 +169,7 @@ impl PublishContentStage {
     /// Create backup of existing file if it exists
     async fn create_backup(&self, target_filename: &str) -> Result<()> {
         // Check if target file exists
-        let exists = match self.proxy_output_file_manager.exists(target_filename).await {
-            Ok(exists) => exists,
-            Err(_) => false, // Assume doesn't exist if we can't check
-        };
+        let exists: bool = (self.proxy_output_file_manager.exists(target_filename).await).unwrap_or_default();
 
         if exists {
             let backup_filename = format!("{}.backup.{}", target_filename, chrono::Utc::now().timestamp());
@@ -250,7 +247,7 @@ impl PipelineStage for PublishContentStage {
     async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
         self.report_progress(25.0, "Initializing file publishing").await;
         let result = self.process(input).await
-            .map_err(|e| PipelineError::stage_error("publish_content", format!("Publishing failed: {}", e)))?;
+            .map_err(|e| PipelineError::stage_error("publish_content", format!("Publishing failed: {e}")))?;
         self.report_progress(100.0, "Publishing completed").await;
         Ok(result)
     }

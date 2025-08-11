@@ -1,0 +1,174 @@
+import { LogEntry, LogHandler } from '@/types/api'
+import { getBackendUrl } from '@/lib/config'
+
+export class LogsClient {
+  private eventSource: EventSource | null = null
+  private handlers: LogHandler[] = []
+  private reconnectAttempts = 0
+  private maxReconnectAttempts = 5
+  private reconnectDelay = 1000
+
+  connect() {
+    if (this.eventSource) {
+      console.log('[Logs] Disconnecting existing connection before reconnecting')
+      this.disconnect()
+    }
+
+    try {
+      console.log('[Logs] Connecting to logs stream')
+      const backendUrl = getBackendUrl()
+      this.eventSource = new EventSource(`${backendUrl}/api/v1/logs/stream`)
+
+      this.eventSource.onopen = () => {
+        console.log('[Logs] Connection opened successfully')
+        this.reconnectAttempts = 0
+      }
+
+      // Handle ALL message events generically
+      this.eventSource.onmessage = (event) => {
+        console.log('[Logs] Default message received:', event.data)
+        this.parseAndHandleLog(event.data)
+      }
+
+      // Specifically listen for 'log' events
+      this.eventSource.addEventListener('log', (event: MessageEvent) => {
+        console.log('[Logs] Log event received:', event.data)
+        this.parseAndHandleLog(event.data)
+      })
+
+      // Listen for other common SSE event types
+      const otherEventTypes = ['message', 'data', 'update', 'entry', 'record']
+      otherEventTypes.forEach(eventType => {
+        this.eventSource!.addEventListener(eventType, (event: MessageEvent) => {
+          console.log(`[Logs] ${eventType} event received:`, event.data)
+          this.parseAndHandleLog(event.data)
+        })
+      })
+
+      this.eventSource.onerror = (error) => {
+        console.error('[Logs] Connection error:', error, 'ReadyState:', this.eventSource?.readyState)
+        this.handleReconnect()
+      }
+
+    } catch (error) {
+      console.error('[Logs] Failed to create SSE connection:', error)
+    }
+  }
+
+  private parseAndHandleLog(data: string) {
+    try {
+      const logData = JSON.parse(data)
+      console.log('[Logs] Parsed log data:', logData)
+      
+      // Create a LogEntry from any JSON structure
+      let logEntry: LogEntry
+      
+      if ('level' in logData && 'message' in logData) {
+        // Handle standard log entries
+        logEntry = {
+          id: logData.id || `log-${Date.now()}`,
+          timestamp: logData.timestamp || logData.created_at || logData.time || new Date().toISOString(),
+          level: this.normalizeLogLevel(logData.level),
+          message: logData.message,
+          module: logData.module || logData.component || logData.source,
+          target: logData.target || logData.logger,
+          file: logData.file || logData.filename,
+          line: logData.line || logData.line_number,
+          context: logData.context || logData.metadata || logData.extra,
+          fields: logData.fields || {}
+        }
+      } else {
+        // Handle completely generic JSON as a log entry
+        logEntry = {
+          id: logData.id || `log-${Date.now()}`,
+          timestamp: logData.timestamp || logData.created_at || logData.time || new Date().toISOString(),
+          level: 'info',
+          message: logData.message || logData.description || logData.text || JSON.stringify(logData).substring(0, 200),
+          module: logData.module || logData.component || logData.source || 'unknown',
+          target: logData.target || logData.logger,
+          file: logData.file || logData.filename,
+          line: logData.line || logData.line_number,
+          context: logData,
+          fields: logData.fields || {}
+        }
+      }
+      
+      this.handleLog(logEntry)
+    } catch (error) {
+      console.error('[Logs] Failed to parse log:', error, 'Raw data:', data)
+      // Create a fallback log entry for unparseable data
+      const fallbackLog: LogEntry = {
+        id: `parse-error-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        message: `Failed to parse log data: ${data.substring(0, 100)}...`,
+        module: 'log-parser',
+        target: 'log-parser',
+        fields: {},
+        context: { raw_data: data, error: error instanceof Error ? error.message : 'Unknown error' }
+      }
+      this.handleLog(fallbackLog)
+    }
+  }
+
+  private normalizeLogLevel(level: string): LogEntry['level'] {
+    const normalized = level.toLowerCase()
+    if (['trace', 'debug', 'info', 'warn', 'error'].includes(normalized)) {
+      return normalized as LogEntry['level']
+    }
+    // Map common alternatives
+    switch (normalized) {
+      case 'warning': return 'warn'
+      case 'err': return 'error'
+      case 'information': return 'info'
+      default: return 'info'
+    }
+  }
+
+  private handleLog(log: LogEntry) {
+    console.log(`[Logs] Handling log: ${log.level} - ${log.message}`)
+    this.handlers.forEach(handler => handler(log))
+  }
+
+  private handleReconnect() {
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.reconnectAttempts++
+      console.log(`[Logs] Attempting to reconnect (attempt ${this.reconnectAttempts})`)
+      
+      setTimeout(() => {
+        if (this.eventSource?.readyState === EventSource.CLOSED) {
+          this.connect()
+        }
+      }, this.reconnectDelay * this.reconnectAttempts)
+    } else {
+      console.error('[Logs] Max reconnect attempts reached, giving up')
+    }
+  }
+
+  subscribe(handler: LogHandler) {
+    this.handlers.push(handler)
+  }
+
+  unsubscribe(handler: LogHandler) {
+    const index = this.handlers.indexOf(handler)
+    if (index > -1) {
+      this.handlers.splice(index, 1)
+    }
+  }
+
+  disconnect() {
+    if (this.eventSource) {
+      this.eventSource.close()
+      this.eventSource = null
+    }
+    this.handlers = []
+    this.reconnectAttempts = 0
+  }
+
+  isConnected(): boolean {
+    return this.eventSource?.readyState === EventSource.OPEN
+  }
+}
+
+// Export singleton instance
+export const logsClient = new LogsClient()

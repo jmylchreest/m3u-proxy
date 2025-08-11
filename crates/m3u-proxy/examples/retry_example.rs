@@ -1,17 +1,8 @@
-//! Example demonstrating how to use the database retry wrapper
-//! 
-//! This example shows how to add retry functionality to any existing repository
-//! to handle database locking and other transient failures gracefully.
+//\! Example demonstrating how to use the database retry wrapper
+//\! 
+//\! This example shows how to add retry functionality to any existing repository
+//\! to handle database locking and other transient failures gracefully.
 
-use m3u_proxy::repositories::{
-    traits::Repository,
-    stream_source::{StreamSourceRepository, StreamSourceQuery},
-    retry_wrapper::RepositoryRetryExt,
-};
-use m3u_proxy::models::{StreamSourceCreateRequest, StreamSourceType};
-use m3u_proxy::utils::database_retry::RetryConfig;
-use sqlx::{Pool, Sqlite};
-use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -183,7 +183,7 @@ impl FFmpegCommandBuilder {
             .or(profile.video_bitrate);
             
         if let Some(bitrate) = target_bitrate {
-            args.extend(["-b:v".to_string(), format!("{}k", bitrate)]);
+            args.extend(["-b:v".to_string(), format!("{bitrate}k")]);
         }
         if let Some(ref preset) = profile.video_preset {
             args.extend(["-preset".to_string(), preset.clone()]);
@@ -217,7 +217,7 @@ impl FFmpegCommandBuilder {
             // Audio settings - only apply encoding parameters if we're not copying
             if profile.audio_codec != AudioCodec::Copy {
                 if let Some(bitrate) = profile.audio_bitrate {
-                    args.extend(["-b:a".to_string(), format!("{}k", bitrate)]);
+                    args.extend(["-b:a".to_string(), format!("{bitrate}k")]);
                 }
                 self.add_explicit_audio_params(args, profile);
             }
@@ -235,7 +235,7 @@ impl FFmpegCommandBuilder {
         let target_bitrate = strategy.target_audio_bitrate.or(profile.audio_bitrate);
         
         if let Some(bitrate) = target_bitrate {
-            args.extend(["-b:a".to_string(), format!("{}k", bitrate)]);
+            args.extend(["-b:a".to_string(), format!("{bitrate}k")]);
         }
         
         self.add_explicit_audio_params(args, profile);
@@ -445,13 +445,12 @@ impl FFmpegCommandBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
 
     #[test]
     fn test_command_builder_creation() {
         let builder = FFmpegCommandBuilder::new(None);
         // Test basic functionality
-        assert_eq!(builder.stream_prober.is_none(), true);
+        assert!(builder.stream_prober.is_none());
     }
 
     #[test] 

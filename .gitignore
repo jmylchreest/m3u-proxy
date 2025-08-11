@@ -38,4 +38,19 @@ test_*.m3u8
 # Downloaded M3U files
 *.m3u
 *.m3u8
-get.php*
+
+
+# frontend
+frontend/node_modules
+frontend/out
+frontend/.env
+frontend/.env.example
+frontend/components.json.bak
+frontend/*.har
+frontend/.next/analyze/
+frontend/**/public/sw.js
+frontend/**/public/workbox-*.js
+frontend/**/public/worker-*.js
+frontend/**/public/sw.js.map
+frontend/**/public/workbox-*.js.map
+frontend/**/public/worker-*.js.map

@@ -104,7 +104,7 @@ impl XtreamSourceHandler {
         let auth_params = self.get_auth_params(source)?;
 
         let mut url = reqwest::Url::parse(&base_url)
-            .map_err(|e| AppError::validation(format!("Invalid Xtream URL: {}", e)))?;
+            .map_err(|e| AppError::validation(format!("Invalid Xtream URL: {e}")))?;
 
         // Add authentication parameters
         for (key, value) in &auth_params {
@@ -113,8 +113,7 @@ impl XtreamSourceHandler {
 
         debug!("Testing Xtream authentication for: {}", source.name);
 
-        let server_info: XtreamServerInfo = self.http_client.fetch_json(url.as_str()).await
-            .map_err(|e| e)?; // Pass through the original HTTP error without wrapping
+        let server_info: XtreamServerInfo = self.http_client.fetch_json(url.as_str()).await?; // Pass through the original HTTP error without wrapping
 
         // Check if authentication was successful
         if let Some(ref auth) = server_info.user_info {
@@ -134,7 +133,7 @@ impl XtreamSourceHandler {
         let auth_params = self.get_auth_params(source)?;
 
         let mut url = reqwest::Url::parse(&base_url)
-            .map_err(|e| AppError::validation(format!("Invalid Xtream URL: {}", e)))?;
+            .map_err(|e| AppError::validation(format!("Invalid Xtream URL: {e}")))?;
 
         // Add parameters for live TV channels
         for (key, value) in &auth_params {
@@ -144,8 +143,7 @@ impl XtreamSourceHandler {
 
         debug!("Fetching live channels from Xtream source: {}", source.name);
 
-        let channels: Vec<XtreamChannel> = self.http_client.fetch_json(url.as_str()).await
-            .map_err(|e| e)?; // Pass through the original HTTP error
+        let channels: Vec<XtreamChannel> = self.http_client.fetch_json(url.as_str()).await?; // Pass through the original HTTP error
 
         info!("Retrieved {} live channels from Xtream source: {}", channels.len(), source.name);
         Ok(channels)
@@ -179,7 +177,7 @@ impl XtreamSourceHandler {
             tvg_shift: None,
             group_title: xtream_channel.category_name.clone(),
             channel_name: xtream_channel.name.clone(),
-            stream_url: stream_url,
+            stream_url,
             created_at: now,
             updated_at: now,
         }
@@ -192,7 +190,7 @@ impl XtreamSourceHandler {
         let username = source.username.as_ref().unwrap_or(&empty_string);
         let password = source.password.as_ref().unwrap_or(&empty_string);
         
-        format!("{}/live/{}/{}/{}.ts", base_url, username, password, stream_id)
+        format!("{base_url}/live/{username}/{password}/{stream_id}.ts")
     }
 
     /// Validate Xtream URL format
@@ -215,7 +213,7 @@ impl XtreamSourceHandler {
             if let Some(port) = parsed_url.port() {
                 result = result.with_context("port", port.to_string());
                 #[allow(unused_comparisons)]
-                if port < 1024 || port > 65535 {
+                if !(1024..=65535).contains(&port) {
                     result = result.with_warning("Port number is outside typical range");
                 }
             }
@@ -455,7 +453,7 @@ impl SourceHandler for XtreamSourceHandler {
                     }
                 }
                 Err(e) => {
-                    result.errors.push(format!("Authentication test failed: {}", e));
+                    result.errors.push(format!("Authentication test failed: {e}"));
                     result.is_valid = false;
                 }
             }

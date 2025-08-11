@@ -227,8 +227,7 @@ impl EpgSourceService {
         if let (Some(username), Some(password)) = (username, password) {
             let client = reqwest::Client::new();
             let epg_url = format!(
-                "{}xmltv.php?username={}&password={}",
-                url, username, password
+                "{url}xmltv.php?username={username}&password={password}"
             );
 
             match client.head(&epg_url).send().await {
@@ -253,7 +252,7 @@ impl EpgSourceService {
                 }),
                 Err(e) => Ok(TestConnectionResult {
                     success: false,
-                    message: format!("Connection failed: {}", e),
+                    message: format!("Connection failed: {e}"),
                     has_epg: false,
                     has_streams: false,
                 }),
@@ -292,7 +291,7 @@ impl EpgSourceService {
             }),
             Err(e) => Ok(TestConnectionResult {
                 success: false,
-                message: format!("Connection failed: {}", e),
+                message: format!("Connection failed: {e}"),
                 has_epg: false,
                 has_streams: false,
             }),
@@ -308,8 +307,7 @@ impl EpgSourceService {
     ) -> Result<bool> {
         let client = reqwest::Client::new();
         let stream_url = format!(
-            "{}player_api.php?username={}&password={}&action=get_live_categories",
-            url, username, password
+            "{url}player_api.php?username={username}&password={password}&action=get_live_categories"
         );
 
         match client.head(&stream_url).send().await {
@@ -444,7 +442,7 @@ impl EpgSourceService {
             
             // Mark stage as completed
             if let Some(updater) = progress_updater {
-                updater.update_progress(100.0, &format!("Completed: {} programs saved", programs_saved)).await;
+                updater.update_progress(100.0, &format!("Completed: {programs_saved} programs saved")).await;
                 updater.complete_stage().await;
             }
             
@@ -471,7 +469,7 @@ impl EpgSourceService {
                 }
                 Err(e) => {
                     // Mark operation as failed with error message
-                    updater.fail_operation(&format!("EPG ingestion failed: {}", e)).await;
+                    updater.fail_operation(&format!("EPG ingestion failed: {e}")).await;
                 }
             }
         }
@@ -482,7 +480,6 @@ impl EpgSourceService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[tokio::test]
     async fn test_create_with_auto_stream() {

@@ -42,21 +42,21 @@ impl RelayRepository {
         let video_codec = VideoCodec::from_str(&video_codec_str)
             .map_err(|e| RepositoryError::QueryFailed {
                 query: "relay_profile_from_row".to_string(),
-                message: format!("Failed to parse video_codec: {}", e),
+                message: format!("Failed to parse video_codec: {e}"),
             })?;
 
         let audio_codec_str = row.get::<String, _>("audio_codec");
         let audio_codec = AudioCodec::from_str(&audio_codec_str)
             .map_err(|e| RepositoryError::QueryFailed {
                 query: "relay_profile_from_row".to_string(),
-                message: format!("Failed to parse audio_codec: {}", e),
+                message: format!("Failed to parse audio_codec: {e}"),
             })?;
 
         let output_format_str = row.get::<String, _>("output_format");
         let output_format = RelayOutputFormat::from_str(&output_format_str)
             .map_err(|e| RepositoryError::QueryFailed {
                 query: "relay_profile_from_row".to_string(),
-                message: format!("Failed to parse output_format: {}", e),
+                message: format!("Failed to parse output_format: {e}"),
             })?;
 
         Ok(RelayProfile {
@@ -64,7 +64,7 @@ impl RelayRepository {
                 .get_uuid("id")
                 .map_err(|e| RepositoryError::QueryFailed {
                     query: "relay_profile_from_row".to_string(),
-                    message: format!("Failed to parse id: {}", e),
+                    message: format!("Failed to parse id: {e}"),
                 })?,
             name: row.get("name"),
             description: row.get("description"),
@@ -97,25 +97,25 @@ impl RelayRepository {
                 .get_uuid("id")
                 .map_err(|e| RepositoryError::QueryFailed {
                     query: "channel_relay_config_from_row".to_string(),
-                    message: format!("Failed to parse id: {}", e),
+                    message: format!("Failed to parse id: {e}"),
                 })?,
             proxy_id: row
                 .get_uuid("proxy_id")
                 .map_err(|e| RepositoryError::QueryFailed {
                     query: "channel_relay_config_from_row".to_string(),
-                    message: format!("Failed to parse proxy_id: {}", e),
+                    message: format!("Failed to parse proxy_id: {e}"),
                 })?,
             channel_id: row
                 .get_uuid("channel_id")
                 .map_err(|e| RepositoryError::QueryFailed {
                     query: "channel_relay_config_from_row".to_string(),
-                    message: format!("Failed to parse channel_id: {}", e),
+                    message: format!("Failed to parse channel_id: {e}"),
                 })?,
             profile_id: row
                 .get_uuid("profile_id")
                 .map_err(|e| RepositoryError::QueryFailed {
                     query: "channel_relay_config_from_row".to_string(),
-                    message: format!("Failed to parse profile_id: {}", e),
+                    message: format!("Failed to parse profile_id: {e}"),
                 })?,
             name: row.get("name"),
             description: row.get("description"),
@@ -201,7 +201,7 @@ impl RelayRepository {
         let custom_args_json = if let Some(args) = request.custom_args {
             Some(serde_json::to_string(&args).map_err(|e| RepositoryError::QueryFailed {
                 query: "create_channel_config".to_string(),
-                message: format!("Failed to serialize custom_args: {}", e),
+                message: format!("Failed to serialize custom_args: {e}"),
             })?)
         } else {
             None
@@ -286,7 +286,7 @@ impl RelayRepository {
         if let Some(custom_args) = request.custom_args {
             let custom_args_json = serde_json::to_string(&custom_args).map_err(|e| RepositoryError::QueryFailed {
                 query: "update_channel_config".to_string(),
-                message: format!("Failed to serialize custom_args: {}", e),
+                message: format!("Failed to serialize custom_args: {e}"),
             })?;
             if has_updates {
                 query_builder.push(", ");

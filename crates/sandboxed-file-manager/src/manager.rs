@@ -205,7 +205,7 @@ impl SandboxedManager {
         fs::remove_dir_all(&dir_path).await?;
 
         // Remove all files in this directory from registry
-        let prefix = format!("{}/", path_str);
+        let prefix = format!("{path_str}/");
         let mut registry = self.file_registry.write().await;
         registry.retain(|key, _| !key.starts_with(&prefix) && key != path_str);
 
@@ -314,7 +314,7 @@ impl SandboxedManager {
                 .canonicalize()
                 .map_err(|e| SandboxedFileError::PathValidation {
                     path: self.base_dir.clone(),
-                    reason: format!("Failed to canonicalize base directory: {}", e),
+                    reason: format!("Failed to canonicalize base directory: {e}"),
                 })?;
 
         // Create parent directories if they don't exist
@@ -336,7 +336,7 @@ impl SandboxedManager {
                 .canonicalize()
                 .map_err(|e| SandboxedFileError::PathValidation {
                     path: full_path.clone(),
-                    reason: format!("Failed to resolve existing file path: {}", e),
+                    reason: format!("Failed to resolve existing file path: {e}"),
                 })?
         } else {
             // File doesn't exist - resolve parent and construct final path
@@ -352,7 +352,7 @@ impl SandboxedManager {
                     .canonicalize()
                     .map_err(|e| SandboxedFileError::PathValidation {
                         path: parent.to_path_buf(),
-                        reason: format!("Failed to resolve parent directory: {}", e),
+                        reason: format!("Failed to resolve parent directory: {e}"),
                     })?;
 
             let filename =
@@ -889,8 +889,7 @@ mod tests {
 
             assert!(
                 result.is_ok(),
-                "Should allow path that resolves within sandbox: {}",
-                path
+                "Should allow path that resolves within sandbox: {path}",
             );
 
             // Verify we can retrieve the content
@@ -963,7 +962,7 @@ mod tests {
         for path in invalid_paths {
             let result = manager.write(path, "malicious content").await;
 
-            assert!(result.is_err(), "Should reject invalid path: {:?}", path);
+            assert!(result.is_err(), "Should reject invalid path: {path:?}");
         }
     }
 
@@ -1002,7 +1001,7 @@ mod tests {
             let result = manager.write(attempt, "attack payload").await;
 
             // These should fail outright due to validation
-            assert!(result.is_err(), "Should reject escape attempt: {}", attempt);
+            assert!(result.is_err(), "Should reject escape attempt: {attempt}");
         }
 
         for allowed in allowed_traversal {
@@ -1011,8 +1010,7 @@ mod tests {
             // These should succeed because they resolve within the sandbox
             assert!(
                 result.is_ok(),
-                "Should allow path that resolves within sandbox: {}",
-                allowed
+                "Should allow path that resolves within sandbox: {allowed}",
             );
         }
     }

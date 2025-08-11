@@ -1,0 +1,1134 @@
+"use client"
+
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet"
+import { Skeleton } from "@/components/ui/skeleton"
+import { 
+  Plus, 
+  Search,
+  Trash2, 
+  Edit,
+  Upload,
+  Image as ImageIcon,
+  HardDrive,
+  Database,
+  Link2,
+  AlertCircle,
+  Loader2,
+  WifiOff,
+  Eye,
+  Download,
+  FileImage
+} from "lucide-react"
+import { 
+  LogoAsset,
+  LogoAssetsResponse, 
+  LogoStats,
+  LogoUploadRequest,
+  LogoAssetUpdateRequest
+} from "@/types/api"
+import { apiClient, ApiError } from "@/lib/api-client"
+import { API_CONFIG } from "@/lib/config"
+
+interface LoadingState {
+  logos: boolean;
+  stats: boolean;
+  upload: boolean;
+  edit: boolean;
+  delete: string | null;
+}
+
+interface ErrorState {
+  logos: string | null;
+  stats: string | null;
+  upload: string | null;
+  edit: string | null;
+  action: string | null;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+function formatDate(dateString: string): string {
+  return new Date(dateString).toLocaleString()
+}
+
+function formatRelativeTime(dateString: string): string {
+  const now = new Date()
+  const date = new Date(dateString)
+  const diffMs = now.getTime() - date.getTime()
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+  const diffDays = Math.floor(diffHours / 24)
+  
+  if (diffDays > 0) {
+    return `${diffDays}d ago`
+  } else if (diffHours > 0) {
+    return `${diffHours}h ago`
+  } else {
+    return "Just now"
+  }
+}
+
+function getAssetTypeColor(assetType: string): string {
+  switch (assetType) {
+    case 'uploaded':
+      return 'bg-blue-100 text-blue-800'
+    case 'cached':
+      return 'bg-green-100 text-green-800'
+    default:
+      return 'bg-gray-100 text-gray-800'
+  }
+}
+
+function getFormatFromMimeType(mimeType: string): string {
+  const formats = {
+    'image/png': 'PNG',
+    'image/jpeg': 'JPG',
+    'image/jpg': 'JPG', 
+    'image/gif': 'GIF',
+    'image/svg+xml': 'SVG',
+    'image/webp': 'WEBP'
+  }
+  return formats[mimeType as keyof typeof formats] || mimeType.split('/')[1]?.toUpperCase() || 'IMG'
+}
+
+function UploadLogoSheet({ 
+  onUploadLogo,
+  loading,
+  error,
+  open,
+  onOpenChange
+}: { 
+  onUploadLogo: (data: LogoUploadRequest) => Promise<void>;
+  loading: boolean;
+  error: string | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [formData, setFormData] = useState<{
+    name: string;
+    description: string;
+    file: File | null;
+  }>({
+    name: "",
+    description: "",
+    file: null
+  })
+  
+  const [isDragOver, setIsDragOver] = useState(false)
+  const [showFileError, setShowFileError] = useState(false)
+
+  // Reset drag state and form when sheet opens/closes
+  useEffect(() => {
+    if (!open) {
+      setIsDragOver(false)
+      setShowFileError(false)
+      setFormData({
+        name: "",
+        description: "",
+        file: null
+      })
+    } else {
+      setIsDragOver(false) // Also reset when opening
+      setShowFileError(false) // Reset error state when opening
+    }
+  }, [open])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!formData.file) {
+      setShowFileError(true)
+      return
+    }
+    setShowFileError(false)
+    
+    await onUploadLogo({
+      name: formData.name,
+      description: formData.description || undefined,
+      file: formData.file
+    })
+    
+    if (!error) {
+      onOpenChange(false)
+      setFormData({
+        name: "",
+        description: "",
+        file: null
+      })
+    }
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setFormData(prev => ({
+        ...prev,
+        file,
+        name: prev.name || file.name.replace(/\.[^/.]+$/, "") // Remove extension for name
+      }))
+      setShowFileError(false) // Clear error when file is selected
+    }
+  }
+
+  const isValidImageFile = (file: File) => {
+    return file.type.startsWith('image/')
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!isDragOver) {
+      setIsDragOver(true)
+    }
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    // Only set to false if we're leaving the drop zone entirely
+    const relatedTarget = e.relatedTarget as Node
+    if (!relatedTarget || !e.currentTarget.contains(relatedTarget)) {
+      setIsDragOver(false)
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+    
+    const files = Array.from(e.dataTransfer.files)
+    const imageFile = files.find(isValidImageFile)
+    
+    if (imageFile) {
+      setFormData(prev => ({
+        ...prev,
+        file: imageFile,
+        name: prev.name || imageFile.name.replace(/\.[^/.]+$/, "") // Remove extension for name
+      }))
+      setShowFileError(false) // Clear error when file is dropped
+    }
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent 
+        side="right" 
+        className="w-full sm:max-w-lg overflow-y-auto"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <SheetHeader>
+          <SheetTitle>Upload Logo</SheetTitle>
+          <SheetDescription>
+            Upload a new logo asset to the system. You can drag and drop image files directly onto this dialog.
+          </SheetDescription>
+        </SheetHeader>
+        
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {isDragOver && (
+          <div className="fixed inset-0 bg-primary/10 flex items-center justify-center z-[60] pointer-events-none">
+            <div className="bg-background border border-border rounded-lg p-6 shadow-lg">
+              <div className="text-center">
+                <Upload className="h-12 w-12 mx-auto mb-2 text-primary" />
+                <p className="text-lg font-semibold text-primary">Drop image file here</p>
+                <p className="text-sm text-muted-foreground">Supports JPG, PNG, WebP, and other image formats</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <form id="upload-logo-form" onSubmit={handleSubmit} className="space-y-4 px-4">
+          <div className="space-y-2">
+            <Label htmlFor="file">Logo File</Label>
+            <div className={`border-2 border-dashed rounded-lg p-4 text-center transition-colors ${
+              showFileError 
+                ? 'border-destructive bg-destructive/5' 
+                : 'border-muted-foreground/30 hover:border-muted-foreground/50'
+            }`}>
+              <Input
+                id="file"
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                disabled={loading}
+                className="hidden"
+              />
+              <label htmlFor="file" className="cursor-pointer block">
+                <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                <p className="text-sm font-medium">Click to browse files</p>
+                <p className="text-xs text-muted-foreground mt-1">Or drag and drop an image anywhere on this dialog</p>
+              </label>
+            </div>
+            {showFileError && (
+              <p className="text-sm text-destructive">Please select an image file to upload.</p>
+            )}
+            {formData.file && (
+              <div className="text-sm text-muted-foreground bg-muted p-2 rounded flex items-center gap-2">
+                <FileImage className="h-4 w-4" />
+                <span>{formData.file.name} ({formatFileSize(formData.file.size)})</span>
+              </div>
+            )}
+          </div>
+          
+          <div className="space-y-2">
+            <Label htmlFor="name">Name</Label>
+            <Input
+              id="name"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              placeholder="Logo name"
+              required
+              disabled={loading}
+            />
+          </div>
+          
+          <div className="space-y-2">
+            <Label htmlFor="description">Description (Optional)</Label>
+            <Input
+              id="description"
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              placeholder="Logo description"
+              disabled={loading}
+            />
+          </div>
+        </form>
+
+        <SheetFooter className="gap-2">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
+            Cancel
+          </Button>
+          <Button form="upload-logo-form" type="submit" disabled={loading || !formData.file}>
+            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Upload Logo
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+function EditLogoSheet({ 
+  logo,
+  onUpdateLogo,
+  loading,
+  error,
+  open,
+  onOpenChange
+}: { 
+  logo: LogoAsset | null;
+  onUpdateLogo: (id: string, data: LogoAssetUpdateRequest) => Promise<void>;
+  loading: boolean;
+  error: string | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [formData, setFormData] = useState<{
+    name: string;
+    description: string;
+  }>({
+    name: "",
+    description: ""
+  })
+
+  // Reset form data when logo changes
+  useEffect(() => {
+    if (logo) {
+      setFormData({
+        name: logo.name,
+        description: logo.description || ""
+      })
+    }
+  }, [logo])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!logo) return
+    
+    await onUpdateLogo(logo.id, {
+      name: formData.name,
+      description: formData.description || undefined
+    })
+    
+    if (!error) {
+      onOpenChange(false)
+    }
+  }
+
+  if (!logo) return null
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle>Edit Logo</SheetTitle>
+          <SheetDescription>
+            Update the logo information
+          </SheetDescription>
+        </SheetHeader>
+        
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        <form id="edit-logo-form" onSubmit={handleSubmit} className="space-y-4 px-4">
+          <div className="space-y-2">
+            <Label htmlFor="edit-name">Name</Label>
+            <Input
+              id="edit-name"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              placeholder="Logo name"
+              required
+              disabled={loading}
+            />
+          </div>
+          
+          <div className="space-y-2">
+            <Label htmlFor="edit-description">Description (optional)</Label>
+            <Input
+              id="edit-description"
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              placeholder="Logo description"
+              disabled={loading}
+            />
+          </div>
+
+          {/* Logo preview */}
+          <div className="space-y-2">
+            <Label>Preview</Label>
+            <div className="aspect-square bg-muted rounded-md flex items-center justify-center overflow-hidden max-w-32">
+              <img
+                src={logo.url.startsWith('http') ? logo.url : `${API_CONFIG.baseUrl}${logo.url}`}
+                alt={logo.name}
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none'
+                  const nextElement = e.currentTarget.nextElementSibling as HTMLElement
+                  if (nextElement) {
+                    nextElement.style.display = 'flex'
+                  }
+                }}
+              />
+              <div className="w-full h-full flex items-center justify-center text-muted-foreground" style={{display: 'none'}}>
+                <FileImage className="h-8 w-8" />
+              </div>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              {logo.file_name} ({formatFileSize(logo.file_size)})
+            </div>
+          </div>
+        </form>
+
+        <SheetFooter className="gap-2">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
+            Cancel
+          </Button>
+          <Button form="edit-logo-form" type="submit" disabled={loading}>
+            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Update Logo
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+export function Logos() {
+  const [allLogos, setAllLogos] = useState<LogoAsset[]>([])
+  const [stats, setStats] = useState<LogoStats | null>(null)
+  const [searchTerm, setSearchTerm] = useState("")
+  const [includeCached, setIncludeCached] = useState(true)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [isOnline, setIsOnline] = useState(true)
+  const [isUploadSheetOpen, setIsUploadSheetOpen] = useState(false)
+  const [isEditSheetOpen, setIsEditSheetOpen] = useState(false)
+  const [editingLogo, setEditingLogo] = useState<LogoAsset | null>(null)
+  
+  // Ref for infinite scroll trigger
+  const loadMoreRef = useRef<HTMLDivElement>(null)
+  
+  const [loading, setLoading] = useState<LoadingState>({
+    logos: false,
+    stats: false,
+    upload: false,
+    edit: false,
+    delete: null,
+  })
+  
+  const [errors, setErrors] = useState<ErrorState>({
+    logos: null,
+    stats: null,
+    upload: null,
+    edit: null,
+    action: null,
+  })
+
+  // Debounced search term for API calls
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("")
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchTerm])
+
+  // Client-side filtering for fast local search
+  const filteredLogos = useMemo(() => {
+    let filtered = allLogos
+
+    // Filter by cached inclusion
+    if (!includeCached) {
+      filtered = filtered.filter(logo => logo.asset_type !== 'cached')
+    }
+
+    // Filter by search term (client-side for responsiveness)
+    if (searchTerm.trim()) {
+      const searchLower = searchTerm.toLowerCase()
+      filtered = filtered.filter(logo => {
+        const searchableText = [
+          logo.name.toLowerCase(),
+          logo.description?.toLowerCase() || '',
+          logo.file_name.toLowerCase(),
+          logo.asset_type.toLowerCase(),
+          getFormatFromMimeType(logo.mime_type).toLowerCase(),
+          logo.source_url?.toLowerCase() || '',
+          formatFileSize(logo.file_size).toLowerCase()
+        ]
+
+        return searchableText.some(text => 
+          text.includes(searchLower)
+        )
+      })
+    }
+
+    return filtered
+  }, [allLogos, searchTerm, includeCached])
+
+  const loadStats = useCallback(async () => {
+    if (!isOnline) return
+    
+    setLoading(prev => ({ ...prev, stats: true }))
+    setErrors(prev => ({ ...prev, stats: null }))
+    
+    try {
+      const response = await apiClient.getLogoStats()
+      setStats(response)
+      setIsOnline(true)
+    } catch (error) {
+      const apiError = error as ApiError
+      if (apiError.status === 0) {
+        setIsOnline(false)
+        setErrors(prev => ({ 
+          ...prev, 
+          stats: `Unable to connect to the API service. Please check that the service is running at ${API_CONFIG.baseUrl}.` 
+        }))
+      } else {
+        setErrors(prev => ({ 
+          ...prev, 
+          stats: `Failed to load logo stats: ${apiError.message}` 
+        }))
+      }
+    } finally {
+      setLoading(prev => ({ ...prev, stats: false }))
+    }
+  }, [isOnline])
+
+  const loadLogos = useCallback(async (page: number = 1, append: boolean = false) => {
+    if (!isOnline) return
+    
+    setLoading(prev => ({ ...prev, logos: true }))
+    setErrors(prev => ({ ...prev, logos: null }))
+    
+    try {
+      const response = await apiClient.getLogos({
+        page,
+        limit: 50, // Load more items per page for better UX
+        include_cached: includeCached,
+        search: debouncedSearchTerm || undefined
+      })
+      
+      if (append) {
+        setAllLogos(prev => {
+          // Deduplicate by ID
+          const existing = new Set(prev.map(logo => logo.id))
+          const newLogos = response.assets.filter(logo => !existing.has(logo.id))
+          return [...prev, ...newLogos]
+        })
+      } else {
+        setAllLogos(response.assets)
+      }
+      
+      setCurrentPage(response.page)
+      setTotalPages(response.total_pages)
+      setTotalCount(response.total_count)
+      setHasMore(response.page < response.total_pages)
+      setIsOnline(true)
+    } catch (error) {
+      const apiError = error as ApiError
+      if (apiError.status === 0) {
+        setIsOnline(false)
+        setErrors(prev => ({ 
+          ...prev, 
+          logos: `Unable to connect to the API service. Please check that the service is running at ${API_CONFIG.baseUrl}.` 
+        }))
+      } else {
+        setErrors(prev => ({ 
+          ...prev, 
+          logos: `Failed to load logos: ${apiError.message}` 
+        }))
+      }
+    } finally {
+      setLoading(prev => ({ ...prev, logos: false }))
+    }
+  }, [isOnline, includeCached, debouncedSearchTerm])
+
+  // Load initial data
+  useEffect(() => {
+    loadStats()
+  }, [loadStats])
+
+  useEffect(() => {
+    loadLogos(1, false)
+    setCurrentPage(1)
+  }, [loadLogos])
+
+  const handleLoadMore = useCallback(() => {
+    if (hasMore && !loading.logos) {
+      loadLogos(currentPage + 1, true)
+    }
+  }, [hasMore, loading.logos, currentPage, loadLogos])
+
+  // Infinite scroll effect
+  useEffect(() => {
+    const loadMoreElement = loadMoreRef.current
+    if (!loadMoreElement) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries
+        // Trigger load more when the element comes into view and we have more data
+        if (entry.isIntersecting && hasMore && !loading.logos && !searchTerm) {
+          console.log('[Logos] Loading more items via infinite scroll')
+          handleLoadMore()
+        }
+      },
+      {
+        // Trigger when the element is 200px away from being visible
+        rootMargin: '200px',
+        threshold: 0.1,
+      }
+    )
+
+    observer.observe(loadMoreElement)
+
+    return () => {
+      observer.unobserve(loadMoreElement)
+    }
+  }, [hasMore, loading.logos, searchTerm, handleLoadMore])
+
+  const handleUploadLogo = async (data: LogoUploadRequest) => {
+    setLoading(prev => ({ ...prev, upload: true }))
+    setErrors(prev => ({ ...prev, upload: null }))
+    
+    try {
+      await apiClient.uploadLogo(data)
+      await loadLogos(1, false) // Reload first page
+      await loadStats() // Update stats
+    } catch (error) {
+      const apiError = error as ApiError
+      setErrors(prev => ({ 
+        ...prev, 
+        upload: `Failed to upload logo: ${apiError.message}` 
+      }))
+      throw error // Re-throw to prevent dialog from closing
+    } finally {
+      setLoading(prev => ({ ...prev, upload: false }))
+    }
+  }
+
+  const handleUpdateLogo = async (id: string, data: LogoAssetUpdateRequest) => {
+    setLoading(prev => ({ ...prev, edit: true }))
+    setErrors(prev => ({ ...prev, edit: null }))
+    
+    try {
+      await apiClient.updateLogo(id, data)
+      await loadLogos(1, false) // Reload first page
+      await loadStats() // Update stats
+    } catch (error) {
+      const apiError = error as ApiError
+      setErrors(prev => ({ 
+        ...prev, 
+        edit: `Failed to update logo: ${apiError.message}` 
+      }))
+      throw error // Re-throw to prevent dialog from closing
+    } finally {
+      setLoading(prev => ({ ...prev, edit: false }))
+    }
+  }
+
+  const handleDeleteLogo = async (logoId: string) => {
+    if (!confirm('Are you sure you want to delete this logo? This action cannot be undone.')) {
+      return
+    }
+    
+    setLoading(prev => ({ ...prev, delete: logoId }))
+    setErrors(prev => ({ ...prev, action: null }))
+    
+    try {
+      await apiClient.deleteLogo(logoId)
+      await loadLogos(1, false) // Reload first page
+      await loadStats() // Update stats  
+    } catch (error) {
+      const apiError = error as ApiError
+      setErrors(prev => ({ 
+        ...prev, 
+        action: `Failed to delete logo: ${apiError.message}` 
+      }))
+    } finally {
+      setLoading(prev => ({ ...prev, delete: null }))
+    }
+  }
+
+  // Calculate total storage including filesystem cached
+  const totalStorageUsed = (stats?.total_storage_used || 0) + (stats?.filesystem_cached_storage || 0)
+  const totalCachedLogos = (stats?.total_cached_logos || 0) + (stats?.filesystem_cached_logos || 0)
+
+  return (
+    <div className="space-y-6">
+      {/* Header Section */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-muted-foreground">Manage uploaded and cached logo assets</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {!isOnline && (
+            <WifiOff className="h-5 w-5 text-destructive" />
+          )}
+          <Button 
+            onClick={() => setIsUploadSheetOpen(true)}
+            className="gap-2"
+          >
+            <Plus className="h-4 w-4" />
+            Upload Logo
+          </Button>
+        </div>
+      </div>
+
+      {/* Connection Status Alert */}
+      {!isOnline && (
+        <Alert variant="destructive">
+          <WifiOff className="h-4 w-4" />
+          <AlertTitle>API Service Offline</AlertTitle>
+          <AlertDescription>
+            Unable to connect to the API service at {API_CONFIG.baseUrl}. Please ensure the service is running and try again.
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="ml-2"
+              onClick={() => window.location.reload()}
+            >
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Action Error Alert */}
+      {errors.action && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>
+            {errors.action}
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="ml-2"
+              onClick={() => setErrors(prev => ({ ...prev, action: null }))}
+            >
+              Dismiss
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Statistics Cards */}
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total Logos</CardTitle>
+            <ImageIcon className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            {loading.stats ? (
+              <Skeleton className="h-8 w-16" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold">
+                  {(stats?.total_uploaded_logos || 0) + totalCachedLogos}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {stats?.total_uploaded_logos || 0} uploaded, {totalCachedLogos} cached
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Storage Used</CardTitle>
+            <HardDrive className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            {loading.stats ? (
+              <Skeleton className="h-8 w-20" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold">
+                  {formatFileSize(totalStorageUsed)}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Logo cache storage
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Uploaded</CardTitle>
+            <Upload className="h-4 w-4 text-blue-600" />
+          </CardHeader>
+          <CardContent>
+            {loading.stats ? (
+              <Skeleton className="h-8 w-16" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold">{stats?.total_uploaded_logos || 0}</div>
+                <p className="text-xs text-muted-foreground">
+                  User uploaded logos  
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Linked Assets</CardTitle>
+            <Link2 className="h-4 w-4 text-green-600" />
+          </CardHeader>
+          <CardContent>
+            {loading.stats ? (
+              <Skeleton className="h-8 w-16" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold">{stats?.total_linked_assets || 0}</div>
+                <p className="text-xs text-muted-foreground">
+                  Format conversions
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Search and Filter Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Search className="h-5 w-5" />
+            Search & Filter
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search logos by name, description, format..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-8"
+                  disabled={loading.logos}
+                />
+              </div>
+            </div>
+            <Select
+              value={includeCached ? "include" : "exclude"}
+              onValueChange={(value) => setIncludeCached(value === "include")}
+              disabled={loading.logos}
+            >
+              <SelectTrigger className="w-full sm:w-[180px]">
+                <SelectValue placeholder="Cached logos" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="include">Include Cached</SelectItem>
+                <SelectItem value="exclude">Exclude Cached</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Logo Grid */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">
+            Logos ({filteredLogos.length}
+            {searchTerm || !includeCached ? ` of ${totalCount}` : ""})
+          </h3>
+          {loading.logos && <Loader2 className="h-4 w-4 animate-spin" />}
+        </div>
+
+        {errors.logos ? (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Failed to Load Logos</AlertTitle>
+            <AlertDescription>
+              {errors.logos}
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="ml-2"
+                onClick={() => loadLogos(1, false)}
+                disabled={loading.logos}
+              >
+                {loading.logos && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <>
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+              {filteredLogos.map((logo) => (
+                <Card key={logo.id} className="relative group">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2">
+                        <Badge className={getAssetTypeColor(logo.asset_type)}>
+                          {logo.asset_type === 'cached' ? 'Cached' : 'Uploaded'}
+                        </Badge>
+                        <Badge variant="outline">
+                          {getFormatFromMimeType(logo.mime_type)}
+                        </Badge>
+                      </div>
+                      <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-popover border border-border rounded-md p-1 shadow-md">
+                        {logo.asset_type === 'uploaded' && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setEditingLogo(logo)
+                              setIsEditSheetOpen(true)
+                            }}
+                            className="h-6 w-6 p-0 hover:bg-accent"
+                            disabled={loading.edit}
+                            title="Edit logo"
+                          >
+                            <Edit className="h-3 w-3" />
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteLogo(logo.id)}
+                          className="h-6 w-6 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                          disabled={loading.delete === logo.id}
+                          title="Delete logo"
+                        >
+                          {loading.delete === logo.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3 w-3" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  
+                  <CardContent className="space-y-3">
+                    {/* Logo Preview */}
+                    <div className="aspect-square bg-muted rounded-md flex items-center justify-center overflow-hidden">
+                      <img
+                        src={logo.url.startsWith('http') ? logo.url : `${API_CONFIG.baseUrl}${logo.url}`}
+                        alt={logo.name}
+                        className="max-w-full max-h-full object-contain"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none'
+                          e.currentTarget.nextElementSibling?.classList.remove('hidden')
+                        }}
+                      />
+                      <div className="hidden flex-col items-center gap-2 text-muted-foreground">
+                        <FileImage className="h-8 w-8" />
+                        <span className="text-xs">Preview unavailable</span>
+                      </div>
+                    </div>
+                    
+                    {/* Logo Details */}
+                    <div className="space-y-2">
+                      <div>
+                        <p className="font-medium text-sm truncate" title={logo.name}>
+                          {logo.name}
+                        </p>
+                        {logo.description && (
+                          <p className="text-xs text-muted-foreground truncate" title={logo.description}>
+                            {logo.description}
+                          </p>
+                        )}
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">ID:</span>
+                          <code className="text-xs bg-muted px-1 rounded">
+                            {logo.id.split('-')[0]}...
+                          </code>
+                        </div>
+                        
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">Size:</span>
+                          <span>{formatFileSize(logo.file_size)}</span>
+                        </div>
+                        
+                        {logo.width && logo.height && (
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">Dimensions:</span>
+                            <span>{logo.width}×{logo.height}</span>
+                          </div>
+                        )}
+                        
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">Created:</span>
+                          <span>{formatRelativeTime(logo.created_at)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {/* Infinite Scroll Trigger (invisible) */}
+            {hasMore && !searchTerm && (
+              <div 
+                ref={loadMoreRef}
+                className="h-20 flex items-center justify-center"
+              >
+                {loading.logos ? (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="text-sm">Loading more logos...</span>
+                  </div>
+                ) : (
+                  <div className="text-center">
+                    <p className="text-sm text-muted-foreground mb-2">
+                      {totalPages - currentPage} pages remaining
+                    </p>
+                    <Button 
+                      variant="outline" 
+                      onClick={handleLoadMore}
+                      size="sm"
+                      className="gap-2"
+                    >
+                      <Download className="h-4 w-4" />
+                      Load More
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Empty State */}
+            {filteredLogos.length === 0 && !loading.logos && (
+              <Card>
+                <CardContent className="text-center py-12">
+                  <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">
+                    {searchTerm || !includeCached ? "No matching logos" : "No logos found"}
+                  </h3>
+                  <p className="text-muted-foreground mb-4">
+                    {searchTerm || !includeCached 
+                      ? "Try adjusting your search or filter criteria."
+                      : "Get started by uploading your first logo asset."
+                    }
+                  </p>
+                  <Button onClick={() => setIsUploadSheetOpen(true)} className="gap-2">
+                    <Plus className="h-4 w-4" />
+                    Upload Logo
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Upload Logo Sheet */}
+      <UploadLogoSheet
+        onUploadLogo={handleUploadLogo}
+        loading={loading.upload}
+        error={errors.upload}
+        open={isUploadSheetOpen}
+        onOpenChange={setIsUploadSheetOpen}
+      />
+
+      <EditLogoSheet
+        logo={editingLogo}
+        onUpdateLogo={handleUpdateLogo}
+        loading={loading.edit}
+        error={errors.edit}
+        open={isEditSheetOpen}
+        onOpenChange={setIsEditSheetOpen}
+      />
+    </div>
+  )
+}

@@ -41,7 +41,7 @@ impl RelayConfigResolver {
             .relay_repo
             .find_profile_by_id(relay_profile_id)
             .await
-            .map_err(|e| AppError::Internal { message: format!("Repository error: {}", e) })?
+            .map_err(|e| AppError::Internal { message: format!("Repository error: {e}") })?
             .ok_or_else(|| AppError::NotFound {
                 resource: "relay_profile".to_string(),
                 id: relay_profile_id.to_string(),
@@ -52,7 +52,7 @@ impl RelayConfigResolver {
             .relay_repo
             .find_channel_config(proxy_id, channel_id, relay_profile_id)
             .await
-            .map_err(|e| AppError::Internal { message: format!("Repository error: {}", e) })?
+            .map_err(|e| AppError::Internal { message: format!("Repository error: {e}") })?
         {
             Some(config) => {
                 debug!("Found existing channel relay config: {}", config.id);
@@ -68,7 +68,7 @@ impl RelayConfigResolver {
         // Create resolved configuration
         let resolved_config = ResolvedRelayConfig::new(channel_config, relay_profile)
             .map_err(|e| AppError::Internal {
-                message: format!("Failed to resolve relay configuration: {}", e),
+                message: format!("Failed to resolve relay configuration: {e}"),
             })?;
 
         info!(
@@ -104,7 +104,7 @@ impl RelayConfigResolver {
             proxy_id,
             channel_id,
             profile_id: relay_profile_id,
-            name: format!("Temporary relay config for channel {}", channel_id),
+            name: format!("Temporary relay config for channel {channel_id}"),
             description: Some("Temporary relay configuration for stream proxy mode".to_string()),
             custom_args: None,
             is_active: true,
@@ -186,7 +186,7 @@ mod tests {
             enable_hardware_acceleration: false,
             preferred_hwaccel: None,
             manual_args: None,
-            output_format: RelayOutputFormat::TS,
+            output_format: RelayOutputFormat::TransportStream,
             segment_duration: Some(10),
             max_segments: Some(3),
             input_timeout: 30,
@@ -216,8 +216,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_validate_config_with_active_config() {
+    #[tokio::test]
+    async fn test_validate_config_with_active_config() {
         // Test the validation logic without requiring a database
         // Since validate_config doesn't use the repository, we can test it in isolation
         
@@ -237,8 +237,8 @@ mod tests {
         assert!(result.is_ok(), "Active config should pass validation");
     }
 
-    #[test]
-    fn test_validate_config_with_inactive_config() {
+    #[tokio::test]
+    async fn test_validate_config_with_inactive_config() {
         // Test the validation logic with inactive config
         let profile = create_test_relay_profile(Uuid::new_v4(), "test-profile");
         let mut channel_config = create_test_channel_config(Uuid::new_v4(), Uuid::new_v4(), profile.id);

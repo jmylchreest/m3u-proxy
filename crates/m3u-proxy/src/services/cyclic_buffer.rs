@@ -650,16 +650,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_buffer_limits() {
-        let mut config = CyclicBufferConfig::default();
-        config.max_chunks = 2;
-        config.max_buffer_size = 20; // Very small buffer
+        let config = CyclicBufferConfig {
+            max_chunks: 2,
+            max_buffer_size: 20, // Very small buffer
+            ..CyclicBufferConfig::default()
+        };
         
         let buffer = CyclicBuffer::new(config, None);
-        let client = buffer.add_client(None, None).await;
+        let _client = buffer.add_client(None, None).await;
         
         // Write more data than buffer can hold
         for i in 0..5 {
-            let data = bytes::Bytes::from(format!("chunk {}", i));
+            let data = bytes::Bytes::from(format!("chunk {i}"));
             buffer.write_chunk(data).await.unwrap();
         }
         

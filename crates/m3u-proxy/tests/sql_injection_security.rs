@@ -45,7 +45,7 @@ const SQL_INJECTION_PAYLOADS: &[&str] = &[
 
 /// Helper to create in-memory database for testing
 async fn create_test_database() -> (Database, Pool<Sqlite>) {
-    let database = Database::new_in_memory().await.expect("Failed to create test database");
+    let database = create_in_memory_database().await;
     database.migrate().await.expect("Failed to run migrations");
     let pool = database.pool().clone();
     (database, pool)
@@ -75,7 +75,7 @@ async fn test_parameterized_queries_prevent_sql_injection() {
             }
             Err(e) => {
                 // Error should not be SQL syntax error (would indicate injection)
-                let error_msg = format!("{}", e);
+                let error_msg = format!("{e}");
                 assert!(!error_msg.to_lowercase().contains("syntax error"));
                 assert!(!error_msg.to_lowercase().contains("sql syntax"));
             }
@@ -113,7 +113,7 @@ async fn test_parameterized_queries_prevent_sql_injection() {
             }
             Err(e) => {
                 // If failed, should be due to constraints, not SQL injection
-                let error_msg = format!("{}", e);
+                let error_msg = format!("{e}");
                 assert!(!error_msg.to_lowercase().contains("syntax error"));
             }
         }
@@ -130,7 +130,7 @@ async fn test_like_queries_sql_injection_prevention() {
             "INSERT INTO stream_sources (id, name, source_type, url, max_concurrent_streams, update_cron, created_at, updated_at, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(Uuid::new_v4().to_string())
-        .bind(format!("Test Source {}", i))
+        .bind(format!("Test Source {i}"))
         .bind("m3u")
         .bind("http://example.com/playlist.m3u")
         .bind(10)
@@ -145,9 +145,9 @@ async fn test_like_queries_sql_injection_prevention() {
     // Test LIKE queries with malicious input
     for &payload in SQL_INJECTION_PAYLOADS {
         let like_patterns = [
-            format!("%{}%", payload),
-            format!("{}%", payload),
-            format!("%{}", payload),
+            format!("%{payload}%"),
+            format!("{payload}%"),
+            format!("%{payload}"),
         ];
 
         for pattern in &like_patterns {
@@ -163,7 +163,7 @@ async fn test_like_queries_sql_injection_prevention() {
                     assert!(count >= 0);
                 }
                 Err(e) => {
-                    let error_msg = format!("{}", e);
+                    let error_msg = format!("{e}");
                     assert!(!error_msg.to_lowercase().contains("syntax error"));
                 }
             }
@@ -181,7 +181,7 @@ async fn test_order_by_injection_prevention() {
             "INSERT INTO stream_sources (id, name, source_type, url, max_concurrent_streams, update_cron, created_at, updated_at, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(Uuid::new_v4().to_string())
-        .bind(format!("Source {}", i))
+        .bind(format!("Source {i}"))
         .bind("m3u")
         .bind("http://example.com/playlist.m3u")
         .bind(10)
@@ -213,13 +213,13 @@ async fn test_order_by_injection_prevention() {
         
         if is_safe_column {
             // Only safe, validated column names should be allowed in ORDER BY
-            let query = format!("SELECT * FROM stream_sources ORDER BY {}", pattern);
+            let query = format!("SELECT * FROM stream_sources ORDER BY {pattern}");
             let result = sqlx::query(&query).fetch_all(&pool).await;
             assert!(result.is_ok());
         } else {
             // Malicious ORDER BY patterns should be rejected by validation
             // This simulates what the application should do - reject unsafe ORDER BY clauses
-            assert!(!is_safe_column, "Malicious ORDER BY pattern should be rejected: {}", pattern);
+            assert!(!is_safe_column, "Malicious ORDER BY pattern should be rejected: {pattern}");
         }
     }
 }
@@ -261,15 +261,17 @@ async fn test_stream_source_repository_injection_safety() {
                 
                 // Test update operations
                 let update_request = StreamSourceUpdateRequest {
-                    name: Some(format!("Updated {}", payload)),
-                    source_type: None,
-                    url: None,
-                    max_concurrent_streams: None,
-                    update_cron: None,
-                    username: None,
-                    password: None,
-                    field_map: None,
-                    ignore_channel_numbers: None,
+                    name: format!("Updated {payload}"),
+                    source_type: source.source_type.clone(),
+                    url: source.url.clone(),
+                    max_concurrent_streams: source.max_concurrent_streams,
+                    update_cron: source.update_cron.clone(),
+                    username: source.username.clone(),
+                    password: source.password.clone(),
+                    field_map: source.field_map.clone(),
+                    ignore_channel_numbers: source.ignore_channel_numbers,
+                    is_active: source.is_active,
+                    update_linked: true,
                 };
                 
                 let updated = repo.update(source.id, update_request).await;
@@ -284,7 +286,7 @@ async fn test_stream_source_repository_injection_safety() {
             }
             Err(e) => {
                 // Repository might reject invalid data, but should not have SQL injection
-                let error_msg = format!("{}", e);
+                let error_msg = format!("{e}");
                 assert!(!error_msg.to_lowercase().contains("syntax error"));
                 assert!(!error_msg.to_lowercase().contains("sql error"));
             }
@@ -381,13 +383,13 @@ async fn test_input_validation_prevents_injection() {
     // Test validation helper functions
     for &payload in SQL_INJECTION_PAYLOADS {
         // Test URL validation
-        assert!(!is_valid_url_input(payload), "Should reject malicious URL: {}", payload);
+        assert!(!is_valid_url_input(payload), "Should reject malicious URL: {payload}");
         
         // Test field name validation
-        assert!(!is_valid_field_name(payload), "Should reject malicious field name: {}", payload);
+        assert!(!is_valid_field_name(payload), "Should reject malicious field name: {payload}");
         
         // Test cron expression validation  
-        assert!(!is_valid_cron_expression(payload), "Should reject malicious cron: {}", payload);
+        assert!(!is_valid_cron_expression(payload), "Should reject malicious cron: {payload}");
     }
     
     // Test valid inputs pass validation
@@ -401,7 +403,7 @@ async fn test_uuid_validation_prevents_injection() {
     for &payload in SQL_INJECTION_PAYLOADS {
         // UUID parsing should reject all malicious input
         let result = Uuid::parse_str(payload);
-        assert!(result.is_err(), "Should reject malicious UUID: {}", payload);
+        assert!(result.is_err(), "Should reject malicious UUID: {payload}");
     }
     
     // Valid UUIDs should pass
@@ -425,7 +427,7 @@ fn is_valid_url_input(input: &str) -> bool {
     !input.to_uppercase().contains("DELETE") &&
     !input.to_uppercase().contains("UNION") &&
     input.len() < 2048 && // Reasonable URL length limit
-    input.len() > 0 &&
+    !input.is_empty() &&
     (input.starts_with("http://") || input.starts_with("https://"))
 }
 
@@ -463,7 +465,7 @@ async fn test_error_messages_dont_leak_sensitive_info() {
     let result = repo.find_by_id(Uuid::nil()).await;
     
     if let Err(error) = result {
-        let error_msg = format!("{}", error).to_lowercase();
+        let error_msg = format!("{error}").to_lowercase();
         
         // Error messages should not expose sensitive information
         assert!(!error_msg.contains("password"));
@@ -488,11 +490,33 @@ async fn test_database_error_handling_security() {
         .await;
 
     if let Err(error) = result {
-        let error_msg = format!("{}", error);
+        let error_msg = format!("{error}");
         
         // Should not expose SQL query details or internal structure
         // Error should be generic/safe for end users
         assert!(!error_msg.contains("SQLITE"));
-        println!("Safe database error: {}", error_msg); // For debugging only
+        println!("Safe database error: {error_msg}"); // For debugging only
     }
+}
+/// Helper function to create in-memory database for testing
+async fn create_in_memory_database() -> Database {
+    use m3u_proxy::config::{DatabaseConfig, IngestionConfig};
+    
+    let db_config = DatabaseConfig {
+        url: "sqlite::memory:".to_string(),
+        max_connections: Some(10),
+        batch_sizes: None,
+        busy_timeout: "30s".to_string(),
+        cache_size: "64MB".to_string(),
+        wal_autocheckpoint: 1000,
+    };
+    
+    let ingestion_config = IngestionConfig {
+        progress_update_interval: 1000,
+        run_missed_immediately: true,
+        use_new_source_handlers: true,
+    };
+    
+    Database::new(&db_config, &ingestion_config).await
+        .expect("Failed to create in-memory database")
 }

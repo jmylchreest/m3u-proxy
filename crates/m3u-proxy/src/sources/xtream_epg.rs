@@ -45,7 +45,7 @@ impl XtreamEpgHandler {
     /// Build the Xtream EPG URL with authentication
     fn build_epg_url(&self, source: &EpgSource) -> AppResult<String> {
         source.build_epg_url()
-            .map_err(|e| AppError::source_error(format!("Failed to build EPG URL: {}", e)))
+            .map_err(|e| AppError::source_error(format!("Failed to build EPG URL: {e}")))
     }
 
     /// Fetch EPG content from Xtream API with HTTPS/HTTP fallback and automatic decompression
@@ -67,7 +67,7 @@ impl XtreamEpgHandler {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| AppError::source_error(format!("Failed to read Xtream EPG response: {}", e)))?;
+                .map_err(|e| AppError::source_error(format!("Failed to read Xtream EPG response: {e}")))?;
 
             debug!("Fetched {} bytes of raw Xtream EPG content", bytes.len());
 
@@ -83,13 +83,13 @@ impl XtreamEpgHandler {
                 _ => {
                     debug!("Content is compressed, decompressing...");
                     DecompressionService::decompress(bytes)
-                        .map_err(|e| AppError::source_error(format!("Failed to decompress Xtream EPG content: {}", e)))?
+                        .map_err(|e| AppError::source_error(format!("Failed to decompress Xtream EPG content: {e}")))?
                 }
             };
 
             // Convert decompressed bytes to UTF-8 string
             let content = String::from_utf8(decompressed_bytes)
-                .map_err(|e| AppError::source_error(format!("Failed to decode Xtream EPG content as UTF-8: {}", e)))?;
+                .map_err(|e| AppError::source_error(format!("Failed to decode Xtream EPG content as UTF-8: {e}")))?;
 
             debug!("Successfully processed {} of Xtream EPG content (compression: {:?})", 
                    format_memory(content.len() as f64), compression_format);
@@ -115,13 +115,12 @@ impl XtreamEpgHandler {
                         }
                         Err(fallback_e) => {
                             Err(AppError::source_error(format!(
-                                "Failed to fetch Xtream EPG: HTTPS error: {}, HTTP fallback error: {}",
-                                e, fallback_e
+                                "Failed to fetch Xtream EPG: HTTPS error: {e}, HTTP fallback error: {fallback_e}"
                             )))
                         }
                     }
                 } else {
-                    Err(AppError::source_error(format!("Failed to fetch Xtream EPG: {}", e)))
+                    Err(AppError::source_error(format!("Failed to fetch Xtream EPG: {e}")))
                 }
             }
         }
@@ -160,7 +159,7 @@ impl XtreamEpgHandler {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| AppError::source_error(format!("Failed to read Xtream EPG response: {}", e)))?;
+                .map_err(|e| AppError::source_error(format!("Failed to read Xtream EPG response: {e}")))?;
 
             let byte_count = bytes.len();
             let human_size = format_memory(byte_count as f64);
@@ -169,7 +168,7 @@ impl XtreamEpgHandler {
             
             // Update progress: Downloaded data
             if let Some(updater) = progress_updater {
-                updater.update_progress(12.0, &format!("Downloaded {}", human_size)).await;
+                updater.update_progress(12.0, &format!("Downloaded {human_size}")).await;
             }
 
             // Detect compression format and decompress if needed
@@ -181,12 +180,12 @@ impl XtreamEpgHandler {
                 _ => {
                     debug!("Decompressing Xtream EPG content using {:?}", compression_format);
                     DecompressionService::decompress(bytes)
-                        .map_err(|e| AppError::source_error(format!("Failed to decompress Xtream EPG content: {}", e)))?
+                        .map_err(|e| AppError::source_error(format!("Failed to decompress Xtream EPG content: {e}")))?
                 }
             };
 
             String::from_utf8(decompressed_bytes)
-                .map_err(|e| AppError::source_error(format!("Xtream EPG content is not valid UTF-8: {}", e)))
+                .map_err(|e| AppError::source_error(format!("Xtream EPG content is not valid UTF-8: {e}")))
         }
 
         match self.client.get(&epg_url).send().await {
@@ -209,13 +208,12 @@ impl XtreamEpgHandler {
                         }
                         Err(fallback_e) => {
                             Err(AppError::source_error(format!(
-                                "Failed to fetch Xtream EPG: HTTPS error: {}, HTTP fallback error: {}",
-                                e, fallback_e
+                                "Failed to fetch Xtream EPG: HTTPS error: {e}, HTTP fallback error: {fallback_e}"
                             )))
                         }
                     }
                 } else {
-                    Err(AppError::source_error(format!("Failed to fetch Xtream EPG: {}", e)))
+                    Err(AppError::source_error(format!("Failed to fetch Xtream EPG: {e}")))
                 }
             }
         }
@@ -241,8 +239,7 @@ impl XtreamEpgHandler {
         
         for xmltv_program in xmltv_programs {
             // Create deduplication key: channel_id + start_time + program_title
-            let program_title = xmltv_program.title.as_ref()
-                .map(|t| t.as_str())
+            let program_title = xmltv_program.title.as_deref()
                 .unwrap_or("Unknown Program");
             let dedup_key = format!("{}|{}|{}", 
                 xmltv_program.channel,
@@ -269,7 +266,7 @@ impl XtreamEpgHandler {
                 chrono::DateTime::parse_from_str(stop, "%Y%m%d%H%M%S %z")
                     .or_else(|_| chrono::NaiveDateTime::parse_from_str(stop, "%Y%m%d%H%M%S")
                         .map(|dt| dt.and_utc().with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())))
-                    .map_err(|e| AppError::source_error(format!("Failed to parse stop time '{}': {}", stop, e)))?
+                    .map_err(|e| AppError::source_error(format!("Failed to parse stop time '{stop}': {e}")))?
             } else {
                 // If no stop time, estimate 30 minutes duration
                 start_time + chrono::Duration::minutes(30)
@@ -478,7 +475,7 @@ impl EpgSourceHandler for XtreamEpgHandler {
                     validation = validation.with_context("url_format", "valid");
                 }
                 Err(e) => {
-                    validation.errors.push(format!("Invalid URL format: {}", e));
+                    validation.errors.push(format!("Invalid URL format: {e}"));
                     validation.is_valid = false;
                 }
             }

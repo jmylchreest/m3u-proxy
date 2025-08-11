@@ -310,7 +310,7 @@ pub fn get_comprehensive_openapi_spec() -> utoipa::openapi::OpenApi {
     let version = env!("CARGO_PKG_VERSION");
     let enhanced_description = format!(
         "
-# M3U Proxy API v{}
+# M3U Proxy API v{version}
 
 A modern IPTV proxy service with comprehensive OpenAPI documentation.
 
@@ -323,7 +323,7 @@ A modern IPTV proxy service with comprehensive OpenAPI documentation.
 
 ## Architecture
 
-- **Version**: {}
+- **Version**: {version}
 - **Schema Generation**: Compile-time via `#[derive(ToSchema)]`
 - **Documentation UI**: RapiDoc interactive interface
 - **Handler Annotations**: Complete endpoint documentation
@@ -335,8 +335,7 @@ All endpoints are documented with utoipa annotations.
 ## Getting Started
 
 Visit `/docs` for the interactive API documentation.
-        ",
-        version, version
+        "
     );
     
     openapi.info.description = Some(enhanced_description);

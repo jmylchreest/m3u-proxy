@@ -230,8 +230,8 @@ impl IngestionStateManager {
 
     pub async fn complete_ingestion_with_programs(&self, source_id: Uuid, channels_saved: usize, programs_saved: Option<usize>) {
         let current_step = match programs_saved {
-            Some(programs) => format!("Completed - {} channels and {} programs saved", channels_saved, programs),
-            None => format!("Completed - {} channels saved", channels_saved),
+            Some(programs) => format!("Completed - {channels_saved} channels and {programs} programs saved"),
+            None => format!("Completed - {channels_saved} channels saved"),
         };
 
         self.update_progress(

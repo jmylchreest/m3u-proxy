@@ -101,21 +101,21 @@ impl RuntimeSettingsStore {
                             return false;
                         }
                         info!("Successfully changed log level to: {}", new_level_upper);
-                        return true;
+                        true
                     }
                     Err(e) => {
                         error!("Failed to create new tracing filter: {}", e);
-                        return false;
+                        false
                     }
                 }
             } else {
                 warn!("Could not acquire tracing reload handle lock");
-                return false;
+                false
             }
         } else {
             // No tracing handle available, just log the change
             info!("Log level setting updated to: {} (tracing reload not available)", new_level_upper);
-            return true;
+            true
         }
     }
 
@@ -194,14 +194,14 @@ impl RuntimeSettingsStore {
         // Update max connections if provided
         if let Some(max_conn) = max_connections {
             if self.update_max_connections(max_conn).await {
-                applied_changes.push(format!("Max connections changed to {}", max_conn));
+                applied_changes.push(format!("Max connections changed to {max_conn}"));
             }
         }
 
         // Update request timeout if provided
         if let Some(timeout) = request_timeout_seconds {
             if self.update_request_timeout(timeout).await {
-                applied_changes.push(format!("Request timeout changed to {} seconds", timeout));
+                applied_changes.push(format!("Request timeout changed to {timeout} seconds"));
             }
         }
 

@@ -375,11 +375,7 @@ impl RelayManager {
         let mut system = system.write().await;
         system.refresh_process(Pid::from_u32(process_id));
 
-        if let Some(process) = system.process(Pid::from_u32(process_id)) {
-            Some(process.memory() as f64 / 1024.0 / 1024.0)
-        } else {
-            None
-        }
+        system.process(Pid::from_u32(process_id)).map(|process| process.memory() as f64 / 1024.0 / 1024.0)
     }
 
     /// Get CPU usage for a specific process (percentage, normalized to 100%)
@@ -407,10 +403,8 @@ impl RelayManager {
     /// Get channel name from database using repository
     async fn get_channel_name(&self, channel_id: Uuid) -> Option<String> {
         let channel_repo = ChannelRepository::new(self.database.pool());
-        match channel_repo.get_channel_name(channel_id).await {
-            Ok(name) => name,
-            Err(_) => None,
-        }
+        let channel_name: Option<String> = (channel_repo.get_channel_name(channel_id).await).unwrap_or_default();
+        channel_name
     }
 
 

@@ -22,7 +22,9 @@ pub fn format_memory(bytes: f64) -> String {
     let sign = if bytes < 0.0 { "-" } else { "" };
 
     // Choose precision based on unit and size
-    let formatted = if unit_index == 0 {
+    
+
+    if unit_index == 0 {
         // Bytes - no decimal places
         format!("{}{:.0}{}", sign, size, UNITS[unit_index])
     } else if size >= 100.0 {
@@ -34,9 +36,7 @@ pub fn format_memory(bytes: f64) -> String {
     } else {
         // Small values - 2 decimal places
         format!("{}{:.2}{}", sign, size, UNITS[unit_index])
-    };
-
-    formatted
+    }
 }
 
 /// Flexible duration parser that can handle various duration string formats
@@ -138,14 +138,14 @@ pub fn format_duration_precise(duration: std::time::Duration) -> String {
     
     if micros < 1000 {
         // Less than 1 millisecond - show microseconds
-        format!("{}μs", micros)
+        format!("{micros}μs")
     } else if micros < 1_000_000 {
         // Less than 1 second - show milliseconds with microsecond precision if significant
         let millis = micros as f64 / 1000.0;
         if micros % 1000 == 0 {
             format!("{}ms", micros / 1000)
         } else {
-            format!("{:.3}ms", millis)
+            format!("{millis:.3}ms")
         }
     } else {
         // 1 second or more - use the existing logic but convert to millis first
@@ -161,14 +161,14 @@ pub fn format_duration(millis: u64) -> String {
 
     if millis < 1000 {
         // Less than 1 second - show milliseconds
-        format!("{}ms", millis)
+        format!("{millis}ms")
     } else if millis < 60_000 {
         // Less than 1 minute - show seconds with decimal
         let seconds = millis as f64 / 1000.0;
         if seconds >= 10.0 {
-            format!("{:.1}s", seconds)
+            format!("{seconds:.1}s")
         } else {
-            format!("{:.2}s", seconds)
+            format!("{seconds:.2}s")
         }
     } else if millis < 3_600_000 {
         // Less than 1 hour - show minutes and seconds
@@ -177,9 +177,9 @@ pub fn format_duration(millis: u64) -> String {
         let seconds = total_seconds % 60;
 
         if seconds == 0 {
-            format!("{}m", minutes)
+            format!("{minutes}m")
         } else {
-            format!("{}m{}s", minutes, seconds)
+            format!("{minutes}m{seconds}s")
         }
     } else {
         // 1 hour or more - show hours, minutes, and optionally seconds
@@ -189,11 +189,11 @@ pub fn format_duration(millis: u64) -> String {
         let seconds = total_seconds % 60;
 
         if seconds == 0 && minutes == 0 {
-            format!("{}h", hours)
+            format!("{hours}h")
         } else if seconds == 0 {
-            format!("{}h{}m", hours, minutes)
+            format!("{hours}h{minutes}m")
         } else {
-            format!("{}h{}m{}s", hours, minutes, seconds)
+            format!("{hours}h{minutes}m{seconds}s")
         }
     }
 }

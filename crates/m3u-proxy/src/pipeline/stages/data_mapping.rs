@@ -268,7 +268,7 @@ impl DataMappingStage {
                                                             error!("Critical database error during helper processing for channel {}: {}", 
                                                                 channel_name, db_error);
                                                             error!("Halting pipeline execution due to critical database error");
-                                                            return Err(format!("Critical database error in helper processing: {}", db_error).into());
+                                                            return Err(format!("Critical database error in helper processing: {db_error}").into());
                                                         }
                                                         Err(e) => {
                                                             // Other errors - log and continue without this channel 
@@ -323,8 +323,7 @@ impl DataMappingStage {
                                         };
                                         
                                         // Broadcast progress update via SSE
-                                        let progress_message = format!("Processing {}: {}/{} channels ({} modified)", 
-                                                                      source_name, channel_count, total_channels, source_modified_count);
+                                        let progress_message = format!("Processing {source_name}: {channel_count}/{total_channels} channels ({source_modified_count} modified)");
                                         self.report_progress(10.0 + (completion_percentage as f64 * 0.4), &progress_message).await;
                                     }
                                 }
@@ -395,7 +394,7 @@ impl DataMappingStage {
                                     error!("Critical database error during helper processing for channel {}: {}", 
                                         channel_name, db_error);
                                     error!("Halting pipeline execution due to critical database error");
-                                    return Err(format!("Critical database error in helper processing: {}", db_error).into());
+                                    return Err(format!("Critical database error in helper processing: {db_error}").into());
                                 }
                                 Err(e) => {
                                     // Other errors - log and continue without this channel
@@ -696,7 +695,7 @@ impl DataMappingStage {
             // Process batch when full
             if batch_programs.len() >= BATCH_SIZE {
                 // Move batch to final collection and clear batch memory
-                all_programs.extend(batch_programs.drain(..));
+                all_programs.append(&mut batch_programs);
                 
                 // Log progress periodically
                 if processed_count % EPG_PROGRESS_LOG_INTERVAL == 0 {
@@ -713,7 +712,7 @@ impl DataMappingStage {
                         85.0 + ((processed_count - 50000) as f64 / 50000.0) * 10.0  // 85-95% for 50k+
                     }.min(95.0);
                     
-                    let progress_message = format!("Processing EPG programs: {} processed", processed_count);
+                    let progress_message = format!("Processing EPG programs: {processed_count} processed");
                     self.report_progress(estimated_progress, &progress_message).await;
                 }
             }
@@ -721,7 +720,7 @@ impl DataMappingStage {
         
         // Process remaining programs in final batch
         if !batch_programs.is_empty() {
-            all_programs.extend(batch_programs.drain(..));
+            all_programs.append(&mut batch_programs);
         }
         
         info!("Serialized {} EPG programs from database using streaming approach", all_programs.len());
@@ -787,7 +786,7 @@ impl DataMappingStage {
             source_type: match row.get::<String, _>("source_type").as_str() {
                 "stream" => crate::models::data_mapping::DataMappingSourceType::Stream,
                 "epg" => crate::models::data_mapping::DataMappingSourceType::Epg,
-                other => return Err(anyhow::anyhow!("Invalid source_type: {}", other).into()),
+                other => return Err(anyhow::anyhow!("Invalid source_type: {}", other)),
             },
             sort_order: row.get("sort_order"),
             is_active: row.get("is_active"),
@@ -863,13 +862,13 @@ impl PipelineStage for DataMappingStage {
         // Process channels
         self.report_progress(10.0, "Processing channels").await;
         let channel_artifact = self.process_channels().await
-            .map_err(|e| PipelineError::stage_error("data_mapping", format!("Channel processing failed: {}", e)))?;
+            .map_err(|e| PipelineError::stage_error("data_mapping", format!("Channel processing failed: {e}")))?;
         artifacts.push(channel_artifact);
         
         // Process EPG programs
         self.report_progress(50.0, "Processing EPG programs").await;
         let program_artifact = self.process_programs().await
-            .map_err(|e| PipelineError::stage_error("data_mapping", format!("EPG processing failed: {}", e)))?;
+            .map_err(|e| PipelineError::stage_error("data_mapping", format!("EPG processing failed: {e}")))?;
         artifacts.push(program_artifact);
         
         self.report_progress(100.0, "Data mapping completed").await;

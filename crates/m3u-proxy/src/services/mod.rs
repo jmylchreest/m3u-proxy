@@ -65,6 +65,6 @@ pub use relay_config_resolver::RelayConfigResolver;
 pub use relay_manager::RelayManager;
 pub use source_linking_service::SourceLinkingService;
 pub use stream_prober::{StreamProber, ProbeResult, StreamMappingStrategy};
-pub use stream_proxy::StreamProxyService;
+pub use stream_proxy::{StreamProxyService, StreamProxyServiceBuilder};
 pub use stream_source_service::StreamSourceService as StreamSourceBusinessService;
 pub use traits::*;

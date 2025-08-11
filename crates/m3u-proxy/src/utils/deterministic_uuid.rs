@@ -129,8 +129,8 @@ mod tests {
     
     #[test]
     fn test_order_matters() {
-        let inputs1 = &[&"a", &"b", &"c"];
-        let inputs2 = &[&"c", &"b", &"a"];
+        let inputs1: &[&dyn std::fmt::Display] = &[&"a", &"b", &"c"];
+        let inputs2: &[&dyn std::fmt::Display] = &[&"c", &"b", &"a"];
         
         let uuid1 = generate_deterministic_uuid(inputs1);
         let uuid2 = generate_deterministic_uuid(inputs2);

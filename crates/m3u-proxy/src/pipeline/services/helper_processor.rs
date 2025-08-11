@@ -25,10 +25,10 @@ pub enum HelperProcessorError {
 impl std::fmt::Display for HelperProcessorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HelperProcessorError::ResolutionFailed(msg) => write!(f, "Resolution failed: {}", msg),
-            HelperProcessorError::ServiceUnavailable(msg) => write!(f, "Service unavailable: {}", msg),
-            HelperProcessorError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
-            HelperProcessorError::CriticalDatabaseError(msg) => write!(f, "Critical database error: {}", msg),
+            HelperProcessorError::ResolutionFailed(msg) => write!(f, "Resolution failed: {msg}"),
+            HelperProcessorError::ServiceUnavailable(msg) => write!(f, "Service unavailable: {msg}"),
+            HelperProcessorError::DatabaseError(msg) => write!(f, "Database error: {msg}"),
+            HelperProcessorError::CriticalDatabaseError(msg) => write!(f, "Critical database error: {msg}"),
         }
     }
 }
@@ -72,6 +72,12 @@ pub trait HelperProcessable: HelperDetectable {
 /// Main helper post-processor service
 pub struct HelperPostProcessor {
     processors: Vec<Box<dyn HelperProcessor>>,
+}
+
+impl Default for HelperPostProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HelperPostProcessor {
@@ -191,7 +197,7 @@ impl LogoHelperProcessor {
                         error!("Logo UUID lookup failed after {} attempts for UUID {}: {}", 
                             MAX_RETRIES, uuid, e);
                         return Err(HelperProcessorError::CriticalDatabaseError(
-                            format!("Failed to check logo UUID {} after {} retries: {}", uuid, MAX_RETRIES, e)
+                            format!("Failed to check logo UUID {uuid} after {MAX_RETRIES} retries: {e}")
                         ));
                     } else {
                         // Retry with exponential backoff
@@ -206,7 +212,7 @@ impl LogoHelperProcessor {
         
         // This should never be reached due to the loop structure, but just in case
         Err(HelperProcessorError::CriticalDatabaseError(
-            format!("Unexpected error in logo UUID lookup for {}", uuid)
+            format!("Unexpected error in logo UUID lookup for {uuid}")
         ))
     }
 }
@@ -280,7 +286,7 @@ impl HelperProcessor for TimeHelperProcessor {
                 Ok(Some(resolved))
             }
             Err(e) => Err(HelperProcessorError::ResolutionFailed(
-                format!("Time helper resolution failed: {}", e)
+                format!("Time helper resolution failed: {e}")
             ))
         }
     }
@@ -365,11 +371,11 @@ mod tests {
         let processor = LogoHelperProcessor::new(Arc::new(pool), "https://example.com".to_string());
         
         // Valid UUID that exists in database
-        let result = processor.resolve_helper(&format!("@logo:{}", test_uuid)).await;
+        let result = processor.resolve_helper(&format!("@logo:{test_uuid}")).await;
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap(), 
-            Some(format!("https://example.com/api/v1/logos/{}", test_uuid))
+            Some(format!("https://example.com/api/v1/logos/{test_uuid}"))
         );
     }
     
@@ -389,7 +395,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_helper_post_processor() {
-        let processor = HelperPostProcessor::new()
+        let _processor = HelperPostProcessor::new()
             .register_processor(Box::new(TimeHelperProcessor));
             
         // Test with mock record - would need to implement traits on test struct

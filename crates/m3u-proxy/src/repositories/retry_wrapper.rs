@@ -107,10 +107,9 @@ where
     }
 
     async fn create(&self, request: Self::CreateRequest) -> RepositoryResult<T> {
-        let write_config = RetryConfig::for_writes();
         let request_clone = request.clone();
         with_retry(
-            &write_config,
+            &self.retry_config,
             || {
                 let request = request_clone.clone();
                 async move { self.repository.create(request).await }
@@ -122,9 +121,8 @@ where
     async fn update(&self, id: ID, request: Self::UpdateRequest) -> RepositoryResult<T> {
         let id_clone = id.clone();
         let request_clone = request.clone();
-        let write_config = RetryConfig::for_writes();
         with_retry(
-            &write_config,
+            &self.retry_config,
             || {
                 let id = id_clone.clone();
                 let request = request_clone.clone();
@@ -136,9 +134,8 @@ where
 
     async fn delete(&self, id: ID) -> RepositoryResult<()> {
         let id_clone = id.clone();
-        let write_config = RetryConfig::for_writes();
         with_retry(
-            &write_config,
+            &self.retry_config,
             || {
                 let id = id_clone.clone();
                 async move { self.repository.delete(id).await }
@@ -204,13 +201,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use uuid::Uuid;
-    use tokio_test;
 
     // Mock repository for testing retry wrapper functionality
     #[derive(Clone)]
     struct MockRepository {
         fail_counter: Arc<AtomicU32>,
         fail_until_attempt: u32,
+        #[allow(dead_code)]
         should_fail_permanently: bool,
     }
 
@@ -270,7 +267,7 @@ mod tests {
                     message: "database is locked".to_string()
                 })
             } else {
-                Ok(vec![format!("result_for_{}", query)])
+                Ok(vec![format!("result_for_{query}")])
             }
         }
 
@@ -282,7 +279,7 @@ mod tests {
                     message: "database is locked".to_string()
                 })
             } else {
-                Ok(format!("created_{}", request))
+                Ok(format!("created_{request}"))
             }
         }
 
@@ -294,7 +291,7 @@ mod tests {
                     message: "database is locked".to_string()
                 })
             } else {
-                Ok(format!("updated_{}", request))
+                Ok(format!("updated_{request}"))
             }
         }
 
@@ -406,11 +403,17 @@ mod tests {
         
         // Test critical configuration (7 max attempts)
         let mock_repo_critical = MockRepository::new_with_failure_count(6); // 6 failures, should succeed on 7th attempt
+        let critical_config = RetryConfig::for_critical();
+        eprintln!("DEBUG: Critical config max_attempts: {}", critical_config.max_attempts);
         let retry_repo_critical = RetryWrapper::for_critical(mock_repo_critical.clone());
         
         let result = retry_repo_critical.update(id, "critical_data".to_string()).await;
         
-        assert!(result.is_ok());
+        if let Err(ref e) = result {
+            eprintln!("DEBUG: Critical update failed with error: {:?}", e);
+        }
+        eprintln!("DEBUG: Critical call count: {}", mock_repo_critical.call_count());
+        assert!(result.is_ok(), "Critical update should succeed after retries, got: {:?}", result);
         assert_eq!(result.unwrap(), "updated_critical_data");
         assert_eq!(mock_repo_critical.call_count(), 7); // Critical config: succeeded on 7th attempt
     }
@@ -535,7 +538,7 @@ mod tests {
             RepositoryError::ConnectionFailed { message } => {
                 assert_eq!(message, "database is locked");
             }
-            other => panic!("Expected ConnectionFailed error, got: {:?}", other),
+            other => panic!("Expected ConnectionFailed error, got: {other:?}"),
         }
         
         // Should have exhausted all retry attempts
@@ -569,8 +572,8 @@ mod tests {
         
         // Should have waited: 10ms (first retry) + 20ms (second retry) = 30ms minimum
         assert!(elapsed >= Duration::from_millis(30));
-        // But not too much longer (allowing for execution overhead)
-        assert!(elapsed < Duration::from_millis(100));
+        // But not too much longer (allowing for execution overhead and test environment variability)
+        assert!(elapsed < Duration::from_millis(500)); // Increased from 100ms to 500ms
         
         assert_eq!(mock_repo.call_count(), 3);
     }

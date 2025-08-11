@@ -107,8 +107,7 @@ impl ErrorFallbackGenerator {
         
         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
         let error_content = format!(
-            "STREAM ERROR\n\n{}\n\nConfig ID: {}\nTimestamp: {}\n\nPlease check your stream configuration and try again.",
-            error_message, config_id, timestamp
+            "STREAM ERROR\n\n{error_message}\n\nConfig ID: {config_id}\nTimestamp: {timestamp}\n\nPlease check your stream configuration and try again."
         );
 
         // Generate a basic Transport Stream packet with error information
@@ -152,15 +151,14 @@ impl ErrorFallbackGenerator {
         //        -t 1 -f mpegts -y pipe:1
         
         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-        let error_text = format!("ERROR: {}\\nConfig: {}\\nTime: {}", 
-                                error_message, config_id, timestamp);
+        let error_text = format!("ERROR: {error_message}\\nConfig: {config_id}\\nTime: {timestamp}");
 
         // Build FFmpeg command for error image generation
         let mut cmd = tokio::process::Command::new("ffmpeg");
-        cmd.args(&[
+        cmd.args([
             "-f", "lavfi",
             "-i", "color=red:size=640x480:rate=25",
-            "-vf", &format!("drawtext=text='{}':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2", error_text),
+            "-vf", &format!("drawtext=text='{error_text}':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2"),
             "-t", "0.1", // Generate 0.1 seconds of video
             "-f", "mpegts",
             "-y", "pipe:1"
@@ -176,7 +174,7 @@ impl ErrorFallbackGenerator {
                     let mut reader = tokio::io::BufReader::new(stdout);
                     
                     use tokio::io::AsyncReadExt;
-                    if let Ok(_) = reader.read_to_end(&mut output).await {
+                    if (reader.read_to_end(&mut output).await).is_ok() {
                         let _ = child.wait().await;
                         return Ok(bytes::Bytes::from(output));
                     }

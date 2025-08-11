@@ -52,7 +52,7 @@ impl XmltvEpgHandler {
             .get(url)
             .send()
             .await
-            .map_err(|e| AppError::source_error(format!("Failed to fetch XMLTV: {}", e)))?;
+            .map_err(|e| AppError::source_error(format!("Failed to fetch XMLTV: {e}")))?;
 
         if !response.status().is_success() {
             return Err(AppError::source_error(format!(
@@ -66,7 +66,7 @@ impl XmltvEpgHandler {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| AppError::source_error(format!("Failed to read XMLTV response: {}", e)))?;
+            .map_err(|e| AppError::source_error(format!("Failed to read XMLTV response: {e}")))?;
 
         debug!("Fetched {} bytes of raw XMLTV content", bytes.len());
 
@@ -82,13 +82,13 @@ impl XmltvEpgHandler {
             _ => {
                 debug!("Content is compressed, decompressing...");
                 DecompressionService::decompress(bytes)
-                    .map_err(|e| AppError::source_error(format!("Failed to decompress XMLTV content: {}", e)))?
+                    .map_err(|e| AppError::source_error(format!("Failed to decompress XMLTV content: {e}")))?
             }
         };
 
         // Convert decompressed bytes to UTF-8 string
         let content = String::from_utf8(decompressed_bytes)
-            .map_err(|e| AppError::source_error(format!("Failed to decode XMLTV content as UTF-8: {}", e)))?;
+            .map_err(|e| AppError::source_error(format!("Failed to decode XMLTV content as UTF-8: {e}")))?;
 
         debug!("Successfully processed {} bytes of XMLTV content (compression: {:?})", 
                content.len(), compression_format);
@@ -123,8 +123,7 @@ impl XmltvEpgHandler {
         
         for xmltv_program in xmltv_programs {
             // Create deduplication key: channel_id + start_time + program_title
-            let program_title = xmltv_program.title.as_ref()
-                .map(|t| t.as_str())
+            let program_title = xmltv_program.title.as_deref()
                 .unwrap_or("Unknown Program");
             let dedup_key = format!("{}|{}|{}", 
                 xmltv_program.channel,
@@ -150,7 +149,7 @@ impl XmltvEpgHandler {
                 chrono::DateTime::parse_from_str(stop, "%Y%m%d%H%M%S %z")
                     .or_else(|_| chrono::NaiveDateTime::parse_from_str(stop, "%Y%m%d%H%M%S")
                         .map(|dt| dt.and_utc().with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())))
-                    .map_err(|e| AppError::source_error(format!("Failed to parse stop time '{}': {}", stop, e)))?
+                    .map_err(|e| AppError::source_error(format!("Failed to parse stop time '{stop}': {e}")))?
             } else {
                 // If no stop time, estimate 30 minutes duration
                 start_time + chrono::Duration::minutes(30)
@@ -236,7 +235,7 @@ impl EpgSourceHandler for XmltvEpgHandler {
                     validation = validation.with_context("url_format", "valid");
                 }
                 Err(e) => {
-                    validation.errors.push(format!("Invalid URL format: {}", e));
+                    validation.errors.push(format!("Invalid URL format: {e}"));
                     validation.is_valid = false;
                 }
             }

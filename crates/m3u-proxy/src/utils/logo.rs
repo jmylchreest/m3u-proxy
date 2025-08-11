@@ -39,6 +39,7 @@ use uuid::Uuid;
 /// This struct holds all the parameters needed to generate a logo URL.
 /// It provides a flexible way to specify different URL generation options.
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Default)]
 pub struct LogoUrlConfig {
     /// Base URL for absolute URLs (None for relative URLs)
     pub base_url: Option<String>,
@@ -50,16 +51,6 @@ pub struct LogoUrlConfig {
     pub query_params: Vec<(String, String)>,
 }
 
-impl Default for LogoUrlConfig {
-    fn default() -> Self {
-        Self {
-            base_url: None,
-            format: None,
-            include_domain: false,
-            query_params: Vec::new(),
-        }
-    }
-}
 
 /// Builder for creating LogoUrlConfig with fluent interface
 ///
@@ -78,6 +69,12 @@ impl Default for LogoUrlConfig {
 #[derive(Debug)]
 pub struct LogoUrlConfigBuilder {
     config: LogoUrlConfig,
+}
+
+impl Default for LogoUrlConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LogoUrlConfigBuilder {
@@ -157,8 +154,8 @@ impl LogoUrlGenerator {
     pub fn generate(logo_id: Uuid, config: LogoUrlConfig) -> String {
         // Build the path component
         let path = match config.format {
-            Some(format) => format!("/api/v1/logos/{}/formats/{}", logo_id, format),
-            None => format!("/api/v1/logos/{}", logo_id),
+            Some(format) => format!("/api/v1/logos/{logo_id}/formats/{format}"),
+            None => format!("/api/v1/logos/{logo_id}"),
         };
         
         // Add query parameters if any
@@ -171,7 +168,7 @@ impl LogoUrlGenerator {
                 .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
                 .collect::<Vec<_>>()
                 .join("&");
-            format!("{}?{}", path, query_string)
+            format!("{path}?{query_string}")
         };
         
         // Combine with base URL if needed
@@ -332,7 +329,7 @@ impl LogoUrlGenerator {
         
         // Ensure we have a scheme if it looks like a domain
         if !url.starts_with("http://") && !url.starts_with("https://") && url.contains('.') {
-            url = format!("https://{}", url);
+            url = format!("https://{url}");
         }
         
         url
@@ -473,7 +470,7 @@ mod tests {
         
         assert_eq!(config.base_url, Some("https://api.example.com".to_string()));
         assert_eq!(config.format, Some("thumbnail".to_string()));
-        assert_eq!(config.include_domain, true);
+        assert!(config.include_domain);
         assert_eq!(config.query_params.len(), 1);
         assert_eq!(config.query_params[0], ("size".to_string(), "small".to_string()));
     }

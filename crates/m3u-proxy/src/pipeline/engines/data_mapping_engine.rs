@@ -63,7 +63,7 @@ impl DataMappingEngine<Channel> for ChannelDataMappingEngine {
                 
                 rule_results
                     .entry(rule_processor.get_rule_id().to_string())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(result);
             }
             
@@ -128,7 +128,7 @@ impl DataMappingEngine<EpgProgram> for ProgramDataMappingEngine {
                 
                 rule_results
                     .entry(rule_processor.get_rule_id().to_string())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(result);
             }
             

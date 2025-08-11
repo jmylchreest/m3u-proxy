@@ -198,7 +198,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         parser.parse(&request.expression)
             .map_err(|e| RepositoryError::QueryFailed { 
                 query: "filter expression parsing".to_string(), 
-                message: format!("Invalid filter expression: {}", e) 
+                message: format!("Invalid filter expression: {e}") 
             })?;
         // Store the expression as-is
 
@@ -248,7 +248,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
         parser.parse(&request.expression)
             .map_err(|e| RepositoryError::QueryFailed { 
                 query: "filter expression parsing".to_string(), 
-                message: format!("Invalid filter expression: {}", e) 
+                message: format!("Invalid filter expression: {e}") 
             })?;
         // Store the expression as-is
 
@@ -277,7 +277,7 @@ impl Repository<Filter, Uuid> for FilterRepository {
             .await?
             .ok_or_else(|| RepositoryError::QueryFailed {
                 query: "find_updated_filter".to_string(),
-                message: format!("Filter with id {} not found after update", id_str),
+                message: format!("Filter with id {id_str} not found after update"),
             })
     }
 
@@ -370,7 +370,6 @@ impl PaginatedRepository<Filter, Uuid> for FilterRepository {
 
 impl FilterRepository {
     /// Additional domain-specific methods for filter operations
-    
     /// Get available filter fields for building filter expressions
     pub async fn get_available_filter_fields(&self) -> RepositoryResult<Vec<crate::models::FilterFieldInfo>> {
         // Return the available fields that can be used in filter expressions
@@ -445,9 +444,9 @@ impl FilterRepository {
             let valid_order = if order_direction == "DESC" { "DESC" } else { "ASC" };
             
             match sort_field.as_str() {
-                "name" => sql.push_str(&format!(" ORDER BY f.name {}", valid_order)),
-                "usage_count" => sql.push_str(&format!(" ORDER BY usage_count {}", valid_order)),
-                "created_at" => sql.push_str(&format!(" ORDER BY f.created_at {}", valid_order)),
+                "name" => sql.push_str(&format!(" ORDER BY f.name {valid_order}")),
+                "usage_count" => sql.push_str(&format!(" ORDER BY usage_count {valid_order}")),
+                "created_at" => sql.push_str(&format!(" ORDER BY f.created_at {valid_order}")),
                 _ => sql.push_str(" ORDER BY f.name ASC"), // Default sort
             }
         } else {
@@ -520,14 +519,14 @@ impl FilterRepository {
         
         match parser.parse(pattern) {
             Err(e) => {
-                return Ok(crate::models::FilterTestResult {
+                Ok(crate::models::FilterTestResult {
                     is_valid: false,
-                    error: Some(format!("Invalid filter expression: {}", e)),
+                    error: Some(format!("Invalid filter expression: {e}")),
                     matching_channels: Vec::new(),
                     total_channels: 0,
                     matched_count: 0,
                     expression_tree: None,
-                });
+                })
             }
             Ok(condition_tree) => {
                 // Get channels from database for testing
@@ -547,7 +546,7 @@ impl FilterRepository {
                     regex_evaluator,
                 ).map_err(|e| RepositoryError::QueryFailed {
                     query: "create_filter_processor".to_string(),
-                    message: format!("Failed to create filter processor: {}", e),
+                    message: format!("Failed to create filter processor: {e}"),
                 })?;
                 
                 let mut matching_channels = Vec::new();
@@ -566,7 +565,7 @@ impl FilterRepository {
                         Err(e) => {
                             return Ok(crate::models::FilterTestResult {
                                 is_valid: false,
-                                error: Some(format!("Filter processing error: {}", e)),
+                                error: Some(format!("Filter processing error: {e}")),
                                 matching_channels: Vec::new(),
                                 total_channels,
                                 matched_count: 0,
@@ -608,7 +607,7 @@ impl FilterRepository {
             
             // Verify the source exists and is of the correct type
             let source_exists = sqlx::query_scalar::<_, i64>(&format!(
-                "SELECT COUNT(*) FROM {} WHERE id = ?", source_table
+                "SELECT COUNT(*) FROM {source_table} WHERE id = ?"
             ))
             .bind(source_id.to_string())
             .fetch_one(&self.pool)
@@ -617,7 +616,7 @@ impl FilterRepository {
             if source_exists == 0 {
                 return Err(RepositoryError::QueryFailed {
                     query: "validate_source_id".to_string(),
-                    message: format!("Source ID {} not found in {} table", source_id, source_table),
+                    message: format!("Source ID {source_id} not found in {source_table} table"),
                 });
             }
         }
@@ -634,10 +633,9 @@ impl FilterRepository {
                         id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift,
                         group_title, channel_name, stream_url,
                         created_at, updated_at
-                     FROM {} 
+                     FROM {table} 
                      WHERE source_id = ?
-                     ORDER BY channel_name",
-                    table
+                     ORDER BY channel_name"
                 ),
                 Some(source_id.to_string())
             )
@@ -648,9 +646,8 @@ impl FilterRepository {
                         id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift,
                         group_title, channel_name, stream_url,
                         created_at, updated_at
-                     FROM {} 
-                     ORDER BY channel_name",
-                    table
+                     FROM {table} 
+                     ORDER BY channel_name"
                 ),
                 None
             )
@@ -681,8 +678,8 @@ impl FilterRepository {
                 group_title: row.get("group_title"),
                 channel_name: row.get("channel_name"),
                 stream_url: row.get("stream_url"),
-                created_at: row.get_datetime("created_at").into(),
-                updated_at: row.get_datetime("updated_at").into(),
+                created_at: row.get_datetime("created_at"),
+                updated_at: row.get_datetime("updated_at"),
             };
             channels.push(channel);
         }

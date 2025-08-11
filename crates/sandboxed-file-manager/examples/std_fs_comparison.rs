@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Read a file (like std::fs::read_to_string)
     let content = manager.read_to_string("hello.txt").await?;
-    println!("Read content: '{}'", content);
+    println!("Read content: '{content}'");
 
     // Read as bytes (like std::fs::read)
     let bytes = manager.read("hello.txt").await?;
@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let content = manager.read_to_string("deep/other/file.txt").await?;
     println!("Valid traversal: deep/nested/../other/file.txt -> deep/other/file.txt");
-    println!("   Content: '{}'", content);
+    println!("   Content: '{content}'");
 
     // Show what happens with invalid paths
     println!("Testing security violations:");
@@ -91,11 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (bad_path, description) in results {
         match manager.write(bad_path, "malicious").await {
-            Ok(_) => println!(
-                "   SECURITY BREACH: {} should have been blocked!",
-                description
-            ),
-            Err(_) => println!("   Blocked: {}", description),
+            Ok(_) => println!("   SECURITY BREACH: {description} should have been blocked!"),
+            Err(_) => println!("   Blocked: {description}"),
         }
     }
 

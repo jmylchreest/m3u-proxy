@@ -42,7 +42,7 @@ pub mod duration {
                 E: de::Error,
             {
                 humantime::parse_duration(value)
-                    .map_err(|e| de::Error::custom(format!("Invalid duration '{}': {}", value, e)))
+                    .map_err(|e| de::Error::custom(format!("Invalid duration '{value}': {e}")))
             }
         }
 
@@ -141,7 +141,7 @@ pub mod timeout_seconds {
                 E: de::Error,
             {
                 if seconds > i32::MAX as u64 {
-                    Err(de::Error::custom(format!("Timeout {} seconds is too large for i32", seconds)))
+                    Err(de::Error::custom(format!("Timeout {seconds} seconds is too large for i32")))
                 } else {
                     Ok(seconds as i32)
                 }
@@ -152,11 +152,11 @@ pub mod timeout_seconds {
                 E: de::Error,
             {
                 let duration = humantime::parse_duration(value)
-                    .map_err(|e| de::Error::custom(format!("Invalid duration '{}': {}", value, e)))?;
+                    .map_err(|e| de::Error::custom(format!("Invalid duration '{value}': {e}")))?;
                 
                 let seconds = duration.as_secs();
                 if seconds > i32::MAX as u64 {
-                    Err(de::Error::custom(format!("Duration '{}' is too large for i32 seconds", value)))
+                    Err(de::Error::custom(format!("Duration '{value}' is too large for i32 seconds")))
                 } else {
                     Ok(seconds as i32)
                 }

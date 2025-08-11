@@ -6,21 +6,21 @@ fn main() {
     
     // Generate SBOM during build
     let output = Command::new("cargo")
-        .args(&["sbom", "--output-format", "spdx_json_2_3"])
+        .args(["sbom", "--output-format", "spdx_json_2_3"])
         .output()
         .expect("Failed to generate SBOM");
     
     if output.status.success() {
         // Write SBOM to a file that can be included in the binary
         std::fs::write(
-            format!("{}/sbom.json", out_dir),
+            format!("{out_dir}/sbom.json"),
             output.stdout
         ).expect("Failed to write SBOM file");
     } else {
         // Fallback if cargo sbom is not available
         eprintln!("Warning: cargo sbom not available, dependency versions will not be shown");
         std::fs::write(
-            format!("{}/sbom.json", out_dir),
+            format!("{out_dir}/sbom.json"),
             "{}"
         ).expect("Failed to write empty SBOM file");
     }

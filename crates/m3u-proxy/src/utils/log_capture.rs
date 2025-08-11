@@ -86,7 +86,7 @@ impl LogCaptureLayer {
             
             Some(crate::web::api::log_streaming::SpanInfo {
                 name: metadata.map(|m| m.name().to_string()).unwrap_or_else(|| "unknown".to_string()),
-                id: format!("{:?}", current_span_id),
+                id: format!("{current_span_id:?}"),
                 parent_id: None, // Keep this simple for now
             })
         } else {
@@ -179,7 +179,7 @@ impl<'a> tracing::field::Visit for FieldVisitor<'a> {
     }
 
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        let formatted = format!("{:?}", value);
+        let formatted = format!("{value:?}");
         // Clean up quoted strings for better readability
         let clean_value = if formatted.starts_with('"') && formatted.ends_with('"') && formatted.len() > 1 {
             formatted[1..formatted.len()-1].to_string()
@@ -198,11 +198,11 @@ impl<'a> tracing::field::Visit for FieldVisitor<'a> {
 /// Initialize log capture and return the broadcast sender
 pub fn init_log_capture() -> broadcast::Sender<LogEvent> {
     let (layer, _receiver) = LogCaptureLayer::new(); // Use default buffer size
-    let sender = layer.sender();
+    
     
     // The layer would be added to the tracing subscriber in main.rs
     // For now, just return the sender
-    sender
+    layer.sender()
 }
 
 /// Setup function to add log capture to an existing tracing subscriber

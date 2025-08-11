@@ -79,7 +79,7 @@ async fn serve_html_page(asset_path: &str) -> impl IntoResponse {
         None => {
             (
                 StatusCode::NOT_FOUND,
-                Html(format!("<h1>404 Not Found</h1><p>Page not found: {}</p>", asset_path)),
+                Html(format!("<h1>404 Not Found</h1><p>Page not found: {asset_path}</p>")),
             ).into_response()
         }
     }

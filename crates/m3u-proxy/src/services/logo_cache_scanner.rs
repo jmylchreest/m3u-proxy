@@ -59,7 +59,7 @@ impl CachedLogoInfo {
     pub fn to_logo_asset_like(&self, base_url: &str) -> serde_json::Value {
         let display_name = if let Some(metadata) = &self.metadata {
             if let Some(channel_name) = &metadata.channel_name {
-                format!("Cached: {}", channel_name)
+                format!("Cached: {channel_name}")
             } else {
                 format!("Cached: {}", self.file_name)
             }
@@ -75,13 +75,13 @@ impl CachedLogoInfo {
                     metadata
                         .original_url
                         .as_ref()
-                        .map(|url| format!("Cached from: {}", url))
+                        .map(|url| format!("Cached from: {url}"))
                 })
                 .unwrap_or_else(|| "Cached logo".to_string())
         } else {
             self.inferred_source_url
                 .as_ref()
-                .map(|url| format!("Cached from: {}", url))
+                .map(|url| format!("Cached from: {url}"))
                 .unwrap_or_else(|| "Cached logo".to_string())
         };
 
@@ -230,7 +230,7 @@ impl LogoCacheScanner {
             content_type,
             created_at,
             last_accessed,
-            metadata: Self::load_metadata(&cache_id, &file_path.parent().unwrap_or(&file_path))
+            metadata: Self::load_metadata(&cache_id, file_path.parent().unwrap_or(file_path))
                 .await,
             inferred_source_url,
         }))
@@ -321,14 +321,14 @@ impl LogoCacheScanner {
         let scan_path = &self.base_path;
 
         // Try PNG first (normalized format: cache_id.png)
-        let png_path = scan_path.join(format!("{}.png", cache_id));
+        let png_path = scan_path.join(format!("{cache_id}.png"));
         if png_path.exists() {
             return self.process_cached_logo_file(&png_path).await;
         }
 
         // Fall back to legacy formats with other extensions
         for ext in &["jpg", "jpeg", "gif", "webp", "svg"] {
-            let file_path = scan_path.join(format!("{}.{}", cache_id, ext));
+            let file_path = scan_path.join(format!("{cache_id}.{ext}"));
             if file_path.exists() {
                 return self.process_cached_logo_file(&file_path).await;
             }
@@ -339,7 +339,7 @@ impl LogoCacheScanner {
 
     /// Load metadata from .json sidecar file
     async fn load_metadata(cache_id: &str, directory: &Path) -> Option<CachedLogoMetadata> {
-        let metadata_path = directory.join(format!("{}.json", cache_id));
+        let metadata_path = directory.join(format!("{cache_id}.json"));
 
         if !metadata_path.exists() {
             return None;
@@ -362,7 +362,7 @@ impl LogoCacheScanner {
 
     /// Save metadata to .json sidecar file
     pub async fn save_metadata(&self, cache_id: &str, metadata: &CachedLogoMetadata) -> Result<()> {
-        let metadata_path = self.base_path.join(format!("{}.json", cache_id));
+        let metadata_path = self.base_path.join(format!("{cache_id}.json"));
 
         let json_content = serde_json::to_string_pretty(metadata)?;
         fs::write(&metadata_path, json_content).await?;
@@ -388,7 +388,7 @@ impl LogoCacheScanner {
         }
 
         // Save the image file
-        let file_name = format!("{}.{}", cache_id, file_extension);
+        let file_name = format!("{cache_id}.{file_extension}");
         let file_path = self.base_path.join(&file_name);
         fs::write(&file_path, &file_data).await?;
 
@@ -438,7 +438,7 @@ impl LogoCacheScanner {
 
         // Try to delete the image file (try different extensions)
         for ext in &["png", "jpg", "jpeg", "gif", "webp", "svg"] {
-            let file_path = self.base_path.join(format!("{}.{}", cache_id, ext));
+            let file_path = self.base_path.join(format!("{cache_id}.{ext}"));
             if file_path.exists() {
                 fs::remove_file(&file_path).await?;
                 deleted = true;
@@ -447,7 +447,7 @@ impl LogoCacheScanner {
         }
 
         // Delete the metadata file
-        let metadata_path = self.base_path.join(format!("{}.json", cache_id));
+        let metadata_path = self.base_path.join(format!("{cache_id}.json"));
         if metadata_path.exists() {
             fs::remove_file(&metadata_path).await?;
             deleted = true;
@@ -466,7 +466,7 @@ impl LogoCacheScanner {
         additional_info: Option<std::collections::HashMap<String, String>>,
     ) -> Result<bool> {
         // Check if metadata already exists
-        let metadata_path = self.base_path.join(format!("{}.json", cache_id));
+        let metadata_path = self.base_path.join(format!("{cache_id}.json"));
         if metadata_path.exists() {
             return Ok(false); // Already has metadata
         }
@@ -474,7 +474,7 @@ impl LogoCacheScanner {
         // Check if the image file exists
         let mut image_exists = false;
         for ext in &["png", "jpg", "jpeg", "gif", "webp", "svg"] {
-            let image_path = self.base_path.join(format!("{}.{}", cache_id, ext));
+            let image_path = self.base_path.join(format!("{cache_id}.{ext}"));
             if image_path.exists() {
                 image_exists = true;
                 break;

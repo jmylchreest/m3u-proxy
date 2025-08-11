@@ -224,14 +224,24 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_registration() {
-        let mut registry = SourceHandlerRegistry::new();
-        assert!(registry.create_handler(&StreamSourceType::M3u).is_err());
-        
-        registry.register_handler(StreamSourceType::M3u, || {
-            Arc::new(M3uSourceHandler::new())
-        });
-        
-        assert!(registry.create_handler(&StreamSourceType::M3u).is_ok());
+    fn test_factory_basic_functionality() {
+        // Test that factory can create handlers for all supported types
+        for source_type in [StreamSourceType::M3u, StreamSourceType::Xtream] {
+            assert!(SourceHandlerFactory::is_supported(&source_type));
+            assert!(SourceHandlerFactory::create_handler(&source_type).is_ok());
+            assert!(SourceHandlerFactory::create_basic_handler(&source_type).is_ok());
+            assert!(SourceHandlerFactory::get_handler_capabilities(&source_type).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_epg_factory_functionality() {
+        // Test EPG factory methods
+        for epg_type in [EpgSourceType::Xmltv, EpgSourceType::Xtream] {
+            assert!(SourceHandlerFactory::is_epg_supported(&epg_type));
+            assert!(SourceHandlerFactory::create_epg_handler(&epg_type).is_ok());
+            assert!(SourceHandlerFactory::create_basic_epg_handler(&epg_type).is_ok());
+            assert!(SourceHandlerFactory::get_epg_handler_capabilities(&epg_type).is_ok());
+        }
     }
 }

@@ -373,7 +373,7 @@ impl RepositoryHelpers {
         source_id: uuid::Uuid,
     ) -> crate::errors::RepositoryResult<chrono::DateTime<chrono::Utc>> {
         let now = chrono::Utc::now();
-        let query = format!("UPDATE {} SET last_ingested_at = ?, updated_at = ? WHERE id = ?", table_name);
+        let query = format!("UPDATE {table_name} SET last_ingested_at = ?, updated_at = ? WHERE id = ?");
         
         sqlx::query(&query)
             .bind(now.to_rfc3339())
@@ -391,7 +391,7 @@ impl RepositoryHelpers {
         channel_table: &str,
         source_id: uuid::Uuid,
     ) -> crate::errors::RepositoryResult<i64> {
-        let query = format!("SELECT COUNT(*) FROM {} WHERE source_id = ?", channel_table);
+        let query = format!("SELECT COUNT(*) FROM {channel_table} WHERE source_id = ?");
         let count: i64 = sqlx::query_scalar(&query)
             .bind(source_id.to_string())
             .fetch_one(pool)
@@ -407,7 +407,7 @@ impl RepositoryHelpers {
         entity_id_column: &str,
         entity_id: uuid::Uuid,
     ) -> crate::errors::RepositoryResult<i64> {
-        let query = format!("SELECT COUNT(*) FROM {} WHERE {} = ?", relation_table, entity_id_column);
+        let query = format!("SELECT COUNT(*) FROM {relation_table} WHERE {entity_id_column} = ?");
         let count: i64 = sqlx::query_scalar(&query)
             .bind(entity_id.to_string())
             .fetch_one(pool)

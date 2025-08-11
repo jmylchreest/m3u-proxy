@@ -188,7 +188,7 @@ impl CleanupStage {
     /// Clean up a single artifact file
     async fn cleanup_artifact_file(&self, artifact: &PipelineArtifact) -> Result<u64> {
         // Get file size before deletion for reporting
-        let file_size = artifact.file_size.unwrap_or_else(|| {
+        let file_size = artifact.file_size.unwrap_or({
             // Use recorded file size if available, otherwise default to 0
             // TODO: We could make this async to get actual file size, but it's not critical
             0

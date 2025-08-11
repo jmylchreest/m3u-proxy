@@ -82,7 +82,7 @@ impl EpgSourceRepository {
 
         if let Some(search) = &query.base.search {
             conditions.push("(name LIKE ? OR url LIKE ?)".to_string());
-            let search_param = format!("%{}%", search);
+            let search_param = format!("%{search}%");
             params.push(search_param.clone());
             params.push(search_param);
         }
@@ -110,11 +110,11 @@ impl EpgSourceRepository {
         let direction = if query.base.sort_ascending { "ASC" } else { "DESC" };
         
         match sort_field {
-            "name" => format!(" ORDER BY name {}", direction),
-            "created_at" => format!(" ORDER BY created_at {}", direction),
-            "updated_at" => format!(" ORDER BY updated_at {}", direction),
-            "last_ingested_at" => format!(" ORDER BY last_ingested_at {} NULLS LAST", direction),
-            "source_type" => format!(" ORDER BY source_type {}, name ASC", direction),
+            "name" => format!(" ORDER BY name {direction}"),
+            "created_at" => format!(" ORDER BY created_at {direction}"),
+            "updated_at" => format!(" ORDER BY updated_at {direction}"),
+            "last_ingested_at" => format!(" ORDER BY last_ingested_at {direction} NULLS LAST"),
+            "source_type" => format!(" ORDER BY source_type {direction}, name ASC"),
             _ => " ORDER BY name ASC".to_string(),
         }
     }
@@ -129,7 +129,7 @@ impl EpgSourceRepository {
             "xtream" => EpgSourceType::Xtream,
             _ => return Err(RepositoryError::query_failed(
                 "row_to_model", 
-                format!("Invalid source type: {}", source_type_str)
+                format!("Invalid source type: {source_type_str}")
             )),
         };
 
@@ -157,7 +157,7 @@ impl EpgSourceRepository {
         let order_clause = self.build_order_clause(&query);
         
         let limit_clause = if let Some(limit) = query.base.limit {
-            format!(" LIMIT {}", limit)
+            format!(" LIMIT {limit}")
         } else {
             String::new()
         };
@@ -177,8 +177,7 @@ impl EpgSourceRepository {
                  FROM epg_programs
                  GROUP BY source_id
              ) ep ON e.id = ep.source_id
-             {}{}{}",
-            where_clause, order_clause, limit_clause
+             {where_clause}{order_clause}{limit_clause}"
         );
 
         let mut query_builder = sqlx::query(&sql);
@@ -245,7 +244,7 @@ impl Repository<EpgSource, Uuid> for EpgSourceRepository {
         
         let limit_clause = if let Some(limit) = query.base.limit {
             let offset = query.base.offset.unwrap_or(0);
-            format!(" LIMIT {} OFFSET {}", limit, offset)
+            format!(" LIMIT {limit} OFFSET {offset}")
         } else {
             String::new()
         };
@@ -253,8 +252,7 @@ impl Repository<EpgSource, Uuid> for EpgSourceRepository {
         let sql = format!(
             "SELECT id, name, source_type, url, update_cron, username, password, 
              original_timezone, time_offset, created_at, updated_at, last_ingested_at, is_active
-             FROM epg_sources{}{}{}",
-            where_clause, order_clause, limit_clause
+             FROM epg_sources{where_clause}{order_clause}{limit_clause}"
         );
 
         let mut query_builder = sqlx::query(&sql);
@@ -357,7 +355,7 @@ impl Repository<EpgSource, Uuid> for EpgSourceRepository {
 
     async fn count(&self, query: Self::Query) -> RepositoryResult<u64> {
         let (where_clause, params) = self.build_where_clause(&query);
-        let sql = format!("SELECT COUNT(*) FROM epg_sources{}", where_clause);
+        let sql = format!("SELECT COUNT(*) FROM epg_sources{where_clause}");
 
         let mut query_builder = sqlx::query_scalar(&sql);
         for param in params {
@@ -499,7 +497,7 @@ impl BulkRepository<EpgSource, Uuid> for EpgSourceRepository {
         }
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("DELETE FROM epg_sources WHERE id IN ({})", placeholders);
+        let sql = format!("DELETE FROM epg_sources WHERE id IN ({placeholders})");
 
         let mut query_builder = sqlx::query(&sql);
         for id in ids {
@@ -521,8 +519,7 @@ impl BulkRepository<EpgSource, Uuid> for EpgSourceRepository {
         let sql = format!(
             "SELECT id, name, source_type, url, update_cron, username, password, 
              original_timezone, time_offset, created_at, updated_at, last_ingested_at, is_active
-             FROM epg_sources WHERE id IN ({}) ORDER BY name",
-            placeholders
+             FROM epg_sources WHERE id IN ({placeholders}) ORDER BY name"
         );
 
         let mut query_builder = sqlx::query(&sql);
@@ -570,7 +567,6 @@ impl PaginatedRepository<EpgSource, Uuid> for EpgSourceRepository {
 
 impl EpgSourceRepository {
     /// Additional domain-specific methods for EPG source operations
-    
     /// Get EPG sources with statistics (channel counts, program counts, etc.)
     pub async fn list_with_stats(&self) -> RepositoryResult<Vec<crate::models::EpgSourceWithStats>> {
         let rows = sqlx::query(

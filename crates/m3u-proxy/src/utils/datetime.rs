@@ -83,6 +83,7 @@ impl DateTimeParser {
     /// Parse datetime from various common formats used in the application
     ///
     /// Supports:
+    /// - Unix timestamps: "1704110400"
     /// - RFC3339 format with timezone: "2023-01-01T12:00:00Z"
     /// - RFC3339 format with offset: "2023-01-01T12:00:00+02:00"
     /// - SQLite format (assumes UTC): "2023-01-01 12:00:00"
@@ -114,6 +115,13 @@ impl DateTimeParser {
     pub fn parse_flexible(datetime_str: &str) -> Result<DateTime<Utc>, DateTimeError> {
         let trimmed = datetime_str.trim();
 
+        // Try parsing as Unix timestamp first (fastest check)
+        if let Ok(epoch) = trimmed.parse::<i64>() {
+            if let Some(dt) = DateTime::from_timestamp(epoch, 0) {
+                return Ok(dt);
+            }
+        }
+
         // Try RFC3339 first (most common for APIs)
         if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
             return Ok(dt.with_timezone(&Utc));
@@ -137,6 +145,7 @@ impl DateTimeParser {
             "%d/%m/%Y %H:%M:%S",    // European format
             "%m/%d/%Y %H:%M:%S",    // US format
             "%Y%m%dT%H%M%S",        // Basic ISO format
+            "%Y%m%d%H%M%S",         // XMLTV format
         ];
 
         for format in &naive_formats {
@@ -290,6 +299,18 @@ where
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use chrono::{Datelike, Timelike};
+
+    #[test]
+    fn test_parse_unix_timestamp() {
+        let dt = DateTimeParser::parse_flexible("1704110400").unwrap(); // 2024-01-01 12:00:00 UTC
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 1);
+        assert_eq!(dt.hour(), 12);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 0);
+    }
 
     #[test]
     fn test_parse_rfc3339() {
@@ -309,6 +330,17 @@ mod tests {
         assert_eq!(dt.month(), 1);
         assert_eq!(dt.day(), 1);
         assert_eq!(dt.hour(), 12);
+    }
+
+    #[test]
+    fn test_parse_xmltv_format() {
+        let dt = DateTimeParser::parse_flexible("20240101120000").unwrap(); // XMLTV format
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 1);
+        assert_eq!(dt.hour(), 12);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 0);
     }
 
     #[test]

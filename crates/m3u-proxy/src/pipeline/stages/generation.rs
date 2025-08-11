@@ -229,40 +229,40 @@ impl GenerationStage {
         for numbered_channel in numbered_channels {
             let channel = &numbered_channel.channel;
             // Build EXTINF line with conditional attributes
-            let mut extinf_line = format!("#EXTINF:-1");
+            let mut extinf_line = "#EXTINF:-1".to_string();
             
             // Add tvg-id if present
             if let Some(ref tvg_id) = channel.tvg_id {
                 if !tvg_id.is_empty() {
-                    extinf_line.push_str(&format!(" tvg-id=\"{}\"", tvg_id));
+                    extinf_line.push_str(&format!(" tvg-id=\"{tvg_id}\""));
                 }
             }
             
             // Add tvg-name if present
             if let Some(ref tvg_name) = channel.tvg_name {
                 if !tvg_name.is_empty() {
-                    extinf_line.push_str(&format!(" tvg-name=\"{}\"", tvg_name));
+                    extinf_line.push_str(&format!(" tvg-name=\"{tvg_name}\""));
                 }
             }
             
             // Add tvg-logo if present
             if let Some(ref tvg_logo) = channel.tvg_logo {
                 if !tvg_logo.is_empty() {
-                    extinf_line.push_str(&format!(" tvg-logo=\"{}\"", tvg_logo));
+                    extinf_line.push_str(&format!(" tvg-logo=\"{tvg_logo}\""));
                 }
             }
             
             // Add group-title if present
             if let Some(ref group_title) = channel.group_title {
                 if !group_title.is_empty() {
-                    extinf_line.push_str(&format!(" group-title=\"{}\"", group_title));
+                    extinf_line.push_str(&format!(" group-title=\"{group_title}\""));
                 }
             }
             
             // Add tvg-chno if present
             if let Some(ref tvg_chno) = channel.tvg_chno {
                 if !tvg_chno.is_empty() {
-                    extinf_line.push_str(&format!(" tvg-chno=\"{}\"", tvg_chno));
+                    extinf_line.push_str(&format!(" tvg-chno=\"{tvg_chno}\""));
                 }
             }
             
@@ -281,7 +281,7 @@ impl GenerationStage {
                 crate::utils::uuid_parser::uuid_to_base64(&self.proxy_id),
                 crate::utils::uuid_parser::uuid_to_base64(&channel.id)
             );
-            let stream_line = format!("{}\n", proxy_stream_url);
+            let stream_line = format!("{proxy_stream_url}\n");
             writer.write_all(stream_line.as_bytes()).await?;
             bytes_written += stream_line.len() as u64;
             
@@ -524,7 +524,7 @@ impl PipelineStage for GenerationStage {
             logo_storage
         );
         let artifacts = self.process_channels_and_programs(numbered_channels, epg_programs, false, &logo_service).await
-            .map_err(|e| PipelineError::stage_error("generation", format!("Generation failed: {}", e)))?;
+            .map_err(|e| PipelineError::stage_error("generation", format!("Generation failed: {e}")))?;
         
         self.report_progress(100.0, "Generation completed").await;
         

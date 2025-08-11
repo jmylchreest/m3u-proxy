@@ -25,7 +25,7 @@ impl SqliteRowExt for sqlx::sqlite::SqliteRow {
     fn get_datetime(&self, column: &str) -> DateTime<Utc> {
         let datetime_str: String = self.get(column);
         DateTimeParser::parse_flexible(&datetime_str)
-            .unwrap_or_else(|_| panic!("Failed to parse datetime from column '{}': '{}'", column, datetime_str))
+            .unwrap_or_else(|_| panic!("Failed to parse datetime from column '{column}': '{datetime_str}'"))
     }
     
     fn get_datetime_opt(&self, column: &str) -> Option<DateTime<Utc>> {

@@ -12,7 +12,7 @@ use crate::assets::StaticAssets;
 
 /// Serve a static asset by path
 pub async fn serve_static_asset(Path(path): Path<String>) -> impl IntoResponse {
-    let asset_path = format!("static/{}", path);
+    let asset_path = format!("static/{path}");
     
     match StaticAssets::get_asset(&asset_path) {
         Some(file) => {

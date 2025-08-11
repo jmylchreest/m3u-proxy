@@ -38,7 +38,7 @@ impl UrlUtils {
         if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
             trimmed.to_string()
         } else {
-            format!("http://{}", trimmed)
+            format!("http://{trimmed}")
         }
     }
 

@@ -6,8 +6,10 @@ use std::time::Duration;
 
 /// Defines which timestamp to use for cleanup decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum TimeMatch {
     /// Use last access time - tries filesystem atime, falls back to in-memory tracking, then mtime
+    #[default]
     LastAccess,
     /// Use modification time (mtime) 
     Modified,
@@ -15,11 +17,6 @@ pub enum TimeMatch {
     Created,
 }
 
-impl Default for TimeMatch {
-    fn default() -> Self {
-        TimeMatch::LastAccess
-    }
-}
 
 /// Configuration for automatic file cleanup.
 #[derive(Debug, Clone, Serialize, Deserialize)]

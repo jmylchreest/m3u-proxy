@@ -205,7 +205,7 @@ impl EngineBasedDataMappingService {
             .map(|r| DataMappingTestChannel {
                 channel_name: r.channel_name,
                 group_title: r.final_channel.group_title.clone(),
-                original_values: serde_json::to_value(&channels.iter().find(|c| c.id == r.channel_id).unwrap()).unwrap_or_default(),
+                original_values: serde_json::to_value(channels.iter().find(|c| c.id == r.channel_id).unwrap()).unwrap_or_default(),
                 mapped_values: serde_json::to_value(&r.final_channel).unwrap_or_default(),
                 applied_actions: r.rule_applications.iter().map(|ra| ra.rule_name.clone()).collect(),
             })

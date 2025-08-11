@@ -35,8 +35,8 @@ impl LogoAssetStorage {
     ) -> Result<(String, String, i64, String, Option<(u32, u32)>)> {
         self.ensure_storage_dirs().await?;
 
-        let file_name = format!("{}.{}", asset_id, file_extension);
-        let relative_path = format!("uploaded/{}", file_name);
+        let file_name = format!("{asset_id}.{file_extension}");
+        let relative_path = format!("uploaded/{file_name}");
         let file_path = self.uploaded_logo_dir.join(&file_name);
 
         let mime_type = match file_extension.to_lowercase().as_str() {
@@ -70,8 +70,8 @@ impl LogoAssetStorage {
     ) -> Result<(String, String, i64, String, Option<(u32, u32)>)> {
         self.ensure_storage_dirs().await?;
 
-        let file_name = format!("{}.{}", asset_id, file_extension);
-        let relative_path = format!("uploaded/{}", file_name);
+        let file_name = format!("{asset_id}.{file_extension}");
+        let relative_path = format!("uploaded/{file_name}");
         let file_path = self.uploaded_logo_dir.join(&file_name);
 
         let mime_type = match file_extension.to_lowercase().as_str() {
@@ -145,6 +145,6 @@ impl LogoAssetStorage {
 
     /// Get the file path for a cached logo by cache ID
     pub fn get_cached_logo_path(&self, cache_id: &str) -> PathBuf {
-        self.cached_logo_dir.join(format!("{}.png", cache_id))
+        self.cached_logo_dir.join(format!("{cache_id}.png"))
     }
 }

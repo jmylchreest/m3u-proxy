@@ -65,7 +65,7 @@ impl StandardHttpClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| AppError::source_error(format!("Failed to read response: {}", e)))?;
+            .map_err(|e| AppError::source_error(format!("Failed to read response: {e}")))?;
 
         debug!("Fetched {} bytes of raw content", bytes.len());
 
@@ -81,7 +81,7 @@ impl StandardHttpClient {
             _ => {
                 debug!("Content is compressed, decompressing...");
                 DecompressionService::decompress(bytes)
-                    .map_err(|e| AppError::source_error(format!("Failed to decompress content: {}", e)))?
+                    .map_err(|e| AppError::source_error(format!("Failed to decompress content: {e}")))?
             }
         };
 
@@ -121,7 +121,7 @@ impl DecompressingHttpClient for StandardHttpClient {
         
         // Convert decompressed bytes to UTF-8 string
         let content = String::from_utf8(decompressed_bytes)
-            .map_err(|e| AppError::source_error(format!("Failed to decode content as UTF-8: {}", e)))?;
+            .map_err(|e| AppError::source_error(format!("Failed to decode content as UTF-8: {e}")))?;
 
         debug!("Successfully fetched {} characters of text content", content.len());
         Ok(content)
@@ -148,7 +148,7 @@ impl DecompressingHttpClient for StandardHttpClient {
         
         // Parse JSON from decompressed bytes
         let json_value = serde_json::from_slice(&decompressed_bytes)
-            .map_err(|e| AppError::source_error(format!("Failed to parse JSON: {}", e)))?;
+            .map_err(|e| AppError::source_error(format!("Failed to parse JSON: {e}")))?;
 
         debug!("Successfully fetched and parsed JSON content");
         Ok(json_value)
@@ -202,7 +202,7 @@ impl DecompressingHttpClient for StandardHttpClient {
         
         // Convert decompressed bytes to UTF-8 string
         let content = String::from_utf8(decompressed_bytes)
-            .map_err(|e| AppError::source_error(format!("Failed to decode content as UTF-8: {}", e)))?;
+            .map_err(|e| AppError::source_error(format!("Failed to decode content as UTF-8: {e}")))?;
 
         debug!("Successfully fetched {} characters of text content with headers", content.len());
         Ok(content)

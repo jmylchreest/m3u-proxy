@@ -1,7 +1,4 @@
-//! Memory monitoring configuration for controlling verbosity and behavior
-//!
-//! This module provides configuration options for memory monitoring to reduce
-//! log spam while maintaining important monitoring capabilities.
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
@@ -132,10 +129,7 @@ impl MemoryMonitoringConfig {
 
     /// Check if memory warnings should be logged
     pub fn should_log_memory_warnings(&self) -> bool {
-        match self.verbosity {
-            MemoryVerbosity::Silent => false,
-            _ => true,
-        }
+        !matches!(self.verbosity, MemoryVerbosity::Silent)
     }
 
     /// Check if pressure escalations should be logged
@@ -158,17 +152,6 @@ impl MemoryMonitoringConfig {
 }
 
 impl MemoryVerbosity {
-    /// Parse verbosity from string
-    pub fn from_str(s: &str) -> Result<Self, String> {
-        match s.to_lowercase().as_str() {
-            "silent" => Ok(Self::Silent),
-            "minimal" => Ok(Self::Minimal),
-            "normal" => Ok(Self::Normal),
-            "verbose" => Ok(Self::Verbose),
-            "debug" => Ok(Self::Debug),
-            _ => Err(format!("Unknown verbosity level: {}", s)),
-        }
-    }
 
     /// Get verbosity as string
     pub fn as_str(&self) -> &'static str {
@@ -178,6 +161,21 @@ impl MemoryVerbosity {
             Self::Normal => "normal",
             Self::Verbose => "verbose",
             Self::Debug => "debug",
+        }
+    }
+}
+
+impl FromStr for MemoryVerbosity {
+    type Err = String;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "silent" => Ok(Self::Silent),
+            "minimal" => Ok(Self::Minimal),
+            "normal" => Ok(Self::Normal),
+            "verbose" => Ok(Self::Verbose),
+            "debug" => Ok(Self::Debug),
+            _ => Err(format!("Unknown verbosity level: {s}")),
         }
     }
 }
@@ -196,7 +194,7 @@ pub fn get_global_memory_config() -> MemoryMonitoringConfig {
     GLOBAL_MEMORY_CONFIG
         .get()
         .map(|config| config.read().unwrap().clone())
-        .unwrap_or_else(MemoryMonitoringConfig::default)
+        .unwrap_or_default()
 }
 
 /// Update the global memory configuration
@@ -234,14 +232,14 @@ mod tests {
     #[test]
     fn test_verbosity_parsing() {
         assert_eq!(
-            MemoryVerbosity::from_str("minimal").unwrap(),
+            "minimal".parse::<MemoryVerbosity>().unwrap(),
             MemoryVerbosity::Minimal
         );
         assert_eq!(
-            MemoryVerbosity::from_str("VERBOSE").unwrap(),
+            "VERBOSE".parse::<MemoryVerbosity>().unwrap(),
             MemoryVerbosity::Verbose
         );
-        assert!(MemoryVerbosity::from_str("invalid").is_err());
+        assert!("invalid".parse::<MemoryVerbosity>().is_err());
     }
 
     #[test]

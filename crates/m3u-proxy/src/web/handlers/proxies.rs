@@ -236,8 +236,8 @@ impl StreamProxyResponse {
             stream_sources: vec![], // Will be populated by service layer
             epg_sources: vec![],    // Will be populated by service layer
             filters: vec![],        // Will be populated by service layer
-            m3u8_url: format!("{}/proxy/{}/m3u8", trimmed_base_url, proxy_id_b64),
-            xmltv_url: format!("{}/proxy/{}/xmltv", trimmed_base_url, proxy_id_b64),
+            m3u8_url: format!("{trimmed_base_url}/proxy/{proxy_id_b64}/m3u8"),
+            xmltv_url: format!("{trimmed_base_url}/proxy/{proxy_id_b64}/xmltv"),
         }
     }
 }
@@ -407,20 +407,22 @@ pub async fn list_proxies(
     let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
-        proxy_repo,
-        channel_repo,
-        filter_repo,
-        stream_source_repo,
-        filter_engine,
-        state.database.clone(),
-        state.preview_file_manager.clone(),
-        state.data_mapping_service.clone(),
-        state.logo_asset_service.clone(),
-        state.config.storage.clone(),
-        state.config.clone(),
-        state.temp_file_manager.clone(),
-        state.proxy_output_file_manager.clone(),
-        state.system.clone(),
+        crate::services::StreamProxyServiceBuilder {
+            proxy_repo,
+            channel_repo,
+            filter_repo,
+            stream_source_repo,
+            filter_engine,
+            database: state.database.clone(),
+            preview_file_manager: state.preview_file_manager.clone(),
+            data_mapping_service: state.data_mapping_service.clone(),
+            logo_service: state.logo_asset_service.clone(),
+            storage_config: state.config.storage.clone(),
+            app_config: state.config.clone(),
+            temp_file_manager: state.temp_file_manager.clone(),
+            proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            system: state.system.clone(),
+        },
     );
 
     // Get proxies with pagination
@@ -465,7 +467,7 @@ pub async fn get_proxy(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::GET,
-        &format!("/api/v1/proxies/{}", id).parse().unwrap(),
+        &format!("/api/v1/proxies/{id}").parse().unwrap(),
         &context,
     );
 
@@ -485,20 +487,22 @@ pub async fn get_proxy(
     let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
-        proxy_repo,
-        channel_repo,
-        filter_repo,
-        stream_source_repo,
-        filter_engine,
-        state.database.clone(),
-        state.preview_file_manager.clone(),
-        state.data_mapping_service.clone(),
-        state.logo_asset_service.clone(),
-        state.config.storage.clone(),
-        state.config.clone(),
-        state.temp_file_manager.clone(),
-        state.proxy_output_file_manager.clone(),
-        state.system.clone(),
+        crate::services::StreamProxyServiceBuilder {
+            proxy_repo,
+            channel_repo,
+            filter_repo,
+            stream_source_repo,
+            filter_engine,
+            database: state.database.clone(),
+            preview_file_manager: state.preview_file_manager.clone(),
+            data_mapping_service: state.data_mapping_service.clone(),
+            logo_service: state.logo_asset_service.clone(),
+            storage_config: state.config.storage.clone(),
+            app_config: state.config.clone(),
+            temp_file_manager: state.temp_file_manager.clone(),
+            proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            system: state.system.clone(),
+        },
     );
 
     match service.get_by_id(uuid).await {
@@ -547,20 +551,22 @@ pub async fn create_proxy(
     let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
-        proxy_repo,
-        channel_repo,
-        filter_repo,
-        stream_source_repo,
-        filter_engine,
-        state.database.clone(),
-        state.preview_file_manager.clone(),
-        state.data_mapping_service.clone(),
-        state.logo_asset_service.clone(),
-        state.config.storage.clone(),
-        state.config.clone(),
-        state.temp_file_manager.clone(),
-        state.proxy_output_file_manager.clone(),
-        state.system.clone(),
+        crate::services::StreamProxyServiceBuilder {
+            proxy_repo,
+            channel_repo,
+            filter_repo,
+            stream_source_repo,
+            filter_engine,
+            database: state.database.clone(),
+            preview_file_manager: state.preview_file_manager.clone(),
+            data_mapping_service: state.data_mapping_service.clone(),
+            logo_service: state.logo_asset_service.clone(),
+            storage_config: state.config.storage.clone(),
+            app_config: state.config.clone(),
+            temp_file_manager: state.temp_file_manager.clone(),
+            proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            system: state.system.clone(),
+        },
     );
 
     match service.create(service_request).await {
@@ -595,7 +601,7 @@ pub async fn update_proxy(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::PUT,
-        &format!("/api/v1/proxies/{}", id).parse().unwrap(),
+        &format!("/api/v1/proxies/{id}").parse().unwrap(),
         &context,
     );
 
@@ -666,20 +672,22 @@ pub async fn update_proxy(
     let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
-        proxy_repo,
-        channel_repo,
-        filter_repo,
-        stream_source_repo,
-        filter_engine,
-        state.database.clone(),
-        state.preview_file_manager.clone(),
-        state.data_mapping_service.clone(),
-        state.logo_asset_service.clone(),
-        state.config.storage.clone(),
-        state.config.clone(),
-        state.temp_file_manager.clone(),
-        state.proxy_output_file_manager.clone(),
-        state.system.clone(),
+        crate::services::StreamProxyServiceBuilder {
+            proxy_repo,
+            channel_repo,
+            filter_repo,
+            stream_source_repo,
+            filter_engine,
+            database: state.database.clone(),
+            preview_file_manager: state.preview_file_manager.clone(),
+            data_mapping_service: state.data_mapping_service.clone(),
+            logo_service: state.logo_asset_service.clone(),
+            storage_config: state.config.storage.clone(),
+            app_config: state.config.clone(),
+            temp_file_manager: state.temp_file_manager.clone(),
+            proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            system: state.system.clone(),
+        },
     );
 
     match service.update(uuid, service_request).await {
@@ -711,7 +719,7 @@ pub async fn delete_proxy(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::DELETE,
-        &format!("/api/v1/proxies/{}", id).parse().unwrap(),
+        &format!("/api/v1/proxies/{id}").parse().unwrap(),
         &context,
     );
 
@@ -731,20 +739,22 @@ pub async fn delete_proxy(
     let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
-        proxy_repo,
-        channel_repo,
-        filter_repo,
-        stream_source_repo,
-        filter_engine,
-        state.database.clone(),
-        state.preview_file_manager.clone(),
-        state.data_mapping_service.clone(),
-        state.logo_asset_service.clone(),
-        state.config.storage.clone(),
-        state.config.clone(),
-        state.temp_file_manager.clone(),
-        state.proxy_output_file_manager.clone(),
-        state.system.clone(),
+        crate::services::StreamProxyServiceBuilder {
+            proxy_repo,
+            channel_repo,
+            filter_repo,
+            stream_source_repo,
+            filter_engine,
+            database: state.database.clone(),
+            preview_file_manager: state.preview_file_manager.clone(),
+            data_mapping_service: state.data_mapping_service.clone(),
+            logo_service: state.logo_asset_service.clone(),
+            storage_config: state.config.storage.clone(),
+            app_config: state.config.clone(),
+            temp_file_manager: state.temp_file_manager.clone(),
+            proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            system: state.system.clone(),
+        },
     );
 
     match service.delete(uuid).await {
@@ -803,20 +813,22 @@ pub async fn preview_proxy_config(
     let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
-        proxy_repo,
-        channel_repo,
-        filter_repo,
-        stream_source_repo,
-        filter_engine,
-        state.database.clone(),
-        state.preview_file_manager.clone(),
-        state.data_mapping_service.clone(),
-        state.logo_asset_service.clone(),
-        state.config.storage.clone(),
-        state.config.clone(),
-        state.temp_file_manager.clone(),
-        state.proxy_output_file_manager.clone(),
-        state.system.clone(),
+        crate::services::StreamProxyServiceBuilder {
+            proxy_repo,
+            channel_repo,
+            filter_repo,
+            stream_source_repo,
+            filter_engine,
+            database: state.database.clone(),
+            preview_file_manager: state.preview_file_manager.clone(),
+            data_mapping_service: state.data_mapping_service.clone(),
+            logo_service: state.logo_asset_service.clone(),
+            storage_config: state.config.storage.clone(),
+            app_config: state.config.clone(),
+            temp_file_manager: state.temp_file_manager.clone(),
+            proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            system: state.system.clone(),
+        },
     );
 
     match service.generate_preview(request).await {
@@ -864,7 +876,7 @@ pub async fn preview_existing_proxy(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::GET,
-        &format!("/api/v1/proxies/{}/preview", id).parse().unwrap(),
+        &format!("/api/v1/proxies/{id}/preview").parse().unwrap(),
         &context,
     );
 
@@ -884,20 +896,22 @@ pub async fn preview_existing_proxy(
     let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
-        proxy_repo,
-        channel_repo,
-        filter_repo,
-        stream_source_repo,
-        filter_engine,
-        state.database.clone(),
-        state.preview_file_manager.clone(),
-        state.data_mapping_service.clone(),
-        state.logo_asset_service.clone(),
-        state.config.storage.clone(),
-        state.config.clone(),
-        state.temp_file_manager.clone(),
-        state.proxy_output_file_manager.clone(),
-        state.system.clone(),
+        crate::services::StreamProxyServiceBuilder {
+            proxy_repo,
+            channel_repo,
+            filter_repo,
+            stream_source_repo,
+            filter_engine,
+            database: state.database.clone(),
+            preview_file_manager: state.preview_file_manager.clone(),
+            data_mapping_service: state.data_mapping_service.clone(),
+            logo_service: state.logo_asset_service.clone(),
+            storage_config: state.config.storage.clone(),
+            app_config: state.config.clone(),
+            temp_file_manager: state.temp_file_manager.clone(),
+            proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            system: state.system.clone(),
+        },
     );
 
     // Get the existing proxy first
@@ -989,7 +1003,7 @@ pub async fn serve_proxy_m3u(
             return (
                 StatusCode::BAD_REQUEST,
                 headers,
-                format!("Invalid proxy ID format: {}", e),
+                format!("Invalid proxy ID format: {e}"),
             );
         }
     };
@@ -1035,7 +1049,7 @@ pub async fn serve_proxy_m3u(
         .config
         .storage
         .m3u_path
-        .join(format!("{}.m3u8", resolved_uuid));
+        .join(format!("{resolved_uuid}.m3u8"));
 
     match fs::read_to_string(&m3u_file_path).await {
         Ok(content) => {
@@ -1069,8 +1083,7 @@ pub async fn serve_proxy_m3u(
                 "application/vnd.apple.mpegurl".parse().unwrap(),
             );
             let content = format!(
-                "#EXTM3U\n# Proxy {} M3U8 not generated yet - trigger regeneration\n",
-                id
+                "#EXTM3U\n# Proxy {id} M3U8 not generated yet - trigger regeneration\n"
             );
             (StatusCode::NOT_FOUND, headers, content)
         }
@@ -1122,7 +1135,7 @@ pub async fn serve_proxy_xmltv(
             return (
                 StatusCode::BAD_REQUEST,
                 headers,
-                format!("<!-- Invalid proxy ID format: {} -->", e),
+                format!("<!-- Invalid proxy ID format: {e} -->"),
             );
         }
     };
@@ -1159,7 +1172,7 @@ pub async fn serve_proxy_xmltv(
         .config
         .storage
         .m3u_path
-        .join(format!("{}.xmltv", resolved_uuid));
+        .join(format!("{resolved_uuid}.xmltv"));
 
     match fs::read_to_string(&xmltv_file_path).await {
         Ok(content) => {
@@ -1261,7 +1274,7 @@ pub async fn proxy_stream(
             error!("Invalid proxy ID format '{}': {}", proxy_id, e);
             return (
                 StatusCode::BAD_REQUEST,
-                format!("Invalid proxy ID format: {}", e),
+                format!("Invalid proxy ID format: {e}"),
             )
                 .into_response();
         }
@@ -1274,7 +1287,7 @@ pub async fn proxy_stream(
             error!("Invalid channel ID format '{}': {}", channel_id_str, e);
             return (
                 StatusCode::BAD_REQUEST,
-                format!("Invalid channel ID format: {}", e),
+                format!("Invalid channel ID format: {e}"),
             )
                 .into_response();
         }
@@ -2152,11 +2165,11 @@ async fn diagnose_channel_proxy_issue(
             .flatten();
             
             let timing_info = match last_generated {
-                Some(generated_at) => format!(" (proxy last generated: {})", generated_at),
+                Some(generated_at) => format!(" (proxy last generated: {generated_at})"),
                 None => " (proxy never generated)".to_string(),
             };
             
-            return format!("channel does not exist - M3U may be stale{}", timing_info);
+            return format!("channel does not exist - M3U may be stale{timing_info}");
         }
         Err(_) => {
             return "database error checking channel".to_string();
@@ -2200,14 +2213,12 @@ async fn diagnose_channel_proxy_issue(
     if !source_linked {
         let source_info = source_name.unwrap_or_else(|| "unknown source".to_string());
         return format!(
-            "channel '{}' from source '{}' is not linked to this proxy", 
-            channel_name, source_info
+            "channel '{channel_name}' from source '{source_info}' is not linked to this proxy"
         );
     }
 
     format!(
-        "unknown reason for channel '{}' (this should not happen)", 
-        channel_name
+        "unknown reason for channel '{channel_name}' (this should not happen)"
     )
 }
 
@@ -2246,8 +2257,8 @@ mod tests {
         let response = StreamProxyResponse::from_proxy_with_base_url(proxy, base_url);
         let expected_proxy_id_b64 = uuid_to_base64(&proxy_id);
 
-        assert_eq!(response.m3u8_url, format!("https://example.com:8080/proxy/{}/m3u8", expected_proxy_id_b64));
-        assert_eq!(response.xmltv_url, format!("https://example.com:8080/proxy/{}/xmltv", expected_proxy_id_b64));
+        assert_eq!(response.m3u8_url, format!("https://example.com:8080/proxy/{expected_proxy_id_b64}/m3u8"));
+        assert_eq!(response.xmltv_url, format!("https://example.com:8080/proxy/{expected_proxy_id_b64}/xmltv"));
         assert_eq!(response.name, "Test Proxy");
         assert_eq!(response.id, proxy_id);
     }
@@ -2282,8 +2293,8 @@ mod tests {
         let expected_proxy_id_b64 = uuid_to_base64(&proxy_id);
 
         // Should properly handle trailing slash
-        assert_eq!(response.m3u8_url, format!("https://example.com:8080/proxy/{}/m3u8", expected_proxy_id_b64));
-        assert_eq!(response.xmltv_url, format!("https://example.com:8080/proxy/{}/xmltv", expected_proxy_id_b64));
+        assert_eq!(response.m3u8_url, format!("https://example.com:8080/proxy/{expected_proxy_id_b64}/m3u8"));
+        assert_eq!(response.xmltv_url, format!("https://example.com:8080/proxy/{expected_proxy_id_b64}/xmltv"));
     }
 }
 

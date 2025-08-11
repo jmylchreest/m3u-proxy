@@ -56,7 +56,7 @@ pub fn validate_path_within_sandbox(resolved_path: &Path, sandbox_base: &Path) -
             .canonicalize()
             .map_err(|e| SandboxedFileError::PathValidation {
                 path: sandbox_base.to_path_buf(),
-                reason: format!("Failed to resolve sandbox base: {}", e),
+                reason: format!("Failed to resolve sandbox base: {e}"),
             })?;
 
     // Resolve the target path (may or may not exist)
@@ -65,7 +65,7 @@ pub fn validate_path_within_sandbox(resolved_path: &Path, sandbox_base: &Path) -
             .canonicalize()
             .map_err(|e| SandboxedFileError::PathValidation {
                 path: resolved_path.to_path_buf(),
-                reason: format!("Failed to resolve path: {}", e),
+                reason: format!("Failed to resolve path: {e}"),
             })?
     } else {
         // Path doesn't exist - resolve parent and append filename
@@ -81,7 +81,7 @@ pub fn validate_path_within_sandbox(resolved_path: &Path, sandbox_base: &Path) -
                 .canonicalize()
                 .map_err(|e| SandboxedFileError::PathValidation {
                     path: parent.to_path_buf(),
-                    reason: format!("Failed to resolve parent: {}", e),
+                    reason: format!("Failed to resolve parent: {e}"),
                 })?;
 
         let filename =

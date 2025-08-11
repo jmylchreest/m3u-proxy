@@ -253,7 +253,7 @@ pub async fn list_stream_sources(
         }
         Err(e) => {
             tracing::error!("Failed to list stream sources: {}", e);
-            crate::web::responses::internal_error(&format!("Failed to list stream sources: {}", e))
+            crate::web::responses::internal_error(&format!("Failed to list stream sources: {e}"))
                 .into_response()
         }
     }
@@ -281,7 +281,7 @@ pub async fn get_stream_source(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::GET,
-        &format!("/api/v1/sources/stream/{}", id).parse().unwrap(),
+        &format!("/api/v1/sources/stream/{id}").parse().unwrap(),
         &context,
     );
 
@@ -343,7 +343,7 @@ pub async fn create_stream_source(
         }
         Err(e) => {
             tracing::error!("Failed to create stream source: {}", e);
-            crate::web::responses::internal_error(&format!("Failed to create stream source: {}", e))
+            crate::web::responses::internal_error(&format!("Failed to create stream source: {e}"))
                 .into_response()
         }
     }
@@ -373,7 +373,7 @@ pub async fn update_stream_source(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::PUT,
-        &format!("/api/v1/sources/stream/{}", id).parse().unwrap(),
+        &format!("/api/v1/sources/stream/{id}").parse().unwrap(),
         &context,
     );
 
@@ -403,14 +403,14 @@ pub async fn update_stream_source(
                 }
                 Err(e) => {
                     tracing::error!("Failed to get updated stream source details {}: {}", uuid, e);
-                    crate::web::responses::internal_error(&format!("Failed to get updated source details: {}", e))
+                    crate::web::responses::internal_error(&format!("Failed to get updated source details: {e}"))
                         .into_response()
                 }
             }
         }
         Err(e) => {
             tracing::error!("Failed to update stream source {}: {}", uuid, e);
-            crate::web::responses::internal_error(&format!("Failed to update stream source: {}", e))
+            crate::web::responses::internal_error(&format!("Failed to update stream source: {e}"))
                 .into_response()
         }
     }
@@ -438,7 +438,7 @@ pub async fn delete_stream_source(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::DELETE,
-        &format!("/api/v1/sources/stream/{}", id).parse().unwrap(),
+        &format!("/api/v1/sources/stream/{id}").parse().unwrap(),
         &context,
     );
 
@@ -454,7 +454,7 @@ pub async fn delete_stream_source(
         .into_response(),
         Err(e) => {
             tracing::error!("Failed to delete stream source {}: {}", uuid, e);
-            crate::web::responses::internal_error(&format!("Failed to delete stream source: {}", e))
+            crate::web::responses::internal_error(&format!("Failed to delete stream source: {e}"))
                 .into_response()
         }
     }
@@ -537,7 +537,7 @@ pub async fn get_stream_source_capabilities(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::GET,
-        &format!("/api/v1/sources/capabilities/{}", source_type)
+        &format!("/api/v1/sources/capabilities/{source_type}")
             .parse()
             .unwrap(),
         &context,
@@ -578,7 +578,7 @@ pub async fn refresh_stream_source(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::POST,
-        &format!("/api/v1/sources/stream/{}/refresh", id).parse().unwrap(),
+        &format!("/api/v1/sources/stream/{id}/refresh").parse().unwrap(),
         &context,
     );
 
@@ -630,19 +630,14 @@ pub async fn refresh_stream_source(
                 Err(e) => {
                     // Fail progress operation if it was created
                     if let Some((manager, _)) = progress_manager {
-                        manager.fail(&format!("Stream source refresh failed: {}", e)).await;
+                        manager.fail(&format!("Stream source refresh failed: {e}")).await;
                     }
                     
                     tracing::error!("Failed to refresh stream source {}: {}", source.id, e);
                     
                     // Check if it's an operation in progress error
-                    if let Some(app_error) = e.downcast_ref::<crate::errors::AppError>() {
-                        match app_error {
-                            crate::errors::AppError::OperationInProgress { .. } => {
-                                return crate::web::responses::conflict("Operation already in progress").into_response();
-                            }
-                            _ => {}
-                        }
+                    if let Some(crate::errors::AppError::OperationInProgress { .. }) = e.downcast_ref::<crate::errors::AppError>() {
+                        return crate::web::responses::conflict("Operation already in progress").into_response();
                     }
                     
                     crate::web::responses::handle_error(crate::errors::AppError::Internal { 

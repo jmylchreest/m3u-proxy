@@ -89,7 +89,7 @@ impl NumberingStage {
         }
         
         let stage_duration = stage_start.elapsed();
-        self.report_progress(95.0, &format!("Finalizing: {} channels numbered", total_numbers_assigned)).await;
+        self.report_progress(95.0, &format!("Finalizing: {total_numbers_assigned} channels numbered")).await;
         info!(
             "Numbering stage completed: duration={} channels_processed={} numbers_assigned={} channo_conflicts_resolved={}",
             format_duration_precise(stage_duration), total_channels_processed, total_numbers_assigned, total_channo_conflicts_resolved
@@ -105,7 +105,7 @@ impl NumberingStage {
         let mut channels: Vec<Channel> = content
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str(line))
+            .map(serde_json::from_str)
             .collect::<Result<Vec<_>, _>>()?;
         
         let channel_count = channels.len();
@@ -122,7 +122,7 @@ impl NumberingStage {
         
         let output_content = channels
             .iter()
-            .map(|channel| serde_json::to_string(channel))
+            .map(serde_json::to_string)
             .collect::<Result<Vec<_>, _>>()?
             .join("\n");
         
@@ -195,7 +195,7 @@ impl NumberingStage {
                    total_channels, format_duration_precise(algorithm_start.elapsed()));
             
             // Broadcast progress update via SSE
-            let progress_message = format!("Analyzing {} channels for numbering", total_channels);
+            let progress_message = format!("Analyzing {total_channels} channels for numbering");
             self.report_progress(10.0, &progress_message).await;
             
             // Start interval-driven progress updates
@@ -266,7 +266,7 @@ impl NumberingStage {
                    total_channels, format_duration_precise(algorithm_start.elapsed()));
             
             // Broadcast progress update via SSE
-            let progress_message = format!("First pass complete: {} channels analyzed", total_channels);
+            let progress_message = format!("First pass complete: {total_channels} channels analyzed");
             self.report_progress(33.0, &progress_message).await;
         }
         
@@ -359,7 +359,7 @@ impl NumberingStage {
                    total_channels, format_duration_precise(total_algorithm_duration));
             
             // Broadcast progress update via SSE
-            let progress_message = format!("Assignment complete: {} channels processed", total_channels);
+            let progress_message = format!("Assignment complete: {total_channels} channels processed");
             self.report_progress(100.0, &progress_message).await;
         }
         
@@ -422,7 +422,7 @@ impl PipelineStage for NumberingStage {
     async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
         self.report_progress(20.0, "Initializing channel numbering").await;
         let result = self.process(input).await
-            .map_err(|e| PipelineError::stage_error("numbering", format!("Numbering failed: {}", e)))?;
+            .map_err(|e| PipelineError::stage_error("numbering", format!("Numbering failed: {e}")))?;
         self.report_progress(100.0, "Channel numbering completed").await;
         Ok(result)
     }

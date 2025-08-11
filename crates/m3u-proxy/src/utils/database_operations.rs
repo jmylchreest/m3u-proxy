@@ -20,16 +20,16 @@ impl DatabaseOperations {
         F: Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<R>> + Send + 'static>>,
         R: Send,
     {
-        let mut attempts = 0;
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let mut last_error = None;
 
-        while attempts < max_attempts {
-            attempts += 1;
+        while attempts.load(std::sync::atomic::Ordering::SeqCst) < max_attempts {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             
             match operation().await {
                 Ok(result) => {
-                    if attempts > 1 {
-                        info!("Database operation '{}' succeeded on attempt {}", operation_name, attempts);
+                    if attempts.load(std::sync::atomic::Ordering::SeqCst) > 1 {
+                        info!("Database operation '{}' succeeded on attempt {}", operation_name, attempts.load(std::sync::atomic::Ordering::SeqCst));
                     }
                     return Ok(result);
                 }
@@ -37,27 +37,26 @@ impl DatabaseOperations {
                     let error_msg = e.to_string().to_lowercase();
                     
                     // Check if this is a retryable database lock error
-                    if error_msg.contains("database is locked") || 
+                    if (error_msg.contains("database is locked") || 
                        error_msg.contains("busy") || 
-                       error_msg.contains("deadlock") {
+                       error_msg.contains("deadlock"))
                         
-                        if attempts < max_attempts {
+                        && attempts.load(std::sync::atomic::Ordering::SeqCst) < max_attempts {
                             // Calculate exponential backoff with jitter
                             let base_delay = Duration::from_millis(100);
-                            let exponential_delay = base_delay * 2_u32.pow(attempts - 1);
+                            let exponential_delay = base_delay * 2_u32.pow(attempts.load(std::sync::atomic::Ordering::SeqCst).saturating_sub(1));
                             let jitter = Duration::from_millis(generate_jitter_ms(50));
                             let total_delay = exponential_delay + jitter;
                             
                             debug!(
                                 "Database operation '{}' failed on attempt {} with lock error: {}. Retrying in {:?}",
-                                operation_name, attempts, e, total_delay
+                                operation_name, attempts.load(std::sync::atomic::Ordering::SeqCst), e, total_delay
                             );
                             
                             sleep(total_delay).await;
                             last_error = Some(e);
                             continue;
                         }
-                    }
                     
                     // Non-retryable error or max attempts reached
                     return Err(e);
@@ -67,7 +66,7 @@ impl DatabaseOperations {
 
         // Max attempts reached with retryable errors
         Err(last_error.unwrap_or_else(|| 
-            AppError::internal(format!("Database operation '{}' failed after {} attempts", operation_name, max_attempts))
+            AppError::internal(format!("Database operation '{operation_name}' failed after {max_attempts} attempts"))
         ))
     }
 
@@ -89,11 +88,11 @@ impl DatabaseOperations {
             
             debug!("Processing EPG batch {}/{} ({} items)", 
                    chunk_index + 1, 
-                   (total_items + batch_size - 1) / batch_size,
+                   total_items.div_ceil(batch_size),
                    chunk.len());
 
             // Direct batch insert with retry logic
-            let mut attempts = 0;
+            let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
             let max_attempts = 3;
             
             loop {
@@ -108,10 +107,9 @@ impl DatabaseOperations {
                             let save_progress = (total_processed as f64 / total_items as f64) * 80.0;
                             let total_progress = 20.0 + save_progress;
                             let batch_num = chunk_index + 1;
-                            let total_batches = (total_items + batch_size - 1) / batch_size;
+                            let total_batches = total_items.div_ceil(batch_size);
                             
-                            let progress_message = format!("Inserting batch {}/{} ({} of {} programs)", 
-                                    batch_num, total_batches, total_processed, total_items);
+                            let progress_message = format!("Inserting batch {batch_num}/{total_batches} ({total_processed} of {total_items} programs)");
                             
                             updater.update_progress(total_progress, &progress_message).await;
                         }
@@ -119,17 +117,17 @@ impl DatabaseOperations {
                         break;
                     }
                     Err(e) => {
-                        attempts += 1;
-                        if attempts < max_attempts && e.to_string().to_lowercase().contains("database is locked") {
-                            let delay = Duration::from_millis(100 * 2_u64.pow(attempts));
+                        attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if attempts.load(std::sync::atomic::Ordering::SeqCst) < max_attempts && e.to_string().to_lowercase().contains("database is locked") {
+                            let delay = Duration::from_millis(100 * 2_u64.pow(attempts.load(std::sync::atomic::Ordering::SeqCst)));
                             debug!("EPG batch {} failed (attempt {}), retrying in {:?}: {}", 
-                                  chunk_index + 1, attempts, delay, e);
+                                  chunk_index + 1, attempts.load(std::sync::atomic::Ordering::SeqCst), delay, e);
                             sleep(delay).await;
                             continue;
                         } else {
                             return Err(AppError::internal(format!(
                                 "Failed to process EPG batch {} after {} attempts: {}", 
-                                chunk_index + 1, attempts, e
+                                chunk_index + 1, attempts.load(std::sync::atomic::Ordering::SeqCst), e
                             )));
                         }
                     }
@@ -159,7 +157,7 @@ impl DatabaseOperations {
             sqlx::query(pragma)
                 .execute(pool)
                 .await
-                .map_err(|e| AppError::internal(format!("Failed to set pragma '{}': {}", pragma, e)))?;
+                .map_err(|e| AppError::internal(format!("Failed to set pragma '{pragma}': {e}")))?;
             
             debug!("Applied optimization: {}", description);
         }
@@ -174,7 +172,7 @@ impl DatabaseOperations {
         sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
             .execute(pool)
             .await
-            .map_err(|e| AppError::internal(format!("Failed to checkpoint WAL: {}", e)))?;
+            .map_err(|e| AppError::internal(format!("Failed to checkpoint WAL: {e}")))?;
         
         debug!("WAL checkpoint completed");
         Ok(())
@@ -194,7 +192,7 @@ impl DatabaseOperations {
 
         // Use a transaction for the batch
         let mut tx = pool.begin().await
-            .map_err(|e| AppError::internal(format!("Failed to begin transaction: {}", e)))?;
+            .map_err(|e| AppError::internal(format!("Failed to begin transaction: {e}")))?;
 
         // Use the full batch size - config already accounts for SQLite parameter limits
         // EPG programs have 12 fields, so 1800 * 12 = 21,600 parameters (well under 32,766 limit)
@@ -233,14 +231,14 @@ impl DatabaseOperations {
             }
             
             let result = db_query.execute(&mut *tx).await
-                .map_err(|e| AppError::internal(format!("Failed to insert EPG programs batch: {}", e)))?;
+                .map_err(|e| AppError::internal(format!("Failed to insert EPG programs batch: {e}")))?;
             
             total_inserted += result.rows_affected() as usize;
             trace!("Inserted {} programs in multi-value query", result.rows_affected());
         }
 
         tx.commit().await
-            .map_err(|e| AppError::internal(format!("Failed to commit batch transaction: {}", e)))?;
+            .map_err(|e| AppError::internal(format!("Failed to commit batch transaction: {e}")))?;
 
         debug!("Successfully inserted {} EPG programs in optimized batch", total_inserted);
         Ok(total_inserted)
@@ -254,7 +252,7 @@ impl DatabaseOperations {
         debug!("Deleting existing EPG programs for source: {}", source_id);
 
         let source_id_string = source_id.to_string();
-        let mut attempts = 0;
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let max_attempts = 3;
         
         loop {
@@ -275,17 +273,17 @@ impl DatabaseOperations {
                     return Ok(result);
                 }
                 Err(e) => {
-                    attempts += 1;
-                    if attempts < max_attempts && e.to_string().to_lowercase().contains("database is locked") {
-                        let delay = Duration::from_millis(100 * 2_u64.pow(attempts));
+                    attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if attempts.load(std::sync::atomic::Ordering::SeqCst) < max_attempts && e.to_string().to_lowercase().contains("database is locked") {
+                        let delay = Duration::from_millis(100 * 2_u64.pow(attempts.load(std::sync::atomic::Ordering::SeqCst)));
                         debug!("Delete EPG programs failed (attempt {}), retrying in {:?}: {}", 
-                              attempts, delay, e);
+                              attempts.load(std::sync::atomic::Ordering::SeqCst), delay, e);
                         sleep(delay).await;
                         continue;
                     } else {
                         return Err(AppError::internal(format!(
-                            "Failed to delete EPG programs after {} attempts: {}", 
-                            attempts, e
+                            "Failed to delete EPG programs after {:?} attempts: {e}",
+                            attempts.load(std::sync::atomic::Ordering::SeqCst)
                         )));
                     }
                 }
@@ -300,13 +298,14 @@ mod tests {
     
     #[tokio::test]
     async fn test_retry_logic() {
-        let mut attempts = 0;
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         
         let result = DatabaseOperations::execute_with_retry(
             || {
-                attempts += 1;
+                let attempts_clone = attempts.clone();
+                attempts_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Box::pin(async move {
-                    if attempts < 3 {
+                    if attempts_clone.load(std::sync::atomic::Ordering::SeqCst) < 3 {
                         Err(AppError::internal("database is locked".to_string()))
                     } else {
                         Ok("success".to_string())
@@ -319,6 +318,6 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "success");
-        assert_eq!(attempts, 3);
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 }

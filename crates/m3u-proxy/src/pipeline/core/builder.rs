@@ -253,8 +253,7 @@ mod tests {
 
     #[test]
     fn test_pipeline_config_customization() {
-        let config = PipelineConfig::default()
-            .into();
+        let _config = PipelineConfig::default();
         
         let config = PipelineConfig {
             enable_data_mapping: true,

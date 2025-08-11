@@ -1,0 +1,867 @@
+"use client"
+
+import { useState, useEffect, useCallback, useRef } from "react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Slider } from "@/components/ui/slider"
+import { Label } from "@/components/ui/label"
+import { 
+  RefreshCw, 
+  Heart, 
+  Database, 
+  Server, 
+  Clock, 
+  CheckCircle,
+  AlertCircle,
+  XCircle,
+  Activity,
+  Cpu,
+  MemoryStick,
+  HardDrive,
+  Gauge,
+  Settings,
+  Calendar,
+  FolderOpen,
+  Zap,
+  Copy,
+  Check
+} from "lucide-react"
+import { 
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid
+} from 'recharts'
+import { 
+  ChartContainer, 
+  ChartTooltip, 
+  ChartTooltipContent, 
+  ChartLegend, 
+  ChartLegendContent,
+  type ChartConfig
+} from '@/components/ui/chart'
+import { ApiResponse, HealthData, KubernetesProbeResponse } from "@/types/api"
+import { getStatusIndicatorClasses, getStatusType } from "@/lib/status-colors"
+import { getBackendUrl } from '@/lib/config'
+import { useHealthData } from "@/hooks/use-health-data"
+
+interface ChartDataPoint {
+  timestamp: string;
+  time: string; // Formatted time for display
+  cpuLoad: number;
+  cpuLoad1minPct: number;
+  cpuLoad5minPct: number;
+  cpuLoad15minPct: number;
+  cpuLoadPercentage: number;
+  totalMemoryUsed: number;
+  freeMemory: number;
+  availableMemory: number;
+  swapUsed: number;
+  processMemory: number;
+  childProcessMemory: number;
+}
+
+interface MemoryInfo {
+  totalMemoryMb: number;
+  usedMemoryMb: number;
+  freeMemoryMb: number;
+  availableMemoryMb: number;
+  swapUsedMb: number;
+  swapTotalMb: number;
+  processMemoryMb: number;
+  childProcessMemoryMb: number;
+  totalProcessMemoryMb: number;
+  processPercentage: number;
+}
+
+function formatUptime(uptimeSeconds: number): string {
+  const days = Math.floor(uptimeSeconds / 86400)
+  const hours = Math.floor((uptimeSeconds % 86400) / 3600)
+  const minutes = Math.floor((uptimeSeconds % 3600) / 60)
+  const seconds = uptimeSeconds % 60
+  
+  if (days > 0) {
+    return `${days}d ${hours}h ${minutes}m ${seconds}s`
+  } else if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds}s`
+  } else {
+    return `${seconds}s`
+  }
+}
+
+function formatMemorySize(mb: number): string {
+  if (mb >= 1024) {
+    return `${(mb / 1024).toFixed(1)} GB`
+  }
+  return `${mb.toFixed(0)} MB`
+}
+
+function formatPercentage(value: number): string {
+  return `${value.toFixed(1)}%`
+}
+
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString('en-US', { 
+    hour12: false, 
+    hour: '2-digit', 
+    minute: '2-digit', 
+    second: '2-digit' 
+  })
+}
+
+function getStatusIcon(status: string) {
+  const statusType = getStatusType(status)
+  switch (statusType) {
+    case 'success':
+      return <CheckCircle className="h-4 w-4 text-green-500" />
+    case 'warning':
+      return <AlertCircle className="h-4 w-4 text-amber-500" />
+    case 'error':
+      return <XCircle className="h-4 w-4 text-destructive" />
+    default:
+      return <AlertCircle className="h-4 w-4 text-muted-foreground" />
+  }
+}
+
+export function Debug() {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [liveProbe, setLiveProbe] = useState<KubernetesProbeResponse | null>(null)
+  const [readyProbe, setReadyProbe] = useState<KubernetesProbeResponse | null>(null)
+  const [copied, setCopied] = useState(false)
+  
+  // Custom step values: 1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
+  const stepValues = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+  
+  // Chart and refresh interval state
+  const [refreshInterval, setRefreshInterval] = useState(stepValues[3]) // Default 15 seconds (index 3)
+  const [chartData, setChartData] = useState<ChartDataPoint[]>([])
+  const [isAutoRefresh, setIsAutoRefresh] = useState(true) // Start enabled
+
+  // Use the health data hook
+  const { healthData } = useHealthData(isAutoRefresh ? refreshInterval * 1000 : 0)
+  const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  
+  // Keep max 60 data points (adjust based on needs)
+  const MAX_DATA_POINTS = 60
+
+  const fetchProbesAndUpdateChart = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    
+    try {
+      const backendUrl = getBackendUrl()
+
+      // Add data point to chart if we have health data
+      if (healthData) {
+        const now = new Date()
+        const dataPoint: ChartDataPoint = {
+          timestamp: now.toISOString(),
+          time: formatTime(now),
+          cpuLoad: healthData.system_load * 100, // Keep for backward compatibility
+          cpuLoad1minPct: (healthData.cpu_info.load_1min / healthData.cpu_info.cores) * 100,
+          cpuLoad5minPct: (healthData.cpu_info.load_5min / healthData.cpu_info.cores) * 100,
+          cpuLoad15minPct: (healthData.cpu_info.load_15min / healthData.cpu_info.cores) * 100,
+          cpuLoadPercentage: healthData.cpu_info.load_percentage_1min,
+          totalMemoryUsed: healthData.memory.used_memory_mb,
+          freeMemory: healthData.memory.free_memory_mb,
+          availableMemory: healthData.memory.available_memory_mb,
+          swapUsed: healthData.memory.swap_used_mb,
+          processMemory: healthData.memory.process_memory.main_process_mb,
+          childProcessMemory: healthData.memory.process_memory.child_processes_mb,
+        }
+        
+        setChartData(prev => {
+          const newData = [...prev, dataPoint]
+          // Keep only the last MAX_DATA_POINTS
+          return newData.slice(-MAX_DATA_POINTS)
+        })
+      }
+
+      // Fetch Kubernetes probes
+      try {
+        const liveResponse = await fetch(`${backendUrl}/live`)
+        if (liveResponse.ok) {
+          const liveData: KubernetesProbeResponse = await liveResponse.json()
+          setLiveProbe(liveData)
+        }
+      } catch (err) {
+        console.warn('Live probe endpoint not available')
+      }
+
+      try {
+        const readyResponse = await fetch(`${backendUrl}/ready`)
+        if (readyResponse.ok) {
+          const readyData: KubernetesProbeResponse = await readyResponse.json()
+          setReadyProbe(readyData)
+        }
+      } catch (err) {
+        console.warn('Ready probe endpoint not available')
+      }
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error occurred')
+    } finally {
+      setLoading(false)
+    }
+  }, [healthData, MAX_DATA_POINTS])
+
+  // Auto-refresh management
+  const startAutoRefresh = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+    }
+    
+    console.log('Starting auto-refresh with interval:', refreshInterval, 'seconds')
+    intervalRef.current = setInterval(() => {
+      fetchProbesAndUpdateChart()
+    }, refreshInterval * 1000)
+    
+    setIsAutoRefresh(true)
+  }, [fetchProbesAndUpdateChart, refreshInterval])
+  
+  const stopAutoRefresh = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    setIsAutoRefresh(false)
+  }, [])
+  
+  const toggleAutoRefresh = useCallback(() => {
+    if (isAutoRefresh) {
+      stopAutoRefresh()
+    } else {
+      startAutoRefresh()
+    }
+  }, [isAutoRefresh, startAutoRefresh, stopAutoRefresh])
+  
+  const handleRefreshIntervalChange = useCallback((value: number[]) => {
+    const sliderIndex = value[0]
+    const newInterval = stepValues[sliderIndex]
+    console.log('Slider changed:', { sliderIndex, newInterval, stepValues })
+    setRefreshInterval(newInterval)
+    // The useEffect will handle restarting auto-refresh automatically
+  }, [stepValues])
+
+  // Initial load and cleanup
+  useEffect(() => {
+    fetchProbesAndUpdateChart() // Add initial data point
+    startAutoRefresh() // Start auto-refresh immediately
+    
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+      }
+    }
+  }, [fetchProbesAndUpdateChart, startAutoRefresh])
+  
+  // Update auto-refresh when refresh interval changes
+  useEffect(() => {
+    if (isAutoRefresh) {
+      console.log('Restarting auto-refresh due to interval change:', refreshInterval)
+      stopAutoRefresh()
+      startAutoRefresh()
+    }
+  }, [refreshInterval, isAutoRefresh, startAutoRefresh, stopAutoRefresh])
+
+  return (
+    <div className="space-y-6">
+      {/* Header with refresh controls */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <p className="text-muted-foreground">
+            Real-time service health monitoring with CPU and memory graphs
+          </p>
+        </div>
+        
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          {/* Refresh Interval Slider */}
+          <Card className="p-4 min-w-[280px]">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="refresh-interval" className="text-sm font-medium">
+                  Update Interval: {refreshInterval}s
+                </Label>
+                <Button
+                  onClick={toggleAutoRefresh}
+                  variant={isAutoRefresh ? "default" : "outline"}
+                  size="sm"
+                >
+                  {isAutoRefresh ? "Stop" : "Start"}
+                </Button>
+              </div>
+              <Slider
+                id="refresh-interval"
+                min={0}
+                max={stepValues.length - 1}
+                step={1}
+                value={[stepValues.indexOf(refreshInterval)]}
+                onValueChange={handleRefreshIntervalChange}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>1s</span>
+                <span>60s</span>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      {error && (
+        <Card className="border-destructive">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-2 text-destructive">
+              <XCircle className="h-4 w-4" />
+              <span className="font-medium">Error loading health data:</span>
+              <span>{error}</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* System Overview */}
+      {healthData && (
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Service Status</CardTitle>
+              <Heart className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2">
+                {getStatusIcon(healthData.status)}
+                <div className="text-2xl font-bold">{healthData.status}</div>
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Version</CardTitle>
+              <Server className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">v{healthData.version}</div>
+            </CardContent>
+          </Card>
+          
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Uptime</CardTitle>
+              <Clock className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {formatUptime(healthData.uptime_seconds)}
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">CPU Load</CardTitle>
+              <Activity className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {formatPercentage(healthData.cpu_info.load_percentage_1min)}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {healthData.cpu_info.load_1min.toFixed(2)} / {healthData.cpu_info.cores} cores
+              </p>
+            </CardContent>
+          </Card>
+          
+          {/* Kubernetes Probes */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">K8s Probes</CardTitle>
+              <CheckCircle className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1 text-xs">
+                  <div className={`h-2 w-2 rounded-full ${liveProbe?.success ? 'bg-green-500' : 'bg-red-500'}`} />
+                  <span>Live: {liveProbe?.success ? 'OK' : 'Fail'}</span>
+                </div>
+                <div className="flex items-center gap-1 text-xs">
+                  <div className={`h-2 w-2 rounded-full ${readyProbe?.success ? 'bg-green-500' : 'bg-red-500'}`} />
+                  <span>Ready: {readyProbe?.success ? 'OK' : 'Fail'}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* M3U-Proxy Memory Usage */}
+      {healthData && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Zap className="h-5 w-5" />
+              M3U-Proxy Memory Usage
+            </CardTitle>
+            <CardDescription>
+              Process-specific memory consumption and child process tracking
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+              <div className="space-y-2">
+                <div className="text-2xl font-bold text-primary">
+                  {formatMemorySize(healthData.memory.process_memory.total_process_tree_mb)}
+                </div>
+                <p className="text-xs font-medium text-muted-foreground">Total Process Tree</p>
+                <p className="text-xs text-muted-foreground">
+                  {formatPercentage(healthData.memory.process_memory.percentage_of_system)} of system memory
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <div className="text-2xl font-bold">
+                  {formatMemorySize(healthData.memory.process_memory.main_process_mb)}
+                </div>
+                <p className="text-xs font-medium text-muted-foreground">Main Process</p>
+                <p className="text-xs text-muted-foreground">Primary application</p>
+              </div>
+              
+              <div className="space-y-2">
+                <div className="text-2xl font-bold">
+                  {formatMemorySize(healthData.memory.process_memory.child_processes_mb)}
+                </div>
+                <p className="text-xs font-medium text-muted-foreground">All Child Processes</p>
+                <p className="text-xs text-muted-foreground">
+                  {healthData.memory.process_memory.child_process_count} processes (includes FFmpeg, cleanup, etc.)
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <div className="text-2xl font-bold">
+                  {healthData.memory.process_memory.child_process_count}
+                </div>
+                <p className="text-xs font-medium text-muted-foreground">Active Children</p>
+                <p className="text-xs text-muted-foreground">Running processes</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Performance Charts - Side by Side */}
+      <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+        {/* CPU Usage Chart */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Cpu className="h-5 w-5" />
+            CPU Load Average
+          </CardTitle>
+          <CardDescription>
+            System load averages over time ({chartData.length} data points) {healthData && `• ${healthData.cpu_info.cores} cores`}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {chartData.length > 0 ? (
+            <ChartContainer
+              config={{
+                cpuLoad1minPct: {
+                  label: "1min Load",
+                  color: "var(--chart-1)",
+                },
+                cpuLoad5minPct: {
+                  label: "5min Load", 
+                  color: "var(--chart-2)",
+                },
+                cpuLoad15minPct: {
+                  label: "15min Load",
+                  color: "var(--chart-3)",
+                },
+              } satisfies ChartConfig}
+              className="h-[300px] w-full"
+            >
+              <AreaChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis 
+                  dataKey="time" 
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis 
+                  tickLine={false}
+                  axisLine={false}
+                  domain={[0, 'dataMax']}
+                  tickFormatter={(value) => `${value.toFixed(1)}%`}
+                />
+                <ChartTooltip 
+                  content={<ChartTooltipContent 
+                    labelFormatter={(label) => `Time: ${label}`}
+                    formatter={(value, name) => {
+                      const nameMap: Record<string, string> = {
+                        cpuLoad1minPct: '1min Load',
+                        cpuLoad5minPct: '5min Load',
+                        cpuLoad15minPct: '15min Load'
+                      }
+                      return [`${Number(value).toFixed(1)}% `, nameMap[name] || name]
+                    }}
+                  />}
+                />
+                <ChartLegend />
+                <Area
+                  type="monotone"
+                  dataKey="cpuLoad1minPct"
+                  stroke="var(--color-cpuLoad1minPct)"
+                  fill="var(--color-cpuLoad1minPct)"
+                  fillOpacity={0.6}
+                  strokeWidth={2}
+                />
+              </AreaChart>
+            </ChartContainer>
+          ) : (
+            <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+              <div className="text-center">
+                <Gauge className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                <p>Start monitoring to see CPU usage data</p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Memory Usage Chart */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MemoryStick className="h-5 w-5" />
+            Memory Usage
+          </CardTitle>
+          <CardDescription>
+            System memory breakdown over time {healthData && `(Total: ${formatMemorySize(healthData.memory.total_memory_mb)})`}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {chartData.length > 0 && healthData ? (
+            <ChartContainer
+              config={{
+                totalMemoryUsed: {
+                  label: "Used Memory",
+                  color: "var(--chart-1)",
+                },
+                freeMemory: {
+                  label: "Free Memory",
+                  color: "var(--chart-2)",
+                },
+                swapUsed: {
+                  label: "Swap Used",
+                  color: "var(--chart-3)",
+                },
+              } satisfies ChartConfig}
+              className="h-[300px] w-full"
+            >
+              <AreaChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis 
+                  dataKey="time" 
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis 
+                  tickLine={false}
+                  axisLine={false}
+                  domain={[0, healthData.memory.total_memory_mb]}
+                  tickFormatter={(value) => formatMemorySize(value)}
+                />
+                <ChartTooltip 
+                  content={<ChartTooltipContent 
+                    labelFormatter={(label) => `Time: ${label} • Total: ${formatMemorySize(healthData.memory.total_memory_mb)}`}
+                    formatter={(value, name) => {
+                      const nameMap: Record<string, string> = {
+                        totalMemoryUsed: 'Used Memory',
+                        freeMemory: 'Free Memory', 
+                        availableMemory: 'Available Memory',
+                        swapUsed: 'Swap Used'
+                      }
+                      return [`${formatMemorySize(Number(value))} `, nameMap[name] || name]
+                    }}
+                  />}
+                />
+                <ChartLegend />
+                <Area
+                  type="monotone"
+                  dataKey="totalMemoryUsed"
+                  stroke="var(--color-totalMemoryUsed)"
+                  fill="var(--color-totalMemoryUsed)"
+                  fillOpacity={0.6}
+                />
+              </AreaChart>
+            </ChartContainer>
+          ) : (
+            <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+              <div className="text-center">
+                <HardDrive className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                <p>Start monitoring to see memory usage data</p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      </div>
+
+
+
+      {/* System Components */}
+      {healthData && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {/* Database Component */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Database className="h-5 w-5" />
+                Database
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center gap-2">
+                {getStatusIcon(healthData.components.database.status)}
+                <Badge className={getStatusIndicatorClasses(healthData.components.database.status)}>
+                  {healthData.components.database.status}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Active Connections:</span>
+                  <span className="font-medium">{healthData.components.database.active_connections}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Pool Size:</span>
+                  <span className="font-medium">{healthData.components.database.connection_pool_size}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Scheduler Component */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Calendar className="h-5 w-5" />
+                Scheduler
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center gap-2">
+                {getStatusIcon(healthData.components.scheduler.status)}
+                <Badge className={getStatusIndicatorClasses(healthData.components.scheduler.status)}>
+                  {healthData.components.scheduler.status}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Stream Sources:</span>
+                  <span className="font-medium">{healthData.components.scheduler.sources_scheduled.stream_sources}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">EPG Sources:</span>
+                  <span className="font-medium">{healthData.components.scheduler.sources_scheduled.epg_sources}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Active Ingestions:</span>
+                  <span className="font-medium">{healthData.components.scheduler.active_ingestions}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Sandbox Manager Component */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FolderOpen className="h-5 w-5" />
+                Sandbox Manager
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center gap-2">
+                {getStatusIcon(healthData.components.sandbox_manager.status)}
+                <Badge className={getStatusIndicatorClasses(healthData.components.sandbox_manager.status)}>
+                  {healthData.components.sandbox_manager.status}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Cleanup Status:</span>
+                  <span className="font-medium capitalize">{healthData.components.sandbox_manager.cleanup_status}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Files Cleaned:</span>
+                  <span className="font-medium">{healthData.components.sandbox_manager.temp_files_cleaned}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Space Freed:</span>
+                  <span className="font-medium">{formatMemorySize(healthData.components.sandbox_manager.disk_space_freed_mb)}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Relay System Component */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Zap className="h-5 w-5" />
+                Relay System
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center gap-2">
+                {getStatusIcon(healthData.components.relay_system.status)}
+                <Badge className={getStatusIndicatorClasses(healthData.components.relay_system.status)}>
+                  {healthData.components.relay_system.status}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Total Processes:</span>
+                  <span className="font-medium">{healthData.components.relay_system.total_processes}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Healthy:</span>
+                  <span className="font-medium text-green-600">{healthData.components.relay_system.healthy_processes}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Unhealthy:</span>
+                  <span className="font-medium text-red-600">{healthData.components.relay_system.unhealthy_processes}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* FFmpeg Information - Separate Component */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Settings className="h-5 w-5" />
+                FFmpeg
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center gap-2">
+                {healthData.components.relay_system.ffmpeg_available ? 
+                  <CheckCircle className="h-4 w-4 text-green-500" /> : 
+                  <XCircle className="h-4 w-4 text-red-500" />
+                }
+                <Badge variant={healthData.components.relay_system.ffmpeg_available ? "default" : "destructive"}>
+                  {healthData.components.relay_system.ffmpeg_available ? "Available" : "Unavailable"}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">FFmpeg Version:</span>
+                  <span className="font-medium">{healthData.components.relay_system.ffmpeg_version || 'null'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">FFprobe Version:</span>
+                  <span className="font-medium">{healthData.components.relay_system.ffprobe_version || 'null'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">HW Accel:</span>
+                  <span className="font-medium">
+                    {healthData.components.relay_system.hwaccel_available ? 
+                      <CheckCircle className="h-3 w-3 text-green-500 inline" /> : 
+                      <XCircle className="h-3 w-3 text-red-500 inline" />
+                    }
+                  </span>
+                </div>
+                {healthData.components.relay_system.hwaccel_available && healthData.components.relay_system.hwaccel_capabilities && (
+                  <div className="pt-2 border-t">
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Accelerators:</p>
+                    <div className="flex gap-1 flex-wrap mb-2">
+                      {healthData.components.relay_system.hwaccel_capabilities.accelerators?.map((accel) => (
+                        <Badge key={accel} variant="outline" className="text-xs">{accel.toUpperCase()}</Badge>
+                      ))}
+                    </div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Available Codecs:</p>
+                    <div className="flex gap-1 flex-wrap mb-2">
+                      {healthData.components.relay_system.hwaccel_capabilities.codecs?.map((codec) => (
+                        <Badge key={codec} variant="outline" className="text-xs">{codec}</Badge>
+                      ))}
+                    </div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Support Matrix:</p>
+                    <div className="space-y-1">
+                      {healthData.components.relay_system.hwaccel_capabilities.support_matrix && Object.entries(healthData.components.relay_system.hwaccel_capabilities.support_matrix).map(([accel, support]) => (
+                        <div key={accel} className="text-xs">
+                          <span className="font-medium text-muted-foreground">{accel.toUpperCase()}:</span>
+                          <div className="flex gap-1 mt-1">
+                            {Object.entries(support).map(([codec, supported]) => (
+                              <Badge 
+                                key={codec} 
+                                variant={supported ? "default" : "outline"} 
+                                className={`text-xs ${supported ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100" : "text-muted-foreground"}`}
+                              >
+                                {codec.toUpperCase()}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+
+      {/* Raw JSON Data */}
+      {healthData && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Raw Response Data</CardTitle>
+            <CardDescription>
+              Complete JSON responses from health endpoints
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="relative">
+              <h4 className="font-medium mb-2">Health Data (/health)</h4>
+              <div className="relative group">
+                <pre className="bg-muted p-3 rounded text-xs overflow-auto">
+                  {JSON.stringify(healthData, null, 2)}
+                </pre>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 p-0"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(JSON.stringify(healthData, null, 2))
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 2000)
+                    } catch (err) {
+                      console.error('Failed to copy to clipboard:', err)
+                    }
+                  }}
+                  title="Copy to clipboard"
+                >
+                  {copied ? (
+                    <Check className="h-3 w-3 text-green-600" />
+                  ) : (
+                    <Copy className="h-3 w-3" />
+                  )}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}

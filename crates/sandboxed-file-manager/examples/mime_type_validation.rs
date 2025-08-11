@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for filename in ["test.png", "test.jpg", "test.exe"] {
         match manager.validate_file_type(filename, &validator_all).await {
             Ok(info) => println!("  {} -> {} ({})", filename, info.mime_type, info.extension),
-            Err(e) => println!("  {} -> Error: {}", filename, e),
+            Err(e) => println!("  {filename} -> Error: {e}"),
         }
     }
     println!();
@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "  {} -> ALLOWED: {} ({})",
                 filename, info.mime_type, info.extension
             ),
-            Err(e) => println!("  {} -> BLOCKED: {}", filename, e),
+            Err(e) => println!("  {filename} -> BLOCKED: {e}"),
         }
     }
     println!();
@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "  {} -> ALLOWED: {} ({})",
                 filename, info.mime_type, info.extension
             ),
-            Err(e) => println!("  {} -> BLOCKED: {}", filename, e),
+            Err(e) => println!("  {filename} -> BLOCKED: {e}"),
         }
     }
     println!();
@@ -174,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "  playlist.m3u -> DETECTED: {} ({})",
             info.mime_type, info.extension
         ),
-        Err(e) => println!("  playlist.m3u -> Error: {}", e),
+        Err(e) => println!("  playlist.m3u -> Error: {e}"),
     }
     println!();
 
@@ -207,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => {
                     // Remove the file if validation fails
                     let _ = self.manager.remove_file(path).await;
-                    Err(format!("File validation failed for {}: {}", path, e).into())
+                    Err(format!("File validation failed for {path}: {e}").into())
                 }
             }
         }

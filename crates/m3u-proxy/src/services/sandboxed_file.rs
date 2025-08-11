@@ -30,7 +30,7 @@ impl SandboxedFileManager for SandboxedManagerAdapter {
         content: &[u8],
         extension: &str,
     ) -> Result<()> {
-        let path = format!("{}/{}.{}", category, file_id, extension);
+        let path = format!("{category}/{file_id}.{extension}");
         self.inner.write(&path, content).await
             .map_err(|e| anyhow::anyhow!("Failed to write file: {}", e))
     }
@@ -42,7 +42,7 @@ impl SandboxedFileManager for SandboxedManagerAdapter {
         content: &[u8],
         extension: &str,
     ) -> Result<()> {
-        let path = format!("{}/{}_linked.{}", category, file_id, extension);
+        let path = format!("{category}/{file_id}_linked.{extension}");
         self.inner.write(&path, content).await
             .map_err(|e| anyhow::anyhow!("Failed to write linked file: {}", e))
     }
@@ -53,7 +53,7 @@ impl SandboxedFileManager for SandboxedManagerAdapter {
         file_id: &str,
         extension: &str,
     ) -> Result<Vec<u8>> {
-        let path = format!("{}/{}.{}", category, file_id, extension);
+        let path = format!("{category}/{file_id}.{extension}");
         self.inner.read(&path).await
             .map_err(|e| anyhow::anyhow!("Failed to read file: {}", e))
     }
@@ -64,7 +64,7 @@ impl SandboxedFileManager for SandboxedManagerAdapter {
         file_id: &str,
         extension: &str,
     ) -> Result<bool> {
-        let path = format!("{}/{}.{}", category, file_id, extension);
+        let path = format!("{category}/{file_id}.{extension}");
         self.inner.exists(&path).await
             .map_err(|e| anyhow::anyhow!("Failed to check file existence: {}", e))
     }
@@ -75,7 +75,7 @@ impl SandboxedFileManager for SandboxedManagerAdapter {
         file_id: &str,
         extension: &str,
     ) -> Result<Option<PathBuf>> {
-        let path = format!("{}/{}.{}", category, file_id, extension);
+        let path = format!("{category}/{file_id}.{extension}");
         if self.inner.exists(&path).await.map_err(|e| anyhow::anyhow!("Failed to check existence: {}", e))? {
             let full_path = self.inner.get_full_path(&path)
                 .map_err(|e| anyhow::anyhow!("Failed to get full path: {}", e))?;
@@ -91,7 +91,7 @@ impl SandboxedFileManager for SandboxedManagerAdapter {
         file_id: &str,
         extension: &str,
     ) -> Result<()> {
-        let path = format!("{}/{}.{}", category, file_id, extension);
+        let path = format!("{category}/{file_id}.{extension}");
         self.inner.remove_file(&path).await
             .map_err(|e| anyhow::anyhow!("Failed to delete file: {}", e))
     }

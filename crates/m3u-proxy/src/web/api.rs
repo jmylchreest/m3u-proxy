@@ -365,10 +365,7 @@ pub async fn list_filters(
                 .map(|filter_with_usage| {
                     // Parse expression to condition_tree for UI compatibility
                     let condition_tree = if !filter_with_usage.filter.expression.trim().is_empty() {
-                        match parser.parse(&filter_with_usage.filter.expression) {
-                            Ok(tree) => Some(tree),
-                            Err(_) => None,
-                        }
+                        parser.parse(&filter_with_usage.filter.expression).ok()
                     } else {
                         None
                     };
@@ -797,10 +794,7 @@ pub async fn get_filter(
                     Err(_) => vec![],
                 };
                 let parser = crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
-                match parser.parse(&filter.expression) {
-                    Ok(tree) => Some(tree),
-                    Err(_) => None,
-                }
+                parser.parse(&filter.expression).ok()
             } else {
                 None
             };
@@ -1138,11 +1132,7 @@ pub async fn list_data_mapping_rules(
                                 crate::models::ExtendedExpression::ConditionalActionGroups(
                                     groups,
                                 ) => {
-                                    if let Some(first_group) = groups.first() {
-                                        Some(generate_expression_tree_json(&first_group.conditions))
-                                    } else {
-                                        None
-                                    }
+                                    groups.first().map(|first_group| generate_expression_tree_json(&first_group.conditions))
                                 }
                             }
                         } else {
@@ -1762,7 +1752,7 @@ pub async fn apply_stream_source_data_mapping(
 
     let transformed_channels: Vec<serde_json::Value> = modified_channels
         .iter()
-        .map(|mc| mapped_channel_to_frontend_format(mc))
+        .map(mapped_channel_to_frontend_format)
         .collect();
 
     // Get rule metadata for frontend
@@ -1859,11 +1849,7 @@ pub async fn apply_stream_source_data_mapping(
                                 Some(generate_expression_tree_json(&condition))
                             }
                             crate::models::ExtendedExpression::ConditionalActionGroups(groups) => {
-                                if let Some(first_group) = groups.first() {
-                                    Some(generate_expression_tree_json(&first_group.conditions))
-                                } else {
-                                    None
-                                }
+                                groups.first().map(|first_group| generate_expression_tree_json(&first_group.conditions))
                             }
                         }
                     } else {
@@ -2185,7 +2171,7 @@ async fn apply_data_mapping_rules_impl(
 
             let transformed_channels: Vec<serde_json::Value> = limited_channels
                 .iter()
-                .map(|mc| mapped_channel_to_frontend_format(mc))
+                .map(mapped_channel_to_frontend_format)
                 .collect();
 
             // Get rule metadata for frontend
@@ -2275,13 +2261,9 @@ async fn apply_data_mapping_rules_impl(
                                     crate::models::ExtendedExpression::ConditionalActionGroups(
                                         groups,
                                     ) => {
-                                        if let Some(first_group) = groups.first() {
-                                            Some(generate_expression_tree_json(
+                                        groups.first().map(|first_group| generate_expression_tree_json(
                                                 &first_group.conditions,
                                             ))
-                                        } else {
-                                            None
-                                        }
                                     }
                                 }
                             } else {
@@ -2579,7 +2561,7 @@ pub async fn upload_logo_asset(
 
     // For now, use a simplified upload approach until we implement the full conversion logic
     let asset_id = uuid::Uuid::new_v4();
-    let file_extension = content_type.split('/').last().unwrap_or("img");
+    let file_extension = content_type.split('/').next_back().unwrap_or("img");
 
     match state
         .logo_asset_service
@@ -2590,19 +2572,19 @@ pub async fn upload_logo_asset(
         Ok((file_name, file_path, file_size, mime_type, dimensions)) => {
             match state
                 .logo_asset_service
-                .create_asset_with_id(
+                .create_asset_with_id(crate::logo_assets::service::CreateAssetWithIdParams {
                     asset_id,
-                    create_request.name,
-                    create_request.description,
+                    name: create_request.name,
+                    description: create_request.description,
                     file_name,
                     file_path,
                     file_size,
                     mime_type,
-                    crate::models::logo_asset::LogoAssetType::Uploaded,
-                    None, // source_url
-                    dimensions.map(|(w, _)| w as i32),
-                    dimensions.map(|(_, h)| h as i32),
-                )
+                    asset_type: crate::models::logo_asset::LogoAssetType::Uploaded,
+                    source_url: None,
+                    width: dimensions.map(|(w, _)| w as i32),
+                    height: dimensions.map(|(_, h)| h as i32),
+                })
                 .await
             {
                 Ok(asset) => Ok(Json(LogoAssetUploadResponse {
@@ -2878,7 +2860,7 @@ pub async fn delete_logo_asset(
     let mut deleted_any = false;
     
     for ext in &extensions {
-        let filename = format!("{}.{}", id_str, ext);
+        let filename = format!("{id_str}.{ext}");
         match state.logo_file_manager.remove_file(&filename).await {
             Ok(_) => {
                 info!("Deleted cached logo: {}", filename);
@@ -2925,7 +2907,7 @@ pub async fn get_cached_logo_asset(
     let mut file_extension = "png".to_string();
     let file_data = match state
         .logo_file_manager
-        .read(&format!("{}.png", cache_id))
+        .read(&format!("{cache_id}.png"))
         .await
     {
         Ok(data) => {
@@ -2938,7 +2920,7 @@ pub async fn get_cached_logo_asset(
             for ext in &["jpg", "jpeg", "gif", "webp", "svg"] {
                 match state
                     .logo_file_manager
-                    .read(&format!("{}.{}", cache_id, ext))
+                    .read(&format!("{cache_id}.{ext}"))
                     .await
                 {
                     Ok(data) => {
@@ -3129,7 +3111,6 @@ pub async fn get_stream_source_channels(
 }
 
 /// List EPG sources only
-
 /// Refresh EPG source
 #[utoipa::path(
     post,
@@ -3192,20 +3173,15 @@ pub async fn refresh_epg_source_unified(
                 Err(e) => {
                     // Fail progress operation if it was created
                     if let Some((manager, _)) = progress_manager {
-                        manager.fail(&format!("EPG source refresh failed: {}", e)).await;
+                        manager.fail(&format!("EPG source refresh failed: {e}")).await;
                     }
                     
                     error!("Failed to refresh EPG source {}: {}", source.id, e);
                     // Check if it's an operation in progress error
-                    if let Some(app_error) = e.downcast_ref::<crate::errors::AppError>() {
-                        match app_error {
-                            crate::errors::AppError::OperationInProgress { .. } => {
-                                return Err(StatusCode::CONFLICT);
-                            }
-                            _ => {}
-                        }
+                    if let Some(crate::errors::AppError::OperationInProgress { .. }) = e.downcast_ref::<crate::errors::AppError>() {
+                        return Err(StatusCode::CONFLICT);
                     }
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
                 }
             }
         }
@@ -3431,12 +3407,12 @@ pub async fn get_logo_asset_with_formats(
                 asset
                     .mime_type
                     .split('/')
-                    .last()
+                    .next_back()
                     .unwrap_or("unknown")
                     .to_string(),
             ];
             for linked in &linked_with_urls {
-                if let Some(format) = linked.asset.mime_type.split('/').last() {
+                if let Some(format) = linked.asset.mime_type.split('/').next_back() {
                     if !available_formats.contains(&format.to_string()) {
                         available_formats.push(format.to_string());
                     }
@@ -3570,7 +3546,7 @@ fn generate_condition_node_json(node: &crate::models::ConditionNode) -> serde_js
             json!({
                 "type": "group",
                 "operator": operator_str,
-                "children": children.iter().map(|child| generate_condition_node_json(child)).collect::<Vec<_>>()
+                "children": children.iter().map(generate_condition_node_json).collect::<Vec<_>>()
             })
         }
     }
@@ -3615,7 +3591,7 @@ fn generate_condition_node_expression(node: &crate::models::ConditionNode) -> St
             
             let neg_prefix = if *negate { "NOT " } else { "" };
             let escaped_value = value.replace("\\", "\\\\").replace("\"", "\\\"");
-            format!("{}{} {} \"{}\"", neg_prefix, field, operator_str, escaped_value)
+            format!("{neg_prefix}{field} {operator_str} \"{escaped_value}\"")
         }
         crate::models::ConditionNode::Group { operator, children } => {
             let operator_str = match operator {
@@ -4058,131 +4034,6 @@ fn is_epg_field(field_name: &str) -> bool {
     )
 }
 
-#[cfg(test)]
-mod validation_tests {
-    use super::*;
-    use crate::models::{ExpressionValidateRequest, ExpressionValidateResult};
-
-    #[test]
-    fn test_extract_field_name_from_error() {
-        // Test extracting field name from "Unknown field" errors
-        assert_eq!(
-            extract_field_name_from_error("Unknown field 'chanxnlname'"),
-            Some("chanxnlname".to_string())
-        );
-        
-        assert_eq!(
-            extract_field_name_from_error("Field 'invalid_field' is not available"),
-            Some("invalid_field".to_string())
-        );
-        
-        // Test cases where no field name can be extracted
-        assert_eq!(
-            extract_field_name_from_error("Syntax error: missing operator"),
-            None
-        );
-        
-        assert_eq!(
-            extract_field_name_from_error(""),
-            None
-        );
-    }
-
-
-
-    // Note: These tests would require a test database setup to run properly
-    // They serve as documentation of expected behavior
-    
-    #[test] 
-    fn test_validate_expression_success_case() {
-        // This test demonstrates the expected behavior for valid expressions
-        // In a real test environment, this would need proper database setup
-        
-        let request = ExpressionValidateRequest {
-            expression: "channel_name contains \"HD\"".to_string(),
-        };
-        
-        // Expected successful response structure
-        let expected_response = ExpressionValidateResult {
-            is_valid: true,
-            errors: vec![],
-            expression_tree: Some(serde_json::json!({
-                "type": "condition",
-                "field": "channel_name",
-                "operator": "Contains",
-                "value": "HD",
-                "case_sensitive": false,
-                "negate": false
-            })),
-        };
-        
-        // Verify the structure is as expected
-        assert!(expected_response.is_valid);
-        assert!(expected_response.errors.is_empty());
-        assert!(expected_response.expression_tree.is_some());
-    }
-    
-    #[test]
-    fn test_validate_expression_field_error_case() {
-        // This test demonstrates the expected behavior for invalid field names
-        
-        let request = ExpressionValidateRequest {
-            expression: "invalid_field contains \"test\"".to_string(),
-        };
-        
-        // Expected error response structure  
-        let expected_response = ExpressionValidateResult {
-            is_valid: false,
-            errors: vec![crate::models::ExpressionValidationError {
-                category: crate::models::ExpressionErrorCategory::Field,
-                error_type: "unknown_field".to_string(),
-                message: "Unknown field 'invalid_field'".to_string(),
-                details: Some("Field 'invalid_field' is not available".to_string()),
-                position: None,
-                context: None,
-                suggestion: Some("Available fields: channel_name, group_title, stream_url, tvg_id, tvg_name, tvg_logo".to_string()),
-            }],
-            expression_tree: None,
-        };
-        
-        // Verify the error structure is as expected
-        assert!(!expected_response.is_valid);
-        assert!(!expected_response.errors.is_empty());
-        assert_eq!(expected_response.errors[0].category, crate::models::ExpressionErrorCategory::Field);
-        assert!(expected_response.expression_tree.is_none());
-    }
-    
-    #[test]
-    fn test_validate_expression_syntax_error_case() {
-        // This test demonstrates the expected behavior for syntax errors
-        
-        let request = ExpressionValidateRequest {
-            expression: "channel_name contains".to_string(),
-        };
-        
-        // Expected syntax error response structure
-        let expected_response = ExpressionValidateResult {
-            is_valid: false,
-            errors: vec![crate::models::ExpressionValidationError {
-                category: crate::models::ExpressionErrorCategory::Syntax,
-                error_type: "syntax_error".to_string(),
-                message: "Syntax error: Incomplete expression".to_string(),
-                details: Some("Expression is incomplete or malformed".to_string()),
-                position: None,
-                context: None,
-                suggestion: None,
-            }],
-            expression_tree: None,
-        };
-        
-        // Verify the error structure is as expected
-        assert!(!expected_response.is_valid);
-        assert!(!expected_response.errors.is_empty());
-        assert_eq!(expected_response.errors[0].category, crate::models::ExpressionErrorCategory::Syntax);
-        assert!(expected_response.expression_tree.is_none());
-    }
-}
-
 /// Preview data mapping with a custom expression
 async fn preview_data_mapping_expression(
     state: AppState,
@@ -4577,5 +4428,6 @@ fn set_channel_field_value(channel: &mut crate::models::Channel, field: &str, ne
         _ => Ok(false), // Unknown field, no change
     }
 }
+
 
 

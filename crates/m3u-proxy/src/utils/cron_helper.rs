@@ -42,7 +42,7 @@ pub fn calculate_next_scheduled_time_validated(cron_expression: &str) -> Result<
             Ok(schedule.upcoming(Utc).next())
         }
         Err(e) => {
-            Err(format!("Invalid cron expression '{}': {}", cron_expression, e))
+            Err(format!("Invalid cron expression '{cron_expression}': {e}"))
         }
     }
 }

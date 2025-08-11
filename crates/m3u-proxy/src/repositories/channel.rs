@@ -118,8 +118,8 @@ impl ChannelRepository {
             group_title: row.try_get("group_title")?,
             channel_name: row.try_get("channel_name")?,
             stream_url: row.try_get("stream_url")?,
-            created_at: row.get_datetime("created_at").into(),
-            updated_at: row.get_datetime("updated_at").into(),
+            created_at: row.get_datetime("created_at"),
+            updated_at: row.get_datetime("updated_at"),
         })
     }
 
@@ -135,7 +135,7 @@ impl ChannelRepository {
 
         if let Some(name_pattern) = &query.name_pattern {
             conditions.push("channel_name LIKE ?".to_string());
-            params.push(format!("%{}%", name_pattern));
+            params.push(format!("%{name_pattern}%"));
         }
 
         if let Some(group_title) = &query.group_title {
@@ -145,7 +145,7 @@ impl ChannelRepository {
 
         if let Some(search) = &query.base.search {
             conditions.push("(channel_name LIKE ? OR group_title LIKE ? OR tvg_name LIKE ?)".to_string());
-            let search_pattern = format!("%{}%", search);
+            let search_pattern = format!("%{search}%");
             params.push(search_pattern.clone());
             params.push(search_pattern.clone());
             params.push(search_pattern);
@@ -165,10 +165,10 @@ impl ChannelRepository {
         if let Some(sort_by) = &query.base.sort_by {
             let direction = if query.base.sort_ascending { "ASC" } else { "DESC" };
             match sort_by.as_str() {
-                "channel_name" => format!(" ORDER BY channel_name {}", direction),
-                "group_title" => format!(" ORDER BY group_title {}, channel_name ASC", direction),
-                "created_at" => format!(" ORDER BY created_at {}", direction),
-                "updated_at" => format!(" ORDER BY updated_at {}", direction),
+                "channel_name" => format!(" ORDER BY channel_name {direction}"),
+                "group_title" => format!(" ORDER BY group_title {direction}, channel_name ASC"),
+                "created_at" => format!(" ORDER BY created_at {direction}"),
+                "updated_at" => format!(" ORDER BY updated_at {direction}"),
                 _ => " ORDER BY channel_name ASC".to_string(),
             }
         } else {
@@ -206,13 +206,12 @@ impl Repository<Channel, Uuid> for ChannelRepository {
         let mut sql = format!(
             "SELECT id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift,
              group_title, channel_name, stream_url, created_at, updated_at
-             FROM channels{}{}",
-            where_clause, order_clause
+             FROM channels{where_clause}{order_clause}"
         );
 
         if let Some(limit) = query.base.limit {
             let offset = query.base.offset.unwrap_or(0);
-            sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+            sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
         }
 
         let mut query_builder = sqlx::query(&sql);
@@ -318,7 +317,7 @@ impl Repository<Channel, Uuid> for ChannelRepository {
 
     async fn count(&self, query: Self::Query) -> RepositoryResult<u64> {
         let (where_clause, params) = self.build_where_clause(&query);
-        let sql = format!("SELECT COUNT(*) as count FROM channels{}", where_clause);
+        let sql = format!("SELECT COUNT(*) as count FROM channels{where_clause}");
 
         let mut query_builder = sqlx::query(&sql);
         for param in params {
@@ -448,7 +447,7 @@ impl BulkRepository<Channel, Uuid> for ChannelRepository {
         }
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("DELETE FROM channels WHERE id IN ({})", placeholders);
+        let sql = format!("DELETE FROM channels WHERE id IN ({placeholders})");
 
         let mut query_builder = sqlx::query(&sql);
         for id in ids {
@@ -468,8 +467,7 @@ impl BulkRepository<Channel, Uuid> for ChannelRepository {
         let sql = format!(
             "SELECT id, source_id, tvg_id, tvg_name, tvg_chno, tvg_logo, tvg_shift,
              group_title, channel_name, stream_url, created_at, updated_at
-             FROM channels WHERE id IN ({}) ORDER BY channel_name",
-            placeholders
+             FROM channels WHERE id IN ({placeholders}) ORDER BY channel_name"
         );
 
         let mut query_builder = sqlx::query(&sql);
@@ -515,7 +513,6 @@ impl PaginatedRepository<Channel, Uuid> for ChannelRepository {
 
 impl ChannelRepository {
     /// Domain-specific methods for channel operations
-    
     /// Get all channels for a specific source (replaces get_source_channels)
     pub async fn get_channels_for_source(&self, source_id: Uuid) -> RepositoryResult<Vec<Channel>> {
         let query = ChannelQuery::new().source_id(source_id);
@@ -626,7 +623,7 @@ impl ChannelRepository {
 
         let requests: Vec<ChannelCreateRequest> = channels
             .iter()
-            .map(|ch| Self::from_channel(ch))
+            .map(Self::from_channel)
             .collect();
 
         self.create_bulk(requests).await?;

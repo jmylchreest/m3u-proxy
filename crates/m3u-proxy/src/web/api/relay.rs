@@ -43,7 +43,7 @@ pub async fn list_profiles(State(state): State<AppState>) -> impl IntoResponse {
     let relay_repo = crate::repositories::RelayRepository::new(state.database.pool());
     match relay_repo.get_active_profiles().await {
         Ok(profiles) => Json(profiles).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {}", e)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {e}")).into_response(),
     }
 }
 
@@ -71,7 +71,7 @@ pub async fn get_profile(
     match relay_repo.find_by_id(id).await {
         Ok(Some(profile)) => Json(profile).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "Profile not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {}", e)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {e}")).into_response(),
     }
 }
 
@@ -97,7 +97,7 @@ pub async fn create_profile(
     let relay_repo = RelayRepository::new(state.database.pool());
     match relay_repo.create(request).await {
         Ok(profile) => (StatusCode::CREATED, Json(profile)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {}", e)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {e}")).into_response(),
     }
 }
 
@@ -131,7 +131,7 @@ pub async fn update_profile(
             if e.to_string().contains("not found") {
                 (StatusCode::NOT_FOUND, "Profile not found").into_response()
             } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {}", e)).into_response()
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {e}")).into_response()
             }
         }
     }
@@ -164,7 +164,7 @@ pub async fn delete_profile(
             if e.to_string().contains("not found") {
                 (StatusCode::NOT_FOUND, "Profile not found").into_response()
             } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {}", e)).into_response()
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Repository error: {e}")).into_response()
             }
         }
     }
@@ -196,7 +196,7 @@ pub async fn delete_profile(
 pub async fn get_relay_health(State(state): State<AppState>) -> impl IntoResponse {
     match state.relay_manager.get_relay_health().await {
         Ok(health) => Json(health).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get health: {}", e)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get health: {e}")).into_response(),
     }
 }
 

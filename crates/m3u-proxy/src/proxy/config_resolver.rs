@@ -45,7 +45,7 @@ impl ProxyConfigResolver {
             .proxy_repo
             .find_by_id(proxy_id)
             .await
-            .map_err(|e| AppError::Repository(e))?
+            .map_err(AppError::Repository)?
             .ok_or_else(|| AppError::NotFound {
                 resource: "stream_proxy".to_string(),
                 id: proxy_id.to_string(),
@@ -57,7 +57,7 @@ impl ProxyConfigResolver {
             self.proxy_repo.get_proxy_epg_sources(proxy.id),
             self.proxy_repo.get_proxy_filters(proxy.id)
         )
-        .map_err(|e| AppError::Repository(e))?;
+        .map_err(AppError::Repository)?;
 
         // Resolve source configurations
         let mut sources = Vec::new();
@@ -66,7 +66,7 @@ impl ProxyConfigResolver {
                 .stream_source_repo
                 .find_by_id(proxy_source.source_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
             {
                 // Filter out inactive sources entirely
                 if !source.is_active {
@@ -93,7 +93,7 @@ impl ProxyConfigResolver {
                 .filter_repo
                 .find_by_id(proxy_filter.filter_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
             {
                 filters.push(ProxyFilterConfig {
                     filter,
@@ -113,7 +113,7 @@ impl ProxyConfigResolver {
                 .proxy_repo
                 .find_epg_source_by_id(proxy_epg_source.epg_source_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
             {
                 // Filter out inactive EPG sources entirely
                 if !epg_source.is_active {
@@ -189,7 +189,7 @@ impl ProxyConfigResolver {
                 .stream_source_repo
                 .find_by_id(source_req.source_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
             {
                 // Filter out inactive sources entirely
                 if !source.is_active {
@@ -219,7 +219,7 @@ impl ProxyConfigResolver {
                 .filter_repo
                 .find_by_id(filter_req.filter_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
             {
                 filters.push(ProxyFilterConfig {
                     filter,
@@ -245,7 +245,7 @@ impl ProxyConfigResolver {
                 .proxy_repo
                 .find_epg_source_by_id(epg_source_req.epg_source_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
             {
                 // Filter out inactive EPG sources entirely
                 if !epg_source.is_active {

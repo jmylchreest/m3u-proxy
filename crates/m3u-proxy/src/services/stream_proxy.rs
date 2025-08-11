@@ -42,41 +42,53 @@ pub struct StreamProxyService {
     system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
+
+/// Builder for StreamProxyService with many dependencies
+pub struct StreamProxyServiceBuilder {
+    pub proxy_repo: StreamProxyRepository,
+    pub channel_repo: ChannelRepository,
+    pub filter_repo: FilterRepository,
+    pub stream_source_repo: StreamSourceRepository,
+    pub filter_engine: FilterEngine,
+    pub database: Database,
+    pub preview_file_manager: SandboxedManager,
+    pub data_mapping_service: DataMappingService,
+    pub logo_service: LogoAssetService,
+    pub storage_config: StorageConfig,
+    pub app_config: crate::config::Config,
+    pub temp_file_manager: SandboxedManager,
+    pub proxy_output_file_manager: SandboxedManager,
+    pub system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+}
+
+impl StreamProxyServiceBuilder {
+    pub fn build(self) -> StreamProxyService {
+        StreamProxyService::new_from_builder(self)
+    }
+}
 impl StreamProxyService {
-    pub fn new(
-        proxy_repo: StreamProxyRepository,
-        channel_repo: ChannelRepository,
-        filter_repo: FilterRepository,
-        stream_source_repo: StreamSourceRepository,
-        filter_engine: FilterEngine,
-        database: Database,
-        preview_file_manager: SandboxedManager,
-        data_mapping_service: DataMappingService,
-        logo_service: LogoAssetService,
-        storage_config: StorageConfig,
-        app_config: crate::config::Config,
-        temp_file_manager: SandboxedManager,
-        proxy_output_file_manager: SandboxedManager,
-        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
-    ) -> Self {
+    pub fn new(builder: StreamProxyServiceBuilder) -> Self {
+        Self::new_from_builder(builder)
+    }
+    
+    fn new_from_builder(builder: StreamProxyServiceBuilder) -> Self {
         Self {
-            proxy_repo,
-            channel_repo,
-            filter_repo,
-            stream_source_repo,
-            filter_engine: tokio::sync::Mutex::new(filter_engine),
-            database,
-            preview_file_manager,
-            data_mapping_service,
-            logo_service,
-            storage_config,
-            app_config,
-            temp_file_manager,
-            proxy_output_file_manager,
-            system,
+            proxy_repo: builder.proxy_repo,
+            channel_repo: builder.channel_repo,
+            filter_repo: builder.filter_repo,
+            stream_source_repo: builder.stream_source_repo,
+            filter_engine: tokio::sync::Mutex::new(builder.filter_engine),
+            database: builder.database,
+            preview_file_manager: builder.preview_file_manager,
+            data_mapping_service: builder.data_mapping_service,
+            logo_service: builder.logo_service,
+            storage_config: builder.storage_config,
+            app_config: builder.app_config,
+            temp_file_manager: builder.temp_file_manager,
+            proxy_output_file_manager: builder.proxy_output_file_manager,
+            system: builder.system,
         }
     }
-
     /// Create a new stream proxy
     pub async fn create(
         &self,
@@ -91,7 +103,7 @@ impl StreamProxyService {
             .proxy_repo
             .create_with_relationships(request)
             .await
-            .map_err(|e| AppError::Repository(e))?;
+            .map_err(AppError::Repository)?;
 
         // Build full response with relationships
         self.build_proxy_response(proxy).await
@@ -108,7 +120,7 @@ impl StreamProxyService {
             .proxy_repo
             .find_by_id(proxy_id)
             .await
-            .map_err(|e| AppError::Repository(e))?
+            .map_err(AppError::Repository)?
             .ok_or_else(|| AppError::NotFound {
                 resource: "stream_proxy".to_string(),
                 id: proxy_id.to_string(),
@@ -123,7 +135,7 @@ impl StreamProxyService {
             .proxy_repo
             .update_with_relationships(proxy_id, request)
             .await
-            .map_err(|e| AppError::Repository(e))?;
+            .map_err(AppError::Repository)?;
 
         // Build full response with relationships
         self.build_proxy_response(proxy).await
@@ -135,7 +147,7 @@ impl StreamProxyService {
             .proxy_repo
             .find_by_id(proxy_id)
             .await
-            .map_err(|e| AppError::Repository(e))?;
+            .map_err(AppError::Repository)?;
 
         match proxy {
             Some(proxy) => Ok(Some(self.build_proxy_response(proxy).await?)),
@@ -152,7 +164,7 @@ impl StreamProxyService {
             .proxy_repo
             .get_by_id(id)
             .await
-            .map_err(|e| AppError::Repository(e))?;
+            .map_err(AppError::Repository)?;
 
         match proxy {
             Some(proxy) => Ok(Some(self.build_proxy_response(proxy).await?)),
@@ -170,7 +182,7 @@ impl StreamProxyService {
             .proxy_repo
             .find_all(crate::repositories::traits::QueryParams::new())
             .await
-            .map_err(|e| AppError::Repository(e))?;
+            .map_err(AppError::Repository)?;
 
         let mut responses = Vec::new();
         for proxy in proxies {
@@ -187,7 +199,7 @@ impl StreamProxyService {
             .proxy_repo
             .find_by_id(proxy_id)
             .await
-            .map_err(|e| AppError::Repository(e))?
+            .map_err(AppError::Repository)?
             .ok_or_else(|| AppError::NotFound {
                 resource: "stream_proxy".to_string(),
                 id: proxy_id.to_string(),
@@ -196,7 +208,7 @@ impl StreamProxyService {
         self.proxy_repo
             .delete(proxy_id)
             .await
-            .map_err(|e| AppError::Repository(e))?;
+            .map_err(AppError::Repository)?;
 
         Ok(())
     }
@@ -238,22 +250,23 @@ impl StreamProxyService {
             self.proxy_output_file_manager.clone(),
             self.system.clone(),
         );
+        let params = crate::proxy::GenerateProxyParams {
+            config: resolved_config.clone(),
+            output,
+            database: &self.database,
+            data_mapping_service: &self.data_mapping_service,
+            logo_service: &self.logo_service,
+            base_url: &self.app_config.web.base_url,
+            engine_config: None,
+            app_config: &self.app_config,
+        };
         let proxy_generation = proxy_service
-            .generate_proxy_with_config(
-                resolved_config.clone(),
-                output,
-                &self.database,
-                &self.data_mapping_service,
-                &self.logo_service,
-                &self.app_config.web.base_url,
-                None,                    // engine_config
-                &self.app_config,
-            )
+            .generate_proxy_with_config(params)
             .await
             .map_err(|e| {
                 tracing::error!("Generator failed for preview: {}", e);
                 AppError::Internal {
-                    message: format!("Generator failed: {}", e),
+                    message: format!("Generator failed: {e}"),
                 }
             })?;
 
@@ -302,7 +315,7 @@ impl StreamProxyService {
             filter_execution_time: generation_stats.and_then(|gs| {
                 gs.stage_timings
                     .get("filtering")
-                    .map(|&t| format!("{}ms", t))
+                    .map(|&t| format!("{t}ms"))
             }),
             processing_rate: generation_stats
                 .map(|gs| format!("{:.1} ch/s", gs.channels_per_second)),
@@ -326,7 +339,7 @@ impl StreamProxyService {
                     .map(|mb| (mb * 1024.0 * 1024.0) as u64)
             }),
             memory_efficiency: generation_stats
-                .and_then(|gs| gs.memory_efficiency.map(|eff| format!("{:.1} ch/MB", eff))),
+                .and_then(|gs| gs.memory_efficiency.map(|eff| format!("{eff:.1} ch/MB"))),
             gc_collections: generation_stats.and_then(|gs| gs.gc_collections),
             memory_by_stage: generation_stats.map(|gs| gs.stage_memory_usage.clone()),
             // Processing metrics from GenerationStats (fix types)
@@ -407,7 +420,7 @@ impl StreamProxyService {
             let line = lines[i].trim();
             if line.starts_with("#EXTINF:") {
                 // Parse the EXTINF line
-                let channel_name = line.split(',').last().unwrap_or("Unknown").to_string();
+                let channel_name = line.split(',').next_back().unwrap_or("Unknown").to_string();
                 let group_title = Self::extract_attribute(line, "group-title");
                 let tvg_id = Self::extract_attribute(line, "tvg-id");
                 let tvg_logo = Self::extract_attribute(line, "tvg-logo");
@@ -479,38 +492,38 @@ impl StreamProxyService {
 
             // Build EXTINF line
             let mut extinf_parts = Vec::new();
-            extinf_parts.push(format!("#EXTINF:-1"));
+            extinf_parts.push("#EXTINF:-1".to_string());
 
             // Add tvg-id if available
             if let Some(tvg_id) = &channel.tvg_id {
                 if !tvg_id.is_empty() {
-                    extinf_parts.push(format!("tvg-id=\"{}\"", tvg_id));
+                    extinf_parts.push(format!("tvg-id=\"{tvg_id}\""));
                 }
             }
 
             // Add tvg-name if available
             if let Some(tvg_name) = &channel.tvg_name {
                 if !tvg_name.is_empty() {
-                    extinf_parts.push(format!("tvg-name=\"{}\"", tvg_name));
+                    extinf_parts.push(format!("tvg-name=\"{tvg_name}\""));
                 }
             }
 
             // Add tvg-logo if available
             if let Some(tvg_logo) = &channel.tvg_logo {
                 if !tvg_logo.is_empty() {
-                    extinf_parts.push(format!("tvg-logo=\"{}\"", tvg_logo));
+                    extinf_parts.push(format!("tvg-logo=\"{tvg_logo}\""));
                 }
             }
 
             // Add group-title if available
             if let Some(group_title) = &channel.group_title {
                 if !group_title.is_empty() {
-                    extinf_parts.push(format!("group-title=\"{}\"", group_title));
+                    extinf_parts.push(format!("group-title=\"{group_title}\""));
                 }
             }
 
             // Add channel number
-            extinf_parts.push(format!("tvg-chno=\"{}\"", channel_number));
+            extinf_parts.push(format!("tvg-chno=\"{channel_number}\""));
 
             // Add channel name at the end
             extinf_parts.push(channel.channel_name.clone());
@@ -569,7 +582,7 @@ impl StreamProxyService {
 
     /// Extract attribute value from EXTINF line
     fn extract_attribute(line: &str, attr: &str) -> Option<String> {
-        let pattern = format!(r#"{}="([^"]*)""#, attr);
+        let pattern = format!(r#"{attr}="([^"]*)""#);
         if let Ok(re) = Regex::new(&pattern) {
             if let Some(captures) = re.captures(line) {
                 return captures.get(1).map(|m| m.as_str().to_string());
@@ -589,7 +602,7 @@ impl StreamProxyService {
             self.proxy_repo.get_proxy_epg_sources(proxy.id),
             self.proxy_repo.get_proxy_filters(proxy.id)
         )
-        .map_err(|e| AppError::Repository(e))?;
+        .map_err(AppError::Repository)?;
 
         // Build stream sources responses
         let mut stream_sources = Vec::new();
@@ -598,7 +611,7 @@ impl StreamProxyService {
                 .stream_source_repo
                 .find_by_id(proxy_source.source_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
             {
                 stream_sources.push(crate::web::handlers::proxies::ProxySourceResponse {
                     source_id: proxy_source.source_id,
@@ -616,7 +629,7 @@ impl StreamProxyService {
                 .proxy_repo
                 .find_epg_source_by_id(proxy_epg_source.epg_source_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
             {
                 epg_sources.push(crate::web::handlers::proxies::ProxyEpgSourceResponse {
                     epg_source_id: proxy_epg_source.epg_source_id,
@@ -633,7 +646,7 @@ impl StreamProxyService {
                 .filter_repo
                 .find_by_id(proxy_filter.filter_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
             {
                 filters.push(crate::web::handlers::proxies::ProxyFilterResponse {
                     filter_id: proxy_filter.filter_id,
@@ -676,7 +689,7 @@ impl StreamProxyService {
                 .stream_source_repo
                 .find_by_id(source_req.source_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
                 .ok_or_else(|| AppError::NotFound {
                     resource: "stream_source".to_string(),
                     id: source_req.source_id.to_string(),
@@ -689,7 +702,7 @@ impl StreamProxyService {
                 .filter_repo
                 .find_by_id(filter_req.filter_id)
                 .await
-                .map_err(|e| AppError::Repository(e))?
+                .map_err(AppError::Repository)?
                 .ok_or_else(|| AppError::NotFound {
                     resource: "filter".to_string(),
                     id: filter_req.filter_id.to_string(),

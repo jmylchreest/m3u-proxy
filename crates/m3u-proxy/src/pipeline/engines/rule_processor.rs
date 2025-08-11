@@ -7,6 +7,9 @@ use crate::utils::regex_preprocessor::RegexPreprocessor;
 use tracing::{trace, warn};
 use regex::Regex;
 
+/// Type alias for regex evaluation result with captures
+type RegexCaptureResult = Result<(bool, Option<Vec<String>>), Box<dyn std::error::Error>>;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldModification {
     pub field_name: String,
@@ -64,7 +67,7 @@ impl RegexEvaluator {
         }
     }
     
-    pub fn evaluate_with_captures(&self, pattern: &str, text: &str, context: &str) -> Result<(bool, Option<Vec<String>>), Box<dyn std::error::Error>> {
+    pub fn evaluate_with_captures(&self, pattern: &str, text: &str, context: &str) -> RegexCaptureResult {
         // Use preprocessor to check if regex should run
         if !self.preprocessor.should_run_regex(text, pattern, context) {
             return Ok((false, None));
@@ -156,12 +159,12 @@ impl StreamRuleProcessor {
         match parsed_expression {
             ExtendedExpression::ConditionWithActions { condition, actions } => {
                 // Check if we need captures (only for regex operations)
-                let needs_captures = self.condition_tree_needs_captures(&condition);
+                let needs_captures = self.condition_tree_needs_captures(condition);
                 
                 
                 if needs_captures {
                     // Use captures version for regex-based conditions
-                    let (condition_result, captures) = self.evaluate_condition_tree_with_captures(&condition, record)?;
+                    let (condition_result, captures) = self.evaluate_condition_tree_with_captures(condition, record)?;
                     
                     
                     trace!("Rule {} condition evaluation result: {} captures: {:?}", self.rule_id, condition_result, captures);
@@ -169,7 +172,7 @@ impl StreamRuleProcessor {
                     if condition_result {
                         trace!("Rule {} condition matched, applying {} actions with captures", self.rule_id, actions.len());
                         for action in actions {
-                            if let Some(modification) = self.apply_parsed_action_with_captures(&action, &mut modified_record, &record.channel_name, &captures)? {
+                            if let Some(modification) = self.apply_parsed_action_with_captures(action, &mut modified_record, &record.channel_name, &captures)? {
                                 trace!("Rule {} applied action: {} {:?} -> {:?}", 
                                        self.rule_id, &modification.field_name, 
                                        &modification.modification_type, &modification.new_value);
@@ -181,13 +184,13 @@ impl StreamRuleProcessor {
                     }
                 } else {
                     // Use simpler/faster version for non-regex conditions
-                    let condition_result = self.evaluate_condition_tree(&condition, record)?;
+                    let condition_result = self.evaluate_condition_tree(condition, record)?;
                     trace!("Rule {} condition evaluation result: {} (fast path)", self.rule_id, condition_result);
                     
                     if condition_result {
                         trace!("Rule {} condition matched, applying {} actions (fast path)", self.rule_id, actions.len());
                         for action in actions {
-                            if let Some(modification) = self.apply_parsed_action(&action, &mut modified_record, &record.channel_name)? {
+                            if let Some(modification) = self.apply_parsed_action(action, &mut modified_record, &record.channel_name)? {
                                 trace!("Rule {} applied action: {} {:?} -> {:?}", 
                                        self.rule_id, &modification.field_name, 
                                        &modification.modification_type, &modification.new_value);
@@ -201,7 +204,7 @@ impl StreamRuleProcessor {
             }
             ExtendedExpression::ConditionOnly(condition) => {
                 // Just evaluate condition - no actions to apply
-                let _matches = self.evaluate_condition_tree(&condition, record)?;
+                let _matches = self.evaluate_condition_tree(condition, record)?;
                 // No modifications for condition-only expressions
             }
             ExtendedExpression::ConditionalActionGroups(groups) => {
@@ -241,7 +244,7 @@ impl StreamRuleProcessor {
     }
     
     /// Evaluate a condition tree and return captures from regex matches
-    fn evaluate_condition_tree_with_captures(&self, condition: &crate::models::ConditionTree, record: &crate::models::Channel) -> Result<(bool, Option<Vec<String>>), Box<dyn std::error::Error>> {
+    fn evaluate_condition_tree_with_captures(&self, condition: &crate::models::ConditionTree, record: &crate::models::Channel) -> RegexCaptureResult {
         self.evaluate_condition_node_with_captures(&condition.root, record)
     }
     
@@ -250,6 +253,7 @@ impl StreamRuleProcessor {
         self.condition_node_needs_captures(&condition.root)
     }
     
+    #[allow(clippy::only_used_in_recursion)]
     /// Check if a condition node contains regex operators recursively
     fn condition_node_needs_captures(&self, node: &crate::models::ConditionNode) -> bool {
         use crate::models::FilterOperator;
@@ -270,7 +274,7 @@ impl StreamRuleProcessor {
     }
 
     /// Evaluate a condition node and return captures for regex matches
-    fn evaluate_condition_node_with_captures(&self, node: &crate::models::ConditionNode, record: &crate::models::Channel) -> Result<(bool, Option<Vec<String>>), Box<dyn std::error::Error>> {
+    fn evaluate_condition_node_with_captures(&self, node: &crate::models::ConditionNode, record: &crate::models::Channel) -> RegexCaptureResult {
         use crate::models::{LogicalOperator, FilterOperator};
         
         match node {
@@ -392,7 +396,7 @@ impl StreamRuleProcessor {
     }
     
     /// Apply a parsed action
-    fn apply_parsed_action(&self, action: &Action, record: &mut crate::models::Channel, channel_name: &str) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
+    fn apply_parsed_action(&self, action: &Action, record: &mut crate::models::Channel, _channel_name: &str) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
         let old_value = self.get_field_value(&action.field, record)?;
         
         
@@ -429,7 +433,7 @@ impl StreamRuleProcessor {
                             field: action.field.clone(),
                             operator: ActionOperator::Delete,
                             value: action.value.clone(),
-                        }, record, channel_name)
+                        }, record, _channel_name)
                     },
                     _ => Ok(None), // Other action value types not implemented yet
                 }
@@ -437,8 +441,8 @@ impl StreamRuleProcessor {
             ActionOperator::Append => {
                 match &action.value {
                     crate::models::ActionValue::Literal(append_value) => {
-                        let current_value = old_value.as_ref().map(|s| s.as_str()).unwrap_or_default();
-                        let new_value = format!("{}{}", current_value, append_value);
+                        let current_value = old_value.as_deref().unwrap_or_default();
+                        let new_value = format!("{current_value}{append_value}");
                         self.set_field_value(&action.field, &new_value, record)?;
                         
                         Ok(Some(FieldModification {
@@ -481,13 +485,13 @@ impl StreamRuleProcessor {
                     field: action.field.clone(),
                     operator: ActionOperator::Delete,
                     value: action.value.clone(),
-                }, record, channel_name)
+                }, record, _channel_name)
             }
         }
     }
     
     /// Apply a parsed action with capture group substitution
-    fn apply_parsed_action_with_captures(&self, action: &Action, record: &mut crate::models::Channel, channel_name: &str, captures: &Option<Vec<String>>) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
+    fn apply_parsed_action_with_captures(&self, action: &Action, record: &mut crate::models::Channel, _channel_name: &str, captures: &Option<Vec<String>>) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
         let old_value = self.get_field_value(&action.field, record)?;
         
         
@@ -526,7 +530,7 @@ impl StreamRuleProcessor {
                             field: action.field.clone(),
                             operator: ActionOperator::Delete,
                             value: action.value.clone(),
-                        }, record, channel_name, captures)
+                        }, record, _channel_name, captures)
                     },
                     _ => Ok(None), // Other action value types not implemented yet
                 }
@@ -535,8 +539,8 @@ impl StreamRuleProcessor {
                 match &action.value {
                     crate::models::ActionValue::Literal(append_value) => {
                         let processed_value = self.substitute_capture_groups(append_value, captures);
-                        let current_value = old_value.as_ref().map(|s| s.as_str()).unwrap_or_default();
-                        let new_value = format!("{}{}", current_value, processed_value);
+                        let current_value = old_value.as_deref().unwrap_or_default();
+                        let new_value = format!("{current_value}{processed_value}");
                         self.set_field_value(&action.field, &new_value, record)?;
                         
                         Ok(Some(FieldModification {
@@ -579,7 +583,7 @@ impl StreamRuleProcessor {
                     field: action.field.clone(),
                     operator: ActionOperator::Delete,
                     value: action.value.clone(),
-                }, record, channel_name, captures)
+                }, record, _channel_name, captures)
             }
         }
     }
@@ -593,7 +597,7 @@ impl StreamRuleProcessor {
             // Replace $1, $2, $3, etc. with captured groups
             // Note: captures[0] is the full match, captures[1] is the first group, etc.
             for (i, capture) in capture_list.iter().enumerate().skip(1) { // Skip index 0 (full match)
-                let placeholder = format!("${}", i);
+                let placeholder = format!("${i}");
                 result = result.replace(&placeholder, capture);
             }
             

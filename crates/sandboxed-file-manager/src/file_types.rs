@@ -78,13 +78,13 @@ impl FileTypeValidator {
         let mut buffer = vec![0u8; self.config.max_detection_bytes];
         let mut file = fs::File::open(path)
             .await
-            .map_err(|e| SandboxedFileError::Io(e))?;
+            .map_err(SandboxedFileError::Io)?;
 
         let bytes_read = {
             use tokio::io::AsyncReadExt;
             file.read(&mut buffer)
                 .await
-                .map_err(|e| SandboxedFileError::Io(e))?
+                .map_err(SandboxedFileError::Io)?
         };
         buffer.truncate(bytes_read);
 
@@ -110,13 +110,13 @@ impl FileTypeValidator {
         let mut buffer = vec![0u8; self.config.max_detection_bytes];
         let mut file = fs::File::open(path)
             .await
-            .map_err(|e| SandboxedFileError::Io(e))?;
+            .map_err(SandboxedFileError::Io)?;
 
         let bytes_read = {
             use tokio::io::AsyncReadExt;
             file.read(&mut buffer)
                 .await
-                .map_err(|e| SandboxedFileError::Io(e))?
+                .map_err(SandboxedFileError::Io)?
         };
         buffer.truncate(bytes_read);
 
@@ -440,8 +440,7 @@ mod tests {
             let result = validator.validate_file_type(path).await;
             assert!(
                 result.is_err(),
-                "Should reject malicious path: {}",
-                malicious_path
+                "Should reject malicious path: {malicious_path}",
             );
         }
     }

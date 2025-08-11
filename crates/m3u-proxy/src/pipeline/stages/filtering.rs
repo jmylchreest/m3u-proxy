@@ -119,7 +119,7 @@ impl FilteringStage {
         }
         
         let stage_duration = stage_start.elapsed();
-        self.report_progress(95.0, &format!("Finalizing: {} records filtered", total_output_records)).await;
+        self.report_progress(95.0, &format!("Finalizing: {total_output_records} records filtered")).await;
         info!("Completed filtering stage duration={} input_records={} output_records={} output_artifacts={}", 
              crate::utils::human_format::format_duration_precise(stage_duration), 
              total_input_records, total_output_records, output_artifacts.len());
@@ -290,7 +290,7 @@ impl FilteringStage {
         let programs_count = programs.len();
         
         // Send progress update after reading
-        self.report_progress(85.0, &format!("Processing {} EPG programs", programs_count)).await;
+        self.report_progress(85.0, &format!("Processing {programs_count} EPG programs")).await;
         
         // Update file path to include stage name
         let filtered_file_path = artifact.file_path
@@ -501,7 +501,7 @@ impl PipelineStage for FilteringStage {
     async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
         self.report_progress(25.0, "Initializing filters").await;
         let result = self.process(input).await
-            .map_err(|e| PipelineError::stage_error("filtering", format!("Filtering failed: {}", e)))?;
+            .map_err(|e| PipelineError::stage_error("filtering", format!("Filtering failed: {e}")))?;
         self.report_progress(100.0, "Filtering completed").await;
         Ok(result)
     }

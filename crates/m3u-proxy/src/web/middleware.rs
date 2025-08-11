@@ -112,8 +112,7 @@ pub async fn request_size_middleware(
                     return (
                         StatusCode::PAYLOAD_TOO_LARGE,
                         Json(ApiResponse::<()>::error(format!(
-                            "Request too large: {} bytes (max: {})",
-                            length, MAX_REQUEST_SIZE
+                            "Request too large: {length} bytes (max: {MAX_REQUEST_SIZE})"
                         ))),
                     ).into_response();
                 }

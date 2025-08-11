@@ -101,12 +101,12 @@ impl EpgProgramRepository {
 
         if let Some(category) = &query.category {
             conditions.push("program_category LIKE ?".to_string());
-            params.push(format!("%{}%", category));
+            params.push(format!("%{category}%"));
         }
 
         if let Some(search) = &query.base.search {
             conditions.push("(program_title LIKE ? OR program_description LIKE ?)".to_string());
-            let search_param = format!("%{}%", search);
+            let search_param = format!("%{search}%");
             params.push(search_param.clone());
             params.push(search_param);
         }
@@ -126,10 +126,10 @@ impl EpgProgramRepository {
         let direction = if query.base.sort_ascending { "ASC" } else { "DESC" };
         
         match sort_field {
-            "start_time" => format!(" ORDER BY start_time {}", direction),
-            "end_time" => format!(" ORDER BY end_time {}", direction),
-            "program_title" => format!(" ORDER BY program_title {}", direction),
-            "channel_name" => format!(" ORDER BY channel_name {}, start_time ASC", direction),
+            "start_time" => format!(" ORDER BY start_time {direction}"),
+            "end_time" => format!(" ORDER BY end_time {direction}"),
+            "program_title" => format!(" ORDER BY program_title {direction}"),
+            "channel_name" => format!(" ORDER BY channel_name {direction}, start_time ASC"),
             _ => " ORDER BY start_time ASC".to_string(),
         }
     }
@@ -354,7 +354,7 @@ impl Repository<EpgProgram, Uuid> for EpgProgramRepository {
         
         let limit_clause = if let Some(limit) = query.base.limit {
             let offset = query.base.offset.unwrap_or(0);
-            format!(" LIMIT {} OFFSET {}", limit, offset)
+            format!(" LIMIT {limit} OFFSET {offset}")
         } else {
             String::new()
         };
@@ -363,8 +363,7 @@ impl Repository<EpgProgram, Uuid> for EpgProgramRepository {
             "SELECT id, source_id, channel_id, channel_name, program_title, program_description,
              program_category, start_time, end_time, episode_num, season_num, rating,
              language, subtitles, aspect_ratio, program_icon, created_at, updated_at
-             FROM epg_programs{}{}{}",
-            where_clause, order_clause, limit_clause
+             FROM epg_programs{where_clause}{order_clause}{limit_clause}"
         );
 
         let mut query_builder = sqlx::query(&sql);
@@ -413,7 +412,7 @@ impl Repository<EpgProgram, Uuid> for EpgProgramRepository {
 
     async fn count(&self, query: Self::Query) -> RepositoryResult<u64> {
         let (where_clause, params) = self.build_where_clause(&query);
-        let sql = format!("SELECT COUNT(*) FROM epg_programs{}", where_clause);
+        let sql = format!("SELECT COUNT(*) FROM epg_programs{where_clause}");
 
         let mut query_builder = sqlx::query_scalar(&sql);
         for param in params {
@@ -447,7 +446,7 @@ impl BulkRepository<EpgProgram, Uuid> for EpgProgramRepository {
         }
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("DELETE FROM epg_programs WHERE id IN ({})", placeholders);
+        let sql = format!("DELETE FROM epg_programs WHERE id IN ({placeholders})");
 
         let mut query_builder = sqlx::query(&sql);
         for id in ids {
@@ -468,8 +467,7 @@ impl BulkRepository<EpgProgram, Uuid> for EpgProgramRepository {
             "SELECT id, source_id, channel_id, channel_name, program_title, program_description,
              program_category, start_time, end_time, episode_num, season_num, rating,
              language, subtitles, aspect_ratio, program_icon, created_at, updated_at
-             FROM epg_programs WHERE id IN ({}) ORDER BY start_time",
-            placeholders
+             FROM epg_programs WHERE id IN ({placeholders}) ORDER BY start_time"
         );
 
         let mut query_builder = sqlx::query(&sql);

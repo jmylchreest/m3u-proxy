@@ -86,14 +86,14 @@ impl ApiValidationService {
             "filtering" => PipelineStageType::Filtering,
             "numbering" => PipelineStageType::Numbering,
             "generation" => PipelineStageType::Generation,
-            _ => return Err(format!("Unknown stage: {}", stage_name)),
+            _ => return Err(format!("Unknown stage: {stage_name}")),
         };
         
         let source_type_enum = if let Some(st) = source_type {
             match st {
                 "stream" => Some(DataMappingSourceType::Stream),
                 "epg" => Some(DataMappingSourceType::Epg),
-                _ => return Err(format!("Unknown source type: {}", st)),
+                _ => return Err(format!("Unknown source type: {st}")),
             }
         } else {
             None
@@ -116,14 +116,14 @@ impl ApiValidationService {
             "filtering" => PipelineStageType::Filtering,
             "numbering" => PipelineStageType::Numbering,
             "generation" => PipelineStageType::Generation,
-            _ => return Err(format!("Unknown stage: {}", stage_name)),
+            _ => return Err(format!("Unknown stage: {stage_name}")),
         };
         
         let source_type_enum = if let Some(st) = source_type {
             match st {
                 "stream" => Some(DataMappingSourceType::Stream),
                 "epg" => Some(DataMappingSourceType::Epg),
-                _ => return Err(format!("Unknown source type: {}", st)),
+                _ => return Err(format!("Unknown source type: {st}")),
             }
         } else {
             None

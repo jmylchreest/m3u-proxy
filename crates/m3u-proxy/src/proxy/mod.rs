@@ -15,6 +15,18 @@ pub mod filter_engine;
 pub mod robust_streaming;
 pub mod session_tracker;
 
+/// Parameters for generate_proxy_with_config method
+pub struct GenerateProxyParams<'a> {
+    pub config: ResolvedProxyConfig,
+    pub output: GenerationOutput,
+    pub database: &'a Database,
+    pub data_mapping_service: &'a DataMappingService,
+    pub logo_service: &'a LogoAssetService,
+    pub base_url: &'a str,
+    pub engine_config: Option<crate::config::DataMappingEngineConfig>,
+    pub app_config: &'a crate::config::Config,
+}
+
 #[derive(Clone)]
 pub struct ProxyService {
     #[allow(dead_code)]
@@ -62,37 +74,38 @@ impl ProxyService {
     /// Generate a proxy using the new pipeline orchestrator with factory pattern
     pub async fn generate_proxy_with_config(
         &self,
-        config: ResolvedProxyConfig,
-        output: GenerationOutput,
-        database: &Database,
-        _data_mapping_service: &DataMappingService, // Needed for factory
-        logo_service: &LogoAssetService, // Needed for factory  
-        _base_url: &str, // Deprecated - factory gets from app config
-        _engine_config: Option<crate::config::DataMappingEngineConfig>, // Deprecated
-        app_config: &crate::config::Config, // Needed for factory
+        params: GenerateProxyParams<'_>,
+    ) -> Result<ProxyGeneration> {
+        self.generate_proxy_with_params(params).await
+    }
+
+    /// Generate a proxy using the new pipeline orchestrator with factory pattern
+    pub async fn generate_proxy_with_params(
+        &self,
+        params: GenerateProxyParams<'_>,
     ) -> Result<ProxyGeneration> {
         use crate::pipeline::PipelineOrchestratorFactory;
 
         info!(
             "Starting generation proxy={} pipeline=orchestrator sources={} filters={}",
-            config.proxy.name,
-            config.sources.len(),
-            config.filters.len()
+            params.config.proxy.name,
+            params.config.sources.len(),
+            params.config.filters.len()
         );
 
         let start_time = std::time::Instant::now();
         
         // Create factory with all dependencies
         let factory = PipelineOrchestratorFactory::new(
-            database.pool(),
-            std::sync::Arc::new(logo_service.clone()),
-            app_config.clone(),
+            params.database.pool(),
+            std::sync::Arc::new(params.logo_service.clone()),
+            params.app_config.clone(),
             self.pipeline_file_manager.clone(),
             self.proxy_output_file_manager.clone(),
         );
         
         // Create orchestrator using factory pattern
-        let mut orchestrator = factory.create_for_proxy(config.proxy.id).await
+        let mut orchestrator = factory.create_for_proxy(params.config.proxy.id).await
             .map_err(|e| anyhow::anyhow!("Failed to create pipeline orchestrator: {}", e))?;
         let execution = orchestrator.execute_pipeline().await
             .map_err(|e| anyhow::anyhow!("Pipeline execution failed: {}", e))?;
@@ -100,7 +113,7 @@ impl ProxyService {
         // Convert pipeline execution to legacy format for compatibility
         let generation = ProxyGeneration {
             id: execution.id,
-            proxy_id: config.proxy.id,
+            proxy_id: params.config.proxy.id,
             version: 1,
             channel_count: 0, // TODO: Extract from execution output files
             m3u_content: String::new(), // TODO: Read from generated files
@@ -119,11 +132,11 @@ impl ProxyService {
         };
 
         // Handle output
-        self.write_output(&generation, &output, &config).await?;
+        self.write_output(&generation, &params.output, &params.config).await?;
 
         info!(
             "Generation completed proxy={} pipeline=orchestrator status={:?} duration={}",
-            config.proxy.name,
+            params.config.proxy.name,
             execution.status,
             crate::utils::human_format::format_duration_precise(start_time.elapsed())
         );

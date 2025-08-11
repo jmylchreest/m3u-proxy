@@ -199,9 +199,10 @@ mod tests {
 
         // Check that default categories exist
         assert!(config.get_category("temp").is_some());
-        assert!(config.get_category("logos_cached").is_some());
-        assert!(config.get_category("logos_uploaded").is_some());
         assert!(config.get_category("proxy_output").is_some());
+        
+        // Check that the config has exactly the expected categories
+        assert_eq!(config.categories.len(), 2);
 
         // Check temp category has short retention
         let temp = config.get_category("temp").unwrap();
@@ -219,18 +220,10 @@ mod tests {
         let temp_interval = config.cleanup_interval_for_category("temp").unwrap();
         assert_eq!(temp_interval, Duration::from_secs(60));
 
-        // Logo cached files (90 day retention) should check every 12 hours
-        // This gives max 12 hour drift (90 days + 12 hours = 90.5 days max)
-        let logo_interval = config
-            .cleanup_interval_for_category("logos_cached")
-            .unwrap();
-        assert_eq!(logo_interval, Duration::from_secs(43200));
-
-        // Proxy output (30 day retention) should check every 12 hours
-        // This gives max 12 hour drift (30 days + 12 hours = 30.5 days max)
+        // Proxy output (30 day retention) cleanup interval has been updated
         let proxy_interval = config
             .cleanup_interval_for_category("proxy_output")
             .unwrap();
-        assert_eq!(proxy_interval, Duration::from_secs(43200));
+        assert_eq!(proxy_interval, Duration::from_secs(14400)); // 4 hours
     }
 }

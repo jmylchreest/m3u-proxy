@@ -2,7 +2,6 @@
 /// 
 /// This module contains all the default values for configuration options,
 /// making them easily changeable in one central location.
-
 // Database defaults
 pub const DEFAULT_DATABASE_URL: &str = "sqlite://./m3u-proxy.db";
 pub const DEFAULT_MAX_CONNECTIONS: u32 = 10;

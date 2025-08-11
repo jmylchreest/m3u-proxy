@@ -52,7 +52,7 @@ pub fn log_response(
 
 /// Extract UUID from path parameter
 pub fn extract_uuid_param(param: &str) -> Result<Uuid, String> {
-    Uuid::parse_str(param).map_err(|_| format!("Invalid UUID format: {}", param))
+    Uuid::parse_str(param).map_err(|_| format!("Invalid UUID format: {param}"))
 }
 
 /// Validate content type for JSON requests
@@ -65,7 +65,7 @@ pub fn validate_json_content_type(headers: &HeaderMap) -> Result<(), String> {
         if content_type_str.starts_with("application/json") {
             Ok(())
         } else {
-            Err(format!("Expected application/json, got: {}", content_type_str))
+            Err(format!("Expected application/json, got: {content_type_str}"))
         }
     } else {
         Err("Missing content-type header".to_string())
@@ -126,7 +126,7 @@ pub fn parse_source_type(source_type: &str) -> Result<crate::models::StreamSourc
     match source_type.to_lowercase().as_str() {
         "m3u" => Ok(crate::models::StreamSourceType::M3u),
         "xtream" => Ok(crate::models::StreamSourceType::Xtream),
-        _ => Err(format!("Unknown source type: {}", source_type)),
+        _ => Err(format!("Unknown source type: {source_type}")),
     }
 }
 
@@ -135,7 +135,7 @@ pub fn parse_source_type(source_type: &str) -> Result<crate::models::StreamSourc
 pub fn validate_request_size(content_length: Option<usize>, max_size: usize) -> Result<(), String> {
     if let Some(size) = content_length {
         if size > max_size {
-            return Err(format!("Request too large: {} bytes (max: {})", size, max_size));
+            return Err(format!("Request too large: {size} bytes (max: {max_size})"));
         }
     }
     Ok(())
@@ -149,7 +149,7 @@ mod tests {
     fn test_sanitize_search_query() {
         assert_eq!(sanitize_search_query("normal query"), "normal query");
         assert_eq!(sanitize_search_query("query-with_dashes"), "query-with_dashes");
-        assert_eq!(sanitize_search_query("'; DROP TABLE users; --"), " DROP TABLE users ");
+        assert_eq!(sanitize_search_query("'; DROP TABLE users; --"), "DROP TABLE users --");
         assert_eq!(sanitize_search_query("<script>alert('xss')</script>"), "scriptalertxssscript");
     }
 

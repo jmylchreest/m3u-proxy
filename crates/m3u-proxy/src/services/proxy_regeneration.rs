@@ -309,8 +309,7 @@ impl ProxyRegenerationService {
             let active = self.active_regenerations.lock().await;
             if active.contains_key(&proxy_id) {
                 let message = format!(
-                    "Proxy {} is already actively regenerating, ignoring new {} trigger from source {}",
-                    proxy_id, trigger_source_type, trigger_source_id
+                    "Proxy {proxy_id} is already actively regenerating, ignoring new {trigger_source_type} trigger from source {trigger_source_id}"
                 );
                 debug!("{}", message);
                 return Ok(()); // Silently ignore to avoid error spam
@@ -360,7 +359,7 @@ impl ProxyRegenerationService {
             if let Some(ref progress_mgr) = progress_manager {
                 let stage_manager = progress_mgr.add_stage("delay", "Waiting").await;
                 if let Some(updater) = stage_manager.get_stage_updater("delay").await {
-                    updater.update_progress(10.0, &format!("Waiting {}s before regeneration", delay_seconds)).await;
+                    updater.update_progress(10.0, &format!("Waiting {delay_seconds}s before regeneration")).await;
                 }
             }
             info!("Proxy {} regeneration: waiting {}s before starting", proxy_id, delay_seconds);
@@ -416,8 +415,7 @@ impl ProxyRegenerationService {
             let active = self.active_regenerations.lock().await;
             if active.contains_key(&proxy_id) {
                 let message = format!(
-                    "Proxy {} is already actively regenerating, rejecting duplicate manual regeneration request",
-                    proxy_id
+                    "Proxy {proxy_id} is already actively regenerating, rejecting duplicate manual regeneration request"
                 );
                 warn!("{}", message);
                 return Err(message.into()); // Return error for manual requests so user gets feedback
@@ -455,7 +453,7 @@ impl ProxyRegenerationService {
         {
             let mut queued = self.queued_proxies.lock().await;
             if queued.contains(&proxy_id) {
-                let message = format!("Proxy {} is already queued for regeneration, rejecting duplicate manual request", proxy_id);
+                let message = format!("Proxy {proxy_id} is already queued for regeneration, rejecting duplicate manual request");
                 warn!("{}", message);
                 return Err(message.into());
             }
@@ -473,7 +471,7 @@ impl ProxyRegenerationService {
         if let Err(e) = self.manual_queue_sender.send(request) {
             // Remove from queued set if send failed
             self.queued_proxies.lock().await.remove(&proxy_id);
-            let message = format!("Failed to queue manual regeneration for proxy {}: {}", proxy_id, e);
+            let message = format!("Failed to queue manual regeneration for proxy {proxy_id}: {e}");
             error!("{}", message);
             return Err(message.into());
         }
@@ -522,7 +520,7 @@ impl ProxyRegenerationService {
         // Wait for completion and cleanup
         match active_regenerations.lock().await.remove(&proxy_id) {
             Some(handle) => {
-                handle.await.map_err(|e| format!("Task join error: {}", e))?;
+                handle.await.map_err(|e| format!("Task join error: {e}"))?;
             }
             None => return Err("Failed to find regeneration task".into()),
         }
@@ -579,7 +577,7 @@ impl ProxyRegenerationService {
                         if let Some(pm) = &progress_manager {
                             pm.fail(&error_msg).await;
                         }
-                        Err(format!("Pipeline execution failed: {}", error_msg).into())
+                        Err(format!("Pipeline execution failed: {error_msg}").into())
                     }
                     _ => {
                         let warning_msg = format!("Pipeline completed with unexpected status: {:?}", result.status);
@@ -596,7 +594,7 @@ impl ProxyRegenerationService {
                 error!("Failed to execute pipeline for proxy {}: {}", proxy_id, e);
                 factory.unregister_orchestrator(proxy_id).await;
                 if let Some(pm) = &progress_manager {
-                    pm.fail(&format!("Pipeline execution failed: {}", e)).await;
+                    pm.fail(&format!("Pipeline execution failed: {e}")).await;
                 }
                 Err(Box::new(e))
             }
@@ -752,12 +750,12 @@ impl ProxyRegenerationService {
                 let updater = progress_manager.get_stage_updater("proxy_regeneration").await
                     .or(progress_manager.get_stage_updater("manual_regeneration").await);
                 if let Some(updater) = updater {
-                    updater.update_progress(0.0, &format!("Pipeline execution failed: {}", error_msg)).await;
+                    updater.update_progress(0.0, &format!("Pipeline execution failed: {error_msg}")).await;
                 }
                 // Fail the overall operation
                 progress_manager.fail(&error_msg).await;
                 
-                return Err(format!("Pipeline execution failed for proxy {}", proxy_id).into());
+                return Err(format!("Pipeline execution failed for proxy {proxy_id}").into());
             }
             _ => {
                 warn!("Pipeline completed with status: {:?} for proxy {}", 
@@ -793,7 +791,7 @@ impl ProxyRegenerationService {
                     .await
                     .map_err(|_e| sqlx::Error::RowNotFound)
             }
-            _ => Err(sqlx::Error::TypeNotFound { type_name: format!("Invalid source_type: {}", source_type) }),
+            _ => Err(sqlx::Error::TypeNotFound { type_name: format!("Invalid source_type: {source_type}") }),
         }
     }
 
@@ -1183,7 +1181,7 @@ impl ProxyRegenerationService {
     async fn has_active_ingestions(&self) -> Result<bool, Box<dyn std::error::Error>> {
         // Use the injected ingestion state manager to check for active ingestions
         self.ingestion_state_manager.has_active_ingestions().await
-            .map_err(|e| format!("Failed to check ingestion status: {}", e).into())
+            .map_err(|e| format!("Failed to check ingestion status: {e}").into())
     }
 
     /// Create human-readable operation name for progress tracking
@@ -1228,8 +1226,7 @@ impl ProxyRegenerationService {
         };
 
         format!(
-            "Regenerating Proxy {} (triggered by {}: {})",
-            proxy_name, source_type_display, source_name
+            "Regenerating Proxy {proxy_name} (triggered by {source_type_display}: {source_name})"
         )
     }
 
@@ -1247,7 +1244,7 @@ impl ProxyRegenerationService {
             _ => proxy_id.to_string(),
         };
 
-        format!("Manual Regeneration: Proxy {}", proxy_name)
+        format!("Manual Regeneration: Proxy {proxy_name}")
     }
 }
 
@@ -1255,16 +1252,24 @@ impl ProxyRegenerationService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sysinfo::SystemExt;
 
     #[tokio::test]
     async fn test_deduplication() {
+        // Create mock services for testing
+        let ingestion_state_manager = Arc::new(IngestionStateManager::new());
+        let progress_service = Arc::new(ProgressService::new(ingestion_state_manager.clone()));
+        
         let service = ProxyRegenerationService::new(
             sqlx::SqlitePool::connect(":memory:").await.unwrap(),
             Config::default(),
-            Some(RegenerationConfig { delay_seconds: 1, max_concurrent: 1 }),
-            sandboxed_file_manager::SandboxedManager::new("/tmp").unwrap(),
+            Some(RegenerationConfig { delay_seconds: 1, max_concurrent: 1, coordination_window_seconds: 5 }),
+            sandboxed_file_manager::SandboxedManager::builder()
+                .base_directory(std::env::temp_dir().join("m3u_proxy_test"))
+                .build().await.unwrap(),
             Arc::new(tokio::sync::RwLock::new(sysinfo::System::new())),
-            None, // No progress manager for test
+            progress_service,
+            ingestion_state_manager,
         );
 
         let proxy_id = Uuid::new_v4();
@@ -1281,13 +1286,20 @@ mod tests {
 
     #[tokio::test] 
     async fn test_manual_regeneration() {
+        // Create mock services for testing
+        let ingestion_state_manager = Arc::new(IngestionStateManager::new());
+        let progress_service = Arc::new(ProgressService::new(ingestion_state_manager.clone()));
+        
         let service = ProxyRegenerationService::new(
             sqlx::SqlitePool::connect(":memory:").await.unwrap(),
             Config::default(),
             None,
-            sandboxed_file_manager::SandboxedManager::new("/tmp").unwrap(),
+            sandboxed_file_manager::SandboxedManager::builder()
+                .base_directory(std::env::temp_dir().join("m3u_proxy_test2"))
+                .build().await.unwrap(),
             Arc::new(tokio::sync::RwLock::new(sysinfo::System::new())),
-            None, // No progress manager for test
+            progress_service,
+            ingestion_state_manager,
         );
 
         let proxy_id = Uuid::new_v4();

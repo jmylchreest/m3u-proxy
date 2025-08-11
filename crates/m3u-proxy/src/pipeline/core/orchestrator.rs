@@ -265,7 +265,7 @@ impl PipelineOrchestrator {
         
         // Suspend cleanup during pipeline execution
         self.file_manager.suspend_cleanup(DEFAULT_PIPELINE_SUSPENSION_DURATION).await
-            .map_err(|e| PipelineError::FileSystem(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| PipelineError::FileSystem(std::io::Error::other(e.to_string())))?;
         info!("Pipeline cleanup suspended for execution {}", self.execution.execution_prefix);
         
         // Start background task to extend suspension periodically
@@ -319,7 +319,7 @@ impl PipelineOrchestrator {
                 Err(e) => {
                     error!("Stage {} failed: {}", stage_name, e);
                     self.execution.status = PipelineStatus::Failed;
-                    return Err(PipelineError::stage_error(stage_id, format!("Stage execution failed: {}", e)));
+                    return Err(PipelineError::stage_error(stage_id, format!("Stage execution failed: {e}")));
                 }
             }
             
@@ -398,6 +398,7 @@ impl Drop for SuspensionExtensionGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::models::PipelineArtifact;
     use uuid::Uuid;
     use std::sync::Arc;
     
@@ -443,8 +444,12 @@ mod tests {
         // Create a simple test execution
         let execution = PipelineExecution::new(Uuid::new_v4());
         
-        // Create file manager (in a real test, you'd use a proper temp directory)
-        let file_manager = SandboxedManager::new("/tmp").unwrap();
+        // Create file manager with proper test temp directory
+        let file_manager = SandboxedManager::builder()
+            .base_directory(std::env::temp_dir().join("orchestrator_test"))
+            .build()
+            .await
+            .unwrap();
         let output_manager = file_manager.clone();
         
         // Create orchestrator

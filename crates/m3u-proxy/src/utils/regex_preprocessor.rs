@@ -119,7 +119,7 @@ impl RegexPreprocessor {
                         current_literal.clear();
                     }
                     // Skip character class [...] and check if it's optional
-                    while let Some(c) = chars.next() {
+                    for c in chars.by_ref() {
                         if c == ']' { break; }
                     }
                     // Character classes are handled separately - don't add to literals
@@ -132,7 +132,7 @@ impl RegexPreprocessor {
                     }
                     // Skip to matching closing paren - groups are complex
                     let mut paren_depth = 1;
-                    while let Some(c) = chars.next() {
+                    for c in chars.by_ref() {
                         match c {
                             '(' => paren_depth += 1,
                             ')' => {
@@ -218,7 +218,7 @@ impl RegexPreprocessor {
         let mut quantifier_str = String::new();
         
         // Collect everything until '}'
-        while let Some(ch) = chars.next() {
+        for ch in chars.by_ref() {
             if ch == '}' { break; }
             quantifier_str.push(ch);
         }
@@ -263,7 +263,7 @@ impl RegexPreprocessor {
                 '[' => {
                     // Character classes are more complex - collect chars but check if class is optional
                     let mut class_chars = Vec::new();
-                    while let Some(c) = chars.next() {
+                    for c in chars.by_ref() {
                         if c == ']' { 
                             break; 
                         } else if self.config.precheck_special_chars.contains(c) {
@@ -310,11 +310,11 @@ mod tests {
     fn test_should_run_regex_with_special_chars() {
         let preprocessor = RegexPreprocessor::default();
         
-        // Test with + character (should run regex)
-        assert!(preprocessor.should_run_regex("UK: ITV 1 +1 ◉", ".*test.*", "test"));
+        // Test with + character where regex pattern requires + (should run regex)
+        assert!(preprocessor.should_run_regex("UK: ITV 1 +1 ◉", ".*\\+.*", "test"));
         
-        // Test with - character (should run regex) 
-        assert!(preprocessor.should_run_regex("Channel -2H", ".*test.*", "test"));
+        // Test with - character where regex pattern requires - (should run regex) 
+        assert!(preprocessor.should_run_regex("Channel -2H", ".*\\-.*", "test"));
         
         // Test without special chars but with pattern that has no significant literals (should run)
         assert!(preprocessor.should_run_regex("BBC One HD", ".*", "test"));

@@ -66,95 +66,103 @@ pub struct WebServer {
     addr: SocketAddr,
 }
 
+/// Builder for WebServer with many dependencies
+#[derive(Clone)]
+pub struct WebServerBuilder {
+    pub config: Config,
+    pub database: Database,
+    pub state_manager: IngestionStateManager,
+    pub cache_invalidation_tx: CacheInvalidationSender,
+    pub data_mapping_service: DataMappingService,
+    pub logo_asset_service: LogoAssetService,
+    pub logo_asset_storage: LogoAssetStorage,
+    pub proxy_regeneration_service: ProxyRegenerationService,
+    pub temp_file_manager: SandboxedManager,
+    pub pipeline_file_manager: SandboxedManager,
+    pub logos_cached_file_manager: SandboxedManager,
+    pub proxy_output_file_manager: SandboxedManager,
+    pub relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
+    pub relay_config_resolver: crate::services::relay_config_resolver::RelayConfigResolver,
+    pub system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+    pub progress_service: std::sync::Arc<ProgressService>,
+    pub stream_source_service: std::sync::Arc<crate::services::StreamSourceBusinessService>,
+    pub epg_source_service: std::sync::Arc<crate::services::EpgSourceService>,
+    pub log_broadcaster: broadcast::Sender<crate::web::api::log_streaming::LogEvent>,
+    pub runtime_settings_store: RuntimeSettingsStore,
+}
+
+impl WebServerBuilder {
+    pub async fn build(self) -> Result<WebServer> {
+        WebServer::new_from_builder(self).await
+    }
+}
+
 impl WebServer {
     /// Create a new web server with the refactored handler structure
-    pub async fn new(
-        config: Config,
-        database: Database,
-        state_manager: IngestionStateManager,
-        cache_invalidation_tx: CacheInvalidationSender,
-        data_mapping_service: DataMappingService,
-        logo_asset_service: LogoAssetService,
-        logo_asset_storage: LogoAssetStorage,
-        proxy_regeneration_service: ProxyRegenerationService,
-        temp_file_manager: SandboxedManager, // Use temp for both temp and preview operations
-        pipeline_file_manager: SandboxedManager, // Pipeline-specific file manager
-        logos_cached_file_manager: SandboxedManager,
-        proxy_output_file_manager: SandboxedManager,
-        relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
-        relay_config_resolver: crate::services::relay_config_resolver::RelayConfigResolver,
-        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
-        progress_service: std::sync::Arc<ProgressService>,
-        stream_source_service: std::sync::Arc<crate::services::StreamSourceBusinessService>,
-        epg_source_service: std::sync::Arc<crate::services::EpgSourceService>,
-        log_broadcaster: broadcast::Sender<crate::web::api::log_streaming::LogEvent>,
-        runtime_settings_store: RuntimeSettingsStore,
-    ) -> Result<Self> {
+    pub async fn new(builder: WebServerBuilder) -> Result<Self> {
+        Self::new_from_builder(builder).await
+    }
+    
+    /// Create a new web server from builder (internal implementation)
+    async fn new_from_builder(builder: WebServerBuilder) -> Result<Self> {
         tracing::info!("WebServer using native pipeline");
 
-        // Create logo cache scanner for cached logo discovery
-        // Use the same path that the logo asset storage is configured with
         let logo_cache_scanner = {
-            let base_path = logo_asset_storage.cached_logo_dir.clone();
+            let base_path = builder.logo_asset_storage.cached_logo_dir.clone();
 
             Some(crate::services::logo_cache_scanner::LogoCacheScanner::new(
-                logos_cached_file_manager.clone(),
+                builder.logos_cached_file_manager.clone(),
                 base_path,
             ))
         };
 
-        // Use shared progress service and other services passed from main application
-
         let source_linking_service =
-            std::sync::Arc::new(crate::services::SourceLinkingService::new(database.clone()));
+            std::sync::Arc::new(crate::services::SourceLinkingService::new(builder.database.clone()));
 
-        // Create proxy service with pipeline file manager for pipeline operations
         let proxy_service = crate::proxy::ProxyService::new(
-            config.storage.clone(),
-            pipeline_file_manager.clone(),
-            proxy_output_file_manager.clone(),
-            system.clone(),
+            builder.config.storage.clone(),
+            builder.pipeline_file_manager.clone(),
+            builder.proxy_output_file_manager.clone(),
+            builder.system.clone(),
         );
 
-        // Use the log broadcaster passed from main.rs (already wired to tracing subscriber)
-        let log_broadcaster = Some(log_broadcaster);
+        let log_broadcaster = Some(builder.log_broadcaster.clone());
 
         let app = Self::create_router(AppState {
-            database: database.clone(),
-            config: config.clone(),
-            state_manager,
-            cache_invalidation_tx,
-            data_mapping_service,
-            logo_asset_service,
-            logo_asset_storage,
-            proxy_regeneration_service,
-            preview_file_manager: temp_file_manager.clone(), // Use temp for preview operations
-            logo_file_manager: logos_cached_file_manager,
-            proxy_output_file_manager,
-            temp_file_manager,
-            metrics_logger: MetricsLogger::new(database.pool()),
-            scheduler_event_tx: None, // Will be set later when scheduler is initialized
+            database: builder.database.clone(),
+            config: builder.config.clone(),
+            state_manager: builder.state_manager,
+            cache_invalidation_tx: builder.cache_invalidation_tx,
+            data_mapping_service: builder.data_mapping_service,
+            logo_asset_service: builder.logo_asset_service,
+            logo_asset_storage: builder.logo_asset_storage,
+            proxy_regeneration_service: builder.proxy_regeneration_service,
+            preview_file_manager: builder.temp_file_manager.clone(),
+            logo_file_manager: builder.logos_cached_file_manager,
+            proxy_output_file_manager: builder.proxy_output_file_manager,
+            temp_file_manager: builder.temp_file_manager,
+            metrics_logger: MetricsLogger::new(builder.database.pool()),
+            scheduler_event_tx: None,
             logo_cache_scanner,
             session_tracker: std::sync::Arc::new(
                 crate::proxy::session_tracker::SessionTracker::default(),
             ),
-            relay_manager,
-            relay_config_resolver,
-            system,
-            // New service layer components
-            stream_source_service,
-            epg_source_service,
+            relay_manager: builder.relay_manager,
+            relay_config_resolver: builder.relay_config_resolver,
+            system: builder.system,
+            stream_source_service: builder.stream_source_service,
+            epg_source_service: builder.epg_source_service,
             source_linking_service,
             proxy_service,
-            progress_service,
+            progress_service: builder.progress_service,
             active_regeneration_requests: Arc::new(Mutex::new(HashSet::new())),
             log_broadcaster,
             start_time: chrono::Utc::now(),
-            runtime_settings_store,
+            runtime_settings_store: builder.runtime_settings_store,
         })
         .await;
 
-        let addr: SocketAddr = format!("{}:{}", config.web.host, config.web.port).parse()?;
+        let addr: SocketAddr = format!("{}:{}", builder.config.web.host, builder.config.web.port).parse()?;
 
         Ok(Self { app, addr })
     }

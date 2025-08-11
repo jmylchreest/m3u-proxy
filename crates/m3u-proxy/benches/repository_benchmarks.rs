@@ -4,7 +4,6 @@
 //! to ensure they meet performance requirements and detect regressions.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use std::time::Duration;
 
 // =============================================================================
 // DATABASE RETRY PERFORMANCE BENCHMARKS

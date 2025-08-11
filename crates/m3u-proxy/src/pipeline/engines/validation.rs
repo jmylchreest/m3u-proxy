@@ -65,7 +65,7 @@ impl DataMappingValidator {
                 
                 for field in &available_fields {
                     if error_message.contains(field) {
-                        field_errors.push(format!("Issue with field: {}", field));
+                        field_errors.push(format!("Issue with field: {field}"));
                     }
                 }
                 
@@ -136,6 +136,12 @@ impl StageValidator for DataMappingValidator {
 /// Filtering validator for channel filtering rules
 pub struct FilteringValidator;
 
+impl Default for FilteringValidator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FilteringValidator {
     pub fn new() -> Self {
         Self
@@ -176,7 +182,7 @@ impl FilteringValidator {
                 
                 for field in &available_fields {
                     if error_message.contains(field) {
-                        field_errors.push(format!("Issue with field: {}", field));
+                        field_errors.push(format!("Issue with field: {field}"));
                     }
                 }
                 
@@ -238,6 +244,12 @@ impl StageValidator for FilteringValidator {
 /// Numbering validator for channel numbering rules
 pub struct NumberingValidator;
 
+impl Default for NumberingValidator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NumberingValidator {
     pub fn new() -> Self {
         Self
@@ -268,7 +280,7 @@ impl NumberingValidator {
                 
                 for field in &available_fields {
                     if error_message.contains(field) {
-                        field_errors.push(format!("Issue with field: {}", field));
+                        field_errors.push(format!("Issue with field: {field}"));
                     }
                 }
                 
@@ -323,6 +335,12 @@ impl StageValidator for NumberingValidator {
 /// Generation validator for output generation rules
 pub struct GenerationValidator;
 
+impl Default for GenerationValidator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GenerationValidator {
     pub fn new() -> Self {
         Self
@@ -353,7 +371,7 @@ impl GenerationValidator {
                 
                 for field in &available_fields {
                     if error_message.contains(field) {
-                        field_errors.push(format!("Issue with field: {}", field));
+                        field_errors.push(format!("Issue with field: {field}"));
                     }
                 }
                 

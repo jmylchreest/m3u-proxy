@@ -228,7 +228,7 @@ mod tests {
     
     #[test]
     fn test_channel_helper_detection() {
-        let channel = Channel {
+        let _channel = Channel {
             id: Uuid::new_v4(),
             source_id: Uuid::new_v4(),
             tvg_id: None,
@@ -244,7 +244,7 @@ mod tests {
         };
         
         // Mock processors vector - would need actual processors for real test
-        let processors: Vec<Box<dyn HelperProcessor>> = vec![];
+        let _processors: Vec<Box<dyn HelperProcessor>> = vec![];
         
         // This would return true if we had actual logo helper processor
         // assert!(channel.contains_any_helpers(&processors));

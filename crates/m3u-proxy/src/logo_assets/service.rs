@@ -25,6 +25,22 @@ pub struct LogoAssetService {
     logo_file_manager: Option<SandboxedManager>,
 }
 
+
+/// Parameters for creating a logo asset with specific ID
+#[derive(Debug)]
+pub struct CreateAssetWithIdParams {
+    pub asset_id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub file_name: String,
+    pub file_path: String,
+    pub file_size: i64,
+    pub mime_type: String,
+    pub asset_type: LogoAssetType,
+    pub source_url: Option<String>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+}
 impl LogoAssetService {
     pub fn new(pool: Pool<Sqlite>, storage: LogoAssetStorage) -> Self {
         Self {
@@ -35,8 +51,9 @@ impl LogoAssetService {
         }
     }
 
-    pub fn with_file_manager(mut self, logo_file_manager: SandboxedManager) -> Self {
-        self.logo_file_manager = Some(logo_file_manager);
+    /// Update the service with a file manager
+    pub fn with_file_manager(mut self, file_manager: SandboxedManager) -> Self {
+        self.logo_file_manager = Some(file_manager);
         self
     }
 
@@ -44,31 +61,21 @@ impl LogoAssetService {
     pub fn get_cached_logo_url(&self, cache_id: &str, base_url: &str) -> String {
         format!(
             "{}/api/v1/logos/cached/{}",
-            base_url.trim_end_matches('/'),
+            base_url.trim_end_matches("/"),
             cache_id
         )
     }
-
     pub async fn create_asset_with_id(
         &self,
-        asset_id: Uuid,
-        name: String,
-        description: Option<String>,
-        file_name: String,
-        file_path: String,
-        file_size: i64,
-        mime_type: String,
-        asset_type: LogoAssetType,
-        source_url: Option<String>,
-        width: Option<i32>,
-        height: Option<i32>,
+        params: CreateAssetWithIdParams,
     ) -> Result<LogoAsset, sqlx::Error> {
-        let asset_type_str = match asset_type {
+        let asset_type_str = match params.asset_type {
             LogoAssetType::Uploaded => "uploaded",
             LogoAssetType::Cached => "cached",
         };
 
-        let asset_id_str = asset_id.to_string();
+        let asset_id_str = params.asset_id.to_string();
+
         let created_at = Utc::now().to_rfc3339();
         let updated_at = created_at.clone();
 
@@ -79,33 +86,32 @@ impl LogoAssetService {
             "#
         )
         .bind(&asset_id_str)
-        .bind(&name)
-        .bind(&description)
-        .bind(&file_name)
-        .bind(&file_path)
-        .bind(file_size)
-        .bind(&mime_type)
+        .bind(&params.name)
+        .bind(&params.description)
+        .bind(&params.file_name)
+        .bind(&params.file_path)
+        .bind(params.file_size)
+        .bind(&params.mime_type)
         .bind(asset_type_str)
-        .bind(&source_url)
-        .bind(width)
-        .bind(height)
-        .bind(&created_at)
+        .bind(&params.source_url)
+        .bind(params.width)
+        .bind(params.height)
         .bind(&updated_at)
         .execute(&self.pool)
         .await?;
 
         Ok(LogoAsset {
-            id: asset_id,
-            name,
-            description,
-            file_name,
-            file_path,
-            file_size,
-            mime_type,
-            asset_type,
-            source_url,
-            width,
-            height,
+            id: params.asset_id,
+            name: params.name,
+            description: params.description,
+            file_name: params.file_name,
+            file_path: params.file_path,
+            file_size: params.file_size,
+            mime_type: params.mime_type,
+            asset_type: params.asset_type,
+            source_url: params.source_url,
+            width: params.width,
+            height: params.height,
             parent_asset_id: None,
             format_type: LogoFormatType::Original,
             created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&created_at)
@@ -185,7 +191,7 @@ impl LogoAssetService {
         );
 
         if let Some(search) = &request.search {
-            let search_clause = format!(" AND name LIKE '%{}%'", search);
+            let search_clause = format!(" AND name LIKE '%{search}%'");
             query.push_str(&search_clause);
             count_query.push_str(&search_clause);
         }
@@ -195,14 +201,13 @@ impl LogoAssetService {
                 LogoAssetType::Uploaded => "uploaded",
                 LogoAssetType::Cached => "cached",
             };
-            let type_clause = format!(" AND asset_type = '{}'", type_str);
+            let type_clause = format!(" AND asset_type = '{type_str}'");
             query.push_str(&type_clause);
             count_query.push_str(&type_clause);
         }
 
         query.push_str(&format!(
-            " ORDER BY created_at DESC LIMIT {} OFFSET {}",
-            limit, offset
+            " ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
         ));
 
         let rows = sqlx::query(&query).fetch_all(&self.pool).await?;
@@ -353,8 +358,7 @@ impl LogoAssetService {
 
         // First get uploaded logos from database
         let query = format!(
-            "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original' AND asset_type = 'uploaded' AND name LIKE '%{}%' ORDER BY name LIMIT {}",
-            search_query, limit
+            "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original' AND asset_type = 'uploaded' AND name LIKE '%{search_query}%' ORDER BY name LIMIT {limit}"
         );
 
         let rows = sqlx::query(&query).fetch_all(&self.pool).await?;
@@ -659,7 +663,7 @@ impl LogoAssetService {
             normalized.push('?');
             let param_string: Vec<String> = sorted_params
                 .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
+                .map(|(k, v)| format!("{k}={v}"))
                 .collect();
             normalized.push_str(&param_string.join("&"));
         }
@@ -669,7 +673,7 @@ impl LogoAssetService {
         hasher.update(normalized.as_bytes());
         let hash = hasher.finalize();
 
-        Ok(format!("{:x}", hash))
+        Ok(format!("{hash:x}"))
     }
 
     /// Download and cache a logo from a URL
@@ -724,8 +728,8 @@ impl LogoAssetService {
         // Check if already cached using the sandboxed file manager
         if let Some(file_manager) = &self.logo_file_manager {
             // The file manager's base is already the cached logo directory, so use direct paths
-            let logo_file_path = format!("{}.png", cache_id);
-            let metadata_file_path = format!("{}.json", cache_id);
+            let logo_file_path = format!("{cache_id}.png");
+            let metadata_file_path = format!("{cache_id}.json");
 
             let file_exists = file_manager.read(&logo_file_path).await.is_ok();
             let metadata_exists = file_manager.read(&metadata_file_path).await.is_ok();
@@ -760,7 +764,7 @@ impl LogoAssetService {
             let metadata_path = self
                 .storage
                 .cached_logo_dir
-                .join(format!("{}.json", cache_id));
+                .join(format!("{cache_id}.json"));
 
             let file_exists = cache_file_path.exists();
             let metadata_exists = metadata_path.exists();
@@ -820,7 +824,7 @@ impl LogoAssetService {
         if let Some(file_manager) = &self.logo_file_manager {
             // Use sandboxed file manager
             // The file manager's base is already the cached logo directory, so use direct paths
-            let logo_file_path = format!("{}.png", cache_id);
+            let logo_file_path = format!("{cache_id}.png");
 
             file_manager
                 .write(&logo_file_path, &png_bytes)
@@ -864,16 +868,14 @@ impl LogoAssetService {
                 ).await {
                     debug!("Failed to generate metadata for {}: {}", cache_id, e);
                 }
-            } else {
-                if let Err(e) = self.generate_metadata_for_cached_logo(
-                    &cache_id,
-                    logo_url,
-                    channel_name,
-                    channel_group,
-                    extra_fields,
-                ).await {
-                    debug!("Failed to generate metadata for {}: {}", cache_id, e);
-                }
+            } else if let Err(e) = self.generate_metadata_for_cached_logo(
+                &cache_id,
+                logo_url,
+                channel_name,
+                channel_group,
+                extra_fields,
+            ).await {
+                debug!("Failed to generate metadata for {}: {}", cache_id, e);
             }
         }
 
@@ -908,7 +910,7 @@ impl LogoAssetService {
         let metadata_path = self
             .storage
             .cached_logo_dir
-            .join(format!("{}.json", cache_id));
+            .join(format!("{cache_id}.json"));
         let json_content = serde_json::to_string_pretty(&metadata)?;
 
         tokio::fs::write(&metadata_path, json_content).await?;
@@ -944,7 +946,7 @@ impl LogoAssetService {
 
         if let Some(file_manager) = &self.logo_file_manager {
             // The file manager's base is already the cached logo directory, so use direct paths
-            let metadata_file_path = format!("{}.json", cache_id);
+            let metadata_file_path = format!("{cache_id}.json");
             let json_content = serde_json::to_string_pretty(&metadata)?;
 
             file_manager
@@ -1102,21 +1104,28 @@ mod tests {
 
     #[test]
     fn test_convert_image_to_png() {
-        // Test the conversion logic with a minimal PNG
-        // Create a simple 1x1 red pixel PNG
-        let png_bytes = vec![
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-            0x00, 0x00, 0x00, 0x0D, // IHDR chunk length
-            0x49, 0x48, 0x44, 0x52, // IHDR
-            0x00, 0x00, 0x00, 0x01, // width = 1
-            0x00, 0x00, 0x00, 0x01, // height = 1
-            0x08, 0x02, 0x00, 0x00, 0x00, // bit depth, color type, etc.
-            0x90, 0x77, 0x53, 0xDE, // CRC
-        ];
-
-        // Test that we can detect this is already a PNG format
+        use image::{RgbImage, ImageBuffer};
+        use std::io::Cursor;
+        
+        // Create a simple 1x1 RGB image programmatically
+        let img: RgbImage = ImageBuffer::new(1, 1);
+        
+        // Convert to PNG bytes
+        let mut png_bytes = Vec::new();
+        {
+            let mut cursor = Cursor::new(&mut png_bytes);
+            img.write_to(&mut cursor, image::ImageFormat::Png)
+                .expect("Failed to write PNG to memory");
+        }
+        
+        // Test that we can load this PNG
         let result = image::load_from_memory(&png_bytes);
-        assert!(result.is_ok(), "Should be able to load test PNG");
+        assert!(result.is_ok(), "Should be able to load generated PNG");
+        
+        // Verify it's recognized as PNG
+        let loaded_image = result.unwrap();
+        assert_eq!(loaded_image.width(), 1);
+        assert_eq!(loaded_image.height(), 1);
     }
 
     #[test]

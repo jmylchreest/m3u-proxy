@@ -103,11 +103,11 @@ impl SessionStats {
         let seconds = total_seconds % 60;
         
         if hours > 0 {
-            format!("{}h{:02}m{:02}s", hours, minutes, seconds)
+            format!("{hours}h{minutes:02}m{seconds:02}s")
         } else if minutes > 0 {
-            format!("{}m{:02}s", minutes, seconds)
+            format!("{minutes}m{seconds:02}s")
         } else {
-            format!("{}s", seconds)
+            format!("{seconds}s")
         }
     }
 
@@ -167,10 +167,10 @@ impl SessionTracker {
             session_stats.channel_id,
             session_stats.upstream_url,
             session_stats.client_info.user_agent.as_ref()
-                .map(|ua| format!(" user_agent=\"{}\"", ua))
+                .map(|ua| format!(" user_agent=\"{ua}\""))
                 .unwrap_or_default(),
             session_stats.client_info.referer.as_ref()
-                .map(|ref_| format!(" referer=\"{}\"", ref_))
+                .map(|ref_| format!(" referer=\"{ref_}\""))
                 .unwrap_or_default()
         );
         
@@ -232,7 +232,7 @@ impl SessionTracker {
                 session.proxy_name,
                 session.channel_name,
                 session.client_info.user_agent.as_ref()
-                    .map(|ua| format!(" user_agent=\"{}\"", ua))
+                    .map(|ua| format!(" user_agent=\"{ua}\""))
                     .unwrap_or(" user_agent=unknown".to_string())
             );
         }
@@ -340,7 +340,7 @@ impl SessionTracker {
                     
                     let top_proxies: Vec<String> = proxy_vec.iter()
                         .take(5)
-                        .map(|(name, count)| format!("{}: {}", name, count))
+                        .map(|(name, count)| format!("{name}: {count}"))
                         .collect();
                     
                     debug!("event=top_proxies proxies=\"{}\"", top_proxies.join(", "));
@@ -353,7 +353,7 @@ impl SessionTracker {
                     
                     let top_channels: Vec<String> = channel_vec.iter()
                         .take(5)
-                        .map(|(name, count)| format!("{}: {}", name, count))
+                        .map(|(name, count)| format!("{name}: {count}"))
                         .collect();
                     
                     debug!("event=top_channels channels=\"{}\"", top_channels.join(", "));
@@ -412,10 +412,10 @@ impl SessionTracker {
                             session.chunks_served,
                             session.errors,
                             session.client_info.user_agent.as_ref()
-                                .map(|ua| format!(" user_agent=\"{}\"", ua))
+                                .map(|ua| format!(" user_agent=\"{ua}\""))
                                 .unwrap_or(" user_agent=unknown".to_string()),
                             session.last_error.as_ref()
-                                .map(|err| format!(" last_error=\"{}\"", err))
+                                .map(|err| format!(" last_error=\"{err}\""))
                                 .unwrap_or_default()
                         );
                     }

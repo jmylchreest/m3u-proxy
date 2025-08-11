@@ -228,7 +228,7 @@ impl Database {
                 last_generated_at: row.get("last_generated_at"),
                 is_active: row.get("is_active"),
                 auto_regenerate: false, // Default value, field was added later
-                proxy_mode: crate::models::StreamProxyMode::from_str(&row.get::<String, _>("proxy_mode")),
+                proxy_mode: row.get::<String, _>("proxy_mode").parse::<crate::models::StreamProxyMode>().unwrap_or_default(),
                 upstream_timeout: row.get("upstream_timeout"),
                 buffer_size: row.get("buffer_size"),
                 max_concurrent_streams: row.get("max_concurrent_streams"),
@@ -260,7 +260,7 @@ impl Database {
             last_generated_at: row.get("last_generated_at"),
             is_active: row.get("is_active"),
             auto_regenerate: false, // Default value, field was added later
-            proxy_mode: StreamProxyMode::from_str(&row.get::<String, _>("proxy_mode")),
+            proxy_mode: row.get::<String, _>("proxy_mode").parse::<StreamProxyMode>().unwrap_or_default(),
             upstream_timeout: row.get("upstream_timeout"),
             buffer_size: row.get("buffer_size"),
             max_concurrent_streams: row.get("max_concurrent_streams"),
@@ -461,16 +461,14 @@ impl Database {
                 ).map_err(|e| anyhow::anyhow!("Failed to parse updated_at: {}", e))?,
                 last_generated_at: row
                     .get::<Option<String>, _>("last_generated_at")
-                    .map(|s| crate::utils::datetime::DateTimeParser::parse_flexible(&s).ok())
-                    .flatten(),
+                    .and_then(|s| crate::utils::datetime::DateTimeParser::parse_flexible(&s).ok()),
                 is_active: row.get("is_active"),
                 auto_regenerate: row.get("auto_regenerate"),
                 cache_channel_logos: row.get("cache_channel_logos"),
                 cache_program_logos: row.get("cache_program_logos"),
                 relay_profile_id: row
                     .get::<Option<String>, _>("relay_profile_id")
-                    .map(|s| parse_uuid_flexible(&s).ok())
-                    .flatten(),
+                    .and_then(|s| parse_uuid_flexible(&s).ok()),
             };
             proxies.push(proxy);
         }

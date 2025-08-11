@@ -28,7 +28,7 @@ impl FromRow<'_, sqlx::sqlite::SqliteRow> for DataMappingRule {
         let id = parse_uuid_flexible(&id_str)
             .map_err(|e| sqlx::Error::ColumnDecode {
                 index: "id".to_string(),
-                source: format!("UUID parsing error: {}", e).into(),
+                source: format!("UUID parsing error: {e}").into(),
             })?;
         
         Ok(DataMappingRule {

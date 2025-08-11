@@ -337,6 +337,12 @@ pub struct FilteringEngine<T> {
     performance_stats: HashMap<String, (usize, usize, Duration)>, // (included_count, excluded_count, total_time)
 }
 
+impl<T> Default for FilteringEngine<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> FilteringEngine<T> {
     pub fn new() -> Self {
         Self {

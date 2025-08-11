@@ -211,13 +211,13 @@ impl ArtifactRegistry {
         // Add to type index
         self.by_type
             .entry(artifact_type)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(artifact_id.clone());
         
         // Add to stage index
         self.by_stage
             .entry(stage)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(artifact_id);
     }
     

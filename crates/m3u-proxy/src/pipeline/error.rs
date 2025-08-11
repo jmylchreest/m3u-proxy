@@ -49,20 +49,20 @@ pub enum PipelineError {
 impl fmt::Display for PipelineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PipelineError::Database(e) => write!(f, "Database error: {}", e),
-            PipelineError::FileSystem(e) => write!(f, "File system error: {}", e),
+            PipelineError::Database(e) => write!(f, "Database error: {e}"),
+            PipelineError::FileSystem(e) => write!(f, "File system error: {e}"),
             PipelineError::StageExecution { stage, message, .. } => {
-                write!(f, "Stage '{}' execution failed: {}", stage, message)
+                write!(f, "Stage '{stage}' execution failed: {message}")
             }
-            PipelineError::Configuration(msg) => write!(f, "Configuration error: {}", msg),
-            PipelineError::Progress(msg) => write!(f, "Progress tracking error: {}", msg),
-            PipelineError::NotFound(msg) => write!(f, "Resource not found: {}", msg),
-            PipelineError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
+            PipelineError::Configuration(msg) => write!(f, "Configuration error: {msg}"),
+            PipelineError::Progress(msg) => write!(f, "Progress tracking error: {msg}"),
+            PipelineError::NotFound(msg) => write!(f, "Resource not found: {msg}"),
+            PipelineError::InvalidInput(msg) => write!(f, "Invalid input: {msg}"),
             PipelineError::ExternalService { service, message } => {
-                write!(f, "External service '{}' error: {}", service, message)
+                write!(f, "External service '{service}' error: {message}")
             }
-            PipelineError::Serialization(msg) => write!(f, "Serialization error: {}", msg),
-            PipelineError::Generic(msg) => write!(f, "Pipeline error: {}", msg),
+            PipelineError::Serialization(msg) => write!(f, "Serialization error: {msg}"),
+            PipelineError::Generic(msg) => write!(f, "Pipeline error: {msg}"),
         }
     }
 }

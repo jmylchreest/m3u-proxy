@@ -147,22 +147,22 @@ pub fn handle_error(error: AppError) -> impl IntoResponse {
         ),
         AppError::NotFound { resource, id } => (
             StatusCode::NOT_FOUND,
-            format!("{} with id '{}' not found", resource, id),
+            format!("{resource} with id '{id}' not found"),
             None,
         ),
         AppError::PermissionDenied { action, resource } => (
             StatusCode::FORBIDDEN,
-            format!("Permission denied: {} on {}", action, resource),
+            format!("Permission denied: {action} on {resource}"),
             None,
         ),
         AppError::Configuration { message } => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Configuration error: {}", message),
+            format!("Configuration error: {message}"),
             None,
         ),
         AppError::ExternalService { service, message } => (
             StatusCode::BAD_GATEWAY,
-            format!("External service error ({}): {}", service, message),
+            format!("External service error ({service}): {message}"),
             None,
         ),
         AppError::Http(_) => (
@@ -192,12 +192,12 @@ pub fn handle_error(error: AppError) -> impl IntoResponse {
         ),
         AppError::OperationInProgress { operation_type, resource } => (
             StatusCode::CONFLICT,
-            format!("Operation already in progress: {} on {}", operation_type, resource),
+            format!("Operation already in progress: {operation_type} on {resource}"),
             None,
         ),
         AppError::Internal { message } => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Internal error: {}", message),
+            format!("Internal error: {message}"),
             None,
         ),
     };
@@ -235,7 +235,7 @@ pub fn bad_request(message: &str) -> impl IntoResponse {
 pub fn not_found(resource: &str, id: &str) -> impl IntoResponse {
     (
         StatusCode::NOT_FOUND,
-        Json(ApiResponse::<()>::error(format!("{} with id '{}' not found", resource, id))),
+        Json(ApiResponse::<()>::error(format!("{resource} with id '{id}' not found"))),
     )
 }
 

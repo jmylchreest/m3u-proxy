@@ -368,7 +368,7 @@ mod tests {
 
         assert!(!transition.is_cleanup_applied());
 
-        let cleaned = transition.apply_cleanup();
+        let _cleaned = transition.apply_cleanup();
         assert!(transition.is_cleanup_applied());
 
         let data = transition.take();

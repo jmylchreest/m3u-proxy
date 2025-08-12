@@ -1,5 +1,5 @@
 {
-  "name": "m3u-proxy-ui",
+  "name": "m3u-proxy-frontend",
   "version": "0.0.8",
   "private": true,
   "scripts": {

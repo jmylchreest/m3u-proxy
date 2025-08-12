@@ -13,7 +13,7 @@ interface RefreshProgressProps {
 }
 
 interface ProgressState {
-  state: 'idle' | 'processing' | 'completed' | 'error'
+  state: 'idle' | 'processing' | 'completed' | 'error' | 'preparing' | 'connecting' | 'downloading' | 'saving' | 'cleanup' | 'cancelled'
   percentage: number
   message?: string
   operationId?: string

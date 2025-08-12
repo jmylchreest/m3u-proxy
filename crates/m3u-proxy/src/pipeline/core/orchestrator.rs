@@ -159,7 +159,7 @@ impl PipelineOrchestrator {
                     self.file_manager.clone(),
                     self.execution.execution_prefix.clone(),
                     proxy_config.id,
-                    "http://localhost:8080".to_string(), // TODO: Get this from config
+                    logo_config.base_url.clone(),
                     self.progress_manager.clone(),
                 ).await
             })

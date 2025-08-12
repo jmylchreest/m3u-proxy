@@ -65,18 +65,24 @@ impl Database {
         sqlx::query("PRAGMA synchronous = NORMAL")
             .execute(&pool)
             .await?;
-        sqlx::query("PRAGMA cache_size = -64000")
+        let cache_size_query = format!("PRAGMA cache_size = {}", &config.cache_size);
+        sqlx::query(&cache_size_query)
             .execute(&pool)
-            .await?; // 64MB cache
+            .await?;
         sqlx::query("PRAGMA temp_store = MEMORY")
             .execute(&pool)
             .await?;
         sqlx::query("PRAGMA mmap_size = 268435456")
             .execute(&pool)
             .await?; // 256MB mmap
-        sqlx::query("PRAGMA busy_timeout = 5000")
+        let busy_timeout_query = format!("PRAGMA busy_timeout = {}", &config.busy_timeout);
+        sqlx::query(&busy_timeout_query)
             .execute(&pool)
-            .await?; // 5 second global timeout to reduce deadlock duration
+            .await?;
+        let wal_autocheckpoint_query = format!("PRAGMA wal_autocheckpoint = {}", config.wal_autocheckpoint);
+        sqlx::query(&wal_autocheckpoint_query)
+            .execute(&pool)
+            .await?;
 
         let batch_config = config.batch_sizes.clone().unwrap_or_default();
 

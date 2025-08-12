@@ -1,100 +1,111 @@
 [database]
+# Environment variable: M3U_PROXY_DATABASE__URL
 url = "sqlite://./m3u-proxy.db"
+# Environment variable: M3U_PROXY_DATABASE__MAX_CONNECTIONS
 max_connections = 10
-busy_timeout = "30s"
-cache_size = "64MB"
+# Environment variable: M3U_PROXY_DATABASE__BUSY_TIMEOUT
+busy_timeout = "5000"
+# Environment variable: M3U_PROXY_DATABASE__CACHE_SIZE
+cache_size = "-64000"
+# Environment variable: M3U_PROXY_DATABASE__WAL_AUTOCHECKPOINT
 wal_autocheckpoint = 1000
 
 [database.batch_sizes]
+# Environment variable: M3U_PROXY_DATABASE__BATCH_SIZES__EPG_PROGRAMS
 epg_programs = 1800
+# Environment variable: M3U_PROXY_DATABASE__BATCH_SIZES__STREAM_CHANNELS
 stream_channels = 500
 
 [web]
+# Environment variable: M3U_PROXY_WEB__HOST
 host = "0.0.0.0"
+# Environment variable: M3U_PROXY_WEB__PORT
 port = 8080
+# Environment variable: M3U_PROXY_WEB__BASE_URL
 base_url = "http://localhost:8080"
+# Environment variable: M3U_PROXY_WEB__REQUEST_TIMEOUT
 request_timeout = "30s"
+# Environment variable: M3U_PROXY_WEB__MAX_REQUEST_SIZE
 max_request_size = "10MB"
 
 [storage]
+# Environment variable: M3U_PROXY_STORAGE__M3U_PATH
 m3u_path = "./data/m3u"
+# Environment variable: M3U_PROXY_STORAGE__M3U_RETENTION
 m3u_retention = "30d"
+# Environment variable: M3U_PROXY_STORAGE__M3U_CLEANUP_INTERVAL
 m3u_cleanup_interval = "4h"
+# Environment variable: M3U_PROXY_STORAGE__UPLOADED_LOGO_PATH
 uploaded_logo_path = "./data/logos/uploaded"
+# Environment variable: M3U_PROXY_STORAGE__CACHED_LOGO_PATH
 cached_logo_path = "./data/logos/cached"
+# Environment variable: M3U_PROXY_STORAGE__CACHED_LOGO_RETENTION
 cached_logo_retention = "90d"
+# Environment variable: M3U_PROXY_STORAGE__CACHED_LOGO_CLEANUP_INTERVAL
 cached_logo_cleanup_interval = "12h"
-proxy_versions_to_keep = 3
+# Environment variable: M3U_PROXY_STORAGE__TEMP_PATH
 temp_path = "./data/temp"
+# Environment variable: M3U_PROXY_STORAGE__TEMP_RETENTION
 temp_retention = "5m"
+# Environment variable: M3U_PROXY_STORAGE__TEMP_CLEANUP_INTERVAL
 temp_cleanup_interval = "1m"
+# Environment variable: M3U_PROXY_STORAGE__PIPELINE_PATH
 pipeline_path = "./data/pipeline"
+# Environment variable: M3U_PROXY_STORAGE__PIPELINE_RETENTION
 pipeline_retention = "10m"
+# Environment variable: M3U_PROXY_STORAGE__PIPELINE_CLEANUP_INTERVAL
 pipeline_cleanup_interval = "2m"
-clean_orphan_logos = true
 
 [ingestion]
+# Environment variable: M3U_PROXY_INGESTION__PROGRESS_UPDATE_INTERVAL
 progress_update_interval = 1000
+# Environment variable: M3U_PROXY_INGESTION__RUN_MISSED_IMMEDIATELY
 run_missed_immediately = true
+# Environment variable: M3U_PROXY_INGESTION__USE_NEW_SOURCE_HANDLERS
 use_new_source_handlers = true
 
 [data_mapping_engine]
+# Environment variable: M3U_PROXY_DATA_MAPPING_ENGINE__PRECHECK_SPECIAL_CHARS
 precheck_special_chars = "+-@#$%&*=<>!~`€£{}[]."
+# Environment variable: M3U_PROXY_DATA_MAPPING_ENGINE__MINIMUM_LITERAL_LENGTH
 minimum_literal_length = 2
 
-[proxy_generation]
-enable_memory_tracking = true
-enable_profiling = false
-
-[proxy_generation.memory]
-max_memory_mb = 512
-batch_size = 1000
-enable_parallel_processing = true
-memory_check_interval = 100
-warning_threshold = 0.8
-
-[proxy_generation.epg]
-include_past_programs = false
-days_ahead = 7
-days_behind = 1
-deduplicate_programs = true
-max_programs_per_channel = 1000
-
-[pipeline]
-max_memory_mb = 512
-suspension_duration = "5m"
-logo_batch_size = 1000
-channel_batch_size = 100
-epg_batch_size = 1000
-max_retries = 3
-
-[metrics]
-raw_log_retention = "7d"
-hourly_stats_retention = "30d"
-daily_stats_retention = "365d"
-session_timeout = "15s"
-housekeeper_interval = "1m"
-
 [relay]
+# Environment variable: M3U_PROXY_RELAY__FFMPEG_COMMAND
 ffmpeg_command = "ffmpeg"
+# Environment variable: M3U_PROXY_RELAY__FFPROBE_COMMAND
 ffprobe_command = "ffprobe"
+# Environment variable: M3U_PROXY_RELAY__ANALYZEDURATION
 analyzeduration = "10s"
+# Environment variable: M3U_PROXY_RELAY__PROBESIZE
 probesize = "10MB"
 
 [relay.buffer]
+# Environment variable: M3U_PROXY_RELAY__BUFFER__MAX_BUFFER_SIZE
 max_buffer_size = 52428800
+# Environment variable: M3U_PROXY_RELAY__BUFFER__MAX_CHUNKS
 max_chunks = 1000
+# Environment variable: M3U_PROXY_RELAY__BUFFER__CHUNK_TIMEOUT_SECONDS
 chunk_timeout_seconds = 60
+# Environment variable: M3U_PROXY_RELAY__BUFFER__CLIENT_TIMEOUT_SECONDS
 client_timeout_seconds = 30
+# Environment variable: M3U_PROXY_RELAY__BUFFER__CLEANUP_INTERVAL_SECONDS
 cleanup_interval_seconds = 5
+# Environment variable: M3U_PROXY_RELAY__BUFFER__ENABLE_FILE_SPILL
 enable_file_spill = false
+# Environment variable: M3U_PROXY_RELAY__BUFFER__MAX_FILE_SPILL_SIZE
 max_file_spill_size = 524288000
 
 [operational]
+# Environment variable: M3U_PROXY_OPERATIONAL__LOG_BUFFER_SIZE
 log_buffer_size = 200
+# Environment variable: M3U_PROXY_OPERATIONAL__SIMILARITY_THRESHOLD
 similarity_threshold = 0.6
 
 [operational.progress_intervals]
+# Environment variable: M3U_PROXY_OPERATIONAL__PROGRESS_INTERVALS__LOGO_PROGRESS_INTERVAL
 logo_progress_interval = 10
+# Environment variable: M3U_PROXY_OPERATIONAL__PROGRESS_INTERVALS__CHANNEL_DEBUG_INTERVAL
 channel_debug_interval = 1000
+# Environment variable: M3U_PROXY_OPERATIONAL__PROGRESS_INTERVALS__EPG_PROGRESS_INTERVAL
 epg_progress_interval = 10000

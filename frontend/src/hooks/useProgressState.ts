@@ -20,7 +20,7 @@ export interface ProgressState {
       id: string
       name: string
       percentage: number
-      state: 'idle' | 'processing' | 'completed' | 'error'
+      state: 'idle' | 'processing' | 'completed' | 'error' | 'preparing' | 'connecting' | 'downloading' | 'saving' | 'cleanup' | 'cancelled'
       stage_step: string | null
     }>
   } | null

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use figment::{Figment, providers::{Toml, Env, Format}};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::info;
@@ -9,82 +10,10 @@ pub mod file_categories;
 
 use defaults::*;
 
-/// Pipeline configuration for processing optimization
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PipelineConfig {
-    /// Maximum memory usage in MB before spilling to disk
-    pub max_memory_mb: Option<usize>,
-    /// Pipeline suspension duration when errors occur
-    #[serde(default = "default_suspension_duration")]
-    pub suspension_duration: String,
-    /// Logo processing batch size
-    #[serde(default = "default_logo_batch_size")]
-    pub logo_batch_size: usize,
-    /// Channel processing batch size
-    #[serde(default = "default_channel_batch_size")]
-    pub channel_batch_size: usize,
-    /// EPG processing batch size
-    #[serde(default = "default_epg_batch_size")]
-    pub epg_batch_size: usize,
-    /// Retry attempts for failed operations
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-}
 
-/// Metrics configuration for stream access tracking and retention
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricsConfig {
-    /// Retention period for raw access logs
-    #[serde(default = "default_raw_log_retention")]
-    pub raw_log_retention: String,
-    
-    /// Retention period for hourly aggregates
-    #[serde(default = "default_hourly_stats_retention")]
-    pub hourly_stats_retention: String,
-    
-    /// Retention period for daily aggregates
-    #[serde(default = "default_daily_stats_retention")]
-    pub daily_stats_retention: String,
-    
-    /// Client session timeout
-    #[serde(default = "default_session_timeout")]
-    pub session_timeout: String,
-    
-    /// Housekeeper run interval
-    #[serde(default = "default_housekeeper_interval")]
-    pub housekeeper_interval: String,
-}
 
-fn default_raw_log_retention() -> String { "7d".to_string() }
-fn default_hourly_stats_retention() -> String { "30d".to_string() }
-fn default_daily_stats_retention() -> String { "365d".to_string() }
-fn default_session_timeout() -> String { "15s".to_string() }
-fn default_housekeeper_interval() -> String { "1m".to_string() }
 
-impl Default for PipelineConfig {
-    fn default() -> Self {
-        Self {
-            max_memory_mb: Some(512), // 512MB default limit
-            suspension_duration: default_suspension_duration(),
-            logo_batch_size: default_logo_batch_size(),
-            channel_batch_size: default_channel_batch_size(),
-            epg_batch_size: default_epg_batch_size(),
-            max_retries: default_max_retries(),
-        }
-    }
-}
 
-impl Default for MetricsConfig {
-    fn default() -> Self {
-        Self {
-            raw_log_retention: default_raw_log_retention(),
-            hourly_stats_retention: default_hourly_stats_retention(),
-            daily_stats_retention: default_daily_stats_retention(),
-            session_timeout: default_session_timeout(),
-            housekeeper_interval: default_housekeeper_interval(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -93,11 +22,7 @@ pub struct Config {
     pub storage: StorageConfig,
     pub ingestion: IngestionConfig,
     pub data_mapping_engine: Option<DataMappingEngineConfig>,
-    pub proxy_generation: Option<ProxyGenerationConfig>,
-    pub pipeline: Option<PipelineConfig>,
-    pub metrics: Option<MetricsConfig>,
     pub relay: Option<RelayConfig>,
-    pub operational: Option<OperationalConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,8 +80,6 @@ pub struct StorageConfig {
     #[serde(default = "default_cached_logo_cleanup_interval")]
     pub cached_logo_cleanup_interval: String,
     
-    #[serde(default = "default_proxy_versions_to_keep")]
-    pub proxy_versions_to_keep: u32,
     
     #[serde(default = "default_temp_path")]
     pub temp_path: Option<String>,
@@ -172,9 +95,6 @@ pub struct StorageConfig {
     #[serde(default = "default_pipeline_cleanup_interval")]
     pub pipeline_cleanup_interval: String,
 
-    /// Automatically clean up orphaned logo database entries when uploaded_logo_path changes
-    #[serde(default = "default_clean_orphan_logos")]
-    pub clean_orphan_logos: bool,
 }
 
 
@@ -200,36 +120,21 @@ fn default_base_url() -> String {
 }
 
 fn default_busy_timeout() -> String {
-    "30s".to_string()
+    "5000".to_string()
 }
 
 fn default_cache_size() -> String {
-    "64MB".to_string()
+    "-64000".to_string()
 }
 
 fn default_wal_autocheckpoint() -> u32 {
     1000
 }
 
-fn default_suspension_duration() -> String {
-    "5m".to_string()
-}
 
-fn default_logo_batch_size() -> usize {
-    1000
-}
 
-fn default_channel_batch_size() -> usize {
-    100
-}
 
-fn default_epg_batch_size() -> usize {
-    1000
-}
 
-fn default_max_retries() -> u32 {
-    3
-}
 
 fn default_analyzeduration() -> String {
     "10s".to_string()
@@ -239,25 +144,6 @@ fn default_probesize() -> String {
     "10MB".to_string()
 }
 
-fn default_log_buffer_size() -> usize {
-    200
-}
-
-fn default_similarity_threshold() -> f64 {
-    0.60
-}
-
-fn default_logo_progress_interval() -> usize {
-    10
-}
-
-fn default_channel_debug_interval() -> usize {
-    1000
-}
-
-fn default_epg_progress_interval() -> usize {
-    10000
-}
 
 // Storage defaults
 fn default_m3u_path() -> PathBuf {
@@ -272,9 +158,6 @@ fn default_cached_logo_path() -> PathBuf {
     PathBuf::from(DEFAULT_CACHED_LOGO_PATH)
 }
 
-fn default_proxy_versions_to_keep() -> u32 {
-    DEFAULT_PROXY_VERSIONS_TO_KEEP
-}
 
 fn default_temp_path() -> Option<String> {
     Some(DEFAULT_TEMP_PATH.to_string())
@@ -284,9 +167,6 @@ fn default_pipeline_path() -> PathBuf {
     PathBuf::from(DEFAULT_PIPELINE_PATH)
 }
 
-fn default_clean_orphan_logos() -> bool {
-    DEFAULT_CLEAN_ORPHAN_LOGOS
-}
 
 // Storage retention defaults
 fn default_m3u_retention() -> String {
@@ -368,47 +248,6 @@ pub struct DataMappingEngineConfig {
     pub minimum_literal_length: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProxyGenerationConfig {
-    /// Memory configuration for proxy generation
-    pub memory: ProxyMemoryConfig,
-    /// EPG generation configuration
-    pub epg: EpgGenerationConfig,
-    /// Enable detailed memory tracking and reporting
-    pub enable_memory_tracking: bool,
-    /// Enable performance profiling
-    pub enable_profiling: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProxyMemoryConfig {
-    /// Maximum memory usage in MB for proxy generation
-    pub max_memory_mb: Option<usize>,
-    /// Batch size for processing channels
-    pub batch_size: usize,
-    /// Enable parallel processing (uses more memory but faster)
-    pub enable_parallel_processing: bool,
-    /// Memory usage check interval (in number of processed items)
-    pub memory_check_interval: usize,
-    /// Warning threshold as percentage of max memory (0.0-1.0)
-    pub warning_threshold: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EpgGenerationConfig {
-    /// Include programs that have already ended
-    pub include_past_programs: bool,
-    /// Number of days of future EPG data to include
-    pub days_ahead: u32,
-    /// Number of days of past EPG data to include
-    pub days_behind: u32,
-    /// Remove duplicate programs with same title and time
-    pub deduplicate_programs: bool,
-    /// Maximum number of programs per channel (None for unlimited)
-    pub max_programs_per_channel: Option<usize>,
-    /// Time zone for EPG normalization (when normalize_to_utc is true)
-    pub source_timezone: Option<String>,
-}
 
 impl DatabaseBatchConfig {
     /// SQLite variable limit (32,766 in 3.32.0+, 999 in older versions)
@@ -454,32 +293,6 @@ impl Default for DatabaseBatchConfig {
     }
 }
 
-/// Operational configuration for logging and system behavior
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OperationalConfig {
-    /// Log buffer size for in-memory logging
-    #[serde(default = "default_log_buffer_size")]
-    pub log_buffer_size: usize,
-    /// Similarity threshold for expression matching (0.0-1.0)
-    #[serde(default = "default_similarity_threshold")]
-    pub similarity_threshold: f64,
-    /// Progress reporting intervals for various operations
-    pub progress_intervals: Option<ProgressIntervalConfig>,
-}
-
-/// Progress interval configuration for UI responsiveness
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProgressIntervalConfig {
-    /// Logo progress batch interval
-    #[serde(default = "default_logo_progress_interval")]
-    pub logo_progress_interval: usize,
-    /// Channel debug interval
-    #[serde(default = "default_channel_debug_interval")]
-    pub channel_debug_interval: usize,
-    /// EPG progress log interval
-    #[serde(default = "default_epg_progress_interval")]
-    pub epg_progress_interval: usize,
-}
 
 impl Default for DataMappingEngineConfig {
     fn default() -> Self {
@@ -490,61 +303,6 @@ impl Default for DataMappingEngineConfig {
     }
 }
 
-impl Default for OperationalConfig {
-    fn default() -> Self {
-        Self {
-            log_buffer_size: default_log_buffer_size(),
-            similarity_threshold: default_similarity_threshold(),
-            progress_intervals: Some(ProgressIntervalConfig::default()),
-        }
-    }
-}
-
-impl Default for ProgressIntervalConfig {
-    fn default() -> Self {
-        Self {
-            logo_progress_interval: default_logo_progress_interval(),
-            channel_debug_interval: default_channel_debug_interval(),
-            epg_progress_interval: default_epg_progress_interval(),
-        }
-    }
-}
-
-impl Default for ProxyGenerationConfig {
-    fn default() -> Self {
-        Self {
-            memory: ProxyMemoryConfig::default(),
-            epg: EpgGenerationConfig::default(),
-            enable_memory_tracking: true,
-            enable_profiling: false,
-        }
-    }
-}
-
-impl Default for ProxyMemoryConfig {
-    fn default() -> Self {
-        Self {
-            max_memory_mb: Some(512), // 512MB default limit
-            batch_size: 1000,
-            enable_parallel_processing: true,
-            memory_check_interval: 100,
-            warning_threshold: 0.8, // Warn at 80% of limit
-        }
-    }
-}
-
-impl Default for EpgGenerationConfig {
-    fn default() -> Self {
-        Self {
-            include_past_programs: false,
-            days_ahead: 7,
-            days_behind: 1,
-            deduplicate_programs: true,
-            max_programs_per_channel: Some(1000),
-            source_timezone: None, // Auto-detect from EPG source
-        }
-    }
-}
 
 /// Relay system configuration for FFmpeg-based stream processing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -674,14 +432,12 @@ impl Default for Config {
                 cached_logo_path: PathBuf::from("./data/logos/cached"),
                 cached_logo_retention: "90d".to_string(),
                 cached_logo_cleanup_interval: "12h".to_string(),
-                proxy_versions_to_keep: 3,
                 temp_path: Some("./data/temp".to_string()),
                 temp_retention: "5m".to_string(),
                 temp_cleanup_interval: "1m".to_string(),
                 pipeline_path: PathBuf::from("./data/pipeline"),
                 pipeline_retention: "10m".to_string(),
                 pipeline_cleanup_interval: "2m".to_string(),
-                clean_orphan_logos: true,
             },
             ingestion: IngestionConfig {
                 progress_update_interval: 1000,
@@ -689,11 +445,7 @@ impl Default for Config {
                 use_new_source_handlers: default_use_new_source_handlers(),
             },
             data_mapping_engine: Some(DataMappingEngineConfig::default()),
-            proxy_generation: Some(ProxyGenerationConfig::default()),
-            pipeline: Some(PipelineConfig::default()),
-            metrics: Some(MetricsConfig::default()),
             relay: Some(RelayConfig::default()),
-            operational: Some(OperationalConfig::default()),
         }
     }
 }
@@ -707,16 +459,21 @@ impl Config {
     }
 
     pub fn load_from_file(config_file: &str) -> Result<Self> {
-        if std::path::Path::new(&config_file).exists() {
-            let contents = std::fs::read_to_string(config_file)?;
-            Ok(toml::from_str(&contents)?)
-        } else {
+        // Create default config file if it doesn't exist
+        if !std::path::Path::new(&config_file).exists() {
             let default_config = Self::default();
             let contents = toml::to_string_pretty(&default_config)?;
-            std::fs::write(config_file, contents)?;
+            std::fs::write(&config_file, contents)?;
             info!("Created default config file: {}", config_file);
-            Ok(default_config)
         }
+        
+        // Load config with figment (TOML file + environment variables)
+        let config: Config = Figment::new()
+            .merge(Toml::file(&config_file))
+            .merge(Env::prefixed("M3U_PROXY_").split("__"))
+            .extract()?;
+            
+        Ok(config)
     }
 }
 

@@ -335,9 +335,6 @@ async fn main() -> Result<()> {
     // Clone proxy regeneration service for background processing
     let bg_proxy_regeneration_service = proxy_regeneration_service.clone();
 
-    // Configuration for services
-    let metrics_config = config.clone();
-
     // Initialize relay manager with shared system
     let relay_manager = std::sync::Arc::new(
         m3u_proxy::services::RelayManager::new(
@@ -421,7 +418,7 @@ async fn main() -> Result<()> {
     }
 
     // Now start the background services after the web server is listening
-    info!("Starting background processor for auto-regeneration");
+    info!("Starting background processor for intelligent auto-regeneration (monitors all source types, compares timestamps)");
     bg_proxy_regeneration_service.start_processor();
 
     info!("Starting scheduler service");
@@ -431,12 +428,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Metrics housekeeper service disabled - historical statistics tracking removed
-    if metrics_config.metrics.is_some() {
-        info!("Metrics housekeeper disabled (historical statistics removed)");
-    } else {
-        tracing::debug!("Metrics housekeeper disabled (no configuration found)");
-    }
 
     info!("All services started successfully");
 

@@ -24,9 +24,9 @@ use std::collections::HashMap;
 
 // Configurable batch sizes for memory optimization
 const CHANNEL_PROCESSING_BATCH_SIZE: usize = 100;  // Process channels in batches for detailed logging
-const CHANNEL_DEBUG_INTERVAL: usize = 1000;        // Log progress every N channels
 const EPG_PROGRAMS_BATCH_SIZE: usize = 1000;       // Stream EPG programs in batches to avoid loading all into memory
 const EPG_PROGRESS_LOG_INTERVAL: usize = 10000;    // Log EPG progress every N programs
+const CHANNEL_PROGRESS_INTERVAL: usize = 1000;     // Report progress every N channels
 
 pub struct DataMappingStage {
     db_pool: SqlitePool,
@@ -151,7 +151,6 @@ impl DataMappingStage {
             let mut batch_content = String::new();
             // Use configurable batch size constants
             const BATCH_SIZE: usize = CHANNEL_PROCESSING_BATCH_SIZE;
-            const DEBUG_INTERVAL: usize = CHANNEL_DEBUG_INTERVAL;
             
             // Set up data mapping engine if we have rules
             let mut engine = if !rules.is_empty() {
@@ -209,8 +208,9 @@ impl DataMappingStage {
                                 channel_count += 1;
                                 current_batch.push(channel);
                                 
-                                // Process batch when it reaches BATCH_SIZE or log progress
-                                if current_batch.len() >= BATCH_SIZE || channel_count % DEBUG_INTERVAL == 0 {
+                                
+                                // Process batch when it reaches BATCH_SIZE
+                                if current_batch.len() >= BATCH_SIZE {
                                     if !current_batch.is_empty() {
                                         let batch_result = if let Some((ref mut engine, ref rule_name_map)) = engine {
                                             // Process batch through engine
@@ -297,14 +297,14 @@ impl DataMappingStage {
                                             batch_content.push('\n');
                                         }
                                         
-                                        // Write to file if we have content
+                                        // Write to file if we have content (keeping original streaming approach)
                                         if !batch_content.is_empty() {
                                             if !output_file_created {
-                                                // First write across all sources - create file
+                                                // First write - create file
                                                 self.file_manager.write(&output_file_path, batch_content.as_bytes()).await?;
                                                 output_file_created = true;
                                             } else {
-                                                // Subsequent writes - append to existing file
+                                                // Subsequent writes - append
                                                 let existing_content = self.file_manager.read(&output_file_path).await?;
                                                 let mut combined_content = String::from_utf8(existing_content)?;
                                                 combined_content.push_str(&batch_content);
@@ -314,8 +314,8 @@ impl DataMappingStage {
                                         }
                                     }
                                     
-                                    // Log progress update
-                                    if channel_count % DEBUG_INTERVAL == 0 {
+                                    // Update progress every CHANNEL_PROGRESS_INTERVAL channels
+                                    if channel_count % CHANNEL_PROGRESS_INTERVAL == 0 {
                                         let completion_percentage = if total_channels > 0 {
                                             (channel_count as f64 / total_channels as f64 * 100.0).round() as u32
                                         } else {

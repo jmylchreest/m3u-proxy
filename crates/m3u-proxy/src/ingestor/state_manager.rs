@@ -299,7 +299,7 @@ impl IngestionStateManager {
     pub async fn has_active_ingestions(&self) -> Result<bool, Box<dyn std::error::Error>> {
         let states = self.states.read().await;
         
-        for (_, progress) in states.iter() {
+        for (_source_id, progress) in states.iter() {
             match progress.state {
                 crate::models::IngestionState::Idle 
                 | crate::models::IngestionState::Completed 

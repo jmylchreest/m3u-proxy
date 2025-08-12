@@ -121,6 +121,14 @@ export function NotificationBell({
     }
   }
 
+  const formatOperationTypeTitle = (operationType: string) => {
+    return operationType
+      .replace('_', ' ')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ')
+  }
+
   // Resize handlers
   const handleMouseMove = useCallback((e: MouseEvent) => {
     const deltaY = e.clientY - startYRef.current
@@ -177,7 +185,7 @@ export function NotificationBell({
         <PopoverContent className="w-96 p-0" align="end">
           <div className="flex items-center justify-between p-4 border-b">
             <h3 className="font-semibold">
-              {operationType ? `${operationType.replace('_', ' ')} Events` : 'Recent Activity'}
+              {operationType ? `${formatOperationTypeTitle(operationType)} Events` : 'Recent Activity'}
             </h3>
             <Button
               variant="ghost"

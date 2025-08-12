@@ -563,7 +563,7 @@ export interface ProgressStage {
   id: string;
   name: string;
   percentage: number;
-  state: 'idle' | 'processing' | 'completed' | 'error';
+  state: 'idle' | 'preparing' | 'connecting' | 'downloading' | 'processing' | 'saving' | 'cleanup' | 'completed' | 'error' | 'cancelled';
   stage_step: string | null;
 }
 
@@ -574,7 +574,7 @@ export interface ProgressEvent {
   operation_type: 'epg_ingestion' | 'stream_ingestion' | 'proxy_regeneration';
   owner_type: 'epg_source' | 'stream_source' | 'proxy';
   owner_id: string;
-  state: 'idle' | 'processing' | 'completed' | 'error';
+  state: 'idle' | 'preparing' | 'connecting' | 'downloading' | 'processing' | 'saving' | 'cleanup' | 'completed' | 'error' | 'cancelled';
   current_stage: string;
   overall_percentage: number;
   stages: ProgressStage[];

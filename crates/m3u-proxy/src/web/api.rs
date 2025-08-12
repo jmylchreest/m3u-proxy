@@ -3164,6 +3164,7 @@ pub async fn refresh_epg_source_unified(
                     
                     // Emit scheduler event for manual refresh trigger
                     state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
+                    
                     Ok(Json(serde_json::json!({
                         "success": true,
                         "message": "EPG source refresh started",

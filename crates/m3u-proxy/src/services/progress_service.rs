@@ -497,13 +497,15 @@ impl ProgressManager {
     
     /// Add a new stage to the operation
     pub async fn add_stage(&self, stage_id: &str, stage_name: &str) -> Arc<ProgressManager> {
-        {
+        let is_first_stage = {
             let mut stages = self.stages.write().await;
             
             // Check for ID collision
             if stages.iter().any(|s| s.id == stage_id) {
                 panic!("Stage ID collision: '{stage_id}' already exists");
             }
+            
+            let is_first = stages.is_empty();
             
             stages.push(ProgressStage {
                 id: stage_id.to_string(),
@@ -512,7 +514,17 @@ impl ProgressManager {
                 is_completed: false,
                 stage_description: None,
             });
-        } // Drop the write lock before calling recalculate_and_broadcast
+            
+            is_first
+        }; // Drop the write lock before calling recalculate_and_broadcast
+        
+        // If this is the first stage, set it as current
+        if is_first_stage {
+            let mut progress = self.progress.write().await;
+            progress.current_stage = stage_id.to_string();
+            progress.current_stage_name = stage_name.to_string();
+            drop(progress);
+        }
         
         // Recalculate overall progress with new stage count
         self.recalculate_and_broadcast().await;
@@ -561,11 +573,37 @@ impl ProgressManager {
     /// Mark a stage as completed
     pub async fn complete_stage(&self, stage_id: &str) {
         let mut stages = self.stages.write().await;
+        let mut next_stage_id: Option<String> = None;
+        
+        // Mark stage as completed
         if let Some(stage) = stages.iter_mut().find(|s| s.id == stage_id) {
             stage.progress_percentage = 100.0;
             stage.is_completed = true;
+            
+            // Find the next incomplete stage after completing this one
+            for stage in stages.iter() {
+                if !stage.is_complete() {
+                    next_stage_id = Some(stage.id.clone());
+                    break;
+                }
+            }
         }
+        
         drop(stages);
+        
+        // Automatically advance to next stage if there is one
+        if let Some(next_id) = next_stage_id {
+            let mut progress = self.progress.write().await;
+            progress.current_stage = next_id.clone();
+            
+            // Update current_stage_name if we can find the stage
+            let stages = self.stages.read().await;
+            if let Some(stage) = stages.iter().find(|s| s.id == next_id) {
+                progress.current_stage_name = stage.name.clone();
+            }
+            drop(stages);
+            drop(progress);
+        }
         
         self.recalculate_and_broadcast().await;
     }
@@ -606,12 +644,17 @@ impl ProgressManager {
         // Stage info is managed through stages vector
         
         let progress_copy = progress.clone();
+        let _owner_id = progress.owner_id;
         drop(progress);
         
-        // Store in service storage if available
+        // Store in service storage if available and remove from active operations
         if let Some(storage) = &self.progress_service_storage {
             let mut storage = storage.write().await;
             storage.insert(progress_copy.id, progress_copy.clone());
+            
+            // If this is a shared storage from ProgressService, also remove from active operations
+            // We need to access the parent ProgressService to remove from active_operations
+            // For now, we'll let the service handle cleanup via cleanup_completed()
         }
         
         let _ = self.broadcast_tx.send(progress_copy);
@@ -669,12 +712,10 @@ impl ProgressManager {
             
             // Note: current_stage is now managed explicitly by the orchestrator
             // Don't automatically change it based on stage completion status
-        } else {
-            // No stages means nothing to process, so we're completed
-            if progress.state == UniversalState::Idle {
-                progress.set_state(UniversalState::Completed);
-            }
         }
+        // CRITICAL BUG FIX: Do not automatically mark operations as completed just because they have no stages.
+        // Operations should only be completed when explicitly marked as complete via complete_operation().
+        // This was causing progress to show as "completed" immediately upon creation.
         
         // Set percentage AFTER state to override set_state's automatic 100% setting
         progress.overall_percentage = total_progress.clamp(0.0, 100.0);
@@ -857,6 +898,15 @@ impl ProgressService {
 
     /// Check if an operation is already in progress for a given owner
     pub async fn is_operation_in_progress(&self, owner_id: Uuid) -> bool {
+        // First check active_operations set (for newly created operations)
+        {
+            let active = self.active_operations.read().await;
+            if active.contains(&owner_id) {
+                return true;
+            }
+        }
+        
+        // Also check storage for operations that might be persisted
         let storage = self.storage.read().await;
         let active_operations: Vec<_> = storage.values()
             .filter(|progress| progress.owner_id == owner_id && !progress.is_complete())
@@ -871,6 +921,12 @@ impl ProgressService {
         }
         
         !active_operations.is_empty()
+    }
+    
+    /// Remove an operation from the active set (internal method)
+    pub async fn remove_from_active(&self, owner_id: Uuid) {
+        let mut active = self.active_operations.write().await;
+        active.remove(&owner_id);
     }
 
     /// Get all active progress states
@@ -1007,10 +1063,19 @@ impl ProgressService {
     /// Complete operation (backwards compatibility)
     pub async fn complete_operation(&self, operation_id: Uuid) {
         let mut storage = self.storage.write().await;
+        let mut owner_id_to_remove: Option<Uuid> = None;
+        
         if let Some(progress) = storage.get_mut(&operation_id) {
             progress.set_state(UniversalState::Completed);
+            owner_id_to_remove = Some(progress.owner_id);
         }
         drop(storage);
+        
+        // Remove from active operations set
+        if let Some(owner_id) = owner_id_to_remove {
+            let mut active = self.active_operations.write().await;
+            active.remove(&owner_id);
+        }
         
         self.broadcast_progress().await;
     }

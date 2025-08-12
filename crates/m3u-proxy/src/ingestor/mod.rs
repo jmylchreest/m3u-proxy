@@ -6,14 +6,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
 
-// Legacy ingestion modules have been archived - they are replaced by:
-// - StreamSourceService for stream sources 
-// - EpgSourceService for EPG sources
-// The archived modules can be found in /archive/legacy_ingestors/
 pub mod scheduler;
 pub mod state_manager;
-
-// IngestionAccumulator has been archived - use the new pipeline system instead
 pub use state_manager::{IngestionStateManager, ProcessingTrigger};
 
 #[async_trait]

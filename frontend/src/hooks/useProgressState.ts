@@ -77,7 +77,9 @@ export function useProgressState(resourceId: string): ProgressState {
       }
     }
 
-    const isActive = event.state === 'processing' || event.state === 'idle'
+    // Consider all non-terminal states as active (idle, processing, connecting, downloading, saving, cleanup)
+    // Terminal states are: completed, error, cancelled, failed
+    const isActive = !['completed', 'error', 'cancelled', 'failed'].includes(event.state)
     const isProcessing = event.state === 'processing'
     const isCompleted = event.state === 'completed'
     const isFailed = event.state === 'error'

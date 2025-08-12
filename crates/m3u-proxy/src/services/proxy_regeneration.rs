@@ -262,7 +262,9 @@ impl ProxyRegenerationService {
         
         // CRITICAL: Always check ingestion status before processing (ingestion has priority)
         let has_ingestion = match ingestion_state_manager.has_active_ingestions().await {
-            Ok(active) => active,
+            Ok(active) => {
+                active
+            },
             Err(e) => {
                 error!("Failed to check ingestion status: {}", e);
                 return;
@@ -565,6 +567,16 @@ impl ProxyRegenerationService {
                     crate::pipeline::models::PipelineStatus::Completed => {
                         info!("Successfully regenerated proxy {}", proxy_id);
                         factory.unregister_orchestrator(proxy_id).await;
+                        
+                        // CRITICAL FIX: Update the proxy's last_generated_at timestamp
+                        let stream_proxy_repo = crate::repositories::StreamProxyRepository::new(pool.clone());
+                        let update_time = chrono::Utc::now();
+                        if let Err(e) = stream_proxy_repo.update_last_generated(proxy_id).await {
+                            warn!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
+                        } else {
+                            info!("Updated last_generated_at timestamp for proxy {} to {}", proxy_id, update_time.to_rfc3339());
+                        }
+                        
                         if let Some(pm) = &progress_manager {
                             pm.complete().await;
                         }
@@ -724,10 +736,11 @@ impl ProxyRegenerationService {
                 
                 // Update the proxy's last_generated_at timestamp
                 let stream_proxy_repo = crate::repositories::StreamProxyRepository::new(self.pool.clone());
+                let update_time = chrono::Utc::now();
                 if let Err(e) = stream_proxy_repo.update_last_generated(proxy_id).await {
                     warn!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
                 } else {
-                    info!("Updated last_generated_at timestamp for proxy {}", proxy_id);
+                    info!("Updated last_generated_at timestamp for proxy {} to {}", proxy_id, update_time.to_rfc3339());
                 }
                 
                 let updater = progress_manager.get_stage_updater("proxy_regeneration").await
@@ -867,7 +880,6 @@ impl ProxyRegenerationService {
         {
             let pending = self.pending_regenerations.lock().await;
             if pending.contains_key(&proxy_id) {
-                debug!("Proxy {} already has a pending regeneration, skipping duplicate", proxy_id);
                 return;
             }
         }
@@ -875,7 +887,6 @@ impl ProxyRegenerationService {
         {
             let active = self.active_regenerations.lock().await;
             if active.contains_key(&proxy_id) {
-                debug!("Proxy {} already has an active regeneration, skipping duplicate", proxy_id);
                 return;
             }
         }
@@ -1068,20 +1079,62 @@ impl ProxyRegenerationService {
         }
     }
 
-    /// Monitor for completed EPG ingestions and queue affected proxies
-    pub async fn monitor_epg_completions(&self) {
-        // This would be called by a background task to check for recently completed EPG sources
-        // For now, we'll implement a simple approach that could be enhanced later
+    /// Monitor for completed source ingestions (EPG and stream) and queue affected proxies
+    /// Only triggers regeneration for proxies where source data is newer than proxy data
+    pub async fn monitor_source_completions(&self) {
         let pool = &self.pool;
+        let monitor_time = chrono::Utc::now();
+        debug!("Starting monitor_source_completions at {}", monitor_time.to_rfc3339());
         
-        // Look for EPG sources that completed ingestion in the last minute
+        // Find sources that have been updated more recently than any proxy that uses them
         match sqlx::query(
             r#"
-            SELECT id, name, updated_at 
-            FROM epg_sources 
-            WHERE is_active = 1 
-            AND datetime(updated_at) > datetime('now', '-1 minute')
-            ORDER BY updated_at DESC
+            WITH outdated_proxies AS (
+                -- Find stream sources newer than their associated proxies
+                SELECT DISTINCT
+                    ss.id as source_id,
+                    'stream' as source_type,
+                    ss.name as source_name,
+                    ss.last_ingested_at,
+                    p.id as proxy_id,
+                    p.name as proxy_name,
+                    p.updated_at as proxy_updated_at
+                FROM stream_sources ss
+                JOIN proxy_sources ps ON ps.source_id = ss.id
+                JOIN stream_proxies p ON p.id = ps.proxy_id
+                WHERE ss.is_active = 1 
+                AND p.is_active = 1
+                AND ss.last_ingested_at IS NOT NULL
+                AND (p.last_generated_at IS NULL OR datetime(ss.last_ingested_at) > datetime(p.last_generated_at))
+                
+                UNION ALL
+                
+                -- Find EPG sources newer than their associated proxies
+                SELECT DISTINCT
+                    es.id as source_id,
+                    'epg' as source_type,
+                    es.name as source_name,
+                    es.last_ingested_at,
+                    p.id as proxy_id,
+                    p.name as proxy_name,
+                    p.updated_at as proxy_updated_at
+                FROM epg_sources es
+                JOIN proxy_epg_sources pes ON pes.epg_source_id = es.id
+                JOIN stream_proxies p ON p.id = pes.proxy_id
+                WHERE es.is_active = 1 
+                AND p.is_active = 1
+                AND es.last_ingested_at IS NOT NULL
+                AND (p.last_generated_at IS NULL OR datetime(es.last_ingested_at) > datetime(p.last_generated_at))
+            )
+            SELECT 
+                source_id,
+                source_type, 
+                source_name,
+                COUNT(DISTINCT proxy_id) as affected_proxy_count,
+                MAX(last_ingested_at) as latest_ingestion
+            FROM outdated_proxies
+            GROUP BY source_id, source_type, source_name
+            ORDER BY latest_ingestion DESC
             "#
         )
         .fetch_all(pool)
@@ -1089,17 +1142,17 @@ impl ProxyRegenerationService {
         {
             Ok(rows) => {
                 for row in rows {
-                    let id: String = row.get("id");
-                    let name: String = row.get("name");
-                    if let Ok(source_id) = id.parse::<Uuid>() {
-                        debug!("Found recently updated EPG source: {} ({})", name, source_id);
+                    let source_id_str: String = row.get("source_id");
+                    let source_type: String = row.get("source_type");
+                    
+                    if let Ok(source_id) = source_id_str.parse::<Uuid>() {
                         // COORDINATION FIX: Use coordinated method for background monitoring
-                        self.queue_affected_proxies_coordinated(source_id, "epg").await;
+                        self.queue_affected_proxies_coordinated(source_id, &source_type).await;
                     }
                 }
             }
             Err(e) => {
-                error!("Failed to monitor EPG completions: {}", e);
+                error!("Failed to monitor source completions: {}", e);
             }
         }
     }
@@ -1124,14 +1177,14 @@ impl ProxyRegenerationService {
         }))
     }
 
-    /// Start the background processor for monitoring EPG completions
+    /// Start the background processor for monitoring source completions
     pub fn start_processor(&self) {
         let service = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60)); // Check every minute
             loop {
                 interval.tick().await;
-                service.monitor_epg_completions().await;
+                service.monitor_source_completions().await;
             }
         });
         info!("Started proxy regeneration background processor");
@@ -1307,8 +1360,8 @@ mod tests {
         let result = service.queue_manual_regeneration(proxy_id).await;
         assert!(result.is_ok());
         
-        // Should have one active regeneration
-        let active_count = service.active_regenerations.lock().await.len();
-        assert_eq!(active_count, 1);
+        // Should have one queued regeneration (not active, since no worker is running)
+        let queued_count = service.queued_proxies.lock().await.len();
+        assert_eq!(queued_count, 1);
     }
 }

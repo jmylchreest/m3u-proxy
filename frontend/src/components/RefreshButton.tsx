@@ -38,7 +38,7 @@ export function RefreshButton({
 }: RefreshButtonProps) {
   const progressState = useProgressState(resourceId)
   const { handleApiError, dismissConflict, getConflictState } = useConflictHandler()
-  const wasActiveRef = useRef(false)
+  const lastEventRef = useRef<typeof progressState.event>(null)
   
   const conflictState = getConflictState(resourceId)
 
@@ -47,17 +47,20 @@ export function RefreshButton({
 
   // Call onComplete when operation finishes
   useEffect(() => {
-    const isActive = progressState.isActive
-    const wasActive = wasActiveRef.current
+    const currentEvent = progressState.event
     
-    // If was active but now not active, operation completed
-    if (wasActive && !isActive && onComplete) {
-      console.log(`[RefreshButton] Operation completed for ${resourceId}, calling onComplete`)
-      onComplete()
+    // Check for new completed events (different event ID than last one we saw)
+    if (currentEvent && currentEvent.state === 'completed' && onComplete) {
+      const lastEvent = lastEventRef.current
+      const isNewEvent = !lastEvent || lastEvent.id !== currentEvent.id
+      
+      if (isNewEvent) {
+        onComplete()
+      }
     }
     
-    wasActiveRef.current = isActive
-  }, [progressState.isActive, onComplete, resourceId])
+    lastEventRef.current = currentEvent
+  }, [progressState.event, onComplete, resourceId])
   const isCompleted = progressState.isCompleted
 
   // Determine button state and styling

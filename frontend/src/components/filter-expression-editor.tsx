@@ -43,7 +43,8 @@ export interface FilterExpressionEditorProps {
 }
 
 const VALID_OPERATORS = [
-  'contains', 'equals', 'matches', 'starts_with', 'ends_with'
+  'contains', 'equals', 'matches', 'starts_with', 'ends_with',
+  'greater_than', 'less_than', 'greater_than_or_equal', 'less_than_or_equal'
 ]
 
 const VALID_MODIFIERS = [

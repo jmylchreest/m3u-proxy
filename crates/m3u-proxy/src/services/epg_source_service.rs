@@ -453,6 +453,9 @@ impl EpgSourceService {
                 info!("Updated last_ingested_at for EPG source '{}'", source.name);
             }
             
+            // Invalidate cache since we updated EPG programs - this triggers proxy auto-regeneration
+            let _ = self.cache_invalidation_tx.send(());
+            
             info!(
                 "EPG ingestion completed for source '{}': {} programs saved",
                 source.name, programs_saved

@@ -9,9 +9,7 @@ use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 
 pub mod config_resolver;
-// pub mod epg_generator; // ARCHIVED: Moved to /archive/old-proxy-generators/
 pub mod filter_engine;
-// pub mod generator; // ARCHIVED: Moved to /archive/old-proxy-generators/
 pub mod robust_streaming;
 pub mod session_tracker;
 
@@ -199,38 +197,4 @@ impl ProxyService {
     }
 
     // TODO: Migrate these methods to use the new pipeline architecture
-    // The old ProxyGenerator has been archived to /archive/old-proxy-generators/
-    
-    /* ARCHIVED - Needs pipeline replacement
-    /// Save M3U content to storage
-    pub async fn save_m3u_file(
-        &self,
-        proxy_id: uuid::Uuid,
-        content: &str,
-    ) -> Result<std::path::PathBuf> {
-        let generator = generator::ProxyGenerator::new(self.storage_config.clone());
-        generator.save_m3u_file(proxy_id, content).await
-    }
-
-    /// Save M3U content to storage using proxy ID and optional file manager
-    pub async fn save_m3u_file_with_manager(
-        &self,
-        proxy_id: &str,
-        content: &str,
-        file_manager: Option<sandboxed_file_manager::SandboxedManager>,
-    ) -> Result<std::path::PathBuf> {
-        let generator = if let Some(manager) = file_manager {
-            generator::ProxyGenerator::with_file_manager(self.storage_config.clone(), manager)
-        } else {
-            generator::ProxyGenerator::new(self.storage_config.clone())
-        };
-        generator.save_m3u_file_by_id(proxy_id, content).await
-    }
-
-    /// Clean up old proxy versions
-    pub async fn cleanup_old_versions(&self, proxy_id: uuid::Uuid) -> Result<()> {
-        let generator = generator::ProxyGenerator::new(self.storage_config.clone());
-        generator.cleanup_old_versions(proxy_id).await
-    }
-    */
 }

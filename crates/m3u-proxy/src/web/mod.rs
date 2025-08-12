@@ -352,7 +352,6 @@ impl WebServer {
             // Generalized pipeline validation endpoints
             .route("/pipeline/validate", post(api::validate_pipeline_expression))
             .route("/pipeline/fields/{stage}", get(api::get_pipeline_stage_fields))
-            // EPG viewer functionality removed
             // Proxies
             .route(
                 "/proxies",

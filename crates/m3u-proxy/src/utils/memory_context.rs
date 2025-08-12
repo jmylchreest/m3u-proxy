@@ -9,8 +9,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
-// Memory pressure calculator functionality removed - using simpler approach
-// TODO: Restore memory pressure calculation with simpler implementation
 use crate::utils::memory_config::{
     MemoryMonitoringConfig, MemoryVerbosity, get_global_memory_config,
 };

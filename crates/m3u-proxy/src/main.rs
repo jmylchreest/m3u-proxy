@@ -332,8 +332,6 @@ async fn main() -> Result<()> {
     info!("Scheduler service initialized");
 
 
-    // Clone proxy regeneration service for background processing
-    let bg_proxy_regeneration_service = proxy_regeneration_service.clone();
 
     // Initialize relay manager with shared system
     let relay_manager = std::sync::Arc::new(
@@ -418,8 +416,7 @@ async fn main() -> Result<()> {
     }
 
     // Now start the background services after the web server is listening
-    info!("Starting background processor for intelligent auto-regeneration (monitors all source types, compares timestamps)");
-    bg_proxy_regeneration_service.start_processor();
+    // Note: Proxy regeneration is handled by scheduler completion handlers, no background polling needed
 
     info!("Starting scheduler service");
     tokio::spawn(async move {

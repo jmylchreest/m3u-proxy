@@ -350,7 +350,11 @@ impl XtreamEpgHandler {
                 Ok(response) => {
                     
                     if !response.status().is_success() {
-                        warn!("EPG auth failed with HTTP status: {}", response.status());
+                        warn!("EPG auth failed for source '{}' with HTTP status: {} {} - URL: {}", 
+                            source.name, 
+                            response.status().as_u16(), 
+                            response.status().canonical_reason().unwrap_or("Unknown"), 
+                            crate::utils::url::UrlUtils::obfuscate_credentials(&test_url));
                         return Ok(false);
                     }
                     

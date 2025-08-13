@@ -460,16 +460,16 @@ impl Config {
 
     pub fn load_from_file(config_file: &str) -> Result<Self> {
         // Create default config file if it doesn't exist
-        if !std::path::Path::new(&config_file).exists() {
+        if !std::path::Path::new(config_file).exists() {
             let default_config = Self::default();
             let contents = toml::to_string_pretty(&default_config)?;
-            std::fs::write(&config_file, contents)?;
+            std::fs::write(config_file, contents)?;
             info!("Created default config file: {}", config_file);
         }
         
         // Load config with figment (TOML file + environment variables)
         let config: Config = Figment::new()
-            .merge(Toml::file(&config_file))
+            .merge(Toml::file(config_file))
             .merge(Env::prefixed("M3U_PROXY_").split("__"))
             .extract()?;
             

@@ -160,10 +160,17 @@ impl StreamSourceService {
         let linked_epgs = url_linking_repo.find_linked_epg_sources(&source).await.unwrap_or_default();
         let linked_epg = linked_epgs.into_iter().next();
 
+        // Calculate next scheduled update from cron expression
+        let next_scheduled_update = if !source.update_cron.is_empty() {
+            crate::utils::calculate_next_scheduled_time(&source.update_cron)
+        } else {
+            None
+        };
+
         Ok(StreamSourceWithDetails {
             source: source.clone(),
             channel_count,
-            next_scheduled_update: None, // TODO: Implement scheduling info
+            next_scheduled_update,
             last_ingested_at: source.last_ingested_at,
             is_active: source.is_active,
             linked_epg_source: linked_epg,

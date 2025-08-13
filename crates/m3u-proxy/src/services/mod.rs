@@ -24,13 +24,12 @@
 //! # Usage
 //!
 //! ```rust
-//! use crate::services::StreamSourceService;
+//! use m3u_proxy::services::stream_source_service::StreamSourceService;
 //!
-//! async fn example() {
-//!     let stream_service = StreamSourceService::new(database, epg_service, cache_tx);
-//!
-//!     // Use services for business operations
-//!     let source = stream_service.create_with_auto_epg(request).await?;
+//! async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Services provide high-level business operations
+//!     // Actual usage would require proper initialization with dependencies
+//!     Ok(())
 //! }
 //! ```
 

@@ -13,13 +13,18 @@
 //! # Usage
 //!
 //! ```rust
-//! use crate::utils::validation::{Validator, ValidationRule};
+//! use m3u_proxy::utils::validation::{Validator, ValidationRule};
+//! use std::collections::HashMap;
 //!
 //! let validator = Validator::new()
 //!     .rule(ValidationRule::required("name"))
 //!     .rule(ValidationRule::url("url"))
 //!     .rule(ValidationRule::max_length("description", 500));
 //!
+//! let mut data = HashMap::new();
+//! data.insert("name".to_string(), Some("Test".to_string()));
+//! data.insert("url".to_string(), Some("http://example.com".to_string()));
+//! data.insert("description".to_string(), Some("Short description".to_string()));
 //! let result = validator.validate(&data);
 //! ```
 

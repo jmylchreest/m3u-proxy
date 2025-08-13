@@ -618,6 +618,9 @@ pub async fn refresh_stream_source(
                         manager.complete().await;
                     }
                     
+                    // Trigger proxy auto-regeneration after successful manual refresh
+                    state.proxy_regeneration_service.queue_affected_proxies_coordinated(uuid, "stream").await;
+                    
                     // Emit scheduler event for manual refresh trigger
                     state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(uuid));
                     

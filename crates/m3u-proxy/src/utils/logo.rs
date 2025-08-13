@@ -14,16 +14,15 @@
 //! # Usage
 //!
 //! ```rust
-//! use crate::utils::logo::LogoUrlGenerator;
-//! use uuid::Uuid;
+//! use m3u_proxy::utils::logo::LogoUrlGenerator;
 //!
-//! let logo_id = Uuid::new_v4();
+//! let logo_id = "12345678-1234-5678-9abc-123456789abc".to_string();
 //!
 //! // Simple relative URL
-//! let relative = LogoUrlGenerator::relative(logo_id);
+//! let relative = LogoUrlGenerator::relative(logo_id.clone());
 //!
 //! // Full URL with base
-//! let full = LogoUrlGenerator::full(logo_id, "https://api.example.com");
+//! let full = LogoUrlGenerator::full(logo_id.clone(), "https://api.example.com");
 //!
 //! // Complex configuration
 //! let url = LogoUrlGenerator::builder(logo_id)
@@ -31,8 +30,6 @@
 //!     .format("thumbnail")
 //!     .build();
 //! ```
-
-use uuid::Uuid;
 
 /// Configuration for logo URL generation
 ///
@@ -60,6 +57,8 @@ pub struct LogoUrlConfig {
 /// # Examples
 ///
 /// ```rust
+/// use m3u_proxy::utils::logo::LogoUrlConfigBuilder;
+/// 
 /// let config = LogoUrlConfigBuilder::new()
 ///     .base_url("https://api.example.com")
 ///     .format("thumbnail")
@@ -141,6 +140,9 @@ impl LogoUrlGenerator {
     /// # Examples
     ///
     /// ```rust
+    /// use m3u_proxy::utils::logo::{LogoUrlGenerator, LogoUrlConfig};
+    /// 
+    /// let logo_id = "12345678-1234-5678-9abc-123456789abc".to_string();
     /// let config = LogoUrlConfig {
     ///     base_url: Some("https://api.example.com".to_string()),
     ///     format: Some("thumbnail".to_string()),
@@ -149,9 +151,9 @@ impl LogoUrlGenerator {
     /// };
     ///
     /// let url = LogoUrlGenerator::generate(logo_id, config);
-    /// // Result: "https://api.example.com/api/v1/logos/{uuid}/formats/thumbnail?size=small"
+    /// // Result: "https://api.example.com/api/v1/logos/{id}/formats/thumbnail?size=small"
     /// ```
-    pub fn generate(logo_id: Uuid, config: LogoUrlConfig) -> String {
+    pub fn generate(logo_id: String, config: LogoUrlConfig) -> String {
         // Build the path component
         let path = match config.format {
             Some(format) => format!("/api/v1/logos/{logo_id}/formats/{format}"),
@@ -194,10 +196,13 @@ impl LogoUrlGenerator {
     /// # Examples
     ///
     /// ```rust
+    /// use m3u_proxy::utils::logo::LogoUrlGenerator;
+    /// 
+    /// let logo_id = "12345678-1234-5678-9abc-123456789abc".to_string();
     /// let url = LogoUrlGenerator::relative(logo_id);
     /// // Result: "/api/v1/logos/12345678-1234-5678-9abc-123456789abc"
     /// ```
-    pub fn relative(logo_id: Uuid) -> String {
+    pub fn relative(logo_id: String) -> String {
         Self::generate(logo_id, LogoUrlConfig::default())
     }
     
@@ -218,10 +223,13 @@ impl LogoUrlGenerator {
     /// # Examples
     ///
     /// ```rust
+    /// use m3u_proxy::utils::logo::LogoUrlGenerator;
+    /// 
+    /// let logo_id = "12345678-1234-5678-9abc-123456789abc".to_string();
     /// let url = LogoUrlGenerator::full(logo_id, "https://api.example.com");
     /// // Result: "https://api.example.com/api/v1/logos/12345678-1234-5678-9abc-123456789abc"
     /// ```
-    pub fn full<S: Into<String>>(logo_id: Uuid, base_url: S) -> String {
+    pub fn full<S: Into<String>>(logo_id: String, base_url: S) -> String {
         Self::generate(
             logo_id,
             LogoUrlConfig {
@@ -249,16 +257,19 @@ impl LogoUrlGenerator {
     /// # Examples
     ///
     /// ```rust
+    /// use m3u_proxy::utils::logo::LogoUrlGenerator;
+    /// 
+    /// let logo_id = "12345678-1234-5678-9abc-123456789abc".to_string();
     /// // Relative URL with format
-    /// let url = LogoUrlGenerator::with_format(logo_id, None, "thumbnail");
-    /// // Result: "/api/v1/logos/{uuid}/formats/thumbnail"
+    /// let url = LogoUrlGenerator::with_format(logo_id.clone(), None, "thumbnail");
+    /// // Result: "/api/v1/logos/{id}/formats/thumbnail"
     ///
     /// // Absolute URL with format
     /// let url = LogoUrlGenerator::with_format(logo_id, Some("https://api.example.com"), "thumbnail");
-    /// // Result: "https://api.example.com/api/v1/logos/{uuid}/formats/thumbnail"
+    /// // Result: "https://api.example.com/api/v1/logos/{id}/formats/thumbnail"
     /// ```
     pub fn with_format<S: Into<String>>(
-        logo_id: Uuid,
+        logo_id: String,
         base_url: Option<S>,
         format: S,
     ) -> String {
@@ -290,13 +301,16 @@ impl LogoUrlGenerator {
     /// # Examples
     ///
     /// ```rust
+    /// use m3u_proxy::utils::logo::LogoUrlGenerator;
+    /// 
+    /// let logo_id = "12345678-1234-5678-9abc-123456789abc".to_string();
     /// let url = LogoUrlGenerator::builder(logo_id)
     ///     .base_url("https://api.example.com")
     ///     .format("thumbnail")
     ///     .query_param("size", "small")
     ///     .build();
     /// ```
-    pub fn builder(logo_id: Uuid) -> LogoUrlBuilder {
+    pub fn builder(logo_id: String) -> LogoUrlBuilder {
         LogoUrlBuilder::new(logo_id)
     }
     
@@ -315,9 +329,10 @@ impl LogoUrlGenerator {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// let sanitized = LogoUrlGenerator::sanitize_base_url("https://api.example.com/");
-    /// assert_eq!(sanitized, "https://api.example.com");
+    /// ```rust,ignore
+    /// // This function is private and for internal use only
+    /// // let sanitized = LogoUrlGenerator::sanitize_base_url("https://api.example.com/");
+    /// // assert_eq!(sanitized, "https://api.example.com");
     /// ```
     fn sanitize_base_url(base_url: &str) -> String {
         let mut url = base_url.trim().to_string();
@@ -343,13 +358,13 @@ impl LogoUrlGenerator {
 /// already specified.
 #[derive(Debug)]
 pub struct LogoUrlBuilder {
-    logo_id: Uuid,
+    logo_id: String,
     config_builder: LogoUrlConfigBuilder,
 }
 
 impl LogoUrlBuilder {
     /// Create a new builder for the specified logo ID
-    fn new(logo_id: Uuid) -> Self {
+    fn new(logo_id: String) -> Self {
         Self {
             logo_id,
             config_builder: LogoUrlConfigBuilder::new(),
@@ -389,6 +404,7 @@ impl LogoUrlBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     fn test_uuid() -> Uuid {
         Uuid::parse_str("12345678-1234-5678-9abc-123456789abc").unwrap()
@@ -396,13 +412,13 @@ mod tests {
 
     #[test]
     fn test_relative_url() {
-        let url = LogoUrlGenerator::relative(test_uuid());
+        let url = LogoUrlGenerator::relative(test_uuid().to_string());
         assert_eq!(url, "/api/v1/logos/12345678-1234-5678-9abc-123456789abc");
     }
 
     #[test]
     fn test_full_url() {
-        let url = LogoUrlGenerator::full(test_uuid(), "https://api.example.com");
+        let url = LogoUrlGenerator::full(test_uuid().to_string(), "https://api.example.com");
         assert_eq!(
             url,
             "https://api.example.com/api/v1/logos/12345678-1234-5678-9abc-123456789abc"
@@ -411,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_url_with_format() {
-        let url = LogoUrlGenerator::with_format(test_uuid(), None, "thumbnail");
+        let url = LogoUrlGenerator::with_format(test_uuid().to_string(), None, "thumbnail");
         assert_eq!(
             url,
             "/api/v1/logos/12345678-1234-5678-9abc-123456789abc/formats/thumbnail"
@@ -421,7 +437,7 @@ mod tests {
     #[test]
     fn test_full_url_with_format() {
         let url = LogoUrlGenerator::with_format(
-            test_uuid(),
+            test_uuid().to_string(),
             Some("https://api.example.com"),
             "thumbnail",
         );
@@ -433,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_builder() {
-        let url = LogoUrlGenerator::builder(test_uuid())
+        let url = LogoUrlGenerator::builder(test_uuid().to_string())
             .base_url("https://api.example.com")
             .format("thumbnail")
             .query_param("size", "small")
@@ -473,5 +489,47 @@ mod tests {
         assert!(config.include_domain);
         assert_eq!(config.query_params.len(), 1);
         assert_eq!(config.query_params[0], ("size".to_string(), "small".to_string()));
+    }
+
+    // Test cache_id based logos (SHA256 hashes)
+    #[test]
+    fn test_cache_id_relative_url() {
+        let cache_id = "abc123def456789012345678901234567890abcdef123456789012345678901234".to_string();
+        let url = LogoUrlGenerator::relative(cache_id.clone());
+        assert_eq!(url, format!("/api/v1/logos/{}", cache_id));
+    }
+
+    #[test]
+    fn test_cache_id_full_url() {
+        let cache_id = "abc123def456789012345678901234567890abcdef123456789012345678901234".to_string();
+        let url = LogoUrlGenerator::full(cache_id.clone(), "https://api.example.com");
+        assert_eq!(
+            url,
+            format!("https://api.example.com/api/v1/logos/{}", cache_id)
+        );
+    }
+
+    #[test]
+    fn test_cache_id_with_format() {
+        let cache_id = "abc123def456789012345678901234567890abcdef123456789012345678901234".to_string();
+        let url = LogoUrlGenerator::with_format(cache_id.clone(), None, "thumbnail");
+        assert_eq!(url, format!("/api/v1/logos/{}/formats/thumbnail", cache_id));
+    }
+
+    #[test]
+    fn test_mixed_id_types() {
+        // Test that both UUID and cache_id formats work with the same API
+        let uuid_id = test_uuid().to_string();
+        let cache_id = "abc123def456789012345678901234567890abcdef123456789012345678901234".to_string();
+        
+        let uuid_url = LogoUrlGenerator::relative(uuid_id.clone());
+        let cache_url = LogoUrlGenerator::relative(cache_id.clone());
+        
+        assert_eq!(uuid_url, format!("/api/v1/logos/{}", uuid_id));
+        assert_eq!(cache_url, format!("/api/v1/logos/{}", cache_id));
+        
+        // Both should work with the same URL pattern
+        assert!(uuid_url.starts_with("/api/v1/logos/"));
+        assert!(cache_url.starts_with("/api/v1/logos/"));
     }
 }

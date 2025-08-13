@@ -62,6 +62,7 @@
 //!
 //! // Write files in nested directories (like std::fs::write)
 //! manager.write("config/app/settings.json", r#"{"debug": true}"#).await?;
+//! let image_bytes = b"fake image data";
 //! manager.write("assets/images/logo.png", image_bytes).await?;
 //! manager.write("data/cache/temp.txt", "temporary data").await?;
 //!
@@ -100,7 +101,7 @@
 //! ## File Type Validation
 //!
 //! ```rust
-//! use sandboxed_file_manager::file_types::{FileTypeValidator, FileTypeConfigBuilder};
+//! use sandboxed_file_manager::{SandboxedManager, file_types::{FileTypeValidator, FileTypeConfigBuilder}};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a validator that only allows images and JSON
@@ -118,6 +119,7 @@
 //!     .await?;
 //!
 //! // Write file then validate its type
+//! let jpeg_bytes = b"fake jpeg data";
 //! manager.write("image.jpg", jpeg_bytes).await?;
 //! let file_info = manager.validate_file_type("image.jpg", &validator).await?;
 //! println!("Detected: {} ({})", file_info.mime_type, file_info.extension);
@@ -171,17 +173,24 @@
 //!
 //! **✅ Allowed operations:**
 //! ```rust
+//! use sandboxed_file_manager::SandboxedManager;
+//! 
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let manager = SandboxedManager::builder().base_directory("/var/cache/myapp").build().await?;
 //! manager.write("file.txt", "content").await?;                    // Simple file
 //! manager.write("config/app.json", "{}").await?;                 // Nested path
 //! manager.write("dir/../other/file.txt", "content").await?;      // Resolves to other/file.txt
 //! manager.copy("source.txt", "backup/copy.txt").await?;          // Copy with nesting
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! **❌ Blocked operations:**
-//! ```rust
-//! manager.write("../../../etc/passwd", "evil").await?;           // Escapes sandbox
-//! manager.write("/etc/passwd", "evil").await?;                   // Absolute path
-//! manager.write("file\0.txt", "evil").await?;                    // Null bytes
+//! ```rust,ignore
+//! // These operations would fail with security errors:
+//! // manager.write("../../../etc/passwd", "evil").await?;           // Escapes sandbox
+//! // manager.write("/etc/passwd", "evil").await?;                   // Absolute path  
+//! // manager.write("file\0.txt", "evil").await?;                    // Null bytes
 //! ```
 
 pub mod error;

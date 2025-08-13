@@ -18,7 +18,7 @@ use uuid::Uuid;
 /// # Examples
 /// 
 /// ```rust
-/// use crate::utils::deterministic_uuid::generate_deterministic_uuid;
+/// use m3u_proxy::utils::deterministic_uuid::generate_deterministic_uuid;
 /// use uuid::Uuid;
 /// 
 /// let source_id = Uuid::new_v4();

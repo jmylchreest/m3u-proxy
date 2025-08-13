@@ -36,6 +36,10 @@ impl Database {
         self.pool.clone()
     }
 
+    pub fn batch_config(&self) -> &DatabaseBatchConfig {
+        &self.batch_config
+    }
+
     /// Set the scheduler event sender for database operations to notify scheduler of changes
     pub fn set_scheduler_event_sender(&mut self, sender: mpsc::UnboundedSender<SchedulerEvent>) {
         self.scheduler_event_tx = Some(sender);

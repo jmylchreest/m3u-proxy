@@ -23,8 +23,8 @@ use super::xtream_epg::XtreamEpgHandler;
 /// # Examples
 ///
 /// ```rust
-/// use crate::sources::SourceHandlerFactory;
-/// use crate::models::StreamSourceType;
+/// use m3u_proxy::sources::factory::SourceHandlerFactory;
+/// use m3u_proxy::models::StreamSourceType;
 ///
 /// async fn example() -> Result<(), Box<dyn std::error::Error>> {
 ///     // Create handler for M3U source

@@ -15,12 +15,16 @@
 //! # Usage
 //!
 //! ```rust
-//! use crate::repositories::{Repository, StreamSourceRepository};
+//! use m3u_proxy::repositories::traits::Repository;
+//! use m3u_proxy::repositories::StreamSourceRepository;
+//! use m3u_proxy::models::StreamSource;
 //! use uuid::Uuid;
 //!
-//! async fn example(repo: impl Repository<StreamSource, Uuid>) {
-//!     let source = repo.find_by_id(uuid).await?;
+//! async fn example(repo: impl Repository<StreamSource, Uuid>) -> Result<(), Box<dyn std::error::Error>> {
+//!     let id = Uuid::new_v4();
+//!     let source = repo.find_by_id(id).await?;
 //!     // ... use source
+//!     Ok(())
 //! }
 //! ```
 

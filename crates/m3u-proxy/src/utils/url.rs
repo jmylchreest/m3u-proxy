@@ -26,7 +26,7 @@ impl UrlUtils {
     /// # Examples
     ///
     /// ```rust
-    /// use crate::utils::url::UrlUtils;
+    /// use m3u_proxy::utils::url::UrlUtils;
     ///
     /// assert_eq!(UrlUtils::normalize_scheme("example.com"), "http://example.com");
     /// assert_eq!(UrlUtils::normalize_scheme("https://example.com"), "https://example.com");
@@ -142,7 +142,7 @@ impl UrlUtils {
     /// # Examples
     ///
     /// ```rust
-    /// use crate::utils::url::UrlUtils;
+    /// use m3u_proxy::utils::url::UrlUtils;
     ///
     /// let url = "http://user:pass@example.com/path?username=user&password=secret";
     /// let obfuscated = UrlUtils::obfuscate_credentials(url);

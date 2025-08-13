@@ -56,6 +56,7 @@ impl LogoAssetService {
         self.logo_file_manager = Some(file_manager);
         self
     }
+    
 
     /// Construct the full URL for a cached logo
     pub fn get_cached_logo_url(&self, cache_id: &str, base_url: &str) -> String {
@@ -101,7 +102,7 @@ impl LogoAssetService {
         .await?;
 
         Ok(LogoAsset {
-            id: params.asset_id,
+            id: params.asset_id.to_string(),
             name: params.name,
             description: params.description,
             file_name: params.file_name,
@@ -149,7 +150,7 @@ impl LogoAssetService {
         };
 
         Ok(LogoAsset {
-            id: asset_id,
+            id: asset_id.to_string(),
             name: row.get("name"),
             description: row.get("description"),
             file_name: row.get("file_name"),
@@ -233,7 +234,7 @@ impl LogoAssetService {
             };
 
             let asset = LogoAsset {
-                id: parse_uuid_flexible(&row.get::<String, _>("id")).unwrap(),
+                id: row.get::<String, _>("id"),
                 name: row.get("name"),
                 description: row.get("description"),
                 file_name: row.get("file_name"),
@@ -382,7 +383,7 @@ impl LogoAssetService {
             };
 
             let asset = LogoAsset {
-                id: parse_uuid_flexible(&row.get::<String, _>("id")).unwrap(),
+                id: row.get::<String, _>("id"),
                 name: row.get("name"),
                 description: row.get("description"),
                 file_name: row.get("file_name"),
@@ -453,7 +454,7 @@ impl LogoAssetService {
                 for cached_logo in cached_logos {
                     // Create a synthetic LogoAsset from cached logo info
                     let synthetic_asset = LogoAsset {
-                        id: Uuid::new_v4(), // Generate a synthetic UUID
+                        id: cached_logo.cache_id.clone(), // Use cache_id directly as string ID
                         name: cached_logo.file_name.clone(),
                         description: Some(format!("Cached logo: {}", cached_logo.cache_id)),
                         file_name: cached_logo.file_name.clone(),
@@ -484,8 +485,15 @@ impl LogoAssetService {
             }
         }
 
-        // Sort by name
-        all_assets.sort_by(|a, b| a.asset.name.cmp(&b.asset.name));
+        // Sort by asset type (uploaded first, cached after), then by name
+        all_assets.sort_by(|a, b| {
+            use crate::models::logo_asset::LogoAssetType;
+            match (&a.asset.asset_type, &b.asset.asset_type) {
+                (LogoAssetType::Uploaded, LogoAssetType::Cached) => std::cmp::Ordering::Less,
+                (LogoAssetType::Cached, LogoAssetType::Uploaded) => std::cmp::Ordering::Greater,
+                _ => a.asset.name.cmp(&b.asset.name), // Same type, sort by name
+            }
+        });
 
         // Apply limit
         let total_count = all_assets.len();
@@ -1031,7 +1039,7 @@ impl LogoAssetService {
             };
 
             let asset = LogoAsset {
-                id: parse_uuid_flexible(&row.get::<String, _>("id")).unwrap(),
+                id: row.get::<String, _>("id"),
                 name: row.get("name"),
                 description: row.get("description"),
                 file_name: row.get("file_name"),

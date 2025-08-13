@@ -2422,7 +2422,9 @@ async fn list_logo_assets_with_cached(
 
             // Convert JSON value to LogoAssetWithUrl
             match serde_json::from_value::<LogoAssetWithUrl>(asset_like.clone()) {
-                Ok(logo_asset_with_url) => {
+                Ok(mut logo_asset_with_url) => {
+                    // WORKAROUND: Ensure the ID is the cache_id, not a generated UUID
+                    logo_asset_with_url.asset.id = cached_logo.cache_id.clone();
                     all_assets.push(logo_asset_with_url);
                     converted_count += 1;
                 }
@@ -2457,8 +2459,19 @@ async fn list_logo_assets_with_cached(
         });
     }
 
-    // Sort by updated_at descending (most recent first)
-    all_assets.sort_by(|a, b| b.asset.updated_at.cmp(&a.asset.updated_at));
+    // Sort by type first (uploaded before cached), then by updated_at descending
+    all_assets.sort_by(|a, b| {
+        let a_is_cached = a.url.contains("/logos/cached/");
+        let b_is_cached = b.url.contains("/logos/cached/");
+        
+        match (a_is_cached, b_is_cached) {
+            // Both same type, sort by updated_at descending
+            (true, true) | (false, false) => b.asset.updated_at.cmp(&a.asset.updated_at),
+            // Uploaded (false) comes before cached (true)
+            (false, true) => std::cmp::Ordering::Less,
+            (true, false) => std::cmp::Ordering::Greater,
+        }
+    });
 
     // Calculate pagination
     let total_count = all_assets.len() as i64;
@@ -2587,13 +2600,16 @@ pub async fn upload_logo_asset(
                 })
                 .await
             {
-                Ok(asset) => Ok(Json(LogoAssetUploadResponse {
-                    id: asset.id,
-                    name: asset.name,
-                    file_name: asset.file_name,
-                    file_size: asset.file_size,
-                    url: format!("{}/api/v1/logos/{}", state.config.web.base_url.trim_end_matches('/'), asset.id),
-                })),
+                Ok(asset) => {
+                    let asset_id = asset.id.clone();
+                    Ok(Json(LogoAssetUploadResponse {
+                        id: asset.id,
+                        name: asset.name,
+                        file_name: asset.file_name,
+                        file_size: asset.file_size,
+                        url: format!("{}/api/v1/logos/{}", state.config.web.base_url.trim_end_matches('/'), asset_id),
+                    }))
+                },
                 Err(e) => {
                     error!("Failed to create logo asset: {}", e);
                     Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -2859,6 +2875,7 @@ pub async fn delete_logo_asset(
     let extensions = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
     let mut deleted_any = false;
     
+    // Try deleting with the ID as-is (works for both UUIDs and cache_ids)
     for ext in &extensions {
         let filename = format!("{id_str}.{ext}");
         match state.logo_file_manager.remove_file(&filename).await {
@@ -3162,6 +3179,9 @@ pub async fn refresh_epg_source_unified(
                         manager.complete().await;
                     }
                     
+                    // Trigger proxy auto-regeneration after successful manual refresh
+                    state.proxy_regeneration_service.queue_affected_proxies_coordinated(id, "epg").await;
+                    
                     // Emit scheduler event for manual refresh trigger
                     state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
                     
@@ -3397,9 +3417,12 @@ pub async fn get_logo_asset_with_formats(
             // Convert linked assets to LogoAssetWithUrl (using relative URLs for web UI)
             let linked_with_urls: Vec<crate::models::logo_asset::LogoAssetWithUrl> = linked_assets
                 .into_iter()
-                .map(|linked| crate::models::logo_asset::LogoAssetWithUrl {
-                    url: crate::utils::logo::LogoUrlGenerator::relative(linked.id),
-                    asset: linked,
+                .map(|linked| {
+                    let url = crate::utils::logo::LogoUrlGenerator::relative(linked.id.clone());
+                    crate::models::logo_asset::LogoAssetWithUrl {
+                        url,
+                        asset: linked,
+                    }
                 })
                 .collect();
 
@@ -3422,7 +3445,7 @@ pub async fn get_logo_asset_with_formats(
 
             let response = crate::models::logo_asset::LogoAssetWithLinked {
                 asset,
-                url: crate::utils::logo::LogoUrlGenerator::relative(id),
+                url: crate::utils::logo::LogoUrlGenerator::relative(id.to_string()),
                 linked_assets: linked_with_urls,
                 available_formats,
             };

@@ -14,12 +14,12 @@
 //! # Usage
 //!
 //! ```rust
-//! use crate::utils::datetime::DateTimeParser;
+//! use m3u_proxy::utils::datetime::DateTimeParser;
 //! use chrono::{DateTime, Utc};
 //!
 //! // Parse from various formats
-//! let dt1 = DateTimeParser::parse_flexible("2023-01-01T12:00:00Z")?;
-//! let dt2 = DateTimeParser::parse_flexible("2023-01-01 12:00:00")?;
+//! let dt1 = DateTimeParser::parse_flexible("2023-01-01T12:00:00Z").unwrap();
+//! let dt2 = DateTimeParser::parse_flexible("2023-01-01 12:00:00").unwrap();
 //!
 //! // Format for database storage
 //! let formatted = DateTimeParser::format_for_storage(&dt1);
@@ -101,13 +101,13 @@ impl DateTimeParser {
     /// # Examples
     ///
     /// ```rust
-    /// use crate::utils::datetime::DateTimeParser;
+    /// use m3u_proxy::utils::datetime::DateTimeParser;
     ///
     /// // RFC3339 with timezone
-    /// let dt1 = DateTimeParser::parse_flexible("2023-01-01T12:00:00Z")?;
+    /// let dt1 = DateTimeParser::parse_flexible("2023-01-01T12:00:00Z").unwrap();
     ///
     /// // SQLite format (assumes UTC)
-    /// let dt2 = DateTimeParser::parse_flexible("2023-01-01 12:00:00")?;
+    /// let dt2 = DateTimeParser::parse_flexible("2023-01-01 12:00:00").unwrap();
     ///
     /// // Both result in UTC datetime
     /// assert_eq!(dt1.timezone(), dt2.timezone());

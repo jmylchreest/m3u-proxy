@@ -2,11 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct LogoAsset {
-    pub id: Uuid,
+    pub id: String, // Changed from Uuid to String to support both UUID and cache_id formats
     pub name: String,
     pub description: Option<String>,
     pub file_name: String,
@@ -17,7 +16,7 @@ pub struct LogoAsset {
     pub source_url: Option<String>,
     pub width: Option<i32>,
     pub height: Option<i32>,
-    pub parent_asset_id: Option<Uuid>,
+    pub parent_asset_id: Option<String>,
     pub format_type: LogoFormatType,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -57,7 +56,7 @@ pub struct LogoAssetUpdateRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogoAssetUploadResponse {
-    pub id: Uuid,
+    pub id: String,
     pub name: String,
     pub file_name: String,
     pub file_size: i64,

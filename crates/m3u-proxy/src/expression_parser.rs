@@ -2994,7 +2994,7 @@ mod tests {
             // Test that "not" modifier syntax also works
             let test_expr = "channel_name not contains \"HD\"";
             let result = parser.validate(test_expr);
-            assert!(result.is_valid, "Not modifier syntax should work: {}", test_expr);
+            assert!(result.is_valid, "Not modifier syntax should work: {test_expr}");
         }
 
         /// Test time helper error handling

@@ -15,7 +15,7 @@
 //! # Usage
 //!
 //! ```rust
-//! use crate::errors::{AppError, AppResult};
+//! use m3u_proxy::errors::{AppError, AppResult};
 //!
 //! async fn example_function() -> AppResult<String> {
 //!     // Function can return any error type that converts to AppError

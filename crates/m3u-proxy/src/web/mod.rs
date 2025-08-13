@@ -191,20 +191,11 @@ impl WebServer {
             // .route("/logos/{logo_id}", get(handlers::static_assets::serve_logo))
             // Root route for basic index page
             .route("/", get(handlers::index::index))
-            // Web interface routes
-            .route("/sources", get(handlers::web_pages::sources_page))
-            .route("/epg-sources", get(handlers::web_pages::epg_sources_page))
-            .route("/proxies", get(handlers::web_pages::proxies_page))
-            .route("/filters", get(handlers::web_pages::filters_page))
-            .route("/data-mapping", get(handlers::web_pages::data_mapping_page))
-            .route("/logos", get(handlers::web_pages::logos_page))
-            .route("/relay", get(handlers::web_pages::relay_page))
+            // Web interface routes are now handled by Next.js via fallback
             // Static assets
-            .route(
-                "/static/{*path}",
-                get(handlers::static_assets::serve_static_asset),
-            )
             .route("/favicon.ico", get(handlers::static_assets::serve_favicon))
+            // Catch-all route for static assets - this should be LAST to avoid conflicts
+            .fallback(handlers::static_assets::serve_embedded_asset)
             // Middleware (applied in reverse order)
             .layer(CorsLayer::permissive())
             // .layer(axum::middleware::from_fn(middleware::security_headers_middleware))

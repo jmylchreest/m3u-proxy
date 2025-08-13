@@ -306,24 +306,51 @@ impl Repository<EpgSource, Uuid> for EpgSourceRepository {
         let now = Utc::now();
         let time_offset = request.time_offset.unwrap_or_else(|| "+00:00".to_string());
 
-        let sql = "UPDATE epg_sources SET 
-                   name = ?, source_type = ?, url = ?, update_cron = ?, 
-                   username = ?, password = ?, original_timezone = ?, 
-                   time_offset = ?, is_active = ?, updated_at = ?
-                   WHERE id = ?";
+        // Build query conditionally based on whether password should be updated
+        let should_update_password = request.password.as_ref()
+            .map(|p| !p.trim().is_empty())
+            .unwrap_or(false);
 
-        let result = sqlx::query(sql)
-            .bind(&request.name)
-            .bind(request.source_type.to_string())
-            .bind(&request.url)
-            .bind(&request.update_cron)
-            .bind(&request.username)
-            .bind(&request.password)
-            .bind(&request.timezone)
-            .bind(&time_offset)
-            .bind(request.is_active)
-            .bind(now.to_rfc3339())
-            .bind(id.to_string())
+        let (sql, query_builder) = if should_update_password {
+            let sql = "UPDATE epg_sources SET 
+                       name = ?, source_type = ?, url = ?, update_cron = ?, 
+                       username = ?, password = ?, original_timezone = ?, 
+                       time_offset = ?, is_active = ?, updated_at = ?
+                       WHERE id = ?";
+            let builder = sqlx::query(sql)
+                .bind(&request.name)
+                .bind(request.source_type.to_string())
+                .bind(&request.url)
+                .bind(&request.update_cron)
+                .bind(&request.username)
+                .bind(&request.password)
+                .bind(&request.timezone)
+                .bind(&time_offset)
+                .bind(request.is_active)
+                .bind(now.to_rfc3339())
+                .bind(id.to_string());
+            (sql, builder)
+        } else {
+            let sql = "UPDATE epg_sources SET 
+                       name = ?, source_type = ?, url = ?, update_cron = ?, 
+                       username = ?, original_timezone = ?, 
+                       time_offset = ?, is_active = ?, updated_at = ?
+                       WHERE id = ?";
+            let builder = sqlx::query(sql)
+                .bind(&request.name)
+                .bind(request.source_type.to_string())
+                .bind(&request.url)
+                .bind(&request.update_cron)
+                .bind(&request.username)
+                .bind(&request.timezone)
+                .bind(&time_offset)
+                .bind(request.is_active)
+                .bind(now.to_rfc3339())
+                .bind(id.to_string());
+            (sql, builder)
+        };
+
+        let result = query_builder
             .execute(&self.pool)
             .await
             .map_err(|e| RepositoryError::query_failed(sql, e.to_string()))?;

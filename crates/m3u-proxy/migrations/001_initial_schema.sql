@@ -30,7 +30,7 @@ CREATE TABLE epg_sources (
     name TEXT NOT NULL,
     source_type TEXT NOT NULL CHECK (source_type IN ('xmltv', 'xtream')),
     url TEXT NOT NULL,
-    update_cron TEXT NOT NULL DEFAULT '0 0 */12 * * * *', -- Every 12 hours
+    update_cron TEXT NOT NULL DEFAULT '0 0 */6 * * * *', -- Every 6 hours
     username TEXT, -- For Xtream Codes
     password TEXT, -- For Xtream Codes
     original_timezone TEXT, -- Original timezone for reference (all times stored as UTC)

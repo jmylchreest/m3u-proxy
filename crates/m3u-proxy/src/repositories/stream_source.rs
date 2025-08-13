@@ -305,27 +305,53 @@ impl Repository<StreamSource, Uuid> for StreamSourceRepository {
 
         let now = DateTimeParser::now_utc();
         let now_str = DateTimeParser::format_for_storage(&now);
-
-        let query = r#"
-            UPDATE stream_sources 
-            SET name = ?, source_type = ?, url = ?, max_concurrent_streams = ?, update_cron = ?, username = ?, password = ?, field_map = ?, is_active = ?, updated_at = ?
-            WHERE id = ?
-        "#;
-
         let source_type_str = format!("{:?}", request.source_type).to_lowercase();
 
-        sqlx::query(query)
-            .bind(&request.name)
-            .bind(source_type_str)
-            .bind(&request.url)
-            .bind(request.max_concurrent_streams)
-            .bind(&request.update_cron)
-            .bind(&request.username)
-            .bind(&request.password)
-            .bind(&request.field_map)
-            .bind(request.is_active)
-            .bind(&now_str)
-            .bind(id.to_string())
+        // Build query conditionally based on whether password should be updated
+        let should_update_password = request.password.as_ref()
+            .map(|p| !p.trim().is_empty())
+            .unwrap_or(false);
+
+        let (query, query_builder) = if should_update_password {
+            let query = r#"
+                UPDATE stream_sources 
+                SET name = ?, source_type = ?, url = ?, max_concurrent_streams = ?, update_cron = ?, username = ?, password = ?, field_map = ?, is_active = ?, updated_at = ?
+                WHERE id = ?
+            "#;
+            let builder = sqlx::query(query)
+                .bind(&request.name)
+                .bind(&source_type_str)
+                .bind(&request.url)
+                .bind(request.max_concurrent_streams)
+                .bind(&request.update_cron)
+                .bind(&request.username)
+                .bind(&request.password)
+                .bind(&request.field_map)
+                .bind(request.is_active)
+                .bind(&now_str)
+                .bind(id.to_string());
+            (query, builder)
+        } else {
+            let query = r#"
+                UPDATE stream_sources 
+                SET name = ?, source_type = ?, url = ?, max_concurrent_streams = ?, update_cron = ?, username = ?, field_map = ?, is_active = ?, updated_at = ?
+                WHERE id = ?
+            "#;
+            let builder = sqlx::query(query)
+                .bind(&request.name)
+                .bind(&source_type_str)
+                .bind(&request.url)
+                .bind(request.max_concurrent_streams)
+                .bind(&request.update_cron)
+                .bind(&request.username)
+                .bind(&request.field_map)
+                .bind(request.is_active)
+                .bind(&now_str)
+                .bind(id.to_string());
+            (query, builder)
+        };
+
+        query_builder
             .execute(&self.pool)
             .await
             .map_err(|e| RepositoryError::QueryFailed {

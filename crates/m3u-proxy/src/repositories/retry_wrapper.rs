@@ -18,15 +18,24 @@ use std::marker::PhantomData;
 /// # Example Usage
 ///
 /// ```rust
-/// use crate::repositories::{StreamSourceRepository, RetryWrapper};
-/// use crate::utils::database_retry::RetryConfig;
+/// use m3u_proxy::repositories::StreamSourceRepository;
+/// use m3u_proxy::repositories::retry_wrapper::RetryWrapper;
+/// use m3u_proxy::repositories::traits::Repository;
+/// use m3u_proxy::utils::database_retry::RetryConfig;
+/// use uuid::Uuid;
+/// use sqlx::{Pool, Sqlite};
+/// # use std::error::Error;
 /// 
-/// let base_repo = StreamSourceRepository::new(pool.clone());
-/// let retry_repo = RetryWrapper::new(base_repo, RetryConfig::for_writes());
-/// 
-/// // All operations now have retry logic
-/// let source = retry_repo.find_by_id(id).await?;
-/// let updated = retry_repo.update(id, request).await?;
+/// async fn example() -> Result<(), Box<dyn Error>> {
+/// #   let pool: Pool<Sqlite> = todo!();
+///     let base_repo = StreamSourceRepository::new(pool.clone());
+///     let retry_repo = RetryWrapper::new(base_repo, RetryConfig::for_writes());
+///     
+///     // All operations now have retry logic
+///     let id = Uuid::new_v4();
+///     let source = retry_repo.find_by_id(id).await?;
+///     Ok(())
+/// }
 /// ```
 pub struct RetryWrapper<T, ID, R> 
 where 
@@ -410,10 +419,10 @@ mod tests {
         let result = retry_repo_critical.update(id, "critical_data".to_string()).await;
         
         if let Err(ref e) = result {
-            eprintln!("DEBUG: Critical update failed with error: {:?}", e);
+            eprintln!("DEBUG: Critical update failed with error: {e:?}");
         }
         eprintln!("DEBUG: Critical call count: {}", mock_repo_critical.call_count());
-        assert!(result.is_ok(), "Critical update should succeed after retries, got: {:?}", result);
+        assert!(result.is_ok(), "Critical update should succeed after retries, got: {result:?}");
         assert_eq!(result.unwrap(), "updated_critical_data");
         assert_eq!(mock_repo_critical.call_count(), 7); // Critical config: succeeded on 7th attempt
     }

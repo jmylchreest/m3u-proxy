@@ -19,12 +19,15 @@ use crate::errors::AppResult;
 /// # Examples
 ///
 /// ```rust
-/// use crate::services::Service;
+/// use m3u_proxy::services::traits::Service;
+/// use m3u_proxy::models::StreamSource;
+/// use m3u_proxy::errors::AppResult;
 /// use uuid::Uuid;
 ///
 /// async fn example<S: Service<StreamSource, Uuid>>(service: S) -> AppResult<()> {
-///     let source = service.get_by_id(uuid).await?;
-///     let updated = service.update(uuid, update_request).await?;
+///     let id = Uuid::new_v4();
+///     let source = service.get_by_id(id).await?;
+///     // Example would need actual update request data
 ///     Ok(())
 /// }
 /// ```

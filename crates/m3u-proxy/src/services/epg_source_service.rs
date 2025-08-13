@@ -378,11 +378,8 @@ impl EpgSourceService {
 
         info!("Deleted {} existing EPG programs for source: {}", deleted_count, source_id);
 
-        // Determine optimal batch size (default to 1800, but can be configured)
-        let batch_size = std::env::var("EPG_BATCH_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1800);
+        // Use configured batch size for EPG programs
+        let batch_size = self.database.batch_config().safe_epg_program_batch_size();
 
         debug!("Using batch size: {} for EPG program insertion", batch_size);
 

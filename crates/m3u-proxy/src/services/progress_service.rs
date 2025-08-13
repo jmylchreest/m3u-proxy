@@ -1436,10 +1436,10 @@ mod tests {
             None,
         );
 
-        // Test with no stages
+        // Test with no stages - should be Idle until work begins
         let progress = progress_manager.get_progress().await;
         assert_eq!(progress.overall_percentage, 0.0);
-        assert_eq!(progress.state, UniversalState::Completed);
+        assert_eq!(progress.state, UniversalState::Idle);
 
         // Add stage and test clamping
         let progress_manager = progress_manager.add_stage("test_stage", "Test Stage").await;

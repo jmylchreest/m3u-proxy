@@ -52,12 +52,13 @@ impl StandardHttpClient {
     }
     
     /// Process response with automatic decompression
-    async fn process_response_to_bytes(response: Response) -> AppResult<Vec<u8>> {
+    async fn process_response_to_bytes(response: Response, url: &str) -> AppResult<Vec<u8>> {
         if !response.status().is_success() {
             return Err(AppError::source_error(format!(
-                "HTTP error: {} {}",
+                "HTTP error: {} {} - URL: {}",
                 response.status(),
-                response.status().canonical_reason().unwrap_or("Unknown")
+                response.status().canonical_reason().unwrap_or("Unknown"),
+                UrlUtils::obfuscate_credentials(url)
             )));
         }
 
@@ -117,7 +118,7 @@ impl DecompressingHttpClient for StandardHttpClient {
                 }
             })?;
 
-        let decompressed_bytes = Self::process_response_to_bytes(response).await?;
+        let decompressed_bytes = Self::process_response_to_bytes(response, url).await?;
         
         // Convert decompressed bytes to UTF-8 string
         let content = String::from_utf8(decompressed_bytes)
@@ -144,7 +145,7 @@ impl DecompressingHttpClient for StandardHttpClient {
                 }
             })?;
 
-        let decompressed_bytes = Self::process_response_to_bytes(response).await?;
+        let decompressed_bytes = Self::process_response_to_bytes(response, url).await?;
         
         // Parse JSON from decompressed bytes
         let json_value = serde_json::from_slice(&decompressed_bytes)
@@ -171,7 +172,7 @@ impl DecompressingHttpClient for StandardHttpClient {
                 }
             })?;
 
-        let decompressed_bytes = Self::process_response_to_bytes(response).await?;
+        let decompressed_bytes = Self::process_response_to_bytes(response, url).await?;
         
         debug!("Successfully fetched {} bytes of binary content", decompressed_bytes.len());
         Ok(decompressed_bytes)
@@ -198,7 +199,7 @@ impl DecompressingHttpClient for StandardHttpClient {
                 }
             })?;
 
-        let decompressed_bytes = Self::process_response_to_bytes(response).await?;
+        let decompressed_bytes = Self::process_response_to_bytes(response, url).await?;
         
         // Convert decompressed bytes to UTF-8 string
         let content = String::from_utf8(decompressed_bytes)

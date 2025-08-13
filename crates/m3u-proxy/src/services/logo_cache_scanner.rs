@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, warn};
-use uuid::Uuid;
 
 use sandboxed_file_manager::SandboxedManager;
 
@@ -99,7 +98,7 @@ impl CachedLogoInfo {
 
         serde_json::json!({
             // LogoAsset fields (flattened)
-            "id": Uuid::new_v4(), // Generate a synthetic UUID
+            "id": self.cache_id, // Use cache_id directly as string ID
             "name": display_name,
             "description": description,
             "file_name": self.file_name,
@@ -127,6 +126,7 @@ pub struct LogoCacheScanner {
     file_manager: SandboxedManager,
     base_path: PathBuf,
 }
+
 
 impl LogoCacheScanner {
     /// Create a new logo cache scanner

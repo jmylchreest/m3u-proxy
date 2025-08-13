@@ -658,15 +658,14 @@ pub struct Action {
 /// # Examples
 ///
 /// ```
+/// use m3u_proxy::models::ActionOperator;
+/// 
 /// // Basic assignment
-/// SET tvg-name="Sports Channel"
+/// let set_op = ActionOperator::Set;
 ///
 /// // Delete field (removes from output)
-/// DELETE tvg-channo
-///
-/// // Set to null (explicit null value)
-/// SET tvg-logo=null
-///
+/// let delete_op = ActionOperator::Delete;
+/// ```
 /// // Conditional assignment (only if field is empty)
 /// SET tvg-id?="auto-generated-id"
 ///
@@ -710,17 +709,13 @@ pub enum ActionOperator {
 /// # Examples
 ///
 /// ```
+/// use m3u_proxy::models::ActionValue;
+/// 
 /// // Literal string value
-/// ActionValue::Literal("Sports HD".to_string())
+/// let literal = ActionValue::Literal("Sports HD".to_string());
 ///
 /// // Explicit null value (clears field)
-/// ActionValue::Null
-///
-/// // Future: Function call
-/// ActionValue::Function(FunctionCall { name: "upper".to_string(), arguments: vec![] })
-///
-/// // Future: Variable reference
-/// ActionValue::Variable(VariableRef { field_name: "tvg_id".to_string() })
+/// let null_value = ActionValue::Null;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "value")]

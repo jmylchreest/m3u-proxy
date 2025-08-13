@@ -225,14 +225,12 @@ impl PipelineOrchestratorFactory {
             cached_logo_path: PathBuf::from("./uploads/logos/cached"),
             cached_logo_retention: "90d".to_string(),
             cached_logo_cleanup_interval: "12h".to_string(),
-            proxy_versions_to_keep: 3,
             temp_path: Some("./temp".to_string()),
             temp_retention: "5m".to_string(),
             temp_cleanup_interval: "1m".to_string(),
             pipeline_path: PathBuf::from("./pipeline"),
             pipeline_retention: "10m".to_string(),
             pipeline_cleanup_interval: "5m".to_string(),
-            clean_orphan_logos: true,
         };
 
         Self::from_components(db_pool, app_config, storage_config, pipeline_file_manager).await

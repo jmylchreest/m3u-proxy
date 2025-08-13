@@ -10,7 +10,6 @@ pub mod proxies;
 pub mod health;
 pub mod index;
 pub mod static_assets;
-pub mod web_pages;
 
 // Re-export common handler utilities
 pub use crate::web::utils::*;

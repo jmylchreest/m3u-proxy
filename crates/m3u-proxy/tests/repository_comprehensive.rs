@@ -608,8 +608,8 @@ async fn create_in_memory_database() -> Database {
         url: "sqlite::memory:".to_string(),
         max_connections: Some(10),
         batch_sizes: None,
-        busy_timeout: "30s".to_string(),
-        cache_size: "64MB".to_string(),
+        busy_timeout: "5000".to_string(),
+        cache_size: "-64000".to_string(),
         wal_autocheckpoint: 1000,
     };
     

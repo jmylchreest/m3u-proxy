@@ -20,12 +20,15 @@ use std::collections::HashMap;
 /// # Examples
 ///
 /// ```rust
-/// use crate::repositories::Repository;
+/// use m3u_proxy::repositories::traits::Repository;
+/// use m3u_proxy::models::StreamSource;
+/// use m3u_proxy::errors::RepositoryError;
 /// use uuid::Uuid;
 ///
 /// async fn example<R: Repository<StreamSource, Uuid>>(repo: R) -> Result<(), RepositoryError> {
-///     let source = repo.find_by_id(uuid).await?;
-///     let updated = repo.update(uuid, update_request).await?;
+///     let id = Uuid::new_v4();
+///     let source = repo.find_by_id(id).await?;
+///     // Example would need actual update request data
 ///     Ok(())
 /// }
 /// ```

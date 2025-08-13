@@ -122,20 +122,21 @@ mod tests {
         println!("Static assets found: {assets:?}");
 
         // Only test for assets if they are actually embedded (development vs production build)
-        if !assets.is_empty() {
+        // Filter out .keep files and other non-asset files
+        let real_assets: Vec<_> = assets.iter().filter(|path| !path.ends_with(".keep")).collect();
+        if !real_assets.is_empty() {
             // Test that core assets are embedded in production builds
             assert!(
-                StaticAssets::get_asset("static/html/index.html").is_some(),
+                StaticAssets::get_asset("static/index.html").is_some(),
                 "index.html should be embedded in production builds"
             );
-            assert!(
-                StaticAssets::get_asset("static/css/main.css").is_some(),
-                "main.css should be embedded in production builds"
-            );
-            assert!(
-                StaticAssets::get_asset("static/js/shared-loader.js").is_some(),
-                "shared-loader.js should be embedded in production builds"
-            );
+            // Check for Next.js CSS files (they have dynamic names)
+            let has_css = real_assets.iter().any(|path| path.contains(".css"));
+            assert!(has_css, "CSS files should be embedded in production builds");
+            
+            // Check for Next.js JS files
+            let has_js = real_assets.iter().any(|path| path.contains(".js"));
+            assert!(has_js, "JS files should be embedded in production builds");
         } else {
             // In development builds without assets, just verify the system works
             println!("Development build detected - no static assets embedded");
@@ -164,38 +165,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_shared_templates_exist() {
-        // Test that shared templates are embedded (only in production builds)
-        let assets: Vec<_> = StaticAssets::list_assets().collect();
-        
-        if !assets.is_empty() {
-            // Only test for templates if assets are embedded
-            assert!(
-                StaticAssets::get_asset("static/html/shared/header.html").is_some(),
-                "header.html should be embedded in production builds"
-            );
-            assert!(
-                StaticAssets::get_asset("static/html/shared/nav.html").is_some(),
-                "nav.html should be embedded in production builds"
-            );
-            assert!(
-                StaticAssets::get_asset("static/html/shared/channels-modal.html").is_some(),
-                "channels-modal.html should be embedded in production builds"
-            );
-            assert!(
-                StaticAssets::get_asset("static/html/shared/footer-with-channels.html").is_some(),
-                "footer-with-channels.html should be embedded in production builds"
-            );
-        } else {
-            println!("Development build detected - no template assets embedded");
-        }
-    }
 
     #[test]
     fn test_asset_content_validation() {
         // Test HTML content
-        if let Some(index_html) = StaticAssets::get_asset("static/html/index.html") {
+        if let Some(index_html) = StaticAssets::get_asset("static/index.html") {
             let content = String::from_utf8_lossy(&index_html.data);
             assert!(
                 content.contains("M3U Proxy"),
@@ -207,26 +181,26 @@ mod tests {
             );
         }
 
-        // Test CSS content
-        if let Some(main_css) = StaticAssets::get_asset("static/css/main.css") {
-            let content = String::from_utf8_lossy(&main_css.data);
-            assert!(
-                content.contains("--primary-color"),
-                "main.css should contain CSS variables"
-            );
+        // Test that we have some CSS content (Next.js CSS files have dynamic names)
+        let css_files: Vec<_> = StaticAssets::iter().filter(|f| f.contains(".css")).collect();
+        if !css_files.is_empty() {
+            if let Some(css_file) = StaticAssets::get_asset(&css_files[0]) {
+                let content = String::from_utf8_lossy(&css_file.data);
+                assert!(!content.is_empty(), "CSS files should have content");
+            }
         }
 
-        // Test JS content
-        if let Some(shared_loader_js) = StaticAssets::get_asset("static/js/shared-loader.js") {
-            let content = String::from_utf8_lossy(&shared_loader_js.data);
-            assert!(
-                content.contains("TemplateLoader"),
-                "shared-loader.js should contain TemplateLoader class"
-            );
+        // Test that we have some JS content (Next.js JS files have dynamic names)
+        let js_files: Vec<_> = StaticAssets::iter().filter(|f| f.contains(".js")).collect();
+        if !js_files.is_empty() {
+            if let Some(js_file) = StaticAssets::get_asset(&js_files[0]) {
+                let content = String::from_utf8_lossy(&js_file.data);
+                assert!(!content.is_empty(), "JS files should have content");
+            }
         }
 
-        // Test relay.html content
-        if let Some(relay_html) = StaticAssets::get_asset("static/html/relay.html") {
+        // Test relay page content (may be at different paths in Next.js builds)
+        if let Some(relay_html) = StaticAssets::get_asset("static/admin/relays/index.html") {
             let content = String::from_utf8_lossy(&relay_html.data);
             assert!(
                 content.contains("Stream Relay"),

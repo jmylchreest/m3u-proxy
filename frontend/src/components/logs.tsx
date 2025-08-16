@@ -392,9 +392,10 @@ export function Logs() {
 
           {/* Log Filters */}
           <div className="space-y-3 mb-4">
-            {/* All Filters in Single Row */}
-            <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-              <div className="relative flex-1 min-w-0">
+            {/* Responsive Filter Layout */}
+            <div className="flex flex-col lg:flex-row gap-3">
+              {/* Text Filter - Flexible with minimum width */}
+              <div className="relative flex-1 min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Filter by text..."
@@ -404,107 +405,110 @@ export function Logs() {
                 />
               </div>
               
-              <Select value={levelFilter} onValueChange={setLevelFilter}>
-                <SelectTrigger className="h-9 w-28 flex-shrink-0">
-                  <SelectValue placeholder="All levels" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Levels</SelectItem>
-                  <SelectItem value="trace">Trace</SelectItem>
-                  <SelectItem value="debug">Debug</SelectItem>
-                  <SelectItem value="info">Info</SelectItem>
-                  <SelectItem value="warn">Warning</SelectItem>
-                  <SelectItem value="error">Error</SelectItem>
-                </SelectContent>
-              </Select>
-              
-              <Popover open={moduleOpen} onOpenChange={setModuleOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={moduleOpen}
-                    className="h-9 w-56 flex-shrink-0 justify-between font-normal"
-                  >
-                    <span className="truncate">
-                      {moduleFilter === "all" ? "All modules" : 
-                       moduleFilter.length > 35 ? `${moduleFilter.substring(0, 35)}...` : moduleFilter}
-                    </span>
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[200px] p-0 dropdown-backdrop" sideOffset={4}>
-                  <Command>
-                    <CommandInput placeholder="Search modules..." />
-                    <CommandList>
-                      <CommandEmpty>No module found.</CommandEmpty>
-                      <CommandGroup>
-                        <CommandItem
-                          value="all"
-                          onSelect={() => {
-                            setModuleFilter("all")
-                            setModuleOpen(false)
-                          }}
-                        >
-                          <Check
-                            className={cn(
-                              "mr-2 h-4 w-4",
-                              moduleFilter === "all" ? "opacity-100" : "opacity-0"
-                            )}
-                          />
-                          All Modules
-                        </CommandItem>
-                        {uniqueModules.map((module) => (
+              {/* Right-aligned filters with fixed widths */}
+              <div className="flex flex-col sm:flex-row gap-2 lg:ml-auto">
+                <Select value={levelFilter} onValueChange={setLevelFilter}>
+                  <SelectTrigger className="h-9 w-full sm:w-28">
+                    <SelectValue placeholder="All levels" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Levels</SelectItem>
+                    <SelectItem value="trace">Trace</SelectItem>
+                    <SelectItem value="debug">Debug</SelectItem>
+                    <SelectItem value="info">Info</SelectItem>
+                    <SelectItem value="warn">Warning</SelectItem>
+                    <SelectItem value="error">Error</SelectItem>
+                  </SelectContent>
+                </Select>
+                
+                <Popover open={moduleOpen} onOpenChange={setModuleOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={moduleOpen}
+                      className="h-9 w-full sm:w-40 justify-between font-normal"
+                    >
+                      <span className="truncate">
+                        {moduleFilter === "all" ? "All modules" : 
+                         moduleFilter.length > 20 ? `${moduleFilter.substring(0, 20)}...` : moduleFilter}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[200px] p-0 z-50" sideOffset={4}>
+                    <Command>
+                      <CommandInput placeholder="Search modules..." />
+                      <CommandList>
+                        <CommandEmpty>No module found.</CommandEmpty>
+                        <CommandGroup>
                           <CommandItem
-                            key={module}
-                            value={module}
-                            onSelect={(currentValue) => {
-                              setModuleFilter(currentValue)
+                            value="all"
+                            onSelect={() => {
+                              setModuleFilter("all")
                               setModuleOpen(false)
                             }}
                           >
                             <Check
                               className={cn(
                                 "mr-2 h-4 w-4",
-                                moduleFilter === module ? "opacity-100" : "opacity-0"
+                                moduleFilter === "all" ? "opacity-100" : "opacity-0"
                               )}
                             />
-                            {module}
+                            All Modules
                           </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-              
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <DateTimePicker
-                  value={dateAfter}
-                  onChange={setDateAfter}
-                  placeholder="Start time"
-                  className="w-40"
-                />
-                <DateTimePicker
-                  value={dateBefore}
-                  onChange={setDateBefore}
-                  placeholder="End time"
-                  className="w-40"
-                />
-                {(dateAfter || dateBefore) && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setDateAfter(undefined)
-                      setDateBefore(undefined)
-                    }}
-                    className="h-9 w-9 p-0 flex-shrink-0"
-                    title="Clear date range"
-                  >
-                    <XCircle className="h-4 w-4" />
-                  </Button>
-                )}
+                          {uniqueModules.map((module) => (
+                            <CommandItem
+                              key={module}
+                              value={module}
+                              onSelect={(currentValue) => {
+                                setModuleFilter(currentValue)
+                                setModuleOpen(false)
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  moduleFilter === module ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {module}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                
+                <div className="flex items-center gap-2">
+                  <DateTimePicker
+                    value={dateAfter}
+                    onChange={setDateAfter}
+                    placeholder="Start time"
+                    className="w-32"
+                  />
+                  <DateTimePicker
+                    value={dateBefore}
+                    onChange={setDateBefore}
+                    placeholder="End time"
+                    className="w-32"
+                  />
+                  {(dateAfter || dateBefore) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setDateAfter(undefined)
+                        setDateBefore(undefined)
+                      }}
+                      className="h-9 w-9 p-0"
+                      title="Clear date range"
+                    >
+                      <XCircle className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
             

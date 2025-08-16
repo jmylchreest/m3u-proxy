@@ -1,6 +1,6 @@
 [package]
 name = "sandboxed-file-manager"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A secure, sandboxed file management library with configurable retention policies"

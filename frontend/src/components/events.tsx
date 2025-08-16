@@ -346,9 +346,10 @@ export function Events() {
 
           {/* Events Filters */}
           <div className="space-y-3 mb-4">
-            {/* All Filters in Single Row */}
-            <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-              <div className="relative flex-1 min-w-0">
+            {/* Responsive Filter Layout */}
+            <div className="flex flex-col lg:flex-row gap-3">
+              {/* Text Filter - Flexible with minimum width */}
+              <div className="relative flex-1 min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Filter by text..."
@@ -358,106 +359,109 @@ export function Events() {
                 />
               </div>
               
-              <Select value={levelFilter} onValueChange={setLevelFilter}>
-                <SelectTrigger className="h-9 w-28 flex-shrink-0">
-                  <SelectValue placeholder="All levels" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Levels</SelectItem>
-                  <SelectItem value="debug">Debug</SelectItem>
-                  <SelectItem value="info">Info</SelectItem>
-                  <SelectItem value="warn">Warning</SelectItem>
-                  <SelectItem value="error">Error</SelectItem>
-                </SelectContent>
-              </Select>
-              
-              <Popover open={sourceOpen} onOpenChange={setSourceOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={sourceOpen}
-                    className="h-9 w-56 flex-shrink-0 justify-between font-normal"
-                  >
-                    <span className="truncate">
-                      {sourceFilter === "all" ? "All sources" : 
-                       sourceFilter.length > 35 ? `${sourceFilter.substring(0, 35)}...` : sourceFilter}
-                    </span>
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[200px] p-0 dropdown-backdrop" sideOffset={4}>
-                  <Command>
-                    <CommandInput placeholder="Search sources..." />
-                    <CommandList>
-                      <CommandEmpty>No source found.</CommandEmpty>
-                      <CommandGroup>
-                        <CommandItem
-                          value="all"
-                          onSelect={() => {
-                            setSourceFilter("all")
-                            setSourceOpen(false)
-                          }}
-                        >
-                          <Check
-                            className={cn(
-                              "mr-2 h-4 w-4",
-                              sourceFilter === "all" ? "opacity-100" : "opacity-0"
-                            )}
-                          />
-                          All Sources
-                        </CommandItem>
-                        {uniqueSources.map((source) => (
+              {/* Right-aligned filters with fixed widths */}
+              <div className="flex flex-col sm:flex-row gap-2 lg:ml-auto">
+                <Select value={levelFilter} onValueChange={setLevelFilter}>
+                  <SelectTrigger className="h-9 w-full sm:w-28">
+                    <SelectValue placeholder="All levels" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Levels</SelectItem>
+                    <SelectItem value="debug">Debug</SelectItem>
+                    <SelectItem value="info">Info</SelectItem>
+                    <SelectItem value="warn">Warning</SelectItem>
+                    <SelectItem value="error">Error</SelectItem>
+                  </SelectContent>
+                </Select>
+                
+                <Popover open={sourceOpen} onOpenChange={setSourceOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={sourceOpen}
+                      className="h-9 w-full sm:w-40 justify-between font-normal"
+                    >
+                      <span className="truncate">
+                        {sourceFilter === "all" ? "All sources" : 
+                         sourceFilter.length > 20 ? `${sourceFilter.substring(0, 20)}...` : sourceFilter}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[200px] p-0 z-50" sideOffset={4}>
+                    <Command>
+                      <CommandInput placeholder="Search sources..." />
+                      <CommandList>
+                        <CommandEmpty>No source found.</CommandEmpty>
+                        <CommandGroup>
                           <CommandItem
-                            key={source}
-                            value={source}
-                            onSelect={(currentValue) => {
-                              setSourceFilter(currentValue)
+                            value="all"
+                            onSelect={() => {
+                              setSourceFilter("all")
                               setSourceOpen(false)
                             }}
                           >
                             <Check
                               className={cn(
                                 "mr-2 h-4 w-4",
-                                sourceFilter === source ? "opacity-100" : "opacity-0"
+                                sourceFilter === "all" ? "opacity-100" : "opacity-0"
                               )}
                             />
-                            {source}
+                            All Sources
                           </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-              
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <DateTimePicker
-                  value={dateAfter}
-                  onChange={setDateAfter}
-                  placeholder="Start time"
-                  className="w-40"
-                />
-                <DateTimePicker
-                  value={dateBefore}
-                  onChange={setDateBefore}
-                  placeholder="End time"
-                  className="w-40"
-                />
-                {(dateAfter || dateBefore) && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setDateAfter(undefined)
-                      setDateBefore(undefined)
-                    }}
-                    className="h-9 w-9 p-0 flex-shrink-0"
-                    title="Clear date range"
-                  >
-                    <XCircle className="h-4 w-4" />
-                  </Button>
-                )}
+                          {uniqueSources.map((source) => (
+                            <CommandItem
+                              key={source}
+                              value={source}
+                              onSelect={(currentValue) => {
+                                setSourceFilter(currentValue)
+                                setSourceOpen(false)
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  sourceFilter === source ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {source}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                
+                <div className="flex items-center gap-2">
+                  <DateTimePicker
+                    value={dateAfter}
+                    onChange={setDateAfter}
+                    placeholder="Start time"
+                    className="w-32"
+                  />
+                  <DateTimePicker
+                    value={dateBefore}
+                    onChange={setDateBefore}
+                    placeholder="End time"
+                    className="w-32"
+                  />
+                  {(dateAfter || dateBefore) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setDateAfter(undefined)
+                        setDateBefore(undefined)
+                      }}
+                      className="h-9 w-9 p-0"
+                      title="Clear date range"
+                    >
+                      <XCircle className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
             

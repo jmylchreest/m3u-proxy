@@ -4,8 +4,7 @@ use crate::models::*;
 use crate::ingestor::scheduler::SchedulerEvent;
 use anyhow::Result;
 use sqlx::{Pool, Row, Sqlite, SqlitePool, migrate::MigrateDatabase};
-use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tracing;
 use uuid::Uuid;
 use crate::utils::uuid_parser::parse_uuid_flexible;
@@ -13,7 +12,6 @@ use crate::utils::uuid_parser::parse_uuid_flexible;
 #[derive(Clone)]
 pub struct Database {
     pool: Pool<Sqlite>,
-    channel_update_lock: Arc<Mutex<()>>,
     ingestion_config: IngestionConfig,
     batch_config: DatabaseBatchConfig,
     scheduler_event_tx: Option<mpsc::UnboundedSender<SchedulerEvent>>,
@@ -23,7 +21,6 @@ impl std::fmt::Debug for Database {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Database")
             .field("pool", &"SqlitePool")
-            .field("channel_update_lock", &"Mutex<()>")
             .field("ingestion_config", &self.ingestion_config)
             .field("batch_config", &self.batch_config)
             .field("scheduler_event_tx", &self.scheduler_event_tx.is_some())
@@ -118,7 +115,6 @@ impl Database {
 
         Ok(Self {
             pool,
-            channel_update_lock: Arc::new(Mutex::new(())),
             ingestion_config: ingestion_config.clone(),
             batch_config,
             scheduler_event_tx: None,
@@ -231,9 +227,6 @@ impl Database {
         hasher.finish().to_be_bytes().to_vec()
     }
 
-    pub async fn acquire_channel_update_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.channel_update_lock.lock().await
-    }
 
     // Proxy-related database methods
     pub async fn get_stream_proxy(&self, proxy_id: Uuid) -> Result<Option<StreamProxy>> {

@@ -327,7 +327,7 @@ export function Debug() {
 
       {/* System Overview */}
       {healthData && (
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-6">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Service Status</CardTitle>
@@ -374,6 +374,23 @@ export function Debug() {
               </div>
               <p className="text-xs text-muted-foreground">
                 {healthData.cpu_info.load_1min.toFixed(2)} / {healthData.cpu_info.cores} cores
+              </p>
+            </CardContent>
+          </Card>
+          
+          {/* Relay System Summary */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Relay System</CardTitle>
+              <Zap className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2">
+                {getStatusIcon(healthData.components.relay_system.status)}
+                <div className="text-2xl font-bold">{healthData.components.relay_system.healthy_processes}</div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {healthData.components.relay_system.healthy_processes}/{healthData.components.relay_system.total_processes} healthy
               </p>
             </CardContent>
           </Card>
@@ -618,131 +635,259 @@ export function Debug() {
       {/* System Components */}
       {healthData && (
         <div className="grid gap-4 md:grid-cols-2">
-          {/* Database Component */}
+          {/* Database Component - Enhanced */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Database className="h-5 w-5" />
                 Database
               </CardTitle>
+              <CardDescription>
+                Connection pool and performance monitoring
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               <div className="flex items-center gap-2">
                 {getStatusIcon(healthData.components.database.status)}
                 <Badge className={getStatusIndicatorClasses(healthData.components.database.status)}>
                   {healthData.components.database.status}
                 </Badge>
+                <Badge variant="outline" className="ml-auto">
+                  {healthData.components.database.response_time_status}
+                </Badge>
               </div>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Active Connections:</span>
-                  <span className="font-medium">{healthData.components.database.active_connections}</span>
+
+              {/* Connection Pool Metrics */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">Connection Pool</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Active:</span>
+                    <span className="font-medium">{healthData.components.database.active_connections}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Pool Size:</span>
+                    <span className="font-medium">{healthData.components.database.connection_pool_size}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Idle:</span>
+                    <span className="font-medium">{healthData.components.database.idle_connections}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Utilization:</span>
+                    <span className="font-medium">{healthData.components.database.pool_utilization_percent}%</span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Pool Size:</span>
-                  <span className="font-medium">{healthData.components.database.connection_pool_size}</span>
+              </div>
+
+              {/* Performance Metrics */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">Performance</h4>
+                <div className="grid grid-cols-1 gap-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Response Time:</span>
+                    <span className="font-medium">{healthData.components.database.response_time_ms}ms</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Health Checks */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">Health Checks</h4>
+                <div className="grid grid-cols-1 gap-1 text-sm">
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Tables Accessible:</span>
+                    <div className="flex items-center gap-1">
+                      {healthData.components.database.tables_accessible ? 
+                        <CheckCircle className="h-3 w-3 text-green-500" /> : 
+                        <XCircle className="h-3 w-3 text-red-500" />
+                      }
+                      <span className="font-medium text-xs">
+                        {healthData.components.database.tables_accessible ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Write Capability:</span>
+                    <div className="flex items-center gap-1">
+                      {healthData.components.database.write_capability ? 
+                        <CheckCircle className="h-3 w-3 text-green-500" /> : 
+                        <XCircle className="h-3 w-3 text-red-500" />
+                      }
+                      <span className="font-medium text-xs">
+                        {healthData.components.database.write_capability ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">No Blocking Locks:</span>
+                    <div className="flex items-center gap-1">
+                      {healthData.components.database.no_blocking_locks ? 
+                        <CheckCircle className="h-3 w-3 text-green-500" /> : 
+                        <XCircle className="h-3 w-3 text-red-500" />
+                      }
+                      <span className="font-medium text-xs">
+                        {healthData.components.database.no_blocking_locks ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Scheduler Component */}
+          {/* Scheduler Component - Enhanced */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Calendar className="h-5 w-5" />
                 Scheduler
               </CardTitle>
+              <CardDescription>
+                Source scheduling and ingestion monitoring
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               <div className="flex items-center gap-2">
                 {getStatusIcon(healthData.components.scheduler.status)}
                 <Badge className={getStatusIndicatorClasses(healthData.components.scheduler.status)}>
                   {healthData.components.scheduler.status}
                 </Badge>
               </div>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Stream Sources:</span>
-                  <span className="font-medium">{healthData.components.scheduler.sources_scheduled.stream_sources}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">EPG Sources:</span>
-                  <span className="font-medium">{healthData.components.scheduler.sources_scheduled.epg_sources}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Active Ingestions:</span>
-                  <span className="font-medium">{healthData.components.scheduler.active_ingestions}</span>
+
+              {/* Sources Overview */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">Configured Sources</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Stream Sources:</span>
+                    <span className="font-medium">{healthData.components.scheduler.sources_scheduled.stream_sources}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">EPG Sources:</span>
+                    <span className="font-medium">{healthData.components.scheduler.sources_scheduled.epg_sources}</span>
+                  </div>
                 </div>
               </div>
+
+              {/* Activity Status */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">Current Activity</h4>
+                <div className="grid grid-cols-1 gap-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Active Ingestions:</span>
+                    <span className="font-medium">{healthData.components.scheduler.active_ingestions}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Last Cache Refresh:</span>
+                    <span className="font-medium text-xs">
+                      {new Date(healthData.components.scheduler.last_cache_refresh).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Next Scheduled Times */}
+              {healthData.components.scheduler.next_scheduled_times && healthData.components.scheduler.next_scheduled_times.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium text-muted-foreground">Next Scheduled Runs</h4>
+                  <div className="space-y-2">
+                    {healthData.components.scheduler.next_scheduled_times.map((schedule, index) => (
+                      <div key={index} className="bg-muted/50 rounded p-2">
+                        <div className="flex justify-between items-start text-xs">
+                          <div>
+                            <div className="font-medium">{schedule.source_name}</div>
+                            <div className="text-muted-foreground">{schedule.source_type}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-medium">
+                              {new Date(schedule.next_run).toLocaleString()}
+                            </div>
+                            <div className="text-muted-foreground font-mono text-xs">
+                              {schedule.cron_expression}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          {/* Sandbox Manager Component */}
+          {/* Sandbox Manager Component - Enhanced */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FolderOpen className="h-5 w-5" />
                 Sandbox Manager
               </CardTitle>
+              <CardDescription>
+                File management and cleanup operations
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               <div className="flex items-center gap-2">
                 {getStatusIcon(healthData.components.sandbox_manager.status)}
                 <Badge className={getStatusIndicatorClasses(healthData.components.sandbox_manager.status)}>
                   {healthData.components.sandbox_manager.status}
                 </Badge>
-              </div>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Cleanup Status:</span>
-                  <span className="font-medium capitalize">{healthData.components.sandbox_manager.cleanup_status}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Files Cleaned:</span>
-                  <span className="font-medium">{healthData.components.sandbox_manager.temp_files_cleaned}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Space Freed:</span>
-                  <span className="font-medium">{formatMemorySize(healthData.components.sandbox_manager.disk_space_freed_mb)}</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Relay System Component */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Zap className="h-5 w-5" />
-                Relay System
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center gap-2">
-                {getStatusIcon(healthData.components.relay_system.status)}
-                <Badge className={getStatusIndicatorClasses(healthData.components.relay_system.status)}>
-                  {healthData.components.relay_system.status}
+                <Badge variant="outline" className="ml-auto capitalize">
+                  {healthData.components.sandbox_manager.cleanup_status}
                 </Badge>
               </div>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Total Processes:</span>
-                  <span className="font-medium">{healthData.components.relay_system.total_processes}</span>
+
+              {/* Cleanup Statistics */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">Latest Cleanup</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Files Cleaned:</span>
+                    <span className="font-medium">{healthData.components.sandbox_manager.temp_files_cleaned}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Space Freed:</span>
+                    <span className="font-medium">{formatMemorySize(healthData.components.sandbox_manager.disk_space_freed_mb)}</span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Healthy:</span>
-                  <span className="font-medium text-green-600">{healthData.components.relay_system.healthy_processes}</span>
+                <div className="grid grid-cols-1 gap-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Last Cleanup:</span>
+                    <span className="font-medium text-xs">
+                      {new Date(healthData.components.sandbox_manager.last_cleanup_run).toLocaleString()}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Unhealthy:</span>
-                  <span className="font-medium text-red-600">{healthData.components.relay_system.unhealthy_processes}</span>
+              </div>
+
+              {/* Managed Directories */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">Managed Directories</h4>
+                <div className="space-y-2">
+                  {healthData.components.sandbox_manager.managed_directories.map((dir, index) => (
+                    <div key={index} className="bg-muted/50 rounded p-2">
+                      <div className="flex justify-between items-start text-xs">
+                        <div>
+                          <div className="font-medium font-mono">{dir.name}</div>
+                          <div className="text-muted-foreground">
+                            Retention: {dir.retention_duration} • Cleanup: {dir.cleanup_interval}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <Badge variant="outline" className="text-xs">
+                            Active
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* FFmpeg Information - Separate Component */}
+          {/* FFmpeg Information */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -780,33 +925,23 @@ export function Debug() {
                 </div>
                 {healthData.components.relay_system.hwaccel_available && healthData.components.relay_system.hwaccel_capabilities && (
                   <div className="pt-2 border-t">
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Accelerators:</p>
-                    <div className="flex gap-1 flex-wrap mb-2">
-                      {healthData.components.relay_system.hwaccel_capabilities.accelerators?.map((accel) => (
-                        <Badge key={accel} variant="outline" className="text-xs">{accel.toUpperCase()}</Badge>
-                      ))}
-                    </div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Available Codecs:</p>
-                    <div className="flex gap-1 flex-wrap mb-2">
-                      {healthData.components.relay_system.hwaccel_capabilities.codecs?.map((codec) => (
-                        <Badge key={codec} variant="outline" className="text-xs">{codec}</Badge>
-                      ))}
-                    </div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Support Matrix:</p>
-                    <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Hardware Acceleration Support Matrix:</p>
+                    <div className="space-y-2">
                       {healthData.components.relay_system.hwaccel_capabilities.support_matrix && Object.entries(healthData.components.relay_system.hwaccel_capabilities.support_matrix).map(([accel, support]) => (
-                        <div key={accel} className="text-xs">
-                          <span className="font-medium text-muted-foreground">{accel.toUpperCase()}:</span>
-                          <div className="flex gap-1 mt-1">
-                            {Object.entries(support).map(([codec, supported]) => (
-                              <Badge 
-                                key={codec} 
-                                variant={supported ? "default" : "outline"} 
-                                className={`text-xs ${supported ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100" : "text-muted-foreground"}`}
-                              >
-                                {codec.toUpperCase()}
-                              </Badge>
-                            ))}
+                        <div key={accel} className="bg-muted/50 rounded p-2">
+                          <div className="flex justify-between items-center text-xs">
+                            <div className="font-medium">{accel.toUpperCase()}</div>
+                            <div className="flex gap-1">
+                              {Object.entries(support).map(([codec, supported]) => (
+                                <Badge 
+                                  key={codec} 
+                                  variant={supported ? "default" : "outline"} 
+                                  className={`text-xs ${supported ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100" : "text-muted-foreground"}`}
+                                >
+                                  {codec.toUpperCase()}
+                                </Badge>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       ))}

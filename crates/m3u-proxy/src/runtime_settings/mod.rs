@@ -42,6 +42,32 @@ pub struct RuntimeSettingsStore {
     settings: Arc<RwLock<RuntimeSettings>>,
     // Optional handle for reloading tracing subscriber log level
     tracing_reload_handle: Option<Arc<RwLock<Handle<tracing_subscriber::EnvFilter, tracing_subscriber::Registry>>>>,
+    /// Runtime configuration flags for middleware
+    pub runtime_flags: Arc<RwLock<RuntimeFlags>>,
+}
+
+/// Runtime flags that can be checked by middleware and services
+#[derive(Debug, Clone)]
+pub struct RuntimeFlags {
+    /// Whether request logging is currently enabled
+    pub request_logging_enabled: bool,
+    /// Whether metrics collection is currently enabled  
+    pub metrics_enabled: bool,
+    /// Current request timeout in seconds
+    pub request_timeout_seconds: u32,
+    /// Current max connections limit
+    pub max_connections: u32,
+}
+
+impl Default for RuntimeFlags {
+    fn default() -> Self {
+        Self {
+            request_logging_enabled: true,
+            metrics_enabled: true,
+            request_timeout_seconds: 30,
+            max_connections: 1000,
+        }
+    }
 }
 
 impl RuntimeSettingsStore {
@@ -50,7 +76,13 @@ impl RuntimeSettingsStore {
         Self {
             settings: Arc::new(RwLock::new(RuntimeSettings::default())),
             tracing_reload_handle: None,
+            runtime_flags: Arc::new(RwLock::new(RuntimeFlags::default())),
         }
+    }
+    
+    /// Get current runtime flags for middleware to check
+    pub async fn get_flags(&self) -> RuntimeFlags {
+        self.runtime_flags.read().await.clone()
     }
 
     /// Create a new runtime settings store with tracing reload capability
@@ -60,6 +92,7 @@ impl RuntimeSettingsStore {
         Self {
             settings: Arc::new(RwLock::new(RuntimeSettings::default())),
             tracing_reload_handle: Some(Arc::new(RwLock::new(handle))),
+            runtime_flags: Arc::new(RwLock::new(RuntimeFlags::default())),
         }
     }
 
@@ -119,7 +152,7 @@ impl RuntimeSettingsStore {
         }
     }
 
-    /// Update max connections setting
+    /// Update max connections setting (temporary, not persisted)
     pub async fn update_max_connections(&self, max_connections: u32) -> bool {
         if max_connections == 0 || max_connections > 10000 {
             error!("Invalid max_connections value: {} (must be 1-10000)", max_connections);
@@ -128,15 +161,17 @@ impl RuntimeSettingsStore {
 
         let mut settings = self.settings.write().await;
         settings.max_connections = Some(max_connections);
-        info!("Max connections setting updated to: {}", max_connections);
         
-        // TODO: Apply to actual server connection limits if supported
-        // This would require integration with the HTTP server configuration
+        // Apply to runtime flags immediately (temporary application)
+        let mut flags = self.runtime_flags.write().await;
+        flags.max_connections = max_connections;
+        
+        info!("Max connections setting updated to: {} (temporary - resets on restart)", max_connections);
         
         true
     }
 
-    /// Update request timeout setting
+    /// Update request timeout setting (temporary, not persisted)
     pub async fn update_request_timeout(&self, timeout_seconds: u32) -> bool {
         if timeout_seconds == 0 || timeout_seconds > 300 {
             error!("Invalid request_timeout_seconds value: {} (must be 1-300)", timeout_seconds);
@@ -145,32 +180,40 @@ impl RuntimeSettingsStore {
 
         let mut settings = self.settings.write().await;
         settings.request_timeout_seconds = Some(timeout_seconds);
-        info!("Request timeout setting updated to: {} seconds", timeout_seconds);
         
-        // TODO: Apply to actual server timeout configuration
-        // This would require integration with the HTTP client timeout settings
+        // Apply to runtime flags immediately (temporary application)
+        let mut flags = self.runtime_flags.write().await;
+        flags.request_timeout_seconds = timeout_seconds;
+        
+        info!("Request timeout updated to: {} seconds (temporary - resets on restart)", timeout_seconds);
         
         true
     }
 
-    /// Update request logging setting
+    /// Update request logging setting (temporary, not persisted)
     pub async fn update_request_logging(&self, enable: bool) {
         let mut settings = self.settings.write().await;
         settings.enable_request_logging = enable;
-        info!("Request logging {}", if enable { "enabled" } else { "disabled" });
         
-        // TODO: Apply to actual request logging middleware
-        // This would require dynamic enabling/disabling of request logging middleware
+        // Apply to runtime flags immediately (temporary application)
+        let mut flags = self.runtime_flags.write().await;
+        flags.request_logging_enabled = enable;
+        
+        info!("Request logging {} (temporary - resets on restart)", 
+              if enable { "enabled" } else { "disabled" });
     }
 
-    /// Update metrics collection setting
+    /// Update metrics collection setting (temporary, not persisted)
     pub async fn update_metrics_collection(&self, enable: bool) {
         let mut settings = self.settings.write().await;
         settings.enable_metrics = enable;
-        info!("Metrics collection {}", if enable { "enabled" } else { "disabled" });
         
-        // TODO: Apply to actual metrics collection
-        // This would require dynamic enabling/disabling of metrics logging
+        // Apply to runtime flags immediately (temporary application)
+        let mut flags = self.runtime_flags.write().await;
+        flags.metrics_enabled = enable;
+        
+        info!("Metrics collection {} (temporary - resets on restart)", 
+              if enable { "enabled" } else { "disabled" });
     }
 
     /// Bulk update multiple settings

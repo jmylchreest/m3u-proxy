@@ -596,7 +596,17 @@ impl SandboxedManager {
                 // Get relative path from the sandbox base
                 if let Ok(relative) = entry_path.strip_prefix(&self.base_dir) {
                     if let Some(path_str) = relative.to_str() {
-                        files.push(path_str.to_string());
+                        // Skip empty paths (files in root directory)
+                        if !path_str.is_empty() {
+                            files.push(path_str.to_string());
+                        } else {
+                            // For files in root directory, use just the filename
+                            if let Some(filename) = entry_path.file_name() {
+                                if let Some(filename_str) = filename.to_str() {
+                                    files.push(filename_str.to_string());
+                                }
+                            }
+                        }
                     }
                 }
             }

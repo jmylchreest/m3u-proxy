@@ -6,8 +6,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use tokio::fs;
+use std::path::PathBuf;
 use tracing::{debug, warn};
 
 use sandboxed_file_manager::SandboxedManager;
@@ -157,8 +156,8 @@ impl LogoCacheScanner {
     async fn scan_logos_in_manager(&self, file_manager: &SandboxedManager, logo_type: &str) -> Result<Vec<CachedLogoInfo>> {
         debug!("Scanning for {} logos using sandboxed file manager", logo_type);
         
-        // Use sandboxed list_files operation to scan root directory
-        let file_list = match file_manager.list_files("").await {
+        // Use sandboxed list_files operation to scan root directory (use "." for current directory)
+        let file_list = match file_manager.list_files(".").await {
             Ok(files) => files,
             Err(e) => {
                 warn!("Failed to list files in {} file manager: {}", logo_type, e);
@@ -247,72 +246,6 @@ impl LogoCacheScanner {
         }))
     }
     
-    /// Process a single logo file and extract its information (legacy method for compatibility)
-    async fn process_logo_file(&self, file_path: &Path, logo_type: &str) -> Result<Option<CachedLogoInfo>> {
-        // Extract file name
-        let file_name = match file_path.file_name().and_then(|n| n.to_str()) {
-            Some(name) => name.to_string(),
-            None => {
-                warn!("Invalid file name: {:?}", file_path);
-                return Ok(None);
-            }
-        };
-
-        // Parse cache_id and extension from filename (format: {cache_id}.{extension})
-        let (cache_id, file_extension) = match file_name.rsplit_once('.') {
-            Some((id, ext)) => {
-                if !Self::is_supported_image_extension(ext) {
-                    debug!("Skipping non-image file: {}", file_name);
-                    return Ok(None);
-                }
-                (id.to_string(), ext.to_string())
-            }
-            None => {
-                warn!("File without extension: {}", file_name);
-                return Ok(None);
-            }
-        };
-
-        // Get file metadata
-        let metadata = match fs::metadata(&file_path).await {
-            Ok(meta) => meta,
-            Err(e) => {
-                warn!("Failed to get metadata for {}: {}", file_name, e);
-                return Ok(None);
-            }
-        };
-
-        let size_bytes = metadata.len();
-        let created_at = metadata
-            .created()
-            .map(DateTime::from)
-            .unwrap_or_else(|_| Utc::now());
-        let last_accessed = metadata
-            .accessed()
-            .map(DateTime::from)
-            .unwrap_or_else(|_| created_at);
-
-        // Determine content type
-        let content_type = Self::get_content_type(&file_extension);
-
-        // Try to infer original URL (this is optional - we don't store this mapping)
-        let inferred_source_url = None; // Could implement reverse URL mapping if needed
-
-        Ok(Some(CachedLogoInfo {
-            cache_id: cache_id.clone(),
-            file_name,
-            file_extension,
-            file_path: file_path.to_path_buf(),
-            size_bytes,
-            content_type,
-            created_at,
-            last_accessed,
-            metadata: Self::load_metadata(&cache_id, file_path.parent().unwrap_or(file_path))
-                .await,
-            inferred_source_url,
-            logo_type: logo_type.to_string(), // Distinguish between cached and uploaded
-        }))
-    }
 
     /// Check if the file extension is a supported image type
     fn is_supported_image_extension(ext: &str) -> bool {
@@ -442,28 +375,6 @@ impl LogoCacheScanner {
         }
     }
     
-    /// Load metadata from .json sidecar file (legacy method for compatibility)
-    async fn load_metadata(cache_id: &str, directory: &Path) -> Option<CachedLogoMetadata> {
-        let metadata_path = directory.join(format!("{cache_id}.json"));
-
-        if !metadata_path.exists() {
-            return None;
-        }
-
-        match fs::read_to_string(&metadata_path).await {
-            Ok(content) => match serde_json::from_str::<CachedLogoMetadata>(&content) {
-                Ok(metadata) => Some(metadata),
-                Err(e) => {
-                    warn!("Failed to parse metadata file {:?}: {}", metadata_path, e);
-                    None
-                }
-            },
-            Err(e) => {
-                warn!("Failed to read metadata file {:?}: {}", metadata_path, e);
-                None
-            }
-        }
-    }
 
     /// Save metadata to .json sidecar file using sandboxed operations  
     pub async fn save_metadata(&self, cache_id: &str, metadata: &CachedLogoMetadata) -> Result<()> {

@@ -414,6 +414,13 @@ export interface HealthData {
       status: string;
       connection_pool_size: number;
       active_connections: number;
+      idle_connections: number;
+      pool_utilization_percent: number;
+      response_time_ms: number;
+      response_time_status: string;
+      tables_accessible: boolean;
+      write_capability: boolean;
+      no_blocking_locks: boolean;
     };
     scheduler: {
       status: string;
@@ -437,7 +444,11 @@ export interface HealthData {
       cleanup_status: string;
       temp_files_cleaned: number;
       disk_space_freed_mb: number;
-      managed_directories: string[];
+      managed_directories: Array<{
+        name: string;
+        retention_duration: string;
+        cleanup_interval: string;
+      }>;
     };
     relay_system: {
       status: string;

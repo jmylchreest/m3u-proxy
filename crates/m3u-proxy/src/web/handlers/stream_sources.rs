@@ -460,7 +460,7 @@ pub async fn delete_stream_source(
     }
 }
 
-// TODO: Add refresh functionality when ingestion service is available
+// Stream source refresh functionality is fully implemented below
 
 /// Validate a stream source configuration
 #[utoipa::path(

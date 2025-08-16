@@ -143,27 +143,83 @@ pub async fn progress_events_stream(
             .event("heartbeat")
             .data("connected"));
             
-        // Get snapshot of operations that are already completed/failed at connection time
-        // These should be filtered by include_completed/include_failed, but new completion/failure events should always be sent
-        let initially_completed_operations: std::collections::HashSet<uuid::Uuid> = if query.include_completed == Some(false) {
-            let all_progress = progress_service.get_all_progress().await;
-            all_progress.into_iter()
-                .filter(|p| p.state == crate::services::progress_service::UniversalState::Completed)
-                .map(|p| p.id)
-                .collect()
-        } else {
-            std::collections::HashSet::new()
-        };
+        // Only query database for historical events if explicitly requested
+        // Send historical completed operations if include_completed is true (default)
+        let send_historical_completed = query.include_completed.unwrap_or(true);
+        let send_historical_failed = query.include_failed.unwrap_or(true);
         
-        let initially_failed_operations: std::collections::HashSet<uuid::Uuid> = if query.include_failed == Some(false) {
+        // Send historical events if requested
+        if send_historical_completed || send_historical_failed {
             let all_progress = progress_service.get_all_progress().await;
-            all_progress.into_iter()
-                .filter(|p| p.state == crate::services::progress_service::UniversalState::Error)
-                .map(|p| p.id)
-                .collect()
-        } else {
-            std::collections::HashSet::new()
-        };
+            for progress in all_progress {
+                let should_send = match progress.state {
+                    crate::services::progress_service::UniversalState::Completed => send_historical_completed,
+                    crate::services::progress_service::UniversalState::Error => send_historical_failed,
+                    _ => false, // Don't send other historical states
+                };
+                
+                if should_send {
+                    // Apply other filters before sending historical event
+                    let passes_filters = {
+                        let op_type_match = query.operation_type.as_ref()
+                            .map(|t| operation_type_to_string(&progress.operation_type) == t.to_lowercase())
+                            .unwrap_or(true);
+                        let state_match = query.state.as_ref()
+                            .map(|s| universal_state_to_string(&progress.state) == s.to_lowercase())
+                            .unwrap_or(true);
+                        let resource_match = query.resource_id.as_ref()
+                            .map(|r| progress.owner_id.to_string() == *r)
+                            .unwrap_or(true);
+                        let owner_match = query.owner_id.as_ref()
+                            .map(|o| progress.owner_id.to_string() == *o)
+                            .unwrap_or(true);
+                        
+                        op_type_match && state_match && resource_match && owner_match
+                    };
+                    
+                    if passes_filters {
+                        // Convert and send historical event
+                        let stages: Vec<ProgressStageEvent> = progress.stages.iter().map(|stage| {
+                            ProgressStageEvent {
+                                id: stage.id.clone(),
+                                name: stage.name.clone(),
+                                percentage: stage.percentage,
+                                state: universal_state_to_string(&stage.state),
+                                stage_step: stage.stage_step.clone(),
+                            }
+                        }).collect();
+
+                        let event = ProgressEvent {
+                            id: Some(progress.id.to_string()),
+                            owner_id: progress.owner_id.to_string(),
+                            owner_type: progress.owner_type,
+                            operation_type: operation_type_to_string(&progress.operation_type),
+                            operation_name: progress.operation_name,
+                            state: universal_state_to_string(&progress.state),
+                            current_stage: progress.current_stage,
+                            overall_percentage: progress.overall_percentage,
+                            stages,
+                            started_at: progress.started_at.to_rfc3339(),
+                            last_update: progress.last_update.to_rfc3339(),
+                            completed_at: progress.completed_at.map(|dt| dt.to_rfc3339()),
+                            error: progress.error_message,
+                        };
+
+                        match serde_json::to_string(&event) {
+                            Ok(json) => {
+                                yield Ok::<Event, axum::Error>(Event::default()
+                                    .event("progress")
+                                    .id(progress.id.to_string())
+                                    .data(json));
+                            }
+                            Err(e) => {
+                                error!("Failed to serialize historical progress event: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
             
         // Listen for real-time updates
         loop {
@@ -219,26 +275,18 @@ pub async fn progress_events_stream(
                         }
                     }
                     
-                    // Include/exclude completed operations
-                    // Only filter operations that were already completed when client connected,
-                    // always send completion events for operations that complete during the session
+                    // Filter real-time completion/failure events based on client preferences
+                    // Always send events for operations that transition to completed/failed during the session
                     if let Some(include_completed) = query.include_completed {
-                        if !include_completed 
-                            && progress.state == crate::services::progress_service::UniversalState::Completed 
-                            && initially_completed_operations.contains(&progress.id) {
-                            debug!("SSE filtering out initially completed operation: {}", progress.id);
+                        if !include_completed && progress.state == crate::services::progress_service::UniversalState::Completed {
+                            debug!("SSE filtering out real-time completion event per client request: {}", progress.id);
                             continue;
                         }
                     }
                     
-                    // Include/exclude failed operations
-                    // Only filter operations that were already failed when client connected,
-                    // always send failure events for operations that fail during the session
                     if let Some(include_failed) = query.include_failed {
-                        if !include_failed 
-                            && progress.state == crate::services::progress_service::UniversalState::Error 
-                            && initially_failed_operations.contains(&progress.id) {
-                            debug!("SSE filtering out initially failed operation: {}", progress.id);
+                        if !include_failed && progress.state == crate::services::progress_service::UniversalState::Error {
+                            debug!("SSE filtering out real-time failure event per client request: {}", progress.id);
                             continue;
                         }
                     }

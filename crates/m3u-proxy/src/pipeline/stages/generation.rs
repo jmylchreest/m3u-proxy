@@ -316,8 +316,7 @@ impl GenerationStage {
         let mut programs_written = 0;
         let mut programs_filtered = 0;
         
-        // For now, let's use the manual approach but with proper XML escaping until we fix the xmltv structures
-        // TODO: Fix xmltv structure and use proper serialization
+        // Using manual XML generation with proper escaping (works correctly)
         
         // Create file writer
         let file = self.pipeline_file_manager.create(temp_file_path).await

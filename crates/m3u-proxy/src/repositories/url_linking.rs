@@ -246,19 +246,28 @@ impl UrlLinkingRepository {
                         }
 
                         if let Some(update_username) = username {
-                            if epg_source.username.as_deref() != Some(update_username) {
+                            if update_username.is_empty() {
+                                debug!("Skipping username update for linked EPG source '{}' - empty username provided", epg_source.name);
+                            } else if epg_source.username.as_deref() != Some(update_username) {
                                 update_query.push_str(", username = ?");
                                 bind_values.push(update_username.clone());
                                 needs_update = true;
+                                debug!("Username will be updated for linked EPG source '{}'", epg_source.name);
                             }
                         }
 
+                        // Only update password if explicitly provided and non-empty
                         if let Some(update_password) = password {
-                            if epg_source.password.as_deref() != Some(update_password) {
+                            if update_password.is_empty() {
+                                debug!("Skipping password update for linked EPG source '{}' - empty password provided", epg_source.name);
+                            } else if epg_source.password.as_deref() != Some(update_password) {
                                 update_query.push_str(", password = ?");
                                 bind_values.push(update_password.clone());
                                 needs_update = true;
+                                debug!("Password will be updated for linked EPG source '{}'", epg_source.name);
                             }
+                        } else {
+                            debug!("Skipping password update for linked EPG source '{}' - no password provided", epg_source.name);
                         }
 
                         if needs_update {
@@ -323,19 +332,28 @@ impl UrlLinkingRepository {
                         }
 
                         if let Some(update_username) = username {
-                            if stream_source.username.as_deref() != Some(update_username) {
+                            if update_username.is_empty() {
+                                debug!("Skipping username update for linked stream source '{}' - empty username provided", stream_source.name);
+                            } else if stream_source.username.as_deref() != Some(update_username) {
                                 update_query.push_str(", username = ?");
                                 bind_values.push(update_username.clone());
                                 needs_update = true;
+                                debug!("Username will be updated for linked stream source '{}'", stream_source.name);
                             }
                         }
 
+                        // Only update password if explicitly provided and non-empty
                         if let Some(update_password) = password {
-                            if stream_source.password.as_deref() != Some(update_password) {
+                            if update_password.is_empty() {
+                                debug!("Skipping password update for linked stream source '{}' - empty password provided", stream_source.name);
+                            } else if stream_source.password.as_deref() != Some(update_password) {
                                 update_query.push_str(", password = ?");
                                 bind_values.push(update_password.clone());
                                 needs_update = true;
+                                debug!("Password will be updated for linked stream source '{}'", stream_source.name);
                             }
+                        } else {
+                            debug!("Skipping password update for linked stream source '{}' - no password provided", stream_source.name);
                         }
 
                         if needs_update {

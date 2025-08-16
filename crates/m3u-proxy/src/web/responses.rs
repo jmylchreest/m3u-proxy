@@ -325,7 +325,15 @@ pub struct SandboxManagerHealth {
     pub cleanup_status: String,
     pub temp_files_cleaned: u32,
     pub disk_space_freed_mb: f64,
-    pub managed_directories: Vec<String>,
+    pub managed_directories: Vec<ManagedDirectoryInfo>,
+}
+
+/// Information about a specific managed directory
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ManagedDirectoryInfo {
+    pub name: String,
+    pub retention_duration: String,
+    pub cleanup_interval: String,
 }
 
 /// Relay system health information (simplified for main health endpoint)

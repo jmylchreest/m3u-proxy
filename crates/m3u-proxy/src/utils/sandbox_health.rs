@@ -2,7 +2,8 @@
 //!
 //! This module provides health status information for sandbox file managers
 
-use crate::web::responses::SandboxManagerHealth;
+use crate::web::responses::{SandboxManagerHealth, ManagedDirectoryInfo};
+use crate::config::Config;
 use chrono::Utc;
 use sandboxed_file_manager::SandboxedManager;
 
@@ -13,15 +14,35 @@ pub async fn get_sandbox_health(
     _pipeline_manager: &SandboxedManager,
     _logo_manager: &SandboxedManager,
     _proxy_output_manager: &SandboxedManager,
+    config: &Config,
 ) -> SandboxManagerHealth {
-    // In a real implementation, these would be actual values from cleanup operations
-    // For now, we'll return reasonable default values
+    // Get directory-specific retention and cleanup configuration from config
     let managed_directories = vec![
-        "temp".to_string(),
-        "preview".to_string(),
-        "pipeline".to_string(),
-        "logos_cached".to_string(),
-        "proxy_output".to_string(),
+        ManagedDirectoryInfo {
+            name: "temp".to_string(),
+            retention_duration: config.storage.temp_retention.clone(),
+            cleanup_interval: config.storage.temp_cleanup_interval.clone(),
+        },
+        ManagedDirectoryInfo {
+            name: "preview".to_string(),
+            retention_duration: config.storage.temp_retention.clone(), // Preview uses temp settings
+            cleanup_interval: config.storage.temp_cleanup_interval.clone(),
+        },
+        ManagedDirectoryInfo {
+            name: "pipeline".to_string(),
+            retention_duration: config.storage.pipeline_retention.clone(),
+            cleanup_interval: config.storage.pipeline_cleanup_interval.clone(),
+        },
+        ManagedDirectoryInfo {
+            name: "logos_cached".to_string(),
+            retention_duration: config.storage.cached_logo_retention.clone(),
+            cleanup_interval: config.storage.cached_logo_cleanup_interval.clone(),
+        },
+        ManagedDirectoryInfo {
+            name: "proxy_output".to_string(),
+            retention_duration: config.storage.m3u_retention.clone(),
+            cleanup_interval: config.storage.m3u_cleanup_interval.clone(),
+        },
     ];
 
     // Mock cleanup statistics - in reality these would come from the actual cleanup operations

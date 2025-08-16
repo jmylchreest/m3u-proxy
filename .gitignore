@@ -57,3 +57,48 @@ frontend/**/public/worker-*.js
 frontend/**/public/sw.js.map
 frontend/**/public/workbox-*.js.map
 frontend/**/public/worker-*.js.map
+
+# Playwright & UI Testing (keep test files, ignore results/cache)
+tests/playwright/node_modules/
+test-results/
+playwright-report/
+ui_test_results/
+screenshots/
+# Test screenshots and images (but keep logos)
+ui_test_results/**/*.png
+ui_test_results/**/*.jpg
+ui_test_results/**/*.jpeg
+ui_test_results/**/*.gif
+ui_test_results/**/*.webp
+screenshots/**/*.png
+screenshots/**/*.jpg
+screenshots/**/*.jpeg
+
+# Testing artifacts
+**/test-results/
+**/playwright-report/
+**/screenshots/
+test_results.html
+test_results.json
+# Playwright cache and state
+.playwright/
+playwright/.cache/
+
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.pytest_cache/
+
+# MCP (Model Context Protocol) artifacts
+*mcp*
+*.mcp

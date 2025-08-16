@@ -34,6 +34,8 @@
 //! ```
 
 pub mod cyclic_buffer;
+pub mod connection_limiter;
+pub mod embedded_font;
 pub mod epg_source_service;
 pub mod error_fallback;
 pub mod ffmpeg_command_builder;
@@ -54,6 +56,8 @@ pub mod traits;
 
 // Re-export main traits and services
 pub use cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient, CyclicBufferStats};
+pub use connection_limiter::{ConnectionLimiter, ConnectionLimitsConfig, LimitExceededError, ConnectionHandle};
+pub use embedded_font::EmbeddedFontManager;
 pub use epg_source_service::EpgSourceService;
 pub use error_fallback::{ErrorFallbackGenerator, StreamHealthMonitor};
 pub use ffmpeg_command_builder::FFmpegCommandBuilder;

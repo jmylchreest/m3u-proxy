@@ -306,9 +306,26 @@ impl ProxyRegenerationService {
             Ok(mgr) => Some(mgr),
             Err(e) => {
                 // If ProgressManager creation fails, it means there's already an active operation
-                // We should not proceed with a duplicate regeneration
-                warn!("Failed to create progress manager for proxy {}: {} - skipping duplicate regeneration", proxy_id, e);
-                return Ok(());
+                // Try to force cleanup any stuck operations for this proxy and retry once
+                warn!("Failed to create progress manager for proxy {}: {} - attempting cleanup and retry", proxy_id, e);
+                self.progress_service.force_cleanup_owner_operations(proxy_id).await;
+                
+                // Retry once after cleanup
+                match self.progress_service.create_staged_progress_manager(
+                    proxy_id,
+                    "proxy".to_string(),
+                    OperationType::ProxyRegeneration,
+                    operation_name.clone(),
+                ).await {
+                    Ok(mgr) => {
+                        warn!("Successfully created progress manager for proxy {} after cleanup", proxy_id);
+                        Some(mgr)
+                    },
+                    Err(e2) => {
+                        warn!("Failed to create progress manager for proxy {} even after cleanup: {} - skipping regeneration", proxy_id, e2);
+                        return Ok(());
+                    }
+                }
             }
         };
 
@@ -411,12 +428,27 @@ impl ProxyRegenerationService {
 
         // Create progress manager for this manual regeneration
         let operation_name = Self::create_human_readable_manual_operation_name(&self.pool, proxy_id).await;
-        let progress_manager = self.progress_service.create_staged_progress_manager(
+        let progress_manager = match self.progress_service.create_staged_progress_manager(
             proxy_id,
             "proxy".to_string(),
             OperationType::ProxyRegeneration,
-            operation_name,
-        ).await?;
+            operation_name.clone(),
+        ).await {
+            Ok(mgr) => mgr,
+            Err(e) => {
+                // For manual regenerations, try cleanup and retry once
+                warn!("Failed to create progress manager for manual proxy {}: {} - attempting cleanup and retry", proxy_id, e);
+                self.progress_service.force_cleanup_owner_operations(proxy_id).await;
+                
+                // Retry once after cleanup
+                self.progress_service.create_staged_progress_manager(
+                    proxy_id,
+                    "proxy".to_string(),
+                    OperationType::ProxyRegeneration,
+                    operation_name,
+                ).await?
+            }
+        };
 
         // Check if already queued to prevent duplicates (after removing from auto queue)
         {

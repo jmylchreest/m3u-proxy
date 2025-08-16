@@ -345,6 +345,41 @@ impl LogoCacheScanner {
         Ok(None)
     }
 
+    /// Extract dimensions from an image file using sandboxed operations
+    async fn extract_dimensions_from_image_file(file_manager: &SandboxedManager, cache_id: &str) -> Option<(i32, i32)> {
+        // Try common image extensions
+        let extensions = ["png", "jpg", "jpeg", "gif", "webp"];
+        
+        for ext in &extensions {
+            let image_file = format!("{cache_id}.{ext}");
+            
+            if let Ok(true) = file_manager.exists(&image_file).await {
+                match file_manager.read(&image_file).await {
+                    Ok(image_bytes) => {
+                        return Self::extract_image_dimensions(&image_bytes);
+                    },
+                    Err(e) => {
+                        debug!("Failed to read image file {}: {}", image_file, e);
+                        continue;
+                    }
+                }
+            }
+        }
+        
+        None
+    }
+    
+    /// Extract dimensions from image bytes (same logic as LogoAssetService)
+    fn extract_image_dimensions(image_bytes: &[u8]) -> Option<(i32, i32)> {
+        match image::load_from_memory(image_bytes) {
+            Ok(img) => Some((img.width() as i32, img.height() as i32)),
+            Err(e) => {
+                debug!("Failed to extract image dimensions: {}", e);
+                None
+            }
+        }
+    }
+
     /// Load metadata from .json sidecar file using sandboxed operations
     async fn load_metadata_sandboxed(file_manager: &SandboxedManager, cache_id: &str) -> Option<CachedLogoMetadata> {
         let metadata_file = format!("{cache_id}.json");
@@ -361,11 +396,94 @@ impl LogoCacheScanner {
         
         // Read metadata file using sandboxed operations
         match file_manager.read_to_string(&metadata_file).await {
-            Ok(content) => match serde_json::from_str::<CachedLogoMetadata>(&content) {
-                Ok(metadata) => Some(metadata),
-                Err(e) => {
-                    warn!("Failed to parse metadata file {}: {}", metadata_file, e);
-                    None
+            Ok(content) => {
+                // Check if content is empty or whitespace-only
+                let trimmed_content = content.trim();
+                if trimmed_content.is_empty() {
+                    warn!("Empty metadata file {} detected - removing both image and metadata files to allow fresh refetch", metadata_file);
+                    
+                    // Remove the empty metadata file
+                    if let Err(e) = file_manager.remove_file(&metadata_file).await {
+                        warn!("Failed to remove empty metadata file {}: {}", metadata_file, e);
+                    } else {
+                        debug!("Removed empty metadata file {}", metadata_file);
+                    }
+                    
+                    // Also remove the associated image file(s) since the metadata is missing
+                    let image_extensions = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+                    for ext in &image_extensions {
+                        let image_file = format!("{}.{}", cache_id, ext);
+                        if let Ok(true) = file_manager.exists(&image_file).await {
+                            if let Err(e) = file_manager.remove_file(&image_file).await {
+                                warn!("Failed to remove associated image file {}: {}", image_file, e);
+                            } else {
+                                debug!("Removed associated image file {} due to empty metadata", image_file);
+                            }
+                            break; // Only remove the first matching image file
+                        }
+                    }
+                    
+                    warn!("Removed cache entry {} with empty metadata - logo will be refetched with proper metadata on next regeneration", cache_id);
+                    return None;
+                }
+                
+                // Try to parse non-empty content
+                match serde_json::from_str::<CachedLogoMetadata>(trimmed_content) {
+                    Ok(mut metadata) => {
+                        // If dimensions are missing, try to extract them from the image file
+                        if metadata.width.is_none() || metadata.height.is_none() {
+                            if let Some(dimensions) = Self::extract_dimensions_from_image_file(file_manager, cache_id).await {
+                                debug!("Extracted missing dimensions {}x{} for cached logo {}", dimensions.0, dimensions.1, cache_id);
+                                metadata.width = Some(dimensions.0);
+                                metadata.height = Some(dimensions.1);
+                                metadata.updated_at = Utc::now();
+                                
+                                // Update the metadata file with the extracted dimensions
+                                if let Ok(updated_content) = serde_json::to_string_pretty(&metadata) {
+                                    if let Err(e) = file_manager.write(&metadata_file, updated_content).await {
+                                        warn!("Failed to update metadata file {} with dimensions: {}", metadata_file, e);
+                                    } else {
+                                        debug!("Updated metadata file {} with extracted dimensions", metadata_file);
+                                    }
+                                }
+                            }
+                        }
+                        Some(metadata)
+                    },
+                    Err(e) => {
+                        warn!("Failed to parse metadata file {} (size: {} bytes): {}. Content preview: '{}'", 
+                            metadata_file, content.len(), e, 
+                            content.chars().take(100).collect::<String>()
+                        );
+                        
+                        // If JSON is corrupted, remove both the metadata and the image file
+                        // This allows the logo to be refetched fresh with proper metadata later
+                        warn!("Corrupted metadata file {} detected - removing both image and metadata files to allow fresh refetch", metadata_file);
+                        
+                        // Remove the corrupted metadata file
+                        if let Err(e) = file_manager.remove_file(&metadata_file).await {
+                            warn!("Failed to remove corrupted metadata file {}: {}", metadata_file, e);
+                        } else {
+                            debug!("Removed corrupted metadata file {}", metadata_file);
+                        }
+                        
+                        // Also remove the associated image file(s) since the metadata is lost
+                        let image_extensions = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+                        for ext in &image_extensions {
+                            let image_file = format!("{}.{}", cache_id, ext);
+                            if let Ok(true) = file_manager.exists(&image_file).await {
+                                if let Err(e) = file_manager.remove_file(&image_file).await {
+                                    warn!("Failed to remove associated image file {}: {}", image_file, e);
+                                } else {
+                                    debug!("Removed associated image file {} due to corrupted metadata", image_file);
+                                }
+                                break; // Only remove the first matching image file
+                            }
+                        }
+                        
+                        warn!("Removed corrupted cache entry {} - logo will be refetched with proper metadata on next regeneration", cache_id);
+                        None
+                    }
                 }
             },
             Err(e) => {
@@ -379,13 +497,22 @@ impl LogoCacheScanner {
     /// Save metadata to .json sidecar file using sandboxed operations  
     pub async fn save_metadata(&self, cache_id: &str, metadata: &CachedLogoMetadata) -> Result<()> {
         let metadata_file = format!("{cache_id}.json");
+        
+        // Serialize to JSON and validate it's not empty
         let json_content = serde_json::to_string_pretty(metadata)?;
+        if json_content.trim().is_empty() {
+            return Err(anyhow::anyhow!("Refusing to save empty metadata for cache_id: {}", cache_id));
+        }
+        
+        // Validate the JSON can be parsed back (ensures it's valid)
+        serde_json::from_str::<CachedLogoMetadata>(&json_content)
+            .map_err(|e| anyhow::anyhow!("Generated invalid JSON for cache_id {}: {}", cache_id, e))?;
         
         // Use cached file manager for metadata (metadata goes with the cached logos)
         self.cached_file_manager.write(&metadata_file, json_content).await
             .map_err(|e| anyhow::anyhow!("Failed to save metadata: {}", e))?;
         
-        debug!("Saved metadata for cache_id: {} using sandboxed operations", cache_id);
+        debug!("Saved validated metadata for cache_id: {} using sandboxed operations", cache_id);
         Ok(())
     }
 

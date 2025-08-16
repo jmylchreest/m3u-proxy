@@ -587,7 +587,7 @@ pub async fn refresh_stream_source(
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    let stream_source_repo = crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    let stream_source_repo = crate::repositories::StreamSourceRepository::new(state.database.read_pool());
     match stream_source_repo.find_by_id(uuid).await {
         Ok(Some(source)) => {
             // Create progress manager for manual refresh operation

@@ -23,6 +23,38 @@ use crate::{
     },
 };
 
+/// Helper to create repositories with appropriate pools for read-only operations
+fn create_read_repositories(database: &crate::database::Database) -> (
+    crate::repositories::StreamProxyRepository,
+    crate::repositories::ChannelRepository,
+    crate::repositories::FilterRepository,
+    crate::repositories::StreamSourceRepository,
+) {
+    let read_pool = database.read_pool();
+    (
+        crate::repositories::StreamProxyRepository::new(read_pool.clone()),
+        crate::repositories::ChannelRepository::new(read_pool.clone()),
+        crate::repositories::FilterRepository::new(read_pool.clone()),
+        crate::repositories::StreamSourceRepository::new(read_pool),
+    )
+}
+
+/// Helper to create repositories with appropriate pools for write operations
+fn create_write_repositories(database: &crate::database::Database) -> (
+    crate::repositories::StreamProxyRepository,
+    crate::repositories::ChannelRepository,
+    crate::repositories::FilterRepository,
+    crate::repositories::StreamSourceRepository,
+) {
+    let write_pool = database.pool();
+    (
+        crate::repositories::StreamProxyRepository::new(write_pool.clone()),
+        crate::repositories::ChannelRepository::new(write_pool.clone()),
+        crate::repositories::FilterRepository::new(write_pool.clone()),
+        crate::repositories::StreamSourceRepository::new(write_pool),
+    )
+}
+
 /// Request DTO for creating a stream proxy
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateStreamProxyRequest {
@@ -398,12 +430,9 @@ pub async fn list_proxies(
         &context,
     );
 
-    // Create service instances from state
-    let proxy_repo = crate::repositories::StreamProxyRepository::new(state.database.pool().clone());
-    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
-    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
-    let stream_source_repo =
-        crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    // Create service instances from state using read repositories
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+        create_read_repositories(&state.database);
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -478,11 +507,8 @@ pub async fn get_proxy(
     };
 
     // Create service instances
-    let proxy_repo = crate::repositories::StreamProxyRepository::new(state.database.pool().clone());
-    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
-    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
-    let stream_source_repo =
-        crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+        create_read_repositories(&state.database);
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -540,12 +566,9 @@ pub async fn create_proxy(
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    // Create service instances
-    let proxy_repo = crate::repositories::StreamProxyRepository::new(state.database.pool().clone());
-    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
-    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
-    let stream_source_repo =
-        crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    // Create service instances using write repositories for mutations
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+        create_write_repositories(&state.database);
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -660,12 +683,9 @@ pub async fn update_proxy(
         relay_profile_id: request.relay_profile_id,
     };
 
-    // Create service instances
-    let proxy_repo = crate::repositories::StreamProxyRepository::new(state.database.pool().clone());
-    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
-    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
-    let stream_source_repo =
-        crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    // Create service instances using write repositories for mutations
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+        create_write_repositories(&state.database);
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -726,12 +746,9 @@ pub async fn delete_proxy(
         }
     };
 
-    // Create service instances
-    let proxy_repo = crate::repositories::StreamProxyRepository::new(state.database.pool().clone());
-    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
-    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
-    let stream_source_repo =
-        crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    // Create service instances using write repositories for mutations
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+        create_write_repositories(&state.database);
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -800,11 +817,8 @@ pub async fn preview_proxy_config(
     tracing::debug!("Preview request: {:?}", request);
 
     // Create service instances
-    let proxy_repo = crate::repositories::StreamProxyRepository::new(state.database.pool().clone());
-    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
-    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
-    let stream_source_repo =
-        crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+        create_read_repositories(&state.database);
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -882,11 +896,8 @@ pub async fn preview_existing_proxy(
     };
 
     // Create service instances
-    let proxy_repo = crate::repositories::StreamProxyRepository::new(state.database.pool().clone());
-    let channel_repo = crate::repositories::ChannelRepository::new(state.database.pool().clone());
-    let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
-    let stream_source_repo =
-        crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+        create_read_repositories(&state.database);
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -2131,31 +2142,18 @@ async fn diagnose_channel_proxy_issue(
     channel_id: Uuid,
 ) -> String {
     // Check if channel exists at all and get additional info
-    let channel_info = sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT c.channel_name, ss.name as source_name 
-         FROM channels c 
-         LEFT JOIN stream_sources ss ON c.source_id = ss.id 
-         WHERE c.id = ?"
-    )
-    .bind(channel_id.to_string())
-    .fetch_optional(&database.pool())
-    .await;
+    let health_repo = crate::repositories::HealthRepository::new(database.read_pool());
+    let channel_info = health_repo.get_channel_info(channel_id).await;
 
     let (channel_name, source_name) = match channel_info {
-        Ok(Some((channel_name, source_name))) => {
+        Ok(Some(info)) => {
             // Channel exists - continue with other checks
-            (channel_name, source_name)
+            (info.channel_name, info.source_name)
         }
         Ok(None) => {
             // Channel doesn't exist - this suggests stale M3U
-            let last_generated = sqlx::query_scalar::<_, Option<String>>(
-                "SELECT last_generated_at FROM stream_proxies WHERE id = ?"
-            )
-            .bind(proxy_id.to_string())
-            .fetch_optional(&database.pool())
-            .await
-            .unwrap_or(None)
-            .flatten();
+            let last_generated = health_repo.get_proxy_last_generated(proxy_id).await
+                .unwrap_or(None);
             
             let timing_info = match last_generated {
                 Some(generated_at) => format!(" (proxy last generated: {generated_at})"),
@@ -2174,7 +2172,7 @@ async fn diagnose_channel_proxy_issue(
         "SELECT is_active FROM stream_proxies WHERE id = ?"
     )
     .bind(proxy_id.to_string())
-    .fetch_optional(&database.pool())
+    .fetch_optional(&database.read_pool())
     .await;
 
     match proxy_status {
@@ -2199,7 +2197,7 @@ async fn diagnose_channel_proxy_issue(
     )
     .bind(channel_id.to_string())
     .bind(proxy_id.to_string())
-    .fetch_one(&database.pool())
+    .fetch_one(&database.read_pool())
     .await
     .unwrap_or(0) > 0;
 

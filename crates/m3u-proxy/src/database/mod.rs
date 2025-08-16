@@ -11,7 +11,8 @@ use crate::utils::uuid_parser::parse_uuid_flexible;
 
 #[derive(Clone)]
 pub struct Database {
-    pool: Pool<Sqlite>,
+    pool: Pool<Sqlite>,        // Primary pool for writes and mixed operations
+    read_pool: Pool<Sqlite>,   // Dedicated read-only pool for API queries
     ingestion_config: IngestionConfig,
     batch_config: DatabaseBatchConfig,
     scheduler_event_tx: Option<mpsc::UnboundedSender<SchedulerEvent>>,
@@ -21,6 +22,7 @@ impl std::fmt::Debug for Database {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Database")
             .field("pool", &"SqlitePool")
+            .field("read_pool", &"SqlitePool")
             .field("ingestion_config", &self.ingestion_config)
             .field("batch_config", &self.batch_config)
             .field("scheduler_event_tx", &self.scheduler_event_tx.is_some())
@@ -31,6 +33,10 @@ impl std::fmt::Debug for Database {
 impl Database {
     pub fn pool(&self) -> Pool<Sqlite> {
         self.pool.clone()
+    }
+
+    pub fn read_pool(&self) -> Pool<Sqlite> {
+        self.read_pool.clone()
     }
 
     pub fn batch_config(&self) -> &DatabaseBatchConfig {
@@ -76,8 +82,9 @@ impl Database {
         }
 
         let pool = SqlitePool::connect(&config.url).await?;
+        let read_pool = SqlitePool::connect(&config.url).await?;
 
-        // Optimize SQLite for large dataset handling
+        // Optimize SQLite for large dataset handling - Write pool
         sqlx::query("PRAGMA journal_mode = WAL")
             .execute(&pool)
             .await?;
@@ -103,6 +110,34 @@ impl Database {
             .execute(&pool)
             .await?;
 
+        // Optimize SQLite for read performance - Read pool
+        sqlx::query("PRAGMA journal_mode = WAL")
+            .execute(&read_pool)
+            .await?;
+        sqlx::query("PRAGMA synchronous = NORMAL")
+            .execute(&read_pool)
+            .await?;
+        let cache_size_query = format!("PRAGMA cache_size = {}", &config.cache_size);
+        sqlx::query(&cache_size_query)
+            .execute(&read_pool)
+            .await?;
+        sqlx::query("PRAGMA temp_store = MEMORY")
+            .execute(&read_pool)
+            .await?;
+        sqlx::query("PRAGMA mmap_size = 268435456")
+            .execute(&read_pool)
+            .await?; // 256MB mmap
+        // Lower timeout for read pool to fail fast on contention
+        let read_timeout_value = config.busy_timeout.parse::<u32>().unwrap_or(5000);
+        let read_timeout_query = format!("PRAGMA busy_timeout = {}", std::cmp::min(read_timeout_value, 1000));
+        sqlx::query(&read_timeout_query)
+            .execute(&read_pool)
+            .await?;
+        let wal_autocheckpoint_query = format!("PRAGMA wal_autocheckpoint = {}", config.wal_autocheckpoint);
+        sqlx::query(&wal_autocheckpoint_query)
+            .execute(&read_pool)
+            .await?;
+
         let batch_config = config.batch_sizes.clone().unwrap_or_default();
 
         // Validate batch configuration
@@ -115,6 +150,7 @@ impl Database {
 
         Ok(Self {
             pool,
+            read_pool,
             ingestion_config: ingestion_config.clone(),
             batch_config,
             scheduler_event_tx: None,
@@ -236,7 +272,7 @@ impl Database {
              FROM stream_proxies WHERE id = ?",
         )
         .bind(proxy_id.to_string())
-        .fetch_optional(&self.pool)
+.fetch_optional(&self.read_pool)
         .await?;
 
         match row {
@@ -269,7 +305,7 @@ impl Database {
              FROM stream_proxies WHERE id = ?",
         )
         .bind(id)
-        .fetch_one(&self.pool)
+.fetch_one(&self.read_pool)
         .await?;
 
         Ok(StreamProxy {
@@ -303,7 +339,7 @@ impl Database {
              ORDER BY s.name"
         )
         .bind(proxy_id.to_string())
-        .fetch_all(&self.pool)
+.fetch_all(&self.read_pool)
         .await?;
 
         let mut sources = Vec::new();
@@ -362,7 +398,7 @@ impl Database {
              ORDER BY pf.priority_order"
         )
         .bind(proxy_id.to_string())
-        .fetch_all(&self.pool)
+.fetch_all(&self.read_pool)
         .await?;
 
         let mut result = Vec::new();
@@ -415,7 +451,7 @@ impl Database {
         )
         .bind(proxy_id.to_string())
         .bind(channel_id.to_string())
-        .fetch_optional(&self.pool)
+.fetch_optional(&self.read_pool)
         .await?;
 
         match row {
@@ -451,7 +487,7 @@ impl Database {
              FROM stream_proxies
              WHERE is_active = 1",
         )
-        .fetch_all(&self.pool)
+.fetch_all(&self.read_pool)
         .await?;
 
         let mut proxies = Vec::new();
@@ -509,7 +545,7 @@ impl Database {
              ORDER BY pes.priority_order",
         )
         .bind(proxy_id.to_string())
-        .fetch_all(&self.pool)
+.fetch_all(&self.read_pool)
         .await?;
 
         let mut sources = Vec::new();
@@ -561,7 +597,7 @@ impl Database {
         .bind(channel_id.to_string())
         .bind(start_time)
         .bind(end_time)
-        .fetch_all(&self.pool)
+.fetch_all(&self.read_pool)
         .await?;
 
         let mut programs = Vec::new();
@@ -604,7 +640,7 @@ impl Database {
              ORDER BY ep.start_time",
         )
         .bind(channel_id.to_string())
-        .fetch_all(&self.pool)
+.fetch_all(&self.read_pool)
         .await?;
 
         let mut programs = Vec::new();

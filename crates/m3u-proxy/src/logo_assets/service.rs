@@ -463,8 +463,8 @@ impl LogoAssetService {
                         mime_type: cached_logo.content_type.clone(),
                         asset_type: LogoAssetType::Cached,
                         source_url: cached_logo.inferred_source_url.clone(),
-                        width: None, // We don't store dimensions for cached logos
-                        height: None,
+                        width: cached_logo.metadata.as_ref().and_then(|m| m.width),
+                        height: cached_logo.metadata.as_ref().and_then(|m| m.height),
                         parent_asset_id: None,
                         format_type: crate::models::logo_asset::LogoFormatType::Original,
                         created_at: cached_logo.created_at,
@@ -756,12 +756,14 @@ impl LogoAssetService {
                     "Generating missing metadata for cached logo: {} -> {}",
                     logo_url, cache_id
                 );
+                // Dimensions will be extracted automatically when metadata is loaded by the scanner
                 self.generate_metadata_for_cached_logo_with_file_manager(
                     &cache_id,
                     logo_url,
                     channel_name,
                     channel_group,
                     extra_fields,
+                    None, // Dimensions will be extracted when metadata is loaded
                 )
                 .await?;
                 return Ok((cache_id, 0)); // 0 bytes for cache hit
@@ -791,12 +793,14 @@ impl LogoAssetService {
                     "Generating missing metadata for cached logo: {} -> {}",
                     logo_url, cache_id
                 );
+                // Dimensions will be extracted automatically when metadata is loaded by the scanner
                 self.generate_metadata_for_cached_logo(
                     &cache_id,
                     logo_url,
                     channel_name,
                     channel_group,
                     extra_fields,
+                    None, // Dimensions will be extracted when metadata is loaded
                 )
                 .await?;
                 return Ok((cache_id, 0)); // 0 bytes for cache hit
@@ -825,8 +829,11 @@ impl LogoAssetService {
         
         let raw_bytes_downloaded = image_bytes.len() as u64;
 
-        // Convert to PNG
+        // Convert to PNG and extract dimensions
         let png_bytes = self.convert_image_to_png(&image_bytes, logo_url)?;
+        
+        // Extract dimensions from the converted PNG
+        let dimensions = self.extract_image_dimensions(&png_bytes).unwrap_or(None);
 
         // Save to cache using the appropriate method
         if let Some(file_manager) = &self.logo_file_manager {
@@ -873,6 +880,7 @@ impl LogoAssetService {
                     channel_name,
                     channel_group,
                     extra_fields,
+                    dimensions,
                 ).await {
                     debug!("Failed to generate metadata for {}: {}", cache_id, e);
                 }
@@ -882,6 +890,7 @@ impl LogoAssetService {
                 channel_name,
                 channel_group,
                 extra_fields,
+                dimensions,
             ).await {
                 debug!("Failed to generate metadata for {}: {}", cache_id, e);
             }
@@ -898,6 +907,7 @@ impl LogoAssetService {
         channel_name: Option<String>,
         channel_group: Option<String>,
         extra_fields: Option<std::collections::HashMap<String, String>>,
+        dimensions: Option<(i32, i32)>,
     ) -> Result<(), anyhow::Error> {
         use crate::services::logo_cache_scanner::CachedLogoMetadata;
         use chrono::Utc;
@@ -908,8 +918,8 @@ impl LogoAssetService {
             channel_group,
             description: None,
             tags: None,
-            width: None,
-            height: None,
+            width: dimensions.map(|(w, _)| w),
+            height: dimensions.map(|(_, h)| h),
             extra_fields,
             cached_at: Utc::now(),
             updated_at: Utc::now(),
@@ -935,6 +945,7 @@ impl LogoAssetService {
         channel_name: Option<String>,
         channel_group: Option<String>,
         extra_fields: Option<std::collections::HashMap<String, String>>,
+        dimensions: Option<(i32, i32)>,
     ) -> Result<(), anyhow::Error> {
         use crate::services::logo_cache_scanner::CachedLogoMetadata;
         use chrono::Utc;
@@ -945,8 +956,8 @@ impl LogoAssetService {
             channel_group,
             description: None,
             tags: None,
-            width: None,
-            height: None,
+            width: dimensions.map(|(w, _)| w),
+            height: dimensions.map(|(_, h)| h),
             extra_fields,
             cached_at: Utc::now(),
             updated_at: Utc::now(),
@@ -971,6 +982,18 @@ impl LogoAssetService {
 
         Ok(())
     }
+
+    /// Extract image dimensions from image bytes
+    fn extract_image_dimensions(&self, image_bytes: &[u8]) -> Result<Option<(i32, i32)>, anyhow::Error> {
+        match image::load_from_memory(image_bytes) {
+            Ok(img) => Ok(Some((img.width() as i32, img.height() as i32))),
+            Err(e) => {
+                debug!("Failed to extract image dimensions: {}", e);
+                Ok(None)
+            }
+        }
+    }
+
 
     /// Convert image bytes to PNG format
     fn convert_image_to_png(

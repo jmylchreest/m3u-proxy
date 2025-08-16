@@ -122,6 +122,8 @@ pub struct ErrorFallbackConfig {
     pub fallback_timeout_seconds: u32,
     pub max_error_count: u32,
     pub error_threshold_seconds: u32,
+    /// Duration of error video in seconds (default: 5 seconds)
+    pub error_video_duration_seconds: Option<u32>,
 }
 
 impl std::fmt::Display for RelayEventType {

@@ -38,6 +38,7 @@ pub mod epg_source;
 pub mod epg_program;
 pub mod url_linking;
 pub mod relay;
+pub mod health;
 
 // Re-export main traits and types
 pub use traits::*;
@@ -49,3 +50,4 @@ pub use epg_source::{EpgSourceRepository, EpgSourceWithStats};
 pub use epg_program::{EpgProgramRepository, EpgProgramQuery};
 pub use url_linking::UrlLinkingRepository;
 pub use relay::RelayRepository;
+pub use health::{HealthRepository, ScheduledSource, ChannelInfo};

@@ -873,6 +873,8 @@ impl ProgressService {
                     let mut active = cleanup_active_operations.write().await;
                     if active.remove(&progress.owner_id) {
                         debug!("Cleaned up active operation for owner {} (state: {:?})", progress.owner_id, progress.state);
+                    } else {
+                        debug!("Attempted to clean up already removed operation for owner {} (state: {:?})", progress.owner_id, progress.state);
                     }
                 }
             }

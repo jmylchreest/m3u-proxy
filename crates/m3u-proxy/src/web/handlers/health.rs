@@ -6,7 +6,6 @@
 use axum::{extract::State, response::IntoResponse};
 use sysinfo::SystemExt;
 use utoipa;
-use sqlx::Row;
 
 use crate::database::Database;
 use crate::web::{
@@ -360,91 +359,47 @@ async fn get_scheduler_health(state: &crate::web::AppState) -> crate::web::respo
 
 /// Get scheduled sources information from the database
 async fn get_scheduled_sources_info(database: &crate::database::Database) -> (u32, u32, Vec<crate::web::responses::NextScheduledTime>) {
-    let pool = database.pool();
+    let health_repo = crate::repositories::HealthRepository::new(database.read_pool());
     
-    // Get stream sources count with scheduling enabled
-    let stream_sources_count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM stream_sources WHERE is_active = 1 AND update_cron IS NOT NULL AND update_cron != ''"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(0) as u32;
-    
-    // Get EPG sources count with scheduling enabled  
-    let epg_sources_count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM epg_sources WHERE is_active = 1 AND update_cron IS NOT NULL AND update_cron != ''"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(0) as u32;
+    // Get source counts using repository
+    let stream_sources_count = health_repo.get_active_stream_sources_count().await.unwrap_or(0);
+    let epg_sources_count = health_repo.get_active_epg_sources_count().await.unwrap_or(0);
     
     (stream_sources_count, epg_sources_count, Vec::new())
 }
 
 /// Get next scheduled times from lightweight database queries (avoid expensive stats queries)
 async fn get_next_scheduled_from_services(state: &crate::web::AppState) -> Vec<crate::web::responses::NextScheduledTime> {
+    let health_repo = crate::repositories::HealthRepository::new(state.database.read_pool());
     let mut scheduled_times = Vec::new();
-    let pool = state.database.pool();
     
-    // Get stream sources with scheduling info - lightweight query without expensive JOINs
-    let stream_rows = sqlx::query(
-        "SELECT id, name, update_cron FROM stream_sources 
-         WHERE is_active = 1 AND update_cron IS NOT NULL AND update_cron != '' 
-         ORDER BY name"
-    )
-    .fetch_all(&pool)
-    .await;
-    
-    if let Ok(rows) = stream_rows {
-        for row in rows {
-            if let Ok(id_str) = row.try_get::<String, _>("id") {
-                if let Ok(name) = row.try_get::<String, _>("name") {
-                    if let Ok(cron) = row.try_get::<String, _>("update_cron") {
-                        if let Ok(id) = crate::utils::uuid_parser::parse_uuid_flexible(&id_str) {
-                            // Calculate next run time from cron expression (simplified)
-                            let next_run = chrono::Utc::now() + chrono::Duration::minutes(30); // Placeholder
-                            scheduled_times.push(crate::web::responses::NextScheduledTime {
-                                source_id: id,
-                                source_name: name,
-                                source_type: "Stream".to_string(),
-                                next_run,
-                                cron_expression: cron,
-                            });
-                        }
-                    }
-                }
-            }
+    // Get scheduled stream sources
+    if let Ok(stream_sources) = health_repo.get_scheduled_stream_sources().await {
+        for source in stream_sources {
+            // Calculate next run time from cron expression (simplified)
+            let next_run = chrono::Utc::now() + chrono::Duration::minutes(30); // Placeholder
+            scheduled_times.push(crate::web::responses::NextScheduledTime {
+                source_id: source.id,
+                source_name: source.name,
+                source_type: source.source_type,
+                next_run,
+                cron_expression: source.cron_expression,
+            });
         }
     }
     
-    // Get EPG sources with scheduling info - lightweight query without expensive JOINs
-    let epg_rows = sqlx::query(
-        "SELECT id, name, update_cron FROM epg_sources 
-         WHERE is_active = 1 AND update_cron IS NOT NULL AND update_cron != '' 
-         ORDER BY name"
-    )
-    .fetch_all(&pool)
-    .await;
-    
-    if let Ok(rows) = epg_rows {
-        for row in rows {
-            if let Ok(id_str) = row.try_get::<String, _>("id") {
-                if let Ok(name) = row.try_get::<String, _>("name") {
-                    if let Ok(cron) = row.try_get::<String, _>("update_cron") {
-                        if let Ok(id) = crate::utils::uuid_parser::parse_uuid_flexible(&id_str) {
-                            // Calculate next run time from cron expression (simplified)
-                            let next_run = chrono::Utc::now() + chrono::Duration::hours(1); // Placeholder
-                            scheduled_times.push(crate::web::responses::NextScheduledTime {
-                                source_id: id,
-                                source_name: name,
-                                source_type: "EPG".to_string(),
-                                next_run,
-                                cron_expression: cron,
-                            });
-                        }
-                    }
-                }
-            }
+    // Get scheduled EPG sources
+    if let Ok(epg_sources) = health_repo.get_scheduled_epg_sources().await {
+        for source in epg_sources {
+            // Calculate next run time from cron expression (simplified)
+            let next_run = chrono::Utc::now() + chrono::Duration::hours(1); // Placeholder
+            scheduled_times.push(crate::web::responses::NextScheduledTime {
+                source_id: source.id,
+                source_name: source.name,
+                source_type: source.source_type,
+                next_run,
+                cron_expression: source.cron_expression,
+            });
         }
     }
     
@@ -472,7 +427,7 @@ async fn get_last_cache_refresh_time(_progress_service: &crate::services::progre
 
 /// Comprehensive database health check with performance monitoring
 async fn check_database_health(database: &Database) -> crate::web::responses::DatabaseHealth {
-    let pool = database.pool();
+    let pool = database.read_pool();
     let start_time = std::time::Instant::now();
     
     // Test 1: Basic connectivity with simple query

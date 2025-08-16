@@ -12,13 +12,16 @@ use uuid::Uuid;
 
 use crate::models::relay::*;
 use crate::services::cyclic_buffer::CyclicBuffer;
+use crate::services::connection_limiter::LimitExceededError;
+use crate::services::embedded_font::EmbeddedFontManager;
 
-/// Error fallback generator that creates Transport Stream content from error images
+/// Error fallback generator that creates Transport Stream content from error images  
 pub struct ErrorFallbackGenerator {
     config: ErrorFallbackConfig,
     cyclic_buffer: Arc<CyclicBuffer>,
     current_token: std::sync::Mutex<Option<CancellationToken>>,
     is_active: std::sync::atomic::AtomicBool,
+    font_manager: std::sync::Mutex<EmbeddedFontManager>,
 }
 
 impl ErrorFallbackGenerator {
@@ -29,6 +32,7 @@ impl ErrorFallbackGenerator {
             cyclic_buffer,
             current_token: std::sync::Mutex::new(None),
             is_active: std::sync::atomic::AtomicBool::new(false),
+            font_manager: std::sync::Mutex::new(EmbeddedFontManager::new()),
         }
     }
 
@@ -81,6 +85,84 @@ impl ErrorFallbackGenerator {
         });
 
         info!("Started error fallback generator for config {} with message: {}", config_id, error_message);
+        Ok(())
+    }
+
+    /// Start generating error fallback content using the new error video system
+    pub async fn start_error_video_fallback(
+        &self, 
+        error_type: &LimitExceededError,
+        config_id: Uuid,
+        width: u32,
+        height: u32, 
+        bitrate_kbps: u32,
+    ) -> Result<(), RelayError> {
+        if !self.config.enabled {
+            return Ok(());
+        }
+
+        // Stop any existing fallback task
+        self.stop_fallback();
+
+        // Create new cancellation token for this session
+        let cancellation_token = CancellationToken::new();
+        
+        // Store the token so we can cancel it later
+        *self.current_token.lock().unwrap() = Some(cancellation_token.clone());
+        
+        // Mark as active
+        self.is_active.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // Generate error video (short duration, we'll loop it)
+        let error_video = self.generate_error_video_stream(error_type, config_id, width, height, bitrate_kbps).await?;
+
+        // Convert video to chunks and feed to cyclic buffer continuously
+        let buffer = self.cyclic_buffer.clone();
+        let token = cancellation_token.clone();
+        let error_type_name = error_type.error_type().to_string();
+        let error_type_name_for_spawn = error_type_name.clone();
+
+        tokio::spawn(async move {
+            // Calculate chunk size (typical TS packet size)
+            const CHUNK_SIZE: usize = 188 * 7; // 7 TS packets per chunk
+            let video_chunks: Vec<bytes::Bytes> = error_video
+                .chunks(CHUNK_SIZE)
+                .map(|chunk| bytes::Bytes::copy_from_slice(chunk))
+                .collect();
+
+            if video_chunks.is_empty() {
+                warn!("Error video has no chunks to loop");
+                return;
+            }
+
+            let mut chunk_index = 0;
+            let mut interval = interval(Duration::from_millis(40)); // ~25fps worth of chunks
+            
+            info!("Starting error video loop with {} chunks for {}", video_chunks.len(), error_type_name_for_spawn);
+            
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let chunk = &video_chunks[chunk_index];
+                        if let Err(e) = buffer.write_chunk(chunk.clone()).await {
+                            error!("Failed to write error video chunk: {}", e);
+                            break;
+                        }
+                        
+                        // Loop back to beginning when we reach the end
+                        chunk_index = (chunk_index + 1) % video_chunks.len();
+                    }
+                    _ = token.cancelled() => {
+                        info!("Error video fallback cancelled for config {}", config_id);
+                        break;
+                    }
+                }
+            }
+            
+            info!("Error video fallback stopped for config {}", config_id);
+        });
+
+        info!("Started error video fallback for config {} with error type: {}", config_id, error_type_name);
         Ok(())
     }
 
@@ -141,54 +223,261 @@ impl ErrorFallbackGenerator {
         packet
     }
 
-    /// Generate error fallback using FFmpeg (future implementation)
-    
-    async fn generate_ffmpeg_error_image(&self, error_message: &str, config_id: Uuid) -> Result<bytes::Bytes, RelayError> {
-        // This would use FFmpeg to create a proper error image and convert to TS
-        // Example command:
-        // ffmpeg -f lavfi -i "color=red:size=640x480:rate=25" 
-        //        -vf "drawtext=text='ERROR: {error_message}':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2"
-        //        -t 1 -f mpegts -y pipe:1
+    /// Generate error video stream with proper FFmpeg rendering and font support
+    pub async fn generate_error_video_stream(
+        &self,
+        error_type: &LimitExceededError,
+        config_id: Uuid,
+        width: u32,
+        height: u32,
+        bitrate_kbps: u32,
+    ) -> Result<bytes::Bytes, RelayError> {
+        let error_message = self.format_error_message(error_type);
+        let font_param = {
+            let mut font_manager = self.font_manager.lock().unwrap();
+            font_manager.get_ffmpeg_font_param().await
+                .unwrap_or(None)
+        };
         
-        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-        let error_text = format!("ERROR: {error_message}\\nConfig: {config_id}\\nTime: {timestamp}");
+        let ffmpeg_cmd = self.build_error_video_command(
+            &error_message,
+            config_id,
+            width,
+            height,
+            bitrate_kbps,
+            font_param.as_deref(),
+        );
+        
+        // Generate a single loop of the error video, then we'll loop it in memory
+        self.execute_ffmpeg_command(ffmpeg_cmd).await
+    }
 
-        // Build FFmpeg command for error image generation
+
+    /// Build FFmpeg command for error video generation
+    fn build_error_video_command(
+        &self,
+        error_message: &str,
+        _config_id: Uuid,
+        width: u32,
+        height: u32,
+        bitrate_kbps: u32,
+        font_param: Option<&str>,
+    ) -> Vec<String> {
+        let duration = self.config.error_video_duration_seconds.unwrap_or(5);
+        let title_font_size = std::cmp::max(24, width / 20); // Larger title font
+        let body_font_size = std::cmp::max(16, width / 30); // Smaller body font
+        
+        // Parse error message into title and body
+        let lines: Vec<&str> = error_message.lines().collect();
+        let title = lines.first().unwrap_or(&"ERROR").to_string();
+        let body_lines: Vec<&str> = if lines.len() > 1 { lines[1..].to_vec() } else { vec![] };
+        
+        // Build elegant multi-layered text filter
+        let mut text_filters = Vec::new();
+        
+        // 1. Title (first line) - Large, bold, centered at top
+        let clean_title = title.replace('\'', "\\'").replace('"', "\\\"").replace(':', "\\:");
+        let title_filter = if let Some(font) = font_param {
+            format!(
+                "drawtext=text='{}':{}:fontcolor=white:fontsize={}:x=(w-text_w)/2:y={}:box=1:boxcolor=0x1a1a1a@0.8:boxborderw=8",
+                clean_title,
+                font,
+                title_font_size,
+                height / 6 // Position in upper area
+            )
+        } else {
+            format!(
+                "drawtext=text='{}':fontcolor=white:fontsize={}:x=(w-text_w)/2:y={}:box=1:boxcolor=0x1a1a1a@0.8:boxborderw=8",
+                clean_title,
+                title_font_size,
+                height / 6
+            )
+        };
+        text_filters.push(title_filter);
+        
+        // 2. Body lines - Centered, properly spaced
+        if !body_lines.is_empty() {
+            let line_height = body_font_size + 8; // Space between lines
+            let total_text_height = body_lines.len() as u32 * line_height;
+            let start_y = (height / 2) - (total_text_height / 2) + (height / 8); // Center vertically, offset from title
+            
+            for (i, line) in body_lines.iter().enumerate() {
+                if line.trim().is_empty() {
+                    continue; // Skip empty lines
+                }
+                
+                let y_pos = start_y + (i as u32 * line_height);
+                let clean_line = line.trim().replace('\'', "\\'").replace('"', "\\\"").replace(':', "\\:");
+                let line_filter = if let Some(font) = font_param {
+                    format!(
+                        "drawtext=text='{}':{}:fontcolor=0xcccccc:fontsize={}:x=(w-text_w)/2:y={}:box=1:boxcolor=0x0d0d0d@0.7:boxborderw=4",
+                        clean_line,
+                        font,
+                        body_font_size,
+                        y_pos
+                    )
+                } else {
+                    format!(
+                        "drawtext=text='{}':fontcolor=0xcccccc:fontsize={}:x=(w-text_w)/2:y={}:box=1:boxcolor=0x0d0d0d@0.7:boxborderw=4",
+                        clean_line,
+                        body_font_size,
+                        y_pos
+                    )
+                };
+                text_filters.push(line_filter);
+            }
+        }
+        
+        // 3. Add subtle border/frame effect
+        text_filters.push(format!(
+            "drawbox=x={}:y={}:w={}:h={}:color=0x333333@0.3:t=2",
+            width / 20,        // x offset
+            height / 20,       // y offset  
+            width - (width / 10), // width (leaving margins)
+            height - (height / 10) // height (leaving margins)
+        ));
+        
+        // Combine all filters
+        let text_filter = text_filters.join(",");
+
+        vec![
+            "-f".to_string(), "lavfi".to_string(),
+            "-i".to_string(), format!("color=black:size={}x{}:rate=25", width, height), // Black background
+            "-vf".to_string(), text_filter,
+            "-c:v".to_string(), "libx264".to_string(),
+            "-preset".to_string(), "ultrafast".to_string(), // Fast encoding for error videos
+            "-b:v".to_string(), format!("{}k", bitrate_kbps),
+            "-maxrate".to_string(), format!("{}k", bitrate_kbps),
+            "-bufsize".to_string(), format!("{}k", bitrate_kbps * 2),
+            "-g".to_string(), "25".to_string(), // GOP size
+            "-f".to_string(), "mpegts".to_string(),
+            "-t".to_string(), duration.to_string(), // Configurable duration
+            "pipe:1".to_string()
+        ]
+    }
+
+    /// Execute FFmpeg command and return the output
+    async fn execute_ffmpeg_command(&self, args: Vec<String>) -> Result<bytes::Bytes, RelayError> {
         let mut cmd = tokio::process::Command::new("ffmpeg");
-        cmd.args([
-            "-f", "lavfi",
-            "-i", "color=red:size=640x480:rate=25",
-            "-vf", &format!("drawtext=text='{error_text}':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2"),
-            "-t", "0.1", // Generate 0.1 seconds of video
-            "-f", "mpegts",
-            "-y", "pipe:1"
-        ]);
-
+        cmd.args(&args);
         cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::piped());
+
+        info!("Executing FFmpeg command: ffmpeg {}", args.join(" "));
 
         match cmd.spawn() {
             Ok(mut child) => {
-                if let Some(stdout) = child.stdout.take() {
-                    let mut output = Vec::new();
-                    let mut reader = tokio::io::BufReader::new(stdout);
-                    
-                    use tokio::io::AsyncReadExt;
-                    if (reader.read_to_end(&mut output).await).is_ok() {
-                        let _ = child.wait().await;
-                        return Ok(bytes::Bytes::from(output));
+                let stdout_handle = child.stdout.take().map(|stdout| {
+                    tokio::spawn(async move {
+                        let mut output = Vec::new();
+                        let mut reader = tokio::io::BufReader::new(stdout);
+                        use tokio::io::AsyncReadExt;
+                        let _ = reader.read_to_end(&mut output).await;
+                        output
+                    })
+                });
+
+                let stderr_handle = child.stderr.take().map(|stderr| {
+                    tokio::spawn(async move {
+                        let mut error_output = Vec::new();
+                        let mut reader = tokio::io::BufReader::new(stderr);
+                        use tokio::io::AsyncReadExt;
+                        let _ = reader.read_to_end(&mut error_output).await;
+                        String::from_utf8_lossy(&error_output).to_string()
+                    })
+                });
+
+                let exit_status = child.wait().await;
+
+                if let Some(stdout_handle) = stdout_handle {
+                    if let Ok(output) = stdout_handle.await {
+                        if let Some(stderr_handle) = stderr_handle {
+                            if let Ok(stderr_output) = stderr_handle.await {
+                                if !stderr_output.is_empty() {
+                                    warn!("FFmpeg stderr: {}", stderr_output);
+                                }
+                            }
+                        }
+
+                        match exit_status {
+                            Ok(status) if status.success() && !output.is_empty() => {
+                                info!("Generated error video: {} bytes", output.len());
+                                return Ok(bytes::Bytes::from(output));
+                            }
+                            Ok(status) => {
+                                warn!("FFmpeg exited with status: {} (output {} bytes)", status, output.len());
+                            }
+                            Err(e) => {
+                                warn!("FFmpeg process error: {}", e);
+                            }
+                        }
                     }
                 }
-                let _ = child.wait().await;
             }
             Err(e) => {
-                warn!("Failed to generate FFmpeg error image: {}", e);
+                warn!("Failed to spawn FFmpeg for error video generation: {}", e);
             }
         }
 
         // Fallback to simple packet generation
-        let error_packet = self.create_error_transport_stream_packet(error_message);
+        warn!("Falling back to simple error packet generation");
+        let error_packet = self.create_error_transport_stream_packet(&format!("ERROR: {}", "Video generation failed"));
         Ok(bytes::Bytes::from(error_packet))
+    }
+
+    /// Format error message based on error type with elegant styling
+    fn format_error_message(&self, error: &LimitExceededError) -> String {
+        match error {
+            LimitExceededError::ChannelClientLimit { channel_id: _, current, max } => {
+                format!(
+                    "CHANNEL BUSY\n\n\
+                    This channel has reached its maximum viewer limit\n\
+                    \n\
+                    Current Viewers: {}\n\
+                    Maximum Allowed: {}\n\
+                    \n\
+                    Please try again in a few moments\n\
+                    Thank you for your patience",
+                    current, max
+                )
+            },
+            LimitExceededError::ProxyClientLimit { proxy_id: _, current, max } => {
+                format!(
+                    "STREAM PROXY BUSY\n\n\
+                    This stream proxy has reached its connection limit\n\
+                    \n\
+                    Active Connections: {}\n\
+                    Maximum Allowed: {}\n\
+                    \n\
+                    Please try again in a few moments\n\
+                    Thank you for your patience",
+                    current, max
+                )
+            },
+            LimitExceededError::UpstreamSourceLimit { source_url: _, error } => {
+                let clean_error = error.lines().next().unwrap_or("Connection failed");
+                format!(
+                    "SOURCE UNAVAILABLE\n\n\
+                    The upstream source is temporarily unavailable\n\
+                    \n\
+                    Error Details: {}\n\
+                    \n\
+                    Our team has been notified\n\
+                    Please check back shortly",
+                    clean_error
+                )
+            },
+            LimitExceededError::StreamUnavailable { reason } => {
+                format!(
+                    "STREAM UNAVAILABLE\n\n\
+                    {}\n\
+                    \n\
+                    We apologize for the inconvenience\n\
+                    Please try again later",
+                    reason
+                )
+            }
+        }
     }
 }
 
@@ -200,6 +489,7 @@ impl Default for ErrorFallbackConfig {
             fallback_timeout_seconds: 30,
             max_error_count: 5,
             error_threshold_seconds: 60,
+            error_video_duration_seconds: Some(5), // Default to 5 seconds
         }
     }
 }

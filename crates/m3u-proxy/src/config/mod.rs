@@ -22,6 +22,7 @@ pub struct Config {
     pub ingestion: IngestionConfig,
     pub data_mapping_engine: Option<DataMappingEngineConfig>,
     pub relay: Option<RelayConfig>,
+    pub security: Option<SecurityConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,6 +248,18 @@ pub struct DataMappingEngineConfig {
     pub minimum_literal_length: Option<usize>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Maximum allowed regex quantifier limit to prevent ReDoS attacks
+    /// Default: 100
+    #[serde(default = "default_max_quantifier_limit")]
+    pub max_quantifier_limit: usize,
+}
+
+fn default_max_quantifier_limit() -> usize {
+    100
+}
+
 
 impl DatabaseBatchConfig {
     /// SQLite variable limit (32,766 in 3.32.0+, 999 in older versions)
@@ -445,6 +458,9 @@ impl Default for Config {
             },
             data_mapping_engine: Some(DataMappingEngineConfig::default()),
             relay: Some(RelayConfig::default()),
+            security: Some(SecurityConfig {
+                max_quantifier_limit: default_max_quantifier_limit(),
+            }),
         }
     }
 }

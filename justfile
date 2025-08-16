@@ -50,20 +50,25 @@ clean:
     rm -rf frontend/out
     rm -rf frontend/.next
     rm -rf crates/m3u-proxy/static/*
+    rm -rf tests/playwright/node_modules
+    rm -rf tests/playwright/test-results
     @echo "All build artifacts cleaned"
 
-# Complete build process (clean, install, test, build all, containerize)
-build-all: clean install test build-frontend copy-frontend build-backend container-build
+# Complete build process (clean, install, test, build all)
+build-all: clean install test build-frontend copy-frontend build-backend
     @echo "Complete build finished!"
     @echo "Backend binary: target/release/m3u-proxy"
     @echo "Frontend assets embedded in binary"
-    @echo "Container image: m3u-proxy:latest"
 
 # Install dependencies
 install:
     @echo "Installing dependencies..."
     cd frontend && npm install
     @echo "Dependencies installed"
+
+# Install all dependencies including UI testing
+install-all: install ui-setup
+    @echo "All dependencies (frontend + UI testing) installed"
 
 # Development setup (install deps and run dev servers)
 dev: install
@@ -79,8 +84,8 @@ dev: install
 build-dev: build-frontend copy-frontend build-backend
     @echo "Development build finished!"
 
-# Container build (supports podman, docker, buildah, nerdctl)
-container-build:
+# Build container image (supports podman, docker, buildah, nerdctl)
+build-container:
     @echo "Building container using external script with runtime detection..."
     ./build-container.sh
 
@@ -129,3 +134,84 @@ check: fmt lint audit test
 # Performance testing (benchmarks + tests)
 perf: test bench
     @echo "Performance testing completed!"
+
+# UI Testing with Playwright
+# ===========================
+
+# Setup Playwright for the first time
+ui-setup:
+    @echo "🎭 Setting up Playwright UI testing..."
+    @if [ ! -d "tests/playwright" ]; then echo "❌ Playwright tests not found. Please ensure tests/playwright directory exists."; exit 1; fi
+    cd tests/playwright && npm install
+    cd tests/playwright && npx playwright install
+    @echo "✅ Playwright setup complete!"
+
+# Run UI tests (headless)
+ui-test:
+    @echo "🧪 Running UI tests..."
+    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
+    cd tests/playwright && npm test
+
+# Run UI tests with visible browser (for debugging)
+ui-test-headed:
+    @echo "🧪 Running UI tests with visible browser..."
+    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
+    cd tests/playwright && npm run test:headed
+
+# Run UI tests in debug mode (step-through)
+ui-test-debug:
+    @echo "🐛 Running UI tests in debug mode..."
+    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
+    cd tests/playwright && npm run test:debug
+
+# Run UI tests with Playwright UI (interactive)
+ui-test-ui:
+    @echo "🎮 Running UI tests with interactive UI..."
+    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
+    cd tests/playwright && npm run test:ui
+
+# Show UI test report
+ui-report:
+    @echo "📊 Opening UI test report..."
+    @if [ ! -d "tests/playwright/test-results" ]; then echo "❌ No test results found. Run 'just ui-test' first."; exit 1; fi
+    cd tests/playwright && npm run report
+
+# Run UI tests on specific browser
+ui-test-browser browser="chromium":
+    @echo "🌐 Running UI tests on {{browser}}..."
+    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
+    cd tests/playwright && npx playwright test --project={{browser}}
+
+# Run UI tests on mobile devices
+ui-test-mobile:
+    @echo "📱 Running UI tests on mobile devices..."
+    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
+    cd tests/playwright && npx playwright test --project=mobile-chrome --project=mobile-safari
+
+# Clean UI test results
+ui-clean:
+    @echo "🧹 Cleaning UI test results..."
+    rm -rf tests/playwright/test-results
+    @echo "✅ UI test results cleaned!"
+
+# Complete UI testing workflow (setup, test, report)
+ui-full: ui-setup ui-test ui-report
+    @echo "🎭 Complete UI testing workflow finished!"
+
+# Quick UI smoke test (just chromium, essential tests)
+ui-quick:
+    @echo "⚡ Running quick UI smoke test..."
+    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
+    cd tests/playwright && npx playwright test ui-layout.spec.ts --project=chromium
+
+# Extended test command that includes UI tests
+test-all: test ui-test
+    @echo "🧪 All tests (backend, frontend, UI) completed!"
+
+# Quality check with UI tests
+check-all: fmt lint audit test ui-test
+    @echo "✅ All quality checks (including UI tests) passed!"
+
+# Development workflow: build and test everything including UI
+dev-check: build-dev ui-quick
+    @echo "🚀 Development check complete!"

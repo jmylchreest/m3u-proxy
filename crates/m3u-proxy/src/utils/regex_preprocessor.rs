@@ -570,6 +570,7 @@ mod tests {
             enable_first_pass_filtering: false,
             precheck_special_chars: "+-".to_string(),
             minimum_literal_length: 2,
+            max_quantifier_limit: 100,
         };
         let preprocessor = RegexPreprocessor::new(config);
         

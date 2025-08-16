@@ -24,6 +24,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { 
   Plus, 
   Search,
@@ -738,7 +739,8 @@ export function Logos() {
   const totalCachedLogos = (stats?.total_cached_logos || 0) + (stats?.filesystem_cached_logos || 0)
 
   return (
-    <div className="space-y-6">
+    <TooltipProvider>
+      <div className="space-y-6">
       {/* Header Section */}
       <div className="flex items-center justify-between">
         <div>
@@ -1029,9 +1031,16 @@ export function Logos() {
                       <div className="space-y-1">
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-muted-foreground">ID:</span>
-                          <code className="text-xs bg-muted px-1 rounded">
-                            {logo.id.split('-')[0]}...
-                          </code>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <code className="text-xs bg-muted px-1 rounded truncate max-w-[60px] cursor-help">
+                                {logo.id.split('-')[0]}...
+                              </code>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="font-mono text-xs">{logo.id}</p>
+                            </TooltipContent>
+                          </Tooltip>
                         </div>
                         
                         <div className="flex items-center justify-between text-xs">
@@ -1048,7 +1057,16 @@ export function Logos() {
                         
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-muted-foreground">Created:</span>
-                          <span>{formatRelativeTime(logo.created_at)}</span>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="cursor-help">
+                                {formatRelativeTime(logo.created_at)}
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-xs">{formatDate(logo.created_at)}</p>
+                            </TooltipContent>
+                          </Tooltip>
                         </div>
                       </div>
                     </div>
@@ -1129,6 +1147,7 @@ export function Logos() {
         open={isEditSheetOpen}
         onOpenChange={setIsEditSheetOpen}
       />
-    </div>
+      </div>
+    </TooltipProvider>
   )
 }

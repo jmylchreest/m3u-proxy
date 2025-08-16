@@ -34,8 +34,7 @@ struct FilterRule {
 pub struct FilteringStage {
     db_pool: SqlitePool,
     file_manager: SandboxedManager,
-    #[allow(dead_code)]
-    pipeline_execution_prefix: String,
+    
     regex_preprocessor: RegexPreprocessor,
     proxy_id: Option<uuid::Uuid>,
     progress_manager: Option<Arc<ProgressManager>>,
@@ -45,7 +44,7 @@ impl FilteringStage {
     pub async fn new(
         db_pool: SqlitePool, 
         file_manager: SandboxedManager, 
-        pipeline_execution_prefix: String, 
+        _pipeline_execution_prefix: String, 
         proxy_id: Option<uuid::Uuid>,
         progress_manager: Option<Arc<ProgressManager>>
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -54,7 +53,6 @@ impl FilteringStage {
         Ok(Self {
             db_pool,
             file_manager,
-            pipeline_execution_prefix,
             regex_preprocessor,
             proxy_id,
             progress_manager,

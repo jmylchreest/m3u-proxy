@@ -8,7 +8,7 @@ use tracing::warn;
 impl EpgSource {
     /// Detect timezone from EPG content (simplified after migration 004)
     /// Note: Timezone handling was simplified - all times are normalized to UTC
-    #[allow(dead_code)]
+    
     pub async fn detect_timezone_from_content(
         &self,
         epg_content: &str,
@@ -39,20 +39,20 @@ impl EpgSource {
     }
 
     /// Get parsed time offset in seconds
-    #[allow(dead_code)]
+    
     pub fn get_time_offset_seconds(&self) -> Result<i32> {
         parse_time_offset(&self.time_offset)
             .map_err(|e| anyhow::anyhow!("Invalid time offset in source '{}': {}", self.name, e))
     }
 
     /// Check if source needs authentication (Xtream Codes)
-    #[allow(dead_code)]
+    
     pub fn needs_authentication(&self) -> bool {
         matches!(self.source_type, EpgSourceType::Xtream)
     }
 
     /// Build the full EPG URL for Xtream Codes sources
-    #[allow(dead_code)]
+    
     pub fn build_epg_url(&self) -> Result<String> {
         match self.source_type {
             EpgSourceType::Xmltv => {

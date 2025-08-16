@@ -275,12 +275,19 @@ pub fn validation_error(errors: Vec<ValidationErrorResponse>) -> impl IntoRespon
     )
 }
 
-/// Database health status
+/// Database health status with comprehensive monitoring
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseHealth {
     pub status: String,
     pub connection_pool_size: u32,
     pub active_connections: u32,
+    pub response_time_ms: u64,
+    pub response_time_status: String,
+    pub tables_accessible: bool,
+    pub write_capability: bool,
+    pub no_blocking_locks: bool,
+    pub idle_connections: u32,
+    pub pool_utilization_percent: u32,
 }
 
 /// Scheduler health information

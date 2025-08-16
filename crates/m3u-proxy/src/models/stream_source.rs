@@ -5,13 +5,11 @@ use anyhow::Result;
 
 impl StreamSource {
     /// Check if source needs authentication
-    #[allow(dead_code)]
     pub fn needs_authentication(&self) -> bool {
         matches!(self.source_type, StreamSourceType::Xtream)
     }
 
     /// Build the full stream URL for Xtream Codes sources
-    #[allow(dead_code)]
     pub fn build_stream_url(&self) -> Result<String> {
         match self.source_type {
             StreamSourceType::M3u => Ok(self.url.clone()),

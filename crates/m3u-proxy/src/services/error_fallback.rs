@@ -142,7 +142,7 @@ impl ErrorFallbackGenerator {
     }
 
     /// Generate error fallback using FFmpeg (future implementation)
-    #[allow(dead_code)]
+    
     async fn generate_ffmpeg_error_image(&self, error_message: &str, config_id: Uuid) -> Result<bytes::Bytes, RelayError> {
         // This would use FFmpeg to create a proper error image and convert to TS
         // Example command:

@@ -295,6 +295,40 @@ impl IngestionStateManager {
         tokens.get(&source_id).map(|tx| tx.subscribe())
     }
 
+    /// Cancel all active ingestions (used during application shutdown)
+    pub async fn cancel_all_ingestions(&self) -> usize {
+        let tokens = {
+            let tokens_read = self.cancellation_tokens.read().await;
+            tokens_read.clone()
+        };
+
+        let mut cancelled_count = 0;
+        for (source_id, tx) in tokens.iter() {
+            let _ = tx.send(());
+            
+            // Update the state to show cancellation
+            let mut states = self.states.write().await;
+            if let Some(progress) = states.get_mut(source_id) {
+                progress.state = crate::models::IngestionState::Error;
+                progress.error = Some("Operation cancelled due to application shutdown".to_string());
+                progress.completed_at = Some(chrono::Utc::now());
+                progress.updated_at = chrono::Utc::now();
+                
+                // Broadcast the cancellation
+                let _ = self.progress_tx.send(progress.clone());
+            }
+            
+            cancelled_count += 1;
+            tracing::info!("Cancelled ingestion for source: {}", source_id);
+        }
+
+        if cancelled_count > 0 {
+            tracing::info!("Cancelled {} active ingestion(s) due to application shutdown", cancelled_count);
+        }
+
+        cancelled_count
+    }
+
     /// Check if there are any active ingestions in progress
     pub async fn has_active_ingestions(&self) -> Result<bool, Box<dyn std::error::Error>> {
         let states = self.states.read().await;
@@ -315,6 +349,24 @@ impl IngestionStateManager {
                     // These are active ingestion states
                     return Ok(true);
                 }
+            }
+        }
+        
+        Ok(false)
+    }
+
+    /// Check if there are any active ingestions in progress (enhanced version)
+    /// This method also checks the ProgressService for active database operations
+    pub async fn has_active_ingestions_enhanced(&self, progress_service: Option<&crate::services::progress_service::ProgressService>) -> Result<bool, Box<dyn std::error::Error>> {
+        // First check the traditional IngestionState tracking
+        if self.has_active_ingestions().await? {
+            return Ok(true);
+        }
+        
+        // Also check the new ProgressService for active database operations
+        if let Some(service) = progress_service {
+            if service.has_active_database_operations().await {
+                return Ok(true);
             }
         }
         

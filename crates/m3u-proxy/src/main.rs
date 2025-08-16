@@ -377,7 +377,7 @@ async fn main() -> Result<()> {
             data_mapping_service,
             logo_asset_service,
             logo_asset_storage,
-            proxy_regeneration_service,
+            proxy_regeneration_service: proxy_regeneration_service.clone(),
             temp_file_manager: temp_file_manager.clone(),
             pipeline_file_manager,
             logos_cached_file_manager,
@@ -404,6 +404,49 @@ async fn main() -> Result<()> {
         web_server.port()
     );
 
+    // Create cancellation token for coordinated shutdown of all services
+    let cancellation_token = tokio_util::sync::CancellationToken::new();
+    
+    // Clone services for shutdown handling before they get moved
+    let shutdown_proxy_service = proxy_regeneration_service.clone();
+    
+    // Set up signal handlers for graceful shutdown
+    let shutdown_token = cancellation_token.clone();
+    let shutdown_state_manager = state_manager.clone();
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+            let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+            
+            tokio::select! {
+                _ = sigterm.recv() => {
+                    tracing::info!("Received SIGTERM, initiating graceful shutdown of all services");
+                }
+                _ = sigint.recv() => {
+                    tracing::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown of all services");
+                }
+            }
+        }
+        
+        #[cfg(not(unix))]
+        {
+            use tokio::signal;
+            signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+            tracing::info!("Received Ctrl+C, initiating graceful shutdown of all services");
+        }
+        
+        // Cancel all active ingestions first
+        shutdown_state_manager.cancel_all_ingestions().await;
+        
+        // Shutdown proxy regeneration service to cancel pending delays
+        shutdown_proxy_service.shutdown();
+        
+        // Cancel all background services
+        shutdown_token.cancel();
+    });
+
     // Create a channel to signal when the server is ready or fails to bind
     let (server_ready_tx, server_ready_rx) = tokio::sync::oneshot::channel();
 
@@ -411,9 +454,10 @@ async fn main() -> Result<()> {
     let _bind_addr = format!("{}:{}", web_server.host(), web_server.port());
 
     // Start the web server in a separate task
+    let web_server_token = cancellation_token.clone();
     let server_handle = tokio::spawn(async move {
         // This will signal immediately when bind succeeds/fails, then block until shutdown
-        if let Err(e) = web_server.serve_with_signal(server_ready_tx).await {
+        if let Err(e) = web_server.serve_with_cancellation(server_ready_tx, Some(web_server_token)).await {
             tracing::error!("Web server failed: {}", e);
         }
     });
@@ -437,17 +481,40 @@ async fn main() -> Result<()> {
     // Note: Proxy regeneration is handled by scheduler completion handlers, no background polling needed
 
     info!("Starting scheduler service");
-    tokio::spawn(async move {
-        if let Err(e) = scheduler.start().await {
+    let scheduler_token = cancellation_token.clone();
+    let scheduler_handle = tokio::spawn(async move {
+        if let Err(e) = scheduler.start_with_cancellation(Some(scheduler_token)).await {
             tracing::error!("Scheduler service failed: {}", e);
         }
     });
 
-
     info!("All services started successfully");
 
-    // Wait for the server to complete (this will block until shutdown)
-    server_handle.await?;
+    // Wait for either server completion or cancellation signal
+    tokio::select! {
+        result = server_handle => {
+            if let Err(e) = result {
+                tracing::error!("Web server task failed: {}", e);
+            }
+        }
+        _ = cancellation_token.cancelled() => {
+            tracing::info!("Cancellation signal received, waiting for services to shut down");
+            
+            // Give services time to shut down gracefully, with extra time for database operations
+            // Database operations like EPG ingestion can take several minutes and must complete
+            // to avoid partial state corruption
+            let shutdown_timeout = tokio::time::timeout(
+                std::time::Duration::from_secs(300), // 5 minutes for database consistency
+                scheduler_handle
+            );
+            
+            match shutdown_timeout.await {
+                Ok(Ok(())) => tracing::info!("All background services shut down gracefully"),
+                Ok(Err(e)) => tracing::warn!("Background service error during shutdown: {}", e),
+                Err(_) => tracing::warn!("Background services did not shut down within timeout"),
+            }
+        }
+    }
 
     Ok(())
 }

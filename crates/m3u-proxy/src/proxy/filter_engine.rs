@@ -6,7 +6,7 @@ use tracing::{debug, info, warn};
 use crate::models::*;
 use crate::utils::RegexPreprocessor;
 
-#[allow(dead_code)]
+
 pub struct FilterEngine {
     // Cache compiled regexes for performance
     regex_cache: HashMap<String, Regex>,
@@ -21,7 +21,7 @@ impl Default for FilterEngine {
 }
 
 impl FilterEngine {
-    #[allow(dead_code)]
+    
     pub fn new() -> Self {
         Self {
             regex_cache: HashMap::new(),
@@ -29,7 +29,7 @@ impl FilterEngine {
         }
     }
 
-    #[allow(dead_code)]
+    
     pub async fn apply_filters(
         &mut self,
         channels: Vec<Channel>,
@@ -170,7 +170,7 @@ impl FilterEngine {
         Ok(result_channels)
     }
 
-    #[allow(dead_code)]
+    
     pub async fn apply_single_filter(
         &mut self,
         channels: &[Channel],
@@ -234,7 +234,7 @@ impl FilterEngine {
         Ok(matches)
     }
 
-    #[allow(dead_code)]
+    
     fn get_or_compile_regex(&mut self, pattern: &str, case_sensitive: bool) -> Result<&Regex> {
         let cache_key = format!("{pattern}:{case_sensitive}");
         if !self.regex_cache.contains_key(&cache_key) {
@@ -338,7 +338,7 @@ impl FilterEngine {
         }
     }
 
-    #[allow(dead_code)]
+    
     fn evaluate_tree_condition(
         &mut self,
         channel: &Channel,

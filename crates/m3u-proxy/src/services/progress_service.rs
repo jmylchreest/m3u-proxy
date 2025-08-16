@@ -176,6 +176,12 @@ impl ProgressStageUpdater {
         self.update_progress(5.0, stage_description).await;
     }
     
+    /// Check if cancellation has been requested for this operation
+    /// Returns true if the operation should be cancelled
+    pub async fn is_cancellation_requested(&self) -> bool {
+        self.manager.is_cancellation_requested().await
+    }
+    
     /// Update progress for channel/program processing with 5-95% range calculation
     /// Formula: 5% + ((channels_processed + programs_processed) / (total_channels + total_programs)) * 90%
     /// Use this after preprocessing is complete (5%) for the main processing work
@@ -722,12 +728,27 @@ impl ProgressManager {
         
         // CRITICAL FIX: Populate stages field from ProgressManager stages
         let stages_guard = self.stages.read().await;
-        progress.stages = stages_guard.iter().map(|stage| StageInfo {
-            id: stage.id.clone(),
-            name: stage.name.clone(),
-            percentage: stage.progress_percentage,
-            state: if stage.is_complete() { UniversalState::Completed } else { UniversalState::Processing },
-            stage_step: stage.stage_description.clone().unwrap_or_default(),
+        progress.stages = stages_guard.iter().map(|stage| {
+            let stage_state = if stage.is_complete() {
+                UniversalState::Completed
+            } else {
+                // CRITICAL FIX: Map stage description to appropriate state for database operation detection
+                let description = stage.stage_description.as_deref().unwrap_or("");
+                if description.contains("database") || description.contains("Inserting") || 
+                   description.contains("Saving") || description.contains("programs") {
+                    UniversalState::Saving
+                } else {
+                    UniversalState::Processing
+                }
+            };
+            
+            StageInfo {
+                id: stage.id.clone(),
+                name: stage.name.clone(),
+                percentage: stage.progress_percentage,
+                state: stage_state,
+                stage_step: stage.stage_description.clone().unwrap_or_default(),
+            }
         }).collect();
         progress.total_stages = stages_guard.len();
         progress.completed_stages = stages_guard.iter().filter(|s| s.is_complete()).count();
@@ -817,6 +838,14 @@ impl ProgressManager {
                 }
             });
         }))
+    }
+
+    /// Check if cancellation has been requested for this operation
+    pub async fn is_cancellation_requested(&self) -> bool {
+        // Since ProgressManager doesn't have direct access to IngestionStateManager,
+        // we'll check the progress state to see if it's been cancelled
+        let progress = self.progress.read().await;
+        matches!(progress.state, UniversalState::Cancelled)
     }
 }
 
@@ -1111,6 +1140,45 @@ impl ProgressService {
         self.broadcast_progress().await;
     }
     
+    /// Check if there are any active database operations in progress
+    /// This is used by the scheduler to determine if it's safe to shut down
+    pub async fn has_active_database_operations(&self) -> bool {
+        let storage = self.storage.read().await;
+        
+        for progress in storage.values() {
+            // Skip completed operations
+            if progress.is_complete() {
+                continue;
+            }
+            
+            // Check if this is an ingestion operation with database activity
+            match progress.operation_type {
+                OperationType::StreamIngestion | OperationType::EpgIngestion => {
+                    // Check if currently in a database-critical stage
+                    for stage in &progress.stages {
+                        if matches!(stage.state, UniversalState::Saving | UniversalState::Processing) 
+                            && stage.percentage < 100.0 {
+                            tracing::debug!(
+                                "Found active database operation: {} - stage '{}' at {}% ({})",
+                                progress.operation_name,
+                                stage.name,
+                                stage.percentage,
+                                stage.stage_step
+                            );
+                            return true;
+                        }
+                    }
+                }
+                _ => {
+                    // Non-ingestion operations don't block shutdown
+                    continue;
+                }
+            }
+        }
+        
+        false
+    }
+
     /// Broadcast progress update (backwards compatibility)
     async fn broadcast_progress(&self) {
         // Since we're using a different broadcast system, this can be a no-op for now

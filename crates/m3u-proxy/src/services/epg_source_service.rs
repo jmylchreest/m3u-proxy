@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use tokio::sync::broadcast;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::database::Database;
 use crate::models::{EpgSource, EpgSourceCreateRequest, EpgSourceUpdateRequest};
@@ -35,7 +35,7 @@ impl EpgSourceService {
         &self,
         request: EpgSourceCreateRequest,
     ) -> Result<EpgSource> {
-        info!("Creating EPG source: {}", request.name);
+        debug!("Creating EPG source: {}", request.name);
 
         // Create the EPG source (this includes auto-stream creation logic)
         let source = self.epg_source_repo.create(request).await
@@ -46,7 +46,7 @@ impl EpgSourceService {
             match self.database.auto_populate_epg_credentials(source.id).await {
                 Ok(Some(updated_source)) => {
                     if updated_source.username.is_some() && source.username.is_none() {
-                        info!("Auto-populated credentials for EPG source '{}'", source.name);
+                        debug!("Auto-populated credentials for EPG source '{}'", source.name);
                     }
                     updated_source
                 }
@@ -77,7 +77,7 @@ impl EpgSourceService {
         id: uuid::Uuid,
         request: EpgSourceUpdateRequest,
     ) -> Result<EpgSource> {
-        info!("Updating EPG source: {}", id);
+        debug!("Updating EPG source: {}", id);
 
         // Update linked sources first if requested
         if request.update_linked {
@@ -91,7 +91,7 @@ impl EpgSourceService {
                 request.update_linked,
             ).await {
                 Ok(count) if count > 0 => {
-                    info!("Updated {} linked sources for EPG source {}", count, id);
+                    debug!("Updated {} linked sources for EPG source {}", count, id);
                 }
                 Ok(_) => {
                     // No linked sources to update
@@ -119,7 +119,7 @@ impl EpgSourceService {
 
     /// Delete an EPG source with proper cleanup
     pub async fn delete_with_cleanup(&self, id: uuid::Uuid) -> Result<()> {
-        info!("Deleting EPG source: {}", id);
+        debug!("Deleting EPG source: {}", id);
 
         // Delete the EPG source (this will cascade to linked sources)
         self.epg_source_repo.delete(id).await
@@ -359,7 +359,7 @@ impl EpgSourceService {
         programs: Vec<crate::models::EpgProgram>,
         progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
     ) -> Result<usize> {
-        use tracing::{debug, info};
+        use tracing::debug;
         
         if programs.is_empty() {
             debug!("No EPG programs to save for source: {}", source_id);
@@ -371,12 +371,10 @@ impl EpgSourceService {
         DatabaseOperations::optimize_for_bulk_operations(&self.database.pool()).await?;
 
         // Delete existing programs for this source first (separate transaction)
-        let deleted_count = DatabaseOperations::delete_epg_programs_for_source(
+        let _deleted_count = DatabaseOperations::delete_epg_programs_for_source(
             source_id,
             &self.database.pool(),
         ).await?;
-
-        info!("Deleted {} existing EPG programs for source: {}", deleted_count, source_id);
 
         // Use configured batch size for EPG programs
         let batch_size = self.database.batch_config().safe_epg_program_batch_size();
@@ -397,7 +395,7 @@ impl EpgSourceService {
             DatabaseOperations::checkpoint_wal(&self.database.pool()).await?;
         }
 
-        info!("Successfully saved {} EPG programs for source: {}", total_saved, source_id);
+        debug!("Successfully saved {} EPG programs for source: {}", total_saved, source_id);
         Ok(total_saved)
     }
     
@@ -409,7 +407,7 @@ impl EpgSourceService {
     ) -> Result<usize> {
         use crate::sources::factory::SourceHandlerFactory;
         
-        info!("Starting EPG ingestion with ProgressStageUpdater for source: {}", source.name);
+        debug!("Starting EPG ingestion with ProgressStageUpdater for source: {}", source.name);
         
         // Wrap the entire operation in error handling to ensure progress completion
         let result = async {
@@ -423,7 +421,7 @@ impl EpgSourceService {
                 .await
                 .map_err(|e| anyhow::anyhow!("EPG source handler failed: {}", e))?;
             
-            info!(
+            debug!(
                 "EPG handler ingested {} programs from source '{}'",
                 programs.len(), source.name
             );
@@ -434,7 +432,7 @@ impl EpgSourceService {
             }
             
             // Save programs to database
-            info!("Saving {} EPG programs to database for '{}'", programs.len(), source.name);
+            debug!("Saving {} EPG programs to database for '{}'", programs.len(), source.name);
             let programs_saved = self.save_epg_programs(source.id, programs, progress_updater).await?;
             
             // Mark stage as completed
@@ -447,7 +445,7 @@ impl EpgSourceService {
             if let Err(e) = self.epg_source_repo.update_last_ingested(source.id).await {
                 warn!("Failed to update last_ingested_at for EPG source '{}': {}", source.name, e);
             } else {
-                info!("Updated last_ingested_at for EPG source '{}'", source.name);
+                debug!("Updated last_ingested_at for EPG source '{}'", source.name);
             }
             
             // Invalidate cache since we updated EPG programs - this triggers proxy auto-regeneration

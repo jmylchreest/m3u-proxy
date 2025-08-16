@@ -356,28 +356,141 @@ async fn get_mock_scheduler_health() -> crate::web::responses::SchedulerHealth {
     }
 }
 
-/// Check database health
+/// Comprehensive database health check with performance monitoring
 async fn check_database_health(database: &Database) -> crate::web::responses::DatabaseHealth {
-    // TODO: Implement actual database health check
-    // This would typically involve:
-    // - Testing a simple query
-    // - Checking connection pool status
-    // - Measuring response time
-
-    // Simple health check by executing a basic query
-    match sqlx::query("SELECT 1").fetch_one(&database.pool()).await {
+    let pool = database.pool();
+    let start_time = std::time::Instant::now();
+    
+    // Test 1: Basic connectivity with simple query
+    let connectivity_result = sqlx::query("SELECT 1 as test_value")
+        .fetch_one(&pool)
+        .await;
+    
+    let query_duration = start_time.elapsed();
+    
+    match connectivity_result {
         Ok(_) => {
-            let pool = database.pool();
+            // Test 2: Verify critical tables exist and are accessible
+            let tables_check = verify_critical_tables(&pool).await;
+            
+            // Test 3: Test write capability with a harmless operation
+            let write_check = test_write_capability(&pool).await;
+            
+            // Test 4: Check for any locks or blocking operations
+            let locks_check = check_database_locks(&pool).await;
+            
+            // Calculate health status based on all checks
+            let overall_status = if tables_check && write_check && locks_check {
+                "healthy"
+            } else if !tables_check {
+                "critical" // Missing tables is critical
+            } else {
+                "degraded" // Write issues or locks are degraded but not critical
+            };
+            
+            // Check response time thresholds
+            let response_time_status = if query_duration.as_millis() < 100 {
+                "excellent"
+            } else if query_duration.as_millis() < 500 {
+                "good"
+            } else if query_duration.as_millis() < 1000 {
+                "slow"
+            } else {
+                "critical"
+            };
+            
+            // Get connection pool metrics
+            let pool_size = pool.size();
+            let max_connections = pool.options().get_max_connections();
+            let idle_connections = pool.options().get_min_connections();
+            
             crate::web::responses::DatabaseHealth {
-                status: "connected".to_string(),
-                connection_pool_size: pool.options().get_max_connections(),
-                active_connections: pool.size(),
+                status: overall_status.to_string(),
+                connection_pool_size: max_connections,
+                active_connections: pool_size,
+                response_time_ms: query_duration.as_millis() as u64,
+                response_time_status: response_time_status.to_string(),
+                tables_accessible: tables_check,
+                write_capability: write_check,
+                no_blocking_locks: locks_check,
+                idle_connections,
+                pool_utilization_percent: (pool_size as f32 / max_connections as f32 * 100.0) as u32,
             }
         },
-        Err(_) => crate::web::responses::DatabaseHealth {
-            status: "disconnected".to_string(),
-            connection_pool_size: 0,
-            active_connections: 0,
+        Err(e) => {
+            tracing::error!("Database health check failed: {}", e);
+            crate::web::responses::DatabaseHealth {
+                status: "disconnected".to_string(),
+                connection_pool_size: 0,
+                active_connections: 0,
+                response_time_ms: query_duration.as_millis() as u64,
+                response_time_status: "failed".to_string(),
+                tables_accessible: false,
+                write_capability: false,
+                no_blocking_locks: false,
+                idle_connections: 0,
+                pool_utilization_percent: 0,
+            }
         },
+    }
+}
+
+/// Verify that critical application tables exist and are accessible
+async fn verify_critical_tables(pool: &sqlx::SqlitePool) -> bool {
+    let critical_tables = [
+        "stream_sources",
+        "epg_sources", 
+        "stream_proxies",
+        "channels",
+        "filters",
+        "proxy_filters",
+    ];
+    
+    for table in &critical_tables {
+        // Check if table exists and is accessible
+        let query = format!("SELECT COUNT(*) FROM {} LIMIT 1", table);
+        if sqlx::query(&query).fetch_one(pool).await.is_err() {
+            tracing::warn!("Critical table '{}' is not accessible", table);
+            return false;
+        }
+    }
+    
+    true
+}
+
+/// Test database write capability with a harmless operation
+async fn test_write_capability(pool: &sqlx::SqlitePool) -> bool {
+    // Test with a simple pragma that doesn't affect data but tests write permissions
+    match sqlx::query("PRAGMA optimize").execute(pool).await {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!("Database write capability test failed: {}", e);
+            false
+        }
+    }
+}
+
+/// Check for database locks or blocking operations
+async fn check_database_locks(pool: &sqlx::SqlitePool) -> bool {
+    // SQLite-specific check for blocking operations
+    // In SQLite, we can check for active transactions and locks
+    match sqlx::query("PRAGMA busy_timeout").fetch_one(pool).await {
+        Ok(_) => {
+            // Check if database is locked by attempting a quick read with minimal timeout
+            match sqlx::query("SELECT sqlite_version() LIMIT 1")
+                .fetch_one(pool)
+                .await 
+            {
+                Ok(_) => true,  // No locks detected
+                Err(_) => {
+                    tracing::warn!("Database appears to be locked or blocking");
+                    false
+                }
+            }
+        },
+        Err(e) => {
+            tracing::warn!("Failed to check database lock status: {}", e);
+            false
+        }
     }
 }

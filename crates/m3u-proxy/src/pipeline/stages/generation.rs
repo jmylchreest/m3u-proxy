@@ -27,12 +27,12 @@ struct ChannelInfo {
 /// Generation stage - streams to temporary files in pipeline storage
 /// Files will be atomically published by the publish_content stage
 pub struct GenerationStage {
-    #[allow(dead_code)]
+    
     db_pool: SqlitePool,
     pipeline_file_manager: SandboxedManager,  // Pipeline temporary storage
     pipeline_execution_prefix: String,
     proxy_id: Uuid,
-    #[allow(dead_code)]
+    
     base_url: String,
     progress_manager: Option<Arc<ProgressManager>>,
 }

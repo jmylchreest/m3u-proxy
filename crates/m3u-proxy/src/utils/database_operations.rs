@@ -29,7 +29,7 @@ impl DatabaseOperations {
             match operation().await {
                 Ok(result) => {
                     if attempts.load(std::sync::atomic::Ordering::SeqCst) > 1 {
-                        info!("Database operation '{}' succeeded on attempt {}", operation_name, attempts.load(std::sync::atomic::Ordering::SeqCst));
+                        debug!("Database operation '{}' succeeded on attempt {}", operation_name, attempts.load(std::sync::atomic::Ordering::SeqCst));
                     }
                     return Ok(result);
                 }
@@ -81,8 +81,8 @@ impl DatabaseOperations {
         let total_items = programs.len();
         let mut total_processed = 0;
         
-        info!("Starting batched EPG program insertion for {} items with batch size {}", 
-              total_items, batch_size);
+        debug!("Starting batched EPG program insertion for {} items with batch size {}", 
+               total_items, batch_size);
 
         for (chunk_index, chunk) in programs.chunks(batch_size).enumerate() {
             
@@ -135,8 +135,8 @@ impl DatabaseOperations {
             }
         }
 
-        info!("Completed batched EPG program insertion: {} items processed successfully", 
-              total_processed);
+        debug!("Completed batched EPG program insertion: {} items processed successfully", 
+               total_processed);
         
         Ok(total_processed)
     }

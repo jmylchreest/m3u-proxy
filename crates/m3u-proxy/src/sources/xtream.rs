@@ -9,7 +9,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{debug, info, trace};
+use tracing::{debug, info};
 
 use crate::errors::{AppError, AppResult, SourceError};
 use crate::models::{StreamSource, StreamSourceType, Channel};
@@ -153,16 +153,11 @@ impl XtreamSourceHandler {
     fn convert_xtream_channel(&self, xtream_channel: &XtreamChannel, source: &StreamSource) -> Channel {
         let now = Utc::now();
         
-        // Debug logging for channel number handling
+        // Handle channel number configuration
         let tvg_chno_value = if source.ignore_channel_numbers {
-            trace!("Channel '{}': ignore_channel_numbers=true, setting tvg_chno to None (original num={})", 
-                xtream_channel.name, xtream_channel.num.map_or("None".to_string(), |n| n.to_string()));
             None // Ignore channel numbers from Xtream API, allow numbering stage to assign
         } else {
-            let result = xtream_channel.num.map(|n| n.to_string());
-            trace!("Channel '{}': ignore_channel_numbers=false, preserving tvg_chno={:?} (original num={})", 
-                xtream_channel.name, result, xtream_channel.num.map_or("None".to_string(), |n| n.to_string()));
-            result // Preserve original channel numbers
+            xtream_channel.num.map(|n| n.to_string()) // Preserve original channel numbers
         };
         
         let stream_url = self.generate_xtream_stream_url(source, &xtream_channel.stream_id.to_string());
@@ -231,9 +226,9 @@ struct XtreamServerInfo {
     pub server_info: Option<XtreamServerDetails>,
 }
 
-/// Xtream user authentication info
+/// Xtream user authentication info  
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // External API response structure
 struct XtreamUserInfo {
     pub username: String,
     pub password: String,
@@ -250,7 +245,7 @@ struct XtreamUserInfo {
 
 /// Xtream server details
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // External API response structure
 struct XtreamServerDetails {
     pub url: Option<String>,
     pub port: Option<String>,
@@ -264,7 +259,7 @@ struct XtreamServerDetails {
 
 /// Xtream channel information
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // External API response structure  
 struct XtreamChannel {
     #[serde(deserialize_with = "deserialize_string_or_int_option", default)]
     pub num: Option<i32>,

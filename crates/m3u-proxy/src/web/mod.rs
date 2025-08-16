@@ -108,11 +108,10 @@ impl WebServer {
         tracing::info!("WebServer using native pipeline");
 
         let logo_cache_scanner = {
-            let base_path = builder.logo_asset_storage.cached_logo_dir.clone();
-
+            // Use proper file manager separation: cached vs uploaded
             Some(crate::services::logo_cache_scanner::LogoCacheScanner::new(
-                builder.logos_cached_file_manager.clone(),
-                base_path,
+                builder.logos_cached_file_manager.clone(), // For logos cached from URLs
+                builder.temp_file_manager.clone(),          // For manually uploaded logos
             ))
         };
 
@@ -393,34 +392,49 @@ impl WebServer {
         self,
         ready_signal: tokio::sync::oneshot::Sender<Result<()>>,
     ) -> Result<()> {
+        self.serve_with_cancellation(ready_signal, None).await
+    }
+
+    /// Serve with cancellation support and ready notification
+    pub async fn serve_with_cancellation(
+        self,
+        ready_signal: tokio::sync::oneshot::Sender<Result<()>>,
+        cancellation_token: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<()> {
         match tokio::net::TcpListener::bind(&self.addr).await {
             Ok(listener) => {
                 // Signal that we're now actually listening on the port
                 let _ = ready_signal.send(Ok(()));
 
                 // Create graceful shutdown signal
-                let shutdown_signal = async {
-                    #[cfg(unix)]
-                    {
-                        use tokio::signal::unix::{signal, SignalKind};
-                        let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-                        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
-                        
-                        tokio::select! {
-                            _ = sigterm.recv() => {
-                                tracing::info!("Received SIGTERM, shutting down gracefully");
-                            }
-                            _ = sigint.recv() => {
-                                tracing::info!("Received SIGINT (Ctrl+C), shutting down gracefully");
+                let shutdown_signal = async move {
+                    if let Some(token) = &cancellation_token {
+                        token.cancelled().await;
+                        tracing::info!("Web server received cancellation signal, shutting down gracefully");
+                    } else {
+                        // Fallback to signal handling if no cancellation token provided
+                        #[cfg(unix)]
+                        {
+                            use tokio::signal::unix::{signal, SignalKind};
+                            let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+                            let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+                            
+                            tokio::select! {
+                                _ = sigterm.recv() => {
+                                    tracing::info!("Received SIGTERM, shutting down gracefully");
+                                }
+                                _ = sigint.recv() => {
+                                    tracing::info!("Received SIGINT (Ctrl+C), shutting down gracefully");
+                                }
                             }
                         }
-                    }
-                    
-                    #[cfg(not(unix))]
-                    {
-                        use tokio::signal;
-                        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
-                        tracing::info!("Received Ctrl+C, shutting down gracefully");
+                        
+                        #[cfg(not(unix))]
+                        {
+                            use tokio::signal;
+                            signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+                            tracing::info!("Received Ctrl+C, shutting down gracefully");
+                        }
                     }
                 };
 

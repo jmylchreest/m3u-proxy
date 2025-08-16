@@ -44,7 +44,6 @@ impl SystemManager {
                 // Refresh system info
                 let mut sys = system.write().await;
                 sys.refresh_all();
-                tracing::trace!("System monitoring refreshed");
             }
         })
     }

@@ -9,7 +9,7 @@ use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 
 pub mod config_resolver;
-pub mod filter_engine;
+// Legacy filter engine removed - replaced by pipeline-based filtering
 pub mod robust_streaming;
 pub mod session_tracker;
 
@@ -27,45 +27,35 @@ pub struct GenerateProxyParams<'a> {
 
 #[derive(Clone)]
 pub struct ProxyService {
-    #[allow(dead_code)]
-    storage_config: StorageConfig,
-    #[allow(dead_code)]
-    shared_memory_monitor: Option<crate::utils::pressure_monitor::SimpleMemoryMonitor>,
+    
     pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
     proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
-    #[allow(dead_code)]
-    system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+    
 }
 
 impl ProxyService {
     pub fn new(
-        storage_config: StorageConfig,
+        _storage_config: StorageConfig,
         pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
         proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
-        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+        _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
-            storage_config,
-            shared_memory_monitor: None,
             pipeline_file_manager,
             proxy_output_file_manager,
-            system,
         }
     }
 
     pub fn with_memory_monitor(
-        storage_config: StorageConfig,
+        _storage_config: StorageConfig,
         pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
         proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
-        memory_monitor: crate::utils::pressure_monitor::SimpleMemoryMonitor,
-        system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+        _memory_monitor: crate::utils::pressure_monitor::SimpleMemoryMonitor,
+        _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
-            storage_config,
-            shared_memory_monitor: Some(memory_monitor),
             pipeline_file_manager,
             proxy_output_file_manager,
-            system,
         }
     }
 
@@ -185,16 +175,6 @@ impl ProxyService {
         Ok(())
     }
 
-    /// Apply filters to a list of channels (utility method)
-    #[allow(dead_code)]
-    pub async fn apply_filters(
-        &self,
-        channels: Vec<Channel>,
-        filters: Vec<(Filter, ProxyFilter)>,
-    ) -> Result<Vec<Channel>> {
-        let mut engine = filter_engine::FilterEngine::new();
-        engine.apply_filters(channels, filters).await
-    }
-
-    // TODO: Migrate these methods to use the new pipeline architecture
+    // Legacy apply_filters method removed - replaced by pipeline-based filtering
+    // All filtering now handled by crate::pipeline::stages::filtering module
 }

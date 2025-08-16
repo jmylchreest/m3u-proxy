@@ -374,15 +374,12 @@ impl RobustStreamingProxy {
 /// Health monitor for upstream sources
 pub struct UpstreamHealthMonitor {
     health_status: Arc<RwLock<HashMap<String, bool>>>,
-    #[allow(dead_code)]
-    config: RobustStreamingConfig,
 }
 
 impl UpstreamHealthMonitor {
-    pub fn new(config: RobustStreamingConfig) -> Self {
+    pub fn new(_config: RobustStreamingConfig) -> Self {
         Self {
             health_status: Arc::new(RwLock::new(HashMap::new())),
-            config,
         }
     }
 

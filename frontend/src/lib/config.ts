@@ -1,6 +1,15 @@
 // Centralized function to get backend URL
+// Since the frontend is embedded and served by the same backend server,
+// we can use relative URLs which automatically use the correct host and port
 export function getBackendUrl(): string {
-  return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
+  // For development, check if we have explicit environment variables set
+  if (process.env.NODE_ENV === 'development') {
+    return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
+  }
+  
+  // For production (embedded in backend), use relative URLs
+  // This automatically works with any host/port the backend is running on
+  return ''
 }
 
 // API Configuration

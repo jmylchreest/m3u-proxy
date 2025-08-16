@@ -250,7 +250,7 @@ fn format_duration(seconds: i32) -> String {
 
 
 /// Format datetime for display in local timezone
-#[allow(dead_code)]
+
 pub fn format_for_display(utc_time: DateTime<Utc>, local_tz_str: &str) -> String {
     if let Ok(local_tz) = local_tz_str.parse::<Tz>() {
         let local_time = utc_time.with_timezone(&local_tz);

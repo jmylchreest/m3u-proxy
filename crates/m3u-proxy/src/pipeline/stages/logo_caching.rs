@@ -6,7 +6,7 @@
 
 use crate::models::Channel;
 use crate::pipeline::models::{PipelineArtifact, ArtifactType, ContentType, ProcessingStage};
-use crate::pipeline::engines::rule_processor::{FieldModification, EpgProgram};
+use crate::pipeline::engines::rule_processor::EpgProgram;
 use crate::pipeline::traits::{PipelineStage, ProgressAware};
 use crate::pipeline::error::PipelineError;
 use crate::logo_assets::service::LogoAssetService;
@@ -58,8 +58,6 @@ struct LogoCachingResult {
     pub local_proxy_urls: usize,
     pub remote_urls: usize,
     pub unknown_urls: usize,
-    #[allow(dead_code)]
-    pub field_modifications: Vec<FieldModification>,
 }
 
 /// Result of EPG logo caching operations
@@ -71,12 +69,7 @@ struct EpgLogoCachingResult {
     pub cache_failures: usize,
     pub cache_hits: usize,
     pub total_downloaded_bytes: u64,
-    #[allow(dead_code)]
-    pub local_proxy_urls: usize,
-    #[allow(dead_code)]
-    pub unknown_urls: usize,
-    #[allow(dead_code)]
-    pub field_modifications: Vec<FieldModification>,
+    
 }
 
 impl LogoCachingStage {
@@ -271,7 +264,6 @@ impl LogoCachingStage {
         let mut local_proxy_urls = 0;
         let mut remote_urls = 0;
         let mut unknown_urls = 0;
-        let mut field_modifications = Vec::new();
         
         let total_channels = channels.len();
         let start_time = std::time::Instant::now();
@@ -318,13 +310,6 @@ impl LogoCachingStage {
                                         total_downloaded_bytes += bytes_transferred;
                                     }
                                     
-                                    // Track the field modification
-                                    field_modifications.push(FieldModification {
-                                        field_name: "tvg_logo".to_string(),
-                                        old_value: Some(logo_url.clone()),
-                                        new_value: Some(new_url),
-                                        modification_type: crate::pipeline::engines::rule_processor::ModificationType::Set,
-                                    });
                                     
                                     trace!("Processed logo for channel {}: {} -> cache_id={} (hit={} bytes={})", 
                                         channel.channel_name, logo_url, returned_cache_id, logo_exists, bytes_transferred);
@@ -405,7 +390,6 @@ impl LogoCachingStage {
             local_proxy_urls,
             remote_urls,
             unknown_urls,
-            field_modifications,
         })
     }
 
@@ -618,8 +602,6 @@ impl LogoCachingStage {
         let mut cache_failures = 0;
         let cache_hits = 0;
         let mut total_downloaded_bytes = 0;
-        let mut local_proxy_urls = 0;
-        let mut unknown_urls = 0;
         
         info!("Processing program logos for {} programs", total_input);
         
@@ -647,11 +629,9 @@ impl LogoCachingStage {
                         }
                     }
                     LogoUrlType::LocalProxy => {
-                        local_proxy_urls += 1;
                         trace!("Skipping local proxy program icon: {}", program_icon_url);
                     }
                     LogoUrlType::Unknown => {
-                        unknown_urls += 1;
                         trace!("Skipping unknown format program icon: {}", program_icon_url);
                     }
                 }
@@ -660,8 +640,8 @@ impl LogoCachingStage {
         }
         
         info!(
-            "Program logo caching completed: processed={} cached={} failures={} cache_hits={} local_proxy={} unknown={} downloaded_bytes={}",
-            total_input, total_cached, cache_failures, cache_hits, local_proxy_urls, unknown_urls, total_downloaded_bytes
+            "Program logo caching completed: processed={} cached={} failures={} cache_hits={} downloaded_bytes={}",
+            total_input, total_cached, cache_failures, cache_hits, total_downloaded_bytes
         );
         
         let result = EpgLogoCachingResult {
@@ -671,9 +651,6 @@ impl LogoCachingStage {
             cache_failures,
             cache_hits,
             total_downloaded_bytes,
-            local_proxy_urls,
-            unknown_urls,
-            field_modifications: Vec::new(), // Could track program_icon field modifications
         };
 
         // Memory cleanup is handled automatically when variables go out of scope

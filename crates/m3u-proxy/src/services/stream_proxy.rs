@@ -12,9 +12,9 @@ use crate::{
     errors::types::AppError,
     logo_assets::service::LogoAssetService,
     models::{
-        Channel, GenerationOutput, StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest,
+        GenerationOutput, StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest,
     },
-    proxy::filter_engine::FilterEngine,
+    // TODO: Remove - superseded by pipeline-based filtering
     repositories::{
         ChannelRepository, FilterRepository, StreamProxyRepository, StreamSourceRepository,
         traits::Repository,
@@ -25,12 +25,12 @@ use sandboxed_file_manager::SandboxedManager;
 
 pub struct StreamProxyService {
     proxy_repo: StreamProxyRepository,
-    #[allow(dead_code)]
+    
     channel_repo: ChannelRepository,
     filter_repo: FilterRepository,
     stream_source_repo: StreamSourceRepository,
-    #[allow(dead_code)]
-    filter_engine: tokio::sync::Mutex<FilterEngine>,
+    
+    // TODO: Remove - superseded by pipeline-based filtering
     database: Database,
     preview_file_manager: SandboxedManager,
     data_mapping_service: DataMappingService,
@@ -49,7 +49,7 @@ pub struct StreamProxyServiceBuilder {
     pub channel_repo: ChannelRepository,
     pub filter_repo: FilterRepository,
     pub stream_source_repo: StreamSourceRepository,
-    pub filter_engine: FilterEngine,
+    // TODO: Remove - superseded by pipeline-based filtering
     pub database: Database,
     pub preview_file_manager: SandboxedManager,
     pub data_mapping_service: DataMappingService,
@@ -77,7 +77,7 @@ impl StreamProxyService {
             channel_repo: builder.channel_repo,
             filter_repo: builder.filter_repo,
             stream_source_repo: builder.stream_source_repo,
-            filter_engine: tokio::sync::Mutex::new(builder.filter_engine),
+            // TODO: Remove - superseded by pipeline-based filtering
             database: builder.database,
             preview_file_manager: builder.preview_file_manager,
             data_mapping_service: builder.data_mapping_service,
@@ -477,108 +477,9 @@ impl StreamProxyService {
         Ok(preview_channels)
     }
 
-    /// Generate M3U content for preview
-    #[allow(dead_code)]
-    async fn generate_preview_m3u(
-        &self,
-        channels: &[Channel],
-        request: &PreviewProxyRequest,
-    ) -> Result<String, AppError> {
-        let mut m3u_content = String::from("#EXTM3U\n");
+    // TODO: Move to API layer - preview functionality should be exposed via REST endpoints
 
-        for (index, channel) in channels.iter().enumerate() {
-            // Generate channel number (1-based)
-            let channel_number = (index + 1) as i32 + request.starting_channel_number - 1;
-
-            // Build EXTINF line
-            let mut extinf_parts = Vec::new();
-            extinf_parts.push("#EXTINF:-1".to_string());
-
-            // Add tvg-id if available
-            if let Some(tvg_id) = &channel.tvg_id {
-                if !tvg_id.is_empty() {
-                    extinf_parts.push(format!("tvg-id=\"{tvg_id}\""));
-                }
-            }
-
-            // Add tvg-name if available
-            if let Some(tvg_name) = &channel.tvg_name {
-                if !tvg_name.is_empty() {
-                    extinf_parts.push(format!("tvg-name=\"{tvg_name}\""));
-                }
-            }
-
-            // Add tvg-logo if available
-            if let Some(tvg_logo) = &channel.tvg_logo {
-                if !tvg_logo.is_empty() {
-                    extinf_parts.push(format!("tvg-logo=\"{tvg_logo}\""));
-                }
-            }
-
-            // Add group-title if available
-            if let Some(group_title) = &channel.group_title {
-                if !group_title.is_empty() {
-                    extinf_parts.push(format!("group-title=\"{group_title}\""));
-                }
-            }
-
-            // Add channel number
-            extinf_parts.push(format!("tvg-chno=\"{channel_number}\""));
-
-            // Add channel name at the end
-            extinf_parts.push(channel.channel_name.clone());
-
-            let extinf_line = extinf_parts.join(" ");
-            m3u_content.push_str(&extinf_line);
-            m3u_content.push('\n');
-
-            // Add stream URL (would be proxied in real scenario)
-            let stream_url = format!("{}/stream/preview/{}", self.app_config.web.base_url.trim_end_matches('/'), channel.id);
-            m3u_content.push_str(&stream_url);
-            m3u_content.push('\n');
-        }
-
-        Ok(m3u_content)
-    }
-
-    /// Generate preview channel list (limited to first 20 for performance)
-    #[allow(dead_code)]
-    async fn generate_preview_channels(
-        &self,
-        channels: &[Channel],
-        request: &PreviewProxyRequest,
-    ) -> Result<Vec<crate::web::handlers::proxies::PreviewChannel>, AppError> {
-        let mut preview_channels = Vec::new();
-        // No limit - show all channels
-
-        for (index, channel) in channels.iter().enumerate() {
-            let channel_number = (index + 1) as i32 + request.starting_channel_number - 1;
-
-            preview_channels.push(crate::web::handlers::proxies::PreviewChannel {
-                channel_name: channel.channel_name.clone(),
-                group_title: channel.group_title.clone(),
-                tvg_id: channel.tvg_id.clone(),
-                tvg_logo: channel.tvg_logo.clone(),
-                stream_url: format!("{}/stream/preview/{}", self.app_config.web.base_url.trim_end_matches('/'), channel.id),
-                source_name: "Preview".to_string(), // TODO: Get actual source name
-                channel_number,
-                tvg_chno: None, // Channel model doesn't have tvg_chno field
-                tvg_shift: channel.tvg_shift.clone(),
-                tvg_language: None, // Channel model doesn't have language field
-                tvg_country: None, // Channel model doesn't have country field
-                group_logo: None, // Channel model doesn't have group_logo field
-                radio: None, // Channel model doesn't have radio field
-                extinf_line: format!("#EXTINF:-1 tvg-id=\"{}\" tvg-name=\"{}\" tvg-logo=\"{}\" group-title=\"{}\",{}",
-                    channel.tvg_id.as_deref().unwrap_or(""),
-                    channel.channel_name,
-                    channel.tvg_logo.as_deref().unwrap_or(""),
-                    channel.group_title.as_deref().unwrap_or(""),
-                    channel.channel_name),
-            });
-        }
-
-        Ok(preview_channels)
-    }
+    // TODO: Move to API layer - preview functionality should be exposed via REST endpoints
 
     /// Extract attribute value from EXTINF line
     fn extract_attribute(line: &str, attr: &str) -> Option<String> {

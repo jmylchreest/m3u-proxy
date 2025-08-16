@@ -216,7 +216,7 @@ mod tests {
     struct MockRepository {
         fail_counter: Arc<AtomicU32>,
         fail_until_attempt: u32,
-        #[allow(dead_code)]
+        
         should_fail_permanently: bool,
     }
 

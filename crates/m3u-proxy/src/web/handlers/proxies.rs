@@ -404,7 +404,6 @@ pub async fn list_proxies(
     let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
     let stream_source_repo =
         crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
-    let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -412,7 +411,7 @@ pub async fn list_proxies(
             channel_repo,
             filter_repo,
             stream_source_repo,
-            filter_engine,
+            // TODO: Remove - superseded by pipeline-based filtering
             database: state.database.clone(),
             preview_file_manager: state.preview_file_manager.clone(),
             data_mapping_service: state.data_mapping_service.clone(),
@@ -484,7 +483,6 @@ pub async fn get_proxy(
     let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
     let stream_source_repo =
         crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
-    let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -492,7 +490,7 @@ pub async fn get_proxy(
             channel_repo,
             filter_repo,
             stream_source_repo,
-            filter_engine,
+            // TODO: Remove - superseded by pipeline-based filtering
             database: state.database.clone(),
             preview_file_manager: state.preview_file_manager.clone(),
             data_mapping_service: state.data_mapping_service.clone(),
@@ -548,7 +546,6 @@ pub async fn create_proxy(
     let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
     let stream_source_repo =
         crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
-    let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -556,7 +553,7 @@ pub async fn create_proxy(
             channel_repo,
             filter_repo,
             stream_source_repo,
-            filter_engine,
+            // TODO: Remove - superseded by pipeline-based filtering
             database: state.database.clone(),
             preview_file_manager: state.preview_file_manager.clone(),
             data_mapping_service: state.data_mapping_service.clone(),
@@ -669,7 +666,6 @@ pub async fn update_proxy(
     let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
     let stream_source_repo =
         crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
-    let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -677,7 +673,7 @@ pub async fn update_proxy(
             channel_repo,
             filter_repo,
             stream_source_repo,
-            filter_engine,
+            // TODO: Remove - superseded by pipeline-based filtering
             database: state.database.clone(),
             preview_file_manager: state.preview_file_manager.clone(),
             data_mapping_service: state.data_mapping_service.clone(),
@@ -736,7 +732,6 @@ pub async fn delete_proxy(
     let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
     let stream_source_repo =
         crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
-    let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -744,7 +739,7 @@ pub async fn delete_proxy(
             channel_repo,
             filter_repo,
             stream_source_repo,
-            filter_engine,
+            // TODO: Remove - superseded by pipeline-based filtering
             database: state.database.clone(),
             preview_file_manager: state.preview_file_manager.clone(),
             data_mapping_service: state.data_mapping_service.clone(),
@@ -810,7 +805,6 @@ pub async fn preview_proxy_config(
     let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
     let stream_source_repo =
         crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
-    let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -818,7 +812,7 @@ pub async fn preview_proxy_config(
             channel_repo,
             filter_repo,
             stream_source_repo,
-            filter_engine,
+            // TODO: Remove - superseded by pipeline-based filtering
             database: state.database.clone(),
             preview_file_manager: state.preview_file_manager.clone(),
             data_mapping_service: state.data_mapping_service.clone(),
@@ -893,7 +887,6 @@ pub async fn preview_existing_proxy(
     let filter_repo = crate::repositories::FilterRepository::new(state.database.pool().clone());
     let stream_source_repo =
         crate::repositories::StreamSourceRepository::new(state.database.pool().clone());
-    let filter_engine = crate::proxy::filter_engine::FilterEngine::new();
 
     let service = crate::services::StreamProxyService::new(
         crate::services::StreamProxyServiceBuilder {
@@ -901,7 +894,7 @@ pub async fn preview_existing_proxy(
             channel_repo,
             filter_repo,
             stream_source_repo,
-            filter_engine,
+            // TODO: Remove - superseded by pipeline-based filtering
             database: state.database.clone(),
             preview_file_manager: state.preview_file_manager.clone(),
             data_mapping_service: state.data_mapping_service.clone(),

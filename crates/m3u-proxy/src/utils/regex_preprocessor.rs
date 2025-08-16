@@ -4,7 +4,7 @@ use tracing::trace;
 #[derive(Debug, Clone)]
 struct QuantifierInfo {
     min: usize,
-    #[allow(dead_code)]
+    
     max: Option<usize>, // None means unbounded
 }
 
@@ -14,6 +14,8 @@ pub struct RegexPreprocessorConfig {
     pub enable_first_pass_filtering: bool,
     pub precheck_special_chars: String,
     pub minimum_literal_length: usize,
+    /// Maximum allowed quantifier limit to prevent ReDoS attacks
+    pub max_quantifier_limit: usize,
 }
 
 impl Default for RegexPreprocessorConfig {
@@ -22,6 +24,8 @@ impl Default for RegexPreprocessorConfig {
             enable_first_pass_filtering: true,
             precheck_special_chars: "+-@#$%&*=<>!~`€£{}[].".to_string(),
             minimum_literal_length: 2,
+            // Security limit to prevent ReDoS attacks
+            max_quantifier_limit: 100,
         }
     }
 }
@@ -35,6 +39,210 @@ pub struct RegexPreprocessor {
 impl RegexPreprocessor {
     pub fn new(config: RegexPreprocessorConfig) -> Self {
         Self { config }
+    }
+    
+    /// Validate a regex pattern for security vulnerabilities (ReDoS prevention)
+    /// Returns an error if the pattern contains dangerous quantifiers or ReDoS patterns
+    pub fn validate_regex_security(&self, pattern: &str) -> Result<(), String> {
+        // Comprehensive ReDoS detection implementation
+        
+        // 1. Check for nested quantifiers (classic ReDoS pattern)
+        self.detect_nested_quantifiers(pattern)?;
+        
+        // 2. Check for alternation with overlapping patterns
+        self.detect_alternation_overlap(pattern)?;
+        
+        // 3. Check individual quantifier limits
+        self.validate_quantifier_limits(pattern)?;
+        
+        // 4. Check for exponential backtracking patterns
+        self.detect_exponential_backtracking(pattern)?;
+        
+        // 5. Calculate overall pattern complexity
+        let complexity = self.calculate_pattern_complexity(pattern);
+        if complexity > 50 { // Threshold for complex patterns
+            return Err(format!(
+                "Pattern complexity score {} exceeds safety threshold of 50. \
+                 Consider simplifying the regex to prevent performance issues.", 
+                complexity
+            ));
+        }
+        
+        Ok(())
+    }
+    
+    /// Detect nested quantifiers like (a+)+ or (a*)* which cause exponential backtracking
+    fn detect_nested_quantifiers(&self, pattern: &str) -> Result<(), String> {
+        let mut chars = pattern.chars().peekable();
+        let mut paren_depth = 0;
+        let mut quantifier_levels: Vec<bool> = Vec::new(); // Track quantifiers at each nesting level
+        
+        while let Some(ch) = chars.next() {
+            match ch {
+                '(' => {
+                    paren_depth += 1;
+                    if quantifier_levels.len() < paren_depth {
+                        quantifier_levels.push(false);
+                    }
+                }
+                ')' => {
+                    if paren_depth > 0 {
+                        // Check if this group is followed by a quantifier
+                        if let Some(&next_ch) = chars.peek() {
+                            if matches!(next_ch, '*' | '+' | '?' | '{') {
+                                // Group has quantifier - check if it contains quantifiers
+                                if paren_depth > 0 && quantifier_levels.get(paren_depth - 1) == Some(&true) {
+                                    return Err(
+                                        "Nested quantifiers detected (e.g., (a+)+). \
+                                         This pattern can cause catastrophic backtracking and ReDoS attacks.".to_string()
+                                    );
+                                }
+                            }
+                        }
+                        paren_depth -= 1;
+                        if quantifier_levels.len() > paren_depth {
+                            quantifier_levels.truncate(paren_depth);
+                        }
+                    }
+                }
+                '*' | '+' | '?' => {
+                    // Mark current nesting level as having quantifiers
+                    if paren_depth > 0 && paren_depth <= quantifier_levels.len() {
+                        quantifier_levels[paren_depth - 1] = true;
+                    }
+                }
+                '{' => {
+                    // Skip quantifier content
+                    while let Some(ch) = chars.next() {
+                        if ch == '}' { break; }
+                    }
+                    // Mark current nesting level as having quantifiers
+                    if paren_depth > 0 && paren_depth <= quantifier_levels.len() {
+                        quantifier_levels[paren_depth - 1] = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Detect alternation with overlapping patterns like (a|a)* which cause backtracking
+    fn detect_alternation_overlap(&self, pattern: &str) -> Result<(), String> {
+        // Look for patterns like (x|x)* or (ab|a)* where alternatives overlap
+        let alternation_pattern = regex::Regex::new(r"\([^)]*\|[^)]*\)[*+]").unwrap();
+        
+        if alternation_pattern.is_match(pattern) {
+            // This is a simplified check - in practice, we'd need more sophisticated analysis
+            tracing::warn!(
+                "Alternation with quantifiers detected. \
+                 Verify that alternatives don't have overlapping matches to prevent ReDoS."
+            );
+        }
+        
+        Ok(())
+    }
+    
+    /// Validate individual quantifier limits (existing functionality)
+    fn validate_quantifier_limits(&self, pattern: &str) -> Result<(), String> {
+        let mut chars = pattern.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            match ch {
+                '{' => {
+                    let quantifier = self.parse_quantifier(&mut chars);
+                    
+                    // Check min limit
+                    if quantifier.min > self.config.max_quantifier_limit {
+                        return Err(format!(
+                            "Quantifier min value {} exceeds security limit of {}", 
+                            quantifier.min, self.config.max_quantifier_limit
+                        ));
+                    }
+                    
+                    // Check max limit if specified
+                    if let Some(max) = quantifier.max {
+                        if max > self.config.max_quantifier_limit {
+                            return Err(format!(
+                                "Quantifier max value {} exceeds security limit of {}", 
+                                max, self.config.max_quantifier_limit
+                            ));
+                        }
+                    }
+                    
+                    // Check for unbounded quantifiers
+                    if quantifier.max.is_none() && quantifier.min == 0 {
+                        tracing::warn!(
+                            "Unbounded quantifier detected: consider adding upper bounds for performance"
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Detect patterns that can cause exponential backtracking
+    fn detect_exponential_backtracking(&self, pattern: &str) -> Result<(), String> {
+        // Check for common problematic patterns
+        let dangerous_patterns = [
+            r"\([^)]*[*+]\)[*+]",      // Nested quantifiers
+            r"[*+][*+]",                // Adjacent quantifiers  
+            r"\.[*+].*[*+]",            // Multiple .* or .+ patterns
+            r"\([^)]*\)[*+].*\([^)]*\)[*+]", // Multiple quantified groups
+        ];
+        
+        for dangerous_pattern in &dangerous_patterns {
+            if let Ok(regex) = regex::Regex::new(dangerous_pattern) {
+                if regex.is_match(pattern) {
+                    return Err(format!(
+                        "Potentially dangerous regex pattern detected. \
+                         Pattern '{}' matches rule '{}' which can cause exponential backtracking.",
+                        pattern, dangerous_pattern
+                    ));
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Calculate pattern complexity score for performance assessment
+    fn calculate_pattern_complexity(&self, pattern: &str) -> u32 {
+        let mut complexity = 0;
+        let mut chars = pattern.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            match ch {
+                '*' | '+' => complexity += 3,     // High impact quantifiers
+                '?' => complexity += 1,           // Low impact quantifier
+                '{' => {
+                    // Count custom quantifiers
+                    let quantifier = self.parse_quantifier(&mut chars);
+                    complexity += if quantifier.max.is_none() { 5 } else { 2 };
+                }
+                '(' => complexity += 2,           // Grouping adds complexity
+                '|' => complexity += 2,           // Alternation adds complexity
+                '.' => complexity += 2,           // Wildcard matching
+                '[' => {
+                    complexity += 1;
+                    // Skip character class content
+                    while let Some(ch) = chars.next() {
+                        if ch == ']' { break; }
+                    }
+                }
+                '\\' => {
+                    chars.next(); // Skip escaped character
+                    complexity += 1;
+                }
+                _ => {}
+            }
+        }
+        
+        complexity
     }
 
     /// Determine if a regex should be executed on a field value based on preprocessing heuristics
@@ -214,6 +422,7 @@ impl RegexPreprocessor {
     }
 
     /// Parse a quantifier like {0,3} or {2,} and return min/max values
+    /// TODO: Make this public for security validation
     fn parse_quantifier(&self, chars: &mut std::iter::Peekable<std::str::Chars>) -> QuantifierInfo {
         let mut quantifier_str = String::new();
         

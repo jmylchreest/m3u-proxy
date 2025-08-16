@@ -18,8 +18,8 @@ pub struct StreamSourceService {
     database: Database,
     stream_source_repo: StreamSourceRepository,
     channel_repo: ChannelRepository,
-    #[allow(dead_code)]
-    epg_service: Arc<EpgSourceService>,
+    
+    // TODO: Remove - not used, EPG integration handled at higher levels
     cache_invalidation_tx: broadcast::Sender<()>,
 }
 
@@ -27,7 +27,7 @@ impl StreamSourceService {
     /// Create a new stream source service
     pub fn new(
         database: Database,
-        epg_service: Arc<EpgSourceService>,
+        _epg_service: Arc<EpgSourceService>, // TODO: Remove - not used
         cache_invalidation_tx: broadcast::Sender<()>,
     ) -> Self {
         let stream_source_repo = StreamSourceRepository::new(database.pool());
@@ -36,7 +36,7 @@ impl StreamSourceService {
             database,
             stream_source_repo,
             channel_repo,
-            epg_service,
+            // TODO: Remove - not used
             cache_invalidation_tx,
         }
     }
@@ -349,6 +349,11 @@ impl StreamSourceService {
         // Update progress: starting ingestion
         if let Some(updater) = progress_updater {
             updater.update_progress(0.0, &format!("Starting stream ingestion for {}", source.name)).await;
+            
+            // Check for cancellation before starting the operation
+            if updater.is_cancellation_requested().await {
+                return Err(anyhow::anyhow!("Stream ingestion cancelled for source: {}", source.name));
+            }
         }
         
         // Ingest channels using the handler
@@ -365,6 +370,9 @@ impl StreamSourceService {
         // Update progress: saving to database
         if let Some(updater) = progress_updater {
             updater.update_progress(80.0, &format!("Saving {} channels to database", channels.len())).await;
+            
+            // DO NOT check for cancellation here - we must complete the database transaction
+            // to avoid partial state corruption (deleting old data without inserting new data)
         }
         
         // Save channels to database

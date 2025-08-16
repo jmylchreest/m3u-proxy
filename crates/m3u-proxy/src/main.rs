@@ -177,8 +177,26 @@ async fn main() -> Result<()> {
 
     info!("Using database: {}", config.database.url);
 
-    let database = Database::new(&config.database, &config.ingestion).await?;
-    database.migrate().await?;
+    // Initialize database with better error handling
+    let database = match Database::new(&config.database, &config.ingestion).await {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("Failed to initialize database at '{}': {}", config.database.url, e);
+            eprintln!("This could be due to:");
+            eprintln!("  - Invalid database URL format");
+            eprintln!("  - Missing parent directory for SQLite database file");
+            eprintln!("  - Insufficient permissions to create/write database file");
+            eprintln!("  - Database file exists but is corrupted or locked");
+            std::process::exit(1);
+        }
+    };
+    
+    if let Err(e) = database.migrate().await {
+        eprintln!("Failed to run database migrations: {}", e);
+        eprintln!("This could indicate database corruption or incompatible schema versions.");
+        std::process::exit(1);
+    }
+    
     info!("Database connection established and migrations applied");
 
     // Create state manager for ingestion progress tracking

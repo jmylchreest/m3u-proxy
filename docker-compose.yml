@@ -1,0 +1,66 @@
+version: '3.8'
+
+networks:
+  m3u-proxy-net:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+        - subnet: fd00::/64
+
+services:
+  m3u-proxy:
+    image: m3u-proxy:latest
+    networks:
+      - m3u-proxy-net
+    ports:
+      - "8080:8080"
+    environment:
+      # Container defaults (controlled by entrypoint script)
+      M3U_PROXY_HOST: "0.0.0.0"
+      M3U_PROXY_PORT: "8080"
+      M3U_PROXY_CONFIG: "/app/config/config.toml"
+      M3U_PROXY_LOG_LEVEL: "info"
+      # M3U_PROXY_DATABASE_URL: "sqlite:./data/m3u-proxy.db"  # Uses default from config
+      
+      # Storage paths (these are the defaults, mounted as volumes)
+      # M3U_PROXY_M3U_PATH: "/app/data/m3u"
+      # M3U_PROXY_UPLOADED_LOGO_PATH: "/app/data/logos/uploaded"
+      # M3U_PROXY_CACHED_LOGO_PATH: "/app/data/logos/cached"
+      # M3U_PROXY_TEMP_PATH: "/app/data/temp"
+      # M3U_PROXY_PIPELINE_PATH: "/app/data/pipeline"
+      
+      # FFmpeg commands (useful if you have custom FFmpeg installations)
+      # M3U_PROXY_FFMPEG_COMMAND: "ffmpeg"
+      # M3U_PROXY_FFPROBE_COMMAND: "ffprobe"
+      
+    volumes:
+      # Persist application data (database and files)
+      - m3u_data:/app/data
+      
+      # Optional: Mount configuration directory
+      # - ./config:/app/config
+      
+    restart: unless-stopped
+    
+    # Optional: Add resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    
+    # Health check using internal container address
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/api/v1/sources"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  m3u_data:
+    driver: local

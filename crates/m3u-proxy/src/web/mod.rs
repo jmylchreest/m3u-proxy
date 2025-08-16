@@ -398,8 +398,36 @@ impl WebServer {
                 // Signal that we're now actually listening on the port
                 let _ = ready_signal.send(Ok(()));
 
-                // Now serve until shutdown
-                axum::serve(listener, self.app).await?;
+                // Create graceful shutdown signal
+                let shutdown_signal = async {
+                    #[cfg(unix)]
+                    {
+                        use tokio::signal::unix::{signal, SignalKind};
+                        let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+                        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+                        
+                        tokio::select! {
+                            _ = sigterm.recv() => {
+                                tracing::info!("Received SIGTERM, shutting down gracefully");
+                            }
+                            _ = sigint.recv() => {
+                                tracing::info!("Received SIGINT (Ctrl+C), shutting down gracefully");
+                            }
+                        }
+                    }
+                    
+                    #[cfg(not(unix))]
+                    {
+                        use tokio::signal;
+                        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+                        tracing::info!("Received Ctrl+C, shutting down gracefully");
+                    }
+                };
+
+                // Now serve until shutdown signal
+                axum::serve(listener, self.app)
+                    .with_graceful_shutdown(shutdown_signal)
+                    .await?;
                 Ok(())
             }
             Err(bind_error) => {

@@ -1,8 +1,24 @@
 # Rust build artifacts
 target/
-Cargo.lock
+**/*.rs.bk
 
-# IDE files
+# Frontend dependencies and build artifacts (handled by frontend-builder stage)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*.local
+
+# Static files (will be generated during build)
+crates/m3u-proxy/static/
+
+# Git and development files
+.git/
+.gitignore
+*.md
+docs/
+.github/
+
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
@@ -13,19 +29,10 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Git
-.git/
-.gitignore
-
-# CI/CD
-.github/
-
-# Documentation
-README.md
-docs/
-
-# Logs
+# Logs and temporary files
 *.log
+*.tmp
+*.temp
 server.log
 
 # Database files (will be created in container)
@@ -38,19 +45,20 @@ data/
 
 # Test files
 test.*
+**/tests/**/*.rs
 
-# Config files (example will be copied)
+# Development configuration
+.env
+.env.local
+.env.development
+.env.test
+.env.production
 config.toml
 
 # Temporary files
 tmp/
 temp/
-
-# Build cache
 .cache/
-
-# Node modules (if any)
-node_modules/
 
 # Python cache (if any)
 __pycache__/
@@ -59,6 +67,7 @@ __pycache__/
 # Backup files
 *.bak
 *.backup
+src/**/*.backup
 
 # Archive files
 *.tar.gz
@@ -66,15 +75,13 @@ __pycache__/
 *.tar
 *.rar
 
-# Local development files
-.env
-.env.local
-.env.development
-.env.test
-.env.production
-
-# SQLx prepared queries (will be prepared in build)
-.sqlx/
+# SQLx prepared queries - INCLUDE these for container builds
+# .sqlx/
 
 # Cross compilation files
 Cross.toml
+
+# Docker/container files themselves
+Dockerfile*
+.dockerignore
+build-container.sh

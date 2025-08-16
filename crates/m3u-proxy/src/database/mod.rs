@@ -55,9 +55,27 @@ impl Database {
     }
 
     pub async fn new(config: &DatabaseConfig, ingestion_config: &IngestionConfig) -> Result<Self> {
+        // For SQLite databases, ensure parent directory exists
+        if config.url.starts_with("sqlite:") {
+            let db_path = config.url.strip_prefix("sqlite:").unwrap_or(&config.url);
+            let db_path = db_path.trim_start_matches("//");
+            
+            if let Some(parent) = std::path::Path::new(db_path).parent() {
+                if !parent.exists() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| anyhow::anyhow!(
+                            "Failed to create database directory '{}': {}", 
+                            parent.display(), e
+                        ))?;
+                    tracing::info!("Created database directory: {}", parent.display());
+                }
+            }
+        }
+
         // Create database if it doesn't exist (for SQLite)
         if !Sqlite::database_exists(&config.url).await? {
             Sqlite::create_database(&config.url).await?;
+            tracing::info!("Created new database: {}", config.url);
         }
 
         let pool = SqlitePool::connect(&config.url).await?;

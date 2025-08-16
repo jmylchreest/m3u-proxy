@@ -375,7 +375,7 @@ impl DataMappingStats {
     }
 
     /// Iterate over rule performance data
-    pub fn iter(&self) -> std::collections::hash_map::Iter<String, u128> {
+    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, u128> {
         self.rule_performance.iter()
     }
 }

@@ -2,7 +2,6 @@ use anyhow::Result;
 use figment::{Figment, providers::{Toml, Env, Format}};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tracing::info;
 
 pub mod defaults;
 pub mod duration_serde;
@@ -410,7 +409,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             database: DatabaseConfig {
-                url: "sqlite://./m3u-proxy.db".to_string(),
+                url: "sqlite:./data/m3u-proxy.db".to_string(),
                 max_connections: Some(10),
                 batch_sizes: Some(DatabaseBatchConfig::default()),
                 busy_timeout: default_busy_timeout(),
@@ -459,12 +458,18 @@ impl Config {
     }
 
     pub fn load_from_file(config_file: &str) -> Result<Self> {
-        // Create default config file if it doesn't exist
+        // Check if config file exists
         if !std::path::Path::new(config_file).exists() {
+            tracing::warn!("Config file '{}' not found, using default configuration values", config_file);
+            
+            // Start with default config and merge environment variables
             let default_config = Self::default();
-            let contents = toml::to_string_pretty(&default_config)?;
-            std::fs::write(config_file, contents)?;
-            info!("Created default config file: {}", config_file);
+            let config: Config = Figment::new()
+                .merge(figment::providers::Serialized::defaults(default_config))
+                .merge(Env::prefixed("M3U_PROXY_").split("__"))
+                .extract()?;
+                
+            return Ok(config);
         }
         
         // Load config with figment (TOML file + environment variables)

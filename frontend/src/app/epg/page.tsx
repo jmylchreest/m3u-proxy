@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Search, Calendar, Clock, Filter, Play, Grid, List } from 'lucide-react';
+import { Search, Calendar, Clock, Filter, Play, Grid, List, Table as TableIcon } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { VideoPlayerModal } from '@/components/video-player-modal';
@@ -76,6 +76,7 @@ export default function EpgPage() {
   const [timeRange, setTimeRange] = useState<'today' | 'tomorrow' | 'week'>('today');
   const [selectedProgram, setSelectedProgram] = useState<EpgProgram | null>(null);
   const [isPlayerOpen, setIsPlayerOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('table');
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
   const getTimeRangeParams = useCallback(() => {
@@ -474,7 +475,6 @@ export default function EpgPage() {
   return (
     <div className="container mx-auto p-6">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold mb-2">EPG Viewer</h1>
         <p className="text-muted-foreground">
           Browse electronic program guide and schedule information
         </p>
@@ -493,8 +493,9 @@ export default function EpgPage() {
         </TabsList>
 
         {/* Common Filters */}
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row gap-4">
+        <Card className="space-y-4">
+          <CardContent className="p-6">
+            <div className="flex flex-col sm:flex-row gap-4">
             <Select value={timeRange} onValueChange={(v) => setTimeRange(v as 'today' | 'tomorrow' | 'week')}>
               <SelectTrigger className="w-full sm:w-48">
                 <Calendar className="w-4 h-4 mr-2" />
@@ -521,8 +522,37 @@ export default function EpgPage() {
                 ))}
               </SelectContent>
             </Select>
-          </div>
-        </div>
+
+            {/* Layout Chooser */}
+            <div className="flex rounded-md border">
+              <Button
+                size="sm"
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                className="rounded-r-none border-r"
+                onClick={() => setViewMode('table')}
+              >
+                <TableIcon className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                className="rounded-none border-r"
+                onClick={() => setViewMode('grid')}
+              >
+                <Grid className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'list' ? 'default' : 'ghost'}
+                className="rounded-l-none"
+                onClick={() => setViewMode('list')}
+              >
+                <List className="w-4 h-4" />
+              </Button>
+            </div>
+            </div>
+          </CardContent>
+        </Card>
 
         <TabsContent value="programs" className="space-y-6">
           {/* Programs Search and Filters */}
@@ -583,11 +613,25 @@ export default function EpgPage() {
           {/* Programs Display */}
           {programs.length > 0 ? (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {programs.map((program) => (
-                  <ProgramCard key={program.id} program={program} />
-                ))}
-              </div>
+              {viewMode === 'table' ? (
+                <div className="space-y-2">
+                  {programs.map((program) => (
+                    <ProgramCard key={program.id} program={program} />
+                  ))}
+                </div>
+              ) : viewMode === 'grid' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {programs.map((program) => (
+                    <ProgramCard key={program.id} program={program} />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {programs.map((program) => (
+                    <ProgramCard key={program.id} program={program} />
+                  ))}
+                </div>
+              )}
 
               {/* Progressive Loading */}
               {hasMore && (

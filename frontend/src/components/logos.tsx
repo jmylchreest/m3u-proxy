@@ -40,7 +40,10 @@ import {
   WifiOff,
   Eye,
   Download,
-  FileImage
+  FileImage,
+  Grid,
+  List,
+  Table as TableIcon
 } from "lucide-react"
 import { 
   LogoAsset,
@@ -488,6 +491,7 @@ export function Logos() {
   const [isUploadSheetOpen, setIsUploadSheetOpen] = useState(false)
   const [isEditSheetOpen, setIsEditSheetOpen] = useState(false)
   const [editingLogo, setEditingLogo] = useState<LogoAsset | null>(null)
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('grid')
   
   // Ref for infinite scroll trigger
   const loadMoreRef = useRef<HTMLDivElement>(null)
@@ -916,218 +920,419 @@ export function Logos() {
                 <SelectItem value="exclude">Exclude Cached</SelectItem>
               </SelectContent>
             </Select>
+            
+            {/* Layout Chooser */}
+            <div className="flex rounded-md border">
+              <Button
+                size="sm"
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                className="rounded-r-none border-r"
+                onClick={() => setViewMode('table')}
+              >
+                <TableIcon className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                className="rounded-none border-r"
+                onClick={() => setViewMode('grid')}
+              >
+                <Grid className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'list' ? 'default' : 'ghost'}
+                className="rounded-l-none"
+                onClick={() => setViewMode('list')}
+              >
+                <List className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Logo Grid */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">
-            Logos ({filteredLogos.length}
-            {searchTerm || !includeCached ? ` of ${totalCount}` : ""})
-          </h3>
-          {loading.logos && <Loader2 className="h-4 w-4 animate-spin" />}
-        </div>
-
-        {errors.logos ? (
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Failed to Load Logos</AlertTitle>
-            <AlertDescription>
-              {errors.logos}
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="ml-2"
-                onClick={() => loadLogos(1, false)}
-                disabled={loading.logos}
-              >
-                {loading.logos && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Retry
-              </Button>
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <>
-            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-              {filteredLogos.map((logo) => (
-                <Card key={logo.id} className="relative group">
-                  <CardHeader className="pb-2">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-2">
-                        <Badge className={getAssetTypeColor(logo.asset_type)}>
-                          {logo.asset_type === 'cached' ? 'Cached' : 'Uploaded'}
-                        </Badge>
-                        <Badge variant="outline">
-                          {getFormatFromMimeType(logo.mime_type)}
-                        </Badge>
-                      </div>
-                      <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-popover border border-border rounded-md p-1 shadow-md">
-                        {logo.asset_type === 'uploaded' && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setEditingLogo(logo)
-                              setIsEditSheetOpen(true)
-                            }}
-                            className="h-6 w-6 p-0 hover:bg-accent"
-                            disabled={loading.edit}
-                            title="Edit logo"
-                          >
-                            <Edit className="h-3 w-3" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDeleteLogo(logo.id)}
-                          className="h-6 w-6 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                          disabled={loading.delete === logo.id}
-                          title="Delete logo"
-                        >
-                          {loading.delete === logo.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-3 w-3" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  
-                  <CardContent className="space-y-3">
-                    {/* Logo Preview */}
-                    <div className="aspect-square bg-muted rounded-md flex items-center justify-center overflow-hidden">
-                      <img
-                        src={logo.url.startsWith('http') ? logo.url : `${API_CONFIG.baseUrl}${logo.url}`}
-                        alt={logo.name}
-                        className="max-w-full max-h-full object-contain"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none'
-                          e.currentTarget.nextElementSibling?.classList.remove('hidden')
-                        }}
-                      />
-                      <div className="hidden flex-col items-center gap-2 text-muted-foreground">
-                        <FileImage className="h-8 w-8" />
-                        <span className="text-xs">Preview unavailable</span>
-                      </div>
-                    </div>
-                    
-                    {/* Logo Details */}
-                    <div className="space-y-2">
-                      <div>
-                        <p className="font-medium text-sm truncate" title={logo.name}>
-                          {logo.name}
-                        </p>
-                        {logo.description && (
-                          <p className="text-xs text-muted-foreground truncate" title={logo.description}>
-                            {logo.description}
-                          </p>
-                        )}
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">ID:</span>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <code className="text-xs bg-muted px-1 rounded truncate max-w-[60px] cursor-help">
-                                {logo.id.split('-')[0]}...
-                              </code>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="font-mono text-xs">{logo.id}</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">Size:</span>
-                          <span>{formatFileSize(logo.file_size)}</span>
-                        </div>
-                        
-                        {logo.width && logo.height && (
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground">Dimensions:</span>
-                            <span>{logo.width}×{logo.height}</span>
+      {/* Logo Display */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>
+              Logos ({filteredLogos.length}
+              {searchTerm || !includeCached ? ` of ${totalCount}` : ""})
+            </span>
+            {loading.logos && <Loader2 className="h-4 w-4 animate-spin" />}
+          </CardTitle>
+          <CardDescription>
+            Manage uploaded and cached logo assets
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {errors.logos ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Failed to Load Logos</AlertTitle>
+              <AlertDescription>
+                {errors.logos}
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="ml-2"
+                  onClick={() => loadLogos(1, false)}
+                  disabled={loading.logos}
+                >
+                  {loading.logos && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Retry
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <>
+              {viewMode === 'table' && (
+                <div className="space-y-4">
+                  {filteredLogos.map((logo) => (
+                    <Card key={logo.id} className="relative group">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-start gap-4 flex-1">
+                            <div className="w-24 h-24 bg-muted rounded-md flex items-center justify-center overflow-hidden flex-shrink-0">
+                              <img
+                                src={logo.url.startsWith('http') ? logo.url : `${API_CONFIG.baseUrl}${logo.url}`}
+                                alt={logo.name}
+                                className="max-w-full max-h-full object-contain"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = 'none'
+                                  e.currentTarget.nextElementSibling?.classList.remove('hidden')
+                                }}
+                              />
+                              <div className="hidden flex-col items-center gap-1 text-muted-foreground">
+                                <FileImage className="h-6 w-6" />
+                                <span className="text-xs">No preview</span>
+                              </div>
+                            </div>
+                            <div className="space-y-2 flex-1">
+                              <div className="flex items-center gap-2">
+                                <CardTitle className="text-lg">{logo.name}</CardTitle>
+                                <Badge className={getAssetTypeColor(logo.asset_type)}>
+                                  {logo.asset_type === 'cached' ? 'Cached' : 'Uploaded'}
+                                </Badge>
+                                <Badge variant="outline">
+                                  {getFormatFromMimeType(logo.mime_type)}
+                                </Badge>
+                              </div>
+                              {logo.description && (
+                                <p className="text-sm text-muted-foreground">{logo.description}</p>
+                              )}
+                              <div className="flex gap-4 text-sm text-muted-foreground">
+                                <span>Size: {formatFileSize(logo.file_size)}</span>
+                                {logo.width && logo.height && (
+                                  <span>Dimensions: {logo.width}×{logo.height}</span>
+                                )}
+                                <span>Created: {formatRelativeTime(logo.created_at)}</span>
+                              </div>
+                            </div>
                           </div>
-                        )}
-                        
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">Created:</span>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="cursor-help">
-                                {formatRelativeTime(logo.created_at)}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-xs">{formatDate(logo.created_at)}</p>
-                            </TooltipContent>
-                          </Tooltip>
+                          <div className="flex items-center gap-1">
+                            {logo.asset_type === 'uploaded' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingLogo(logo)
+                                  setIsEditSheetOpen(true)
+                                }}
+                                className="h-8 w-8 p-0"
+                                disabled={loading.edit}
+                                title="Edit logo"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteLogo(logo.id)}
+                              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                              disabled={loading.delete === logo.id}
+                              title="Delete logo"
+                            >
+                              {loading.delete === logo.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
                         </div>
-                      </div>
+                      </CardHeader>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {viewMode === 'grid' && (
+                <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                  {filteredLogos.map((logo) => (
+                    <Card key={logo.id} className="relative group transition-all hover:shadow-md">
+                      <CardHeader className="pb-2">
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-center gap-2">
+                            <Badge className={getAssetTypeColor(logo.asset_type)}>
+                              {logo.asset_type === 'cached' ? 'Cached' : 'Uploaded'}
+                            </Badge>
+                            <Badge variant="outline">
+                              {getFormatFromMimeType(logo.mime_type)}
+                            </Badge>
+                          </div>
+                          <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-popover border border-border rounded-md p-1 shadow-md">
+                            {logo.asset_type === 'uploaded' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingLogo(logo)
+                                  setIsEditSheetOpen(true)
+                                }}
+                                className="h-6 w-6 p-0 hover:bg-accent"
+                                disabled={loading.edit}
+                                title="Edit logo"
+                              >
+                                <Edit className="h-3 w-3" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteLogo(logo.id)}
+                              className="h-6 w-6 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                              disabled={loading.delete === logo.id}
+                              title="Delete logo"
+                            >
+                              {loading.delete === logo.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3 w-3" />
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      
+                      <CardContent className="space-y-3">
+                        <div className="aspect-square bg-muted rounded-md flex items-center justify-center overflow-hidden">
+                          <img
+                            src={logo.url.startsWith('http') ? logo.url : `${API_CONFIG.baseUrl}${logo.url}`}
+                            alt={logo.name}
+                            className="max-w-full max-h-full object-contain"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none'
+                              e.currentTarget.nextElementSibling?.classList.remove('hidden')
+                            }}
+                          />
+                          <div className="hidden flex-col items-center gap-2 text-muted-foreground">
+                            <FileImage className="h-8 w-8" />
+                            <span className="text-xs">Preview unavailable</span>
+                          </div>
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <div>
+                            <p className="font-medium text-sm truncate" title={logo.name}>
+                              {logo.name}
+                            </p>
+                            {logo.description && (
+                              <p className="text-xs text-muted-foreground truncate" title={logo.description}>
+                                {logo.description}
+                              </p>
+                            )}
+                          </div>
+                          
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">ID:</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <code className="text-xs bg-muted px-1 rounded truncate max-w-[60px] cursor-help">
+                                    {logo.id.split('-')[0]}...
+                                  </code>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="font-mono text-xs">{logo.id}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">Size:</span>
+                              <span>{formatFileSize(logo.file_size)}</span>
+                            </div>
+                            
+                            {logo.width && logo.height && (
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-muted-foreground">Dimensions:</span>
+                                <span>{logo.width}×{logo.height}</span>
+                              </div>
+                            )}
+                            
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">Created:</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="cursor-help">
+                                    {formatRelativeTime(logo.created_at)}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-xs">{formatDate(logo.created_at)}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {viewMode === 'list' && (
+                <div className="space-y-2">
+                  {filteredLogos.map((logo) => (
+                    <Card key={logo.id} className="transition-all hover:shadow-sm">
+                      <CardContent className="pt-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-4 flex-1">
+                            <div className="w-16 h-16 bg-muted rounded-md flex items-center justify-center overflow-hidden flex-shrink-0">
+                              <img
+                                src={logo.url.startsWith('http') ? logo.url : `${API_CONFIG.baseUrl}${logo.url}`}
+                                alt={logo.name}
+                                className="max-w-full max-h-full object-contain"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = 'none'
+                                  e.currentTarget.nextElementSibling?.classList.remove('hidden')
+                                }}
+                              />
+                              <div className="hidden flex-col items-center gap-1 text-muted-foreground">
+                                <FileImage className="h-4 w-4" />
+                              </div>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-3">
+                                <div>
+                                  <p className="font-medium text-sm">{logo.name}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {logo.description && logo.description.length > 50 
+                                      ? `${logo.description.substring(0, 50)}...` 
+                                      : logo.description || logo.file_name}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Badge className={getAssetTypeColor(logo.asset_type)} >
+                                    {logo.asset_type === 'cached' ? 'Cached' : 'Uploaded'}
+                                  </Badge>
+                                  <Badge variant="outline" className="text-xs">
+                                    {getFormatFromMimeType(logo.mime_type)}
+                                  </Badge>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {formatFileSize(logo.file_size)}
+                                  </Badge>
+                                  {logo.width && logo.height && (
+                                    <Badge variant="outline" className="text-xs">
+                                      {logo.width}×{logo.height}
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            <div className="flex items-center gap-1">
+                              {logo.asset_type === 'uploaded' && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditingLogo(logo)
+                                    setIsEditSheetOpen(true)
+                                  }}
+                                  className="h-8 w-8 p-0"
+                                  disabled={loading.edit}
+                                  title="Edit logo"
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteLogo(logo.id)}
+                                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                disabled={loading.delete === logo.id}
+                                title="Delete logo"
+                              >
+                                {loading.delete === logo.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {/* Infinite Scroll Trigger */}
+              {hasMore && !searchTerm && (
+                <div 
+                  ref={loadMoreRef}
+                  className="h-20 flex items-center justify-center"
+                >
+                  {loading.logos ? (
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span className="text-sm">Loading more logos...</span>
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+                  ) : (
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground mb-2">
+                        {totalPages - currentPage} pages remaining
+                      </p>
+                      <Button 
+                        variant="outline" 
+                        onClick={handleLoadMore}
+                        size="sm"
+                        className="gap-2"
+                      >
+                        <Download className="h-4 w-4" />
+                        Load More
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
 
-            {/* Infinite Scroll Trigger (invisible) */}
-            {hasMore && !searchTerm && (
-              <div 
-                ref={loadMoreRef}
-                className="h-20 flex items-center justify-center"
-              >
-                {loading.logos ? (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span className="text-sm">Loading more logos...</span>
-                  </div>
-                ) : (
-                  <div className="text-center">
-                    <p className="text-sm text-muted-foreground mb-2">
-                      {totalPages - currentPage} pages remaining
-                    </p>
-                    <Button 
-                      variant="outline" 
-                      onClick={handleLoadMore}
-                      size="sm"
-                      className="gap-2"
-                    >
-                      <Download className="h-4 w-4" />
-                      Load More
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Empty State */}
-            {filteredLogos.length === 0 && !loading.logos && (
-              <Card>
-                <CardContent className="text-center py-12">
-                  <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">
+              {/* Empty State */}
+              {filteredLogos.length === 0 && !loading.logos && (
+                <div className="text-center py-8">
+                  <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground" />
+                  <h3 className="mt-4 text-lg font-semibold">
                     {searchTerm || !includeCached ? "No matching logos" : "No logos found"}
                   </h3>
-                  <p className="text-muted-foreground mb-4">
+                  <p className="text-muted-foreground">
                     {searchTerm || !includeCached 
                       ? "Try adjusting your search or filter criteria."
                       : "Get started by uploading your first logo asset."
                     }
                   </p>
-                  <Button onClick={() => setIsUploadSheetOpen(true)} className="gap-2">
-                    <Plus className="h-4 w-4" />
-                    Upload Logo
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
-          </>
-        )}
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
       </div>
 
       {/* Upload Logo Sheet */}
@@ -1147,7 +1352,6 @@ export function Logos() {
         open={isEditSheetOpen}
         onOpenChange={setIsEditSheetOpen}
       />
-      </div>
     </TooltipProvider>
   )
 }

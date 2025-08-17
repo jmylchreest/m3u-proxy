@@ -43,7 +43,10 @@ import {
   ChevronUp,
   GripVertical,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Grid,
+  List,
+  Table as TableIcon
 } from "lucide-react"
 import { 
   DataMappingRule,
@@ -427,6 +430,7 @@ export function DataMapping() {
   // Drag and drop state
   const [draggedItem, setDraggedItem] = useState<DataMappingRule | null>(null)
   const [dragOverItem, setDragOverItem] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('table')
 
   // Toggle rule expansion
   const toggleRuleExpansion = (ruleId: string) => {
@@ -849,25 +853,57 @@ export function DataMapping() {
                 <SelectItem value="epg">EPG Only</SelectItem>
               </SelectContent>
             </Select>
+            
+            {/* Layout Chooser */}
+            <div className="flex rounded-md border">
+              <Button
+                size="sm"
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                className="rounded-r-none border-r"
+                onClick={() => setViewMode('table')}
+              >
+                <TableIcon className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                className="rounded-none border-r"
+                onClick={() => setViewMode('grid')}
+              >
+                <Grid className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'list' ? 'default' : 'ghost'}
+                className="rounded-l-none"
+                onClick={() => setViewMode('list')}
+              >
+                <List className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Data Mapping Rules Cards */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h3 className="text-lg font-semibold">
+      {/* Data Mapping Rules Display */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>
               Data Mapping Rules ({filteredRules?.length || 0}
               {searchTerm || filterSourceType !== "all" ? 
                 ` of ${allRules?.length || 0}` : 
                 ""
               })
-            </h3>
+            </span>
             {(loading.rules || loading.reorder) && <Loader2 className="h-4 w-4 animate-spin" />}
-          </div>
-        </div>
-        {errors.rules ? (
+          </CardTitle>
+          <CardDescription>
+            Manage data transformation rules with drag-and-drop ordering
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {errors.rules ? (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Failed to Load Rules</AlertTitle>
@@ -887,38 +923,179 @@ export function DataMapping() {
             </Alert>
           ) : (
             <>
-              <div className="grid gap-4 lg:grid-cols-1">
-                {filteredRules?.map((rule, index) => {
-                  // Create a robust key
-                  const safeKey = rule?.id ? String(rule.id) : `rule-${index}-${rule?.name || 'unnamed'}`;
-                  
-                  return (
-                    <Card 
-                      key={safeKey} 
-                      className={`relative transition-all ${
-                        dragOverItem === rule.id ? 'border-blue-500 bg-blue-50' : ''
-                      } ${
-                        draggedItem?.id === rule.id ? 'opacity-50' : ''
-                      }`}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, rule)}
-                      onDragOver={(e) => handleDragOver(e, rule.id)}
-                      onDragLeave={handleDragLeave}
-                      onDrop={(e) => handleDrop(e, rule)}
-                    >
-                      <CardHeader className="pb-3">
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-start gap-3 flex-1">
-                            {/* Drag handle */}
-                            <div className="flex items-center pt-1">
-                              <GripVertical className="h-4 w-4 text-muted-foreground cursor-grab" />
+              {viewMode === 'table' && (
+                <div className="space-y-4">
+                  {filteredRules?.map((rule, index) => {
+                    const safeKey = rule?.id ? String(rule.id) : `rule-${index}-${rule?.name || 'unnamed'}`;
+                    
+                    return (
+                      <Card 
+                        key={safeKey} 
+                        className={`relative transition-all ${
+                          dragOverItem === rule.id ? 'border-blue-500 bg-blue-50' : ''
+                        } ${
+                          draggedItem?.id === rule.id ? 'opacity-50' : ''
+                        }`}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, rule)}
+                        onDragOver={(e) => handleDragOver(e, rule.id)}
+                        onDragLeave={handleDragLeave}
+                        onDrop={(e) => handleDrop(e, rule)}
+                      >
+                        <CardHeader className="pb-3">
+                          <div className="flex items-start justify-between">
+                            <div className="flex items-start gap-3 flex-1">
+                              <div className="flex items-center pt-1">
+                                <GripVertical className="h-4 w-4 text-muted-foreground cursor-grab" />
+                              </div>
+                              <div className="space-y-2 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="secondary" className="text-xs font-mono bg-muted text-muted-foreground">
+                                    {rule.sort_order}
+                                  </Badge>
+                                  <CardTitle className="text-lg">{rule.name}</CardTitle>
+                                  <Badge className={getSourceTypeColor(rule.source_type)}>
+                                    {rule.source_type.toUpperCase()}
+                                  </Badge>
+                                  {rule.is_active ? (
+                                    <Badge variant="outline" className="text-green-600 border-green-600">
+                                      <CheckCircle className="h-3 w-3 mr-1" />
+                                      Active
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="text-gray-500 border-gray-500">
+                                      Inactive
+                                    </Badge>
+                                  )}
+                                </div>
+                                {rule.description && (
+                                  <p className="text-sm text-muted-foreground">{rule.description}</p>
+                                )}
+                                <div className="text-xs text-muted-foreground">
+                                  Created {formatRelativeTime(rule.created_at)}
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-2 flex-1">
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => moveRule(rule.id, 'up')}
+                                className="h-8 w-8 p-0"
+                                disabled={index === 0 || loading.reorder}
+                                title="Move up"
+                              >
+                                <ArrowUp className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => moveRule(rule.id, 'down')}
+                                className="h-8 w-8 p-0"
+                                disabled={index === filteredRules.length - 1 || loading.reorder}
+                                title="Move down"
+                              >
+                                <ArrowDown className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => rule?.id && toggleRuleExpansion(rule.id)}
+                                className="h-8 w-8 p-0"
+                                title={rule?.id && expandedRules.has(rule.id) ? "Collapse expression" : "Expand expression"}
+                                disabled={!rule?.id}
+                              >
+                                {rule?.id && expandedRules.has(rule.id) ? (
+                                  <ChevronUp className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
+                                )}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingRule(rule)
+                                  setIsEditSheetOpen(true)
+                                }}
+                                className="h-8 w-8 p-0"
+                                disabled={!isOnline}
+                                title="Edit rule"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteRule(rule.id)}
+                                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                disabled={loading.delete === rule.id || !isOnline}
+                                title="Delete rule"
+                              >
+                                {loading.delete === rule.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                        </CardHeader>
+                        {rule?.id && expandedRules.has(rule.id) && (
+                          <CardContent className="pt-0">
+                            {rule.expression ? (
+                              <div className="bg-muted/30 rounded-lg p-4">
+                                <div className="space-y-2">
+                                  <p className="text-sm font-medium text-muted-foreground">Transformation Expression:</p>
+                                  <code className="text-sm bg-background p-2 rounded block overflow-x-auto">
+                                    {rule.expression}
+                                  </code>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="bg-muted/30 rounded-lg p-4 text-center text-muted-foreground">
+                                <TransformIcon className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                                <p className="text-sm">No transformation expression available</p>
+                              </div>
+                            )}
+                          </CardContent>
+                        )}
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+
+              {viewMode === 'grid' && (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {filteredRules?.map((rule, index) => {
+                    const safeKey = rule?.id ? String(rule.id) : `rule-${index}-${rule?.name || 'unnamed'}`;
+                    
+                    return (
+                      <Card 
+                        key={safeKey} 
+                        className={`transition-all hover:shadow-md ${
+                          dragOverItem === rule.id ? 'border-blue-500 bg-blue-50' : ''
+                        } ${
+                          draggedItem?.id === rule.id ? 'opacity-50' : ''
+                        }`}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, rule)}
+                        onDragOver={(e) => handleDragOver(e, rule.id)}
+                        onDragLeave={handleDragLeave}
+                        onDrop={(e) => handleDrop(e, rule)}
+                      >
+                        <CardHeader>
+                          <div className="flex items-start justify-between">
+                            <div className="space-y-1 flex-1">
                               <div className="flex items-center gap-2">
-                                <Badge variant="secondary" className="text-xs font-mono bg-muted text-muted-foreground">
-                                  {rule.sort_order}
+                                <GripVertical className="h-3 w-3 text-muted-foreground cursor-grab" />
+                                <Badge variant="secondary" className="text-xs font-mono">
+                                  #{rule.sort_order}
                                 </Badge>
-                                <CardTitle className="text-lg">{rule.name}</CardTitle>
+                                <CardTitle className="text-base">{rule.name}</CardTitle>
+                              </div>
+                              <div className="flex flex-wrap gap-1">
                                 <Badge className={getSourceTypeColor(rule.source_type)}>
                                   {rule.source_type.toUpperCase()}
                                 </Badge>
@@ -933,128 +1110,273 @@ export function DataMapping() {
                                   </Badge>
                                 )}
                               </div>
-                              {rule.description && (
-                                <p className="text-sm text-muted-foreground">{rule.description}</p>
-                              )}
-                              <div className="text-xs text-muted-foreground">
-                                Created {formatRelativeTime(rule.created_at)}
+                            </div>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-4">
+                            {rule.description && (
+                              <p className="text-sm text-muted-foreground">{rule.description}</p>
+                            )}
+                            
+                            <div className="text-xs text-muted-foreground">
+                              Created {formatRelativeTime(rule.created_at)}
+                            </div>
+
+                            <div className="flex items-center justify-between pt-2 border-t">
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => moveRule(rule.id, 'up')}
+                                  className="h-8 w-8 p-0"
+                                  disabled={index === 0 || loading.reorder}
+                                  title="Move up"
+                                >
+                                  <ArrowUp className="h-3 w-3" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => moveRule(rule.id, 'down')}
+                                  className="h-8 w-8 p-0"
+                                  disabled={index === filteredRules.length - 1 || loading.reorder}
+                                  title="Move down"
+                                >
+                                  <ArrowDown className="h-3 w-3" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => rule?.id && toggleRuleExpansion(rule.id)}
+                                  className="h-8 px-2 text-xs"
+                                  disabled={!rule?.id}
+                                >
+                                  {rule?.id && expandedRules.has(rule.id) ? (
+                                    <><ChevronUp className="h-3 w-3 mr-1" />Hide</>
+                                  ) : (
+                                    <><ChevronDown className="h-3 w-3 mr-1" />Show</>
+                                  )}
+                                </Button>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditingRule(rule)
+                                    setIsEditSheetOpen(true)
+                                  }}
+                                  className="h-8 w-8 p-0"
+                                  disabled={!isOnline}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteRule(rule.id)}
+                                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                  disabled={loading.delete === rule.id || !isOnline}
+                                >
+                                  {loading.delete === rule.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </Button>
                               </div>
                             </div>
                           </div>
-                          <div className="flex items-center gap-1">
-                            {/* Move up/down buttons */}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => moveRule(rule.id, 'up')}
-                              className="h-8 w-8 p-0"
-                              disabled={index === 0 || loading.reorder}
-                              title="Move up"
-                            >
-                              <ArrowUp className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => moveRule(rule.id, 'down')}
-                              className="h-8 w-8 p-0"
-                              disabled={index === filteredRules.length - 1 || loading.reorder}
-                              title="Move down"
-                            >
-                              <ArrowDown className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => rule?.id && toggleRuleExpansion(rule.id)}
-                              className="h-8 w-8 p-0"
-                              title={rule?.id && expandedRules.has(rule.id) ? "Collapse expression" : "Expand expression"}
-                              disabled={!rule?.id}
-                            >
-                              {rule?.id && expandedRules.has(rule.id) ? (
-                                <ChevronUp className="h-4 w-4" />
-                              ) : (
-                                <ChevronDown className="h-4 w-4" />
-                              )}
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setEditingRule(rule)
-                                setIsEditSheetOpen(true)
-                              }}
-                              className="h-8 w-8 p-0"
-                              disabled={!isOnline}
-                              title="Edit rule"
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteRule(rule.id)}
-                              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                              disabled={loading.delete === rule.id || !isOnline}
-                              title="Delete rule"
-                            >
-                              {loading.delete === rule.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-4 w-4" />
-                              )}
-                            </Button>
-                          </div>
-                        </div>
-                      </CardHeader>
-                      {rule?.id && expandedRules.has(rule.id) && (
-                        <CardContent className="pt-0">
-                          {rule.expression ? (
-                            <div className="bg-muted/30 rounded-lg p-4">
-                              <div className="space-y-2">
-                                <p className="text-sm font-medium text-muted-foreground">Transformation Expression:</p>
-                                <code className="text-sm bg-background p-2 rounded block overflow-x-auto">
-                                  {rule.expression}
-                                </code>
+                        </CardContent>
+                        {rule?.id && expandedRules.has(rule.id) && (
+                          <CardContent className="pt-0 border-t">
+                            {rule.expression ? (
+                              <div className="bg-muted/30 rounded-lg p-3">
+                                <div className="space-y-1">
+                                  <p className="text-xs font-medium text-muted-foreground">Expression:</p>
+                                  <code className="text-xs bg-background p-2 rounded block overflow-x-auto">
+                                    {rule.expression}
+                                  </code>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="bg-muted/30 rounded-lg p-3 text-center text-muted-foreground">
+                                <TransformIcon className="h-6 w-6 mx-auto mb-1 opacity-50" />
+                                <p className="text-xs">No expression</p>
+                              </div>
+                            )}
+                          </CardContent>
+                        )}
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+
+              {viewMode === 'list' && (
+                <div className="space-y-2">
+                  {filteredRules?.map((rule, index) => {
+                    const safeKey = rule?.id ? String(rule.id) : `rule-${index}-${rule?.name || 'unnamed'}`;
+                    
+                    return (
+                      <Card 
+                        key={safeKey} 
+                        className={`transition-all hover:shadow-sm ${
+                          dragOverItem === rule.id ? 'border-blue-500 bg-blue-50' : ''
+                        } ${
+                          draggedItem?.id === rule.id ? 'opacity-50' : ''
+                        }`}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, rule)}
+                        onDragOver={(e) => handleDragOver(e, rule.id)}
+                        onDragLeave={handleDragLeave}
+                        onDrop={(e) => handleDrop(e, rule)}
+                      >
+                        <CardContent className="pt-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-4 flex-1">
+                              <div className="flex items-center">
+                                <GripVertical className="h-4 w-4 text-muted-foreground cursor-grab mr-2" />
+                                <Badge variant="secondary" className="text-xs font-mono">
+                                  #{rule.sort_order}
+                                </Badge>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-3">
+                                  <div>
+                                    <p className="font-medium text-sm">{rule.name}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {rule.description && rule.description.length > 50 
+                                        ? `${rule.description.substring(0, 50)}...` 
+                                        : rule.description || 'No description'}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Badge className={getSourceTypeColor(rule.source_type)}>
+                                      {rule.source_type.toUpperCase()}
+                                    </Badge>
+                                    {rule.is_active ? (
+                                      <Badge variant="outline" className="text-green-600 border-green-600 text-xs">
+                                        <CheckCircle className="h-3 w-3 mr-1" />
+                                        Active
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="outline" className="text-gray-500 border-gray-500 text-xs">
+                                        Inactive
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
                             </div>
-                          ) : (
-                            <div className="bg-muted/30 rounded-lg p-4 text-center text-muted-foreground">
-                              <TransformIcon className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                              <p className="text-sm">No transformation expression available</p>
+                            <div className="flex items-center gap-2 ml-4">
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => moveRule(rule.id, 'up')}
+                                  className="h-8 w-8 p-0"
+                                  disabled={index === 0 || loading.reorder}
+                                  title="Move up"
+                                >
+                                  <ArrowUp className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => moveRule(rule.id, 'down')}
+                                  className="h-8 w-8 p-0"
+                                  disabled={index === filteredRules.length - 1 || loading.reorder}
+                                  title="Move down"
+                                >
+                                  <ArrowDown className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => rule?.id && toggleRuleExpansion(rule.id)}
+                                  className="h-8 w-8 p-0"
+                                  disabled={!rule?.id}
+                                >
+                                  {rule?.id && expandedRules.has(rule.id) ? (
+                                    <ChevronUp className="h-4 w-4" />
+                                  ) : (
+                                    <ChevronDown className="h-4 w-4" />
+                                  )}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditingRule(rule)
+                                    setIsEditSheetOpen(true)
+                                  }}
+                                  className="h-8 w-8 p-0"
+                                  disabled={!isOnline}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteRule(rule.id)}
+                                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                  disabled={loading.delete === rule.id || !isOnline}
+                                >
+                                  {loading.delete === rule.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                          {rule?.id && expandedRules.has(rule.id) && (
+                            <div className="mt-4 pt-4 border-t">
+                              {rule.expression ? (
+                                <div className="bg-muted/30 rounded-lg p-3">
+                                  <div className="space-y-1">
+                                    <p className="text-xs font-medium text-muted-foreground">Transformation Expression:</p>
+                                    <code className="text-xs bg-background p-2 rounded block overflow-x-auto">
+                                      {rule.expression}
+                                    </code>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="bg-muted/30 rounded-lg p-3 text-center text-muted-foreground">
+                                  <TransformIcon className="h-6 w-6 mx-auto mb-1 opacity-50" />
+                                  <p className="text-xs">No transformation expression available</p>
+                                </div>
+                              )}
                             </div>
                           )}
                         </CardContent>
-                      )}
-                    </Card>
-                  );
-                })}
-              </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
               
               {(filteredRules?.length === 0) && !loading.rules && (
-                <Card>
-                  <CardContent className="text-center py-12">
-                    <TransformIcon className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="text-lg font-semibold mb-2">
-                      {searchTerm || filterSourceType !== "all" ? "No matching rules" : "No data mapping rules found"}
-                    </h3>
-                    <p className="text-muted-foreground mb-4">
-                      {searchTerm || filterSourceType !== "all" 
-                        ? "Try adjusting your search or filter criteria."
-                        : "Get started by creating your first data transformation rule."
-                      }
-                    </p>
-                    <CreateDataMappingSheet 
-                      onCreateRule={handleCreateRule}
-                      loading={loading.create}
-                      error={errors.create}
-                    />
-                  </CardContent>
-                </Card>
+                <div className="text-center py-8">
+                  <TransformIcon className="mx-auto h-12 w-12 text-muted-foreground" />
+                  <h3 className="mt-4 text-lg font-semibold">
+                    {searchTerm || filterSourceType !== "all" ? "No matching rules" : "No data mapping rules found"}
+                  </h3>
+                  <p className="text-muted-foreground">
+                    {searchTerm || filterSourceType !== "all" 
+                      ? "Try adjusting your search or filter criteria."
+                      : "Get started by creating your first data transformation rule."
+                    }
+                  </p>
+                </div>
               )}
             </>
-        )}
-      </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Edit Rule Sheet */}
       {editingRule && (

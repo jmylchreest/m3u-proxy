@@ -41,7 +41,10 @@ import {
   Settings,
   Hash,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Grid,
+  List,
+  Table as TableIcon
 } from "lucide-react"
 import { 
   Filter,
@@ -408,6 +411,7 @@ export function Filters() {
   const [isEditSheetOpen, setIsEditSheetOpen] = useState(false)
   const [expandedFilters, setExpandedFilters] = useState<Set<string>>(new Set())
   const [isOnline, setIsOnline] = useState(true)
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('table')
 
   // Helper function to recursively extract searchable text from expression tree
   const extractTreeText = useCallback((tree: any): string[] => {
@@ -837,25 +841,57 @@ export function Filters() {
                 <SelectItem value="epg">EPG Only</SelectItem>
               </SelectContent>
             </Select>
+            
+            {/* Layout Chooser */}
+            <div className="flex rounded-md border">
+              <Button
+                size="sm"
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                className="rounded-r-none border-r"
+                onClick={() => setViewMode('table')}
+              >
+                <TableIcon className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                className="rounded-none border-r"
+                onClick={() => setViewMode('grid')}
+              >
+                <Grid className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'list' ? 'default' : 'ghost'}
+                className="rounded-l-none"
+                onClick={() => setViewMode('list')}
+              >
+                <List className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Filters Cards */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h3 className="text-lg font-semibold">
+      {/* Filters Display */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>
               Filters ({filteredFilters?.length || 0}
               {searchTerm || filterSourceType !== "all" ? 
                 ` of ${allFilters?.length || 0}` : 
                 ""
               })
-            </h3>
+            </span>
             {loading.filters && <Loader2 className="h-4 w-4 animate-spin" />}
-          </div>
-        </div>
-        {errors.filters ? (
+          </CardTitle>
+          <CardDescription>
+            Manage filtering rules for streams and EPG data
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {errors.filters ? (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Failed to Load Filters</AlertTitle>
@@ -875,141 +911,348 @@ export function Filters() {
             </Alert>
           ) : (
             <>
-              <div className="grid gap-4 lg:grid-cols-1">
-                {filteredFilters?.map((filterWithMeta, index) => {
-                  const filter = filterWithMeta.filter;
-                  // Create a more robust key that handles edge cases
-                  const safeKey = filter?.id ? String(filter.id) : `filter-${index}-${filter?.name || 'unnamed'}`;
-                  
-                  // Debug logging to catch key issues
-                  if (process.env.NODE_ENV === 'development') {
-                    if (!filter?.id) {
-                      console.warn('Filter without ID detected:', filter);
-                    }
-                    if (safeKey.includes('[object Object]')) {
-                      console.error('Object in key detected:', { filter, safeKey, filterWithMeta });
-                    }
-                  }
-                  
-                  return (
-                    <Card key={safeKey} className="relative">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-start justify-between">
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <CardTitle className="text-lg">{filter.name}</CardTitle>
-                              <Badge className={getSourceTypeColor(filter.source_type)}>
-                                {filter.source_type.toUpperCase()}
-                              </Badge>
-                              {filter.is_system_default && (
-                                <Badge variant="outline">System Default</Badge>
-                              )}
-                              {filter.is_inverse && (
-                                <Badge variant="outline">
-                                  <Code className="h-3 w-3 mr-1" />
-                                  Inverse
+              {viewMode === 'table' && (
+                <div className="space-y-4">
+                  {filteredFilters?.map((filterWithMeta, index) => {
+                    const filter = filterWithMeta.filter;
+                    const safeKey = filter?.id ? String(filter.id) : `filter-${index}-${filter?.name || 'unnamed'}`;
+                    
+                    return (
+                      <Card key={safeKey} className="relative">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-start justify-between">
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2">
+                                <CardTitle className="text-lg">{filter.name}</CardTitle>
+                                <Badge className={getSourceTypeColor(filter.source_type)}>
+                                  {filter.source_type.toUpperCase()}
                                 </Badge>
+                                {filter.is_system_default && (
+                                  <Badge variant="outline">System Default</Badge>
+                                )}
+                                {filter.is_inverse && (
+                                  <Badge variant="outline">
+                                    <Code className="h-3 w-3 mr-1" />
+                                    Inverse
+                                  </Badge>
+                                )}
+                              </div>
+                              {filterWithMeta.filter.usage_count > 0 && (
+                                <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                                  <Hash className="h-3 w-3" />
+                                  Used {filterWithMeta.filter.usage_count}x
+                                </div>
                               )}
                             </div>
-                            {filterWithMeta.filter.usage_count > 0 && (
-                              <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                                <Hash className="h-3 w-3" />
-                                Used {filterWithMeta.filter.usage_count}x
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => filter?.id && toggleFilterExpansion(filter.id)}
+                                className="h-8 w-8 p-0"
+                                title={filter?.id && expandedFilters.has(filter.id) ? "Collapse expression tree" : "Expand expression tree"}
+                                disabled={!filter?.id}
+                              >
+                                {filter?.id && expandedFilters.has(filter.id) ? (
+                                  <ChevronUp className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
+                                )}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingFilter(filter)
+                                  setIsEditSheetOpen(true)
+                                }}
+                                className="h-8 w-8 p-0"
+                                disabled={!isOnline || filter.is_system_default}
+                                title={filter.is_system_default ? "Cannot edit system default filter" : "Edit filter"}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteFilter(filter.id)}
+                                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                disabled={loading.delete === filter.id || !isOnline || filter.is_system_default}
+                                title={filter.is_system_default ? "Cannot delete system default filter" : "Delete filter"}
+                              >
+                                {loading.delete === filter.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                        </CardHeader>
+                        {filter?.id && expandedFilters.has(filter.id) && (
+                          <CardContent className="pt-0">
+                            {filter.condition_tree ? (
+                              <div className="bg-muted/30 rounded-lg p-4">
+                                <ConditionTreeView 
+                                  conditionTreeJson={filter.condition_tree}
+                                  compact={true}
+                                  className="text-sm"
+                                />
+                              </div>
+                            ) : (
+                              <div className="bg-muted/30 rounded-lg p-4 text-center text-muted-foreground">
+                                <FilterIcon className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                                <p className="text-sm">No condition tree available</p>
                               </div>
                             )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => filter?.id && toggleFilterExpansion(filter.id)}
-                              className="h-8 w-8 p-0"
-                              title={filter?.id && expandedFilters.has(filter.id) ? "Collapse expression tree" : "Expand expression tree"}
-                              disabled={!filter?.id}
-                            >
-                              {filter?.id && expandedFilters.has(filter.id) ? (
-                                <ChevronUp className="h-4 w-4" />
-                              ) : (
-                                <ChevronDown className="h-4 w-4" />
-                              )}
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setEditingFilter(filter)
-                                setIsEditSheetOpen(true)
-                              }}
-                              className="h-8 w-8 p-0"
-                              disabled={!isOnline || filter.is_system_default}
-                              title={filter.is_system_default ? "Cannot edit system default filter" : "Edit filter"}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteFilter(filter.id)}
-                              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                              disabled={loading.delete === filter.id || !isOnline || filter.is_system_default}
-                              title={filter.is_system_default ? "Cannot delete system default filter" : "Delete filter"}
-                            >
-                              {loading.delete === filter.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-4 w-4" />
-                              )}
-                            </Button>
-                          </div>
-                        </div>
-                      </CardHeader>
-                      {filter?.id && expandedFilters.has(filter.id) && (
-                        <CardContent className="pt-0">
-                          {filter.condition_tree ? (
-                            <div className="bg-muted/30 rounded-lg p-4">
-                              <ConditionTreeView 
-                                conditionTreeJson={filter.condition_tree}
-                                compact={true}
-                                className="text-sm"
-                              />
+                          </CardContent>
+                        )}
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+
+              {viewMode === 'grid' && (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {filteredFilters?.map((filterWithMeta, index) => {
+                    const filter = filterWithMeta.filter;
+                    const safeKey = filter?.id ? String(filter.id) : `filter-${index}-${filter?.name || 'unnamed'}`;
+                    
+                    return (
+                      <Card key={safeKey} className="transition-all hover:shadow-md">
+                        <CardHeader>
+                          <div className="flex items-start justify-between">
+                            <div className="space-y-1 flex-1">
+                              <CardTitle className="text-lg">{filter.name}</CardTitle>
+                              <div className="flex flex-wrap gap-1">
+                                <Badge className={getSourceTypeColor(filter.source_type)}>
+                                  {filter.source_type.toUpperCase()}
+                                </Badge>
+                                {filter.is_system_default && (
+                                  <Badge variant="outline">System Default</Badge>
+                                )}
+                                {filter.is_inverse && (
+                                  <Badge variant="outline">
+                                    <Code className="h-3 w-3 mr-1" />
+                                    Inverse
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
-                          ) : (
-                            <div className="bg-muted/30 rounded-lg p-4 text-center text-muted-foreground">
-                              <FilterIcon className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                              <p className="text-sm">No condition tree available</p>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-4">
+                            {filterWithMeta.filter.usage_count > 0 && (
+                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <Hash className="h-4 w-4" />
+                                <span>Used {filterWithMeta.filter.usage_count} times</span>
+                              </div>
+                            )}
+                            
+                            <div className="text-xs text-muted-foreground">
+                              Created {formatRelativeTime(filter.created_at || '')}
+                            </div>
+
+                            <div className="flex items-center justify-between pt-2 border-t">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => filter?.id && toggleFilterExpansion(filter.id)}
+                                className="h-8 px-2 text-xs"
+                                disabled={!filter?.id}
+                              >
+                                {filter?.id && expandedFilters.has(filter.id) ? (
+                                  <><ChevronUp className="h-3 w-3 mr-1" />Hide Tree</>
+                                ) : (
+                                  <><ChevronDown className="h-3 w-3 mr-1" />Show Tree</>
+                                )}
+                              </Button>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditingFilter(filter)
+                                    setIsEditSheetOpen(true)
+                                  }}
+                                  className="h-8 w-8 p-0"
+                                  disabled={!isOnline || filter.is_system_default}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteFilter(filter.id)}
+                                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                  disabled={loading.delete === filter.id || !isOnline || filter.is_system_default}
+                                >
+                                  {loading.delete === filter.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        </CardContent>
+                        {filter?.id && expandedFilters.has(filter.id) && (
+                          <CardContent className="pt-0 border-t">
+                            {filter.condition_tree ? (
+                              <div className="bg-muted/30 rounded-lg p-3">
+                                <ConditionTreeView 
+                                  conditionTreeJson={filter.condition_tree}
+                                  compact={true}
+                                  className="text-sm"
+                                />
+                              </div>
+                            ) : (
+                              <div className="bg-muted/30 rounded-lg p-3 text-center text-muted-foreground">
+                                <FilterIcon className="h-6 w-6 mx-auto mb-1 opacity-50" />
+                                <p className="text-xs">No condition tree</p>
+                              </div>
+                            )}
+                          </CardContent>
+                        )}
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+
+              {viewMode === 'list' && (
+                <div className="space-y-2">
+                  {filteredFilters?.map((filterWithMeta, index) => {
+                    const filter = filterWithMeta.filter;
+                    const safeKey = filter?.id ? String(filter.id) : `filter-${index}-${filter?.name || 'unnamed'}`;
+                    
+                    return (
+                      <Card key={safeKey} className="transition-all hover:shadow-sm">
+                        <CardContent className="pt-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-4 flex-1">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-3">
+                                  <div>
+                                    <p className="font-medium text-sm">{filter.name}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {filter.expression && filter.expression.length > 50 
+                                        ? `${filter.expression.substring(0, 50)}...` 
+                                        : filter.expression || 'No expression'}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Badge className={getSourceTypeColor(filter.source_type)} >
+                                      {filter.source_type.toUpperCase()}
+                                    </Badge>
+                                    {filter.is_system_default && (
+                                      <Badge variant="outline" className="text-xs">Default</Badge>
+                                    )}
+                                    {filter.is_inverse && (
+                                      <Badge variant="outline" className="text-xs">
+                                        <Code className="h-3 w-3 mr-1" />
+                                        Inverse
+                                      </Badge>
+                                    )}
+                                    {filterWithMeta.filter.usage_count > 0 && (
+                                      <Badge variant="secondary" className="text-xs">
+                                        <Hash className="h-3 w-3 mr-1" />
+                                        {filterWithMeta.filter.usage_count}x
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 ml-4">
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => filter?.id && toggleFilterExpansion(filter.id)}
+                                  className="h-8 w-8 p-0"
+                                  disabled={!filter?.id}
+                                >
+                                  {filter?.id && expandedFilters.has(filter.id) ? (
+                                    <ChevronUp className="h-4 w-4" />
+                                  ) : (
+                                    <ChevronDown className="h-4 w-4" />
+                                  )}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditingFilter(filter)
+                                    setIsEditSheetOpen(true)
+                                  }}
+                                  className="h-8 w-8 p-0"
+                                  disabled={!isOnline || filter.is_system_default}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteFilter(filter.id)}
+                                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                  disabled={loading.delete === filter.id || !isOnline || filter.is_system_default}
+                                >
+                                  {loading.delete === filter.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                          {filter?.id && expandedFilters.has(filter.id) && (
+                            <div className="mt-4 pt-4 border-t">
+                              {filter.condition_tree ? (
+                                <div className="bg-muted/30 rounded-lg p-3">
+                                  <ConditionTreeView 
+                                    conditionTreeJson={filter.condition_tree}
+                                    compact={true}
+                                    className="text-sm"
+                                  />
+                                </div>
+                              ) : (
+                                <div className="bg-muted/30 rounded-lg p-3 text-center text-muted-foreground">
+                                  <FilterIcon className="h-6 w-6 mx-auto mb-1 opacity-50" />
+                                  <p className="text-xs">No condition tree available</p>
+                                </div>
+                              )}
                             </div>
                           )}
                         </CardContent>
-                      )}
-                    </Card>
-                  );
-                })}
-              </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
               
               {(filteredFilters?.length === 0) && !loading.filters && (
-                <Card>
-                  <CardContent className="text-center py-12">
-                    <FilterIcon className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="text-lg font-semibold mb-2">
-                      {searchTerm || filterSourceType !== "all" ? "No matching filters" : "No filters found"}
-                    </h3>
-                    <p className="text-muted-foreground mb-4">
-                      {searchTerm || filterSourceType !== "all" 
-                        ? "Try adjusting your search or filter criteria."
-                        : "Get started by creating your first filter rule."
-                      }
-                    </p>
-                    <CreateFilterSheet 
-                      onCreateFilter={handleCreateFilter}
-                      loading={loading.create}
-                      error={errors.create}
-                    />
-                  </CardContent>
-                </Card>
+                <div className="text-center py-8">
+                  <FilterIcon className="mx-auto h-12 w-12 text-muted-foreground" />
+                  <h3 className="mt-4 text-lg font-semibold">
+                    {searchTerm || filterSourceType !== "all" ? "No matching filters" : "No filters found"}
+                  </h3>
+                  <p className="text-muted-foreground">
+                    {searchTerm || filterSourceType !== "all" 
+                      ? "Try adjusting your search or filter criteria."
+                      : "Get started by creating your first filter rule."
+                    }
+                  </p>
+                </div>
               )}
             </>
-        )}
-      </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Edit Filter Sheet */}
       {editingFilter && (

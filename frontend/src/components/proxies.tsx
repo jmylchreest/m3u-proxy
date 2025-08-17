@@ -48,6 +48,9 @@ import {
   Clock,
   Users,
   Activity,
+  Grid,
+  List,
+  Table as TableIcon,
   Search,
   Filter as FilterIcon,
   AlertCircle,
@@ -132,6 +135,7 @@ export function Proxies() {
   const [copiedUrls, setCopiedUrls] = useState<Set<string>>(new Set())
   const [editingProxy, setEditingProxy] = useState<StreamProxy | null>(null)
   const [isEditSheetOpen, setIsEditSheetOpen] = useState(false)
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('table')
 
   // Copy to clipboard functionality
   const copyToClipboard = async (text: string, urlType: string, proxyId: string) => {
@@ -599,11 +603,39 @@ export function Proxies() {
                 <SelectItem value="inactive">Inactive Only</SelectItem>
               </SelectContent>
             </Select>
+            
+            {/* Layout Chooser */}
+            <div className="flex rounded-md border">
+              <Button
+                size="sm"
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                className="rounded-r-none border-r"
+                onClick={() => setViewMode('table')}
+              >
+                <TableIcon className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                className="rounded-none border-r"
+                onClick={() => setViewMode('grid')}
+              >
+                <Grid className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'list' ? 'default' : 'ghost'}
+                className="rounded-l-none"
+                onClick={() => setViewMode('list')}
+              >
+                <List className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Proxies Table */}
+      {/* Proxies Display */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
@@ -641,205 +673,554 @@ export function Proxies() {
             </Alert>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Mode</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Channel Range</TableHead>
-                    <TableHead>Settings</TableHead>
-                    <TableHead>Last Updated</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredProxies?.map((proxy) => (
-                    <TableRow key={proxy.id}>
-                      <TableCell>
-                        <div>
-                          <div className="font-medium">{proxy.name}</div>
-                          {proxy.description && (
-                            <div className="text-sm text-muted-foreground truncate max-w-[200px]">
-                              {proxy.description}
-                            </div>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {proxy.proxy_mode === "relay" && proxy.relay_profile_id ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Badge variant="outline" className="cursor-help">
-                                  {proxy.proxy_mode.toUpperCase()}
-                                </Badge>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <div className="space-y-1">
-                                  <p className="font-medium text-sm">Relay Profile</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {getRelayProfileName(proxy.relay_profile_id)}
-                                  </p>
-                                </div>
-                              </TooltipContent>
-                            </Tooltip>
-                        ) : (
-                          <Badge variant="outline">
-                            {proxy.proxy_mode.toUpperCase()}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={getStatusColor(proxy.is_active)}>
-                          {proxy.is_active ? 'Active' : 'Inactive'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-sm">
-                          Ch {proxy.starting_channel_number}+
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-xs space-y-1">
-                          {proxy.auto_regenerate && (
-                            <div className="flex items-center gap-1">
-                              <RefreshCw className="h-3 w-3" />
-                              Auto-regen
-                            </div>
-                          )}
-                          {proxy.cache_channel_logos && (
-                            <div className="flex items-center gap-1">
-                              <Settings className="h-3 w-3" />
-                              Channel logos
-                            </div>
-                          )}
-                          {proxy.cache_program_logos && (
-                            <div className="flex items-center gap-1">
-                              <Settings className="h-3 w-3" />
-                              Program logos
-                            </div>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className="text-sm cursor-help">
-                                {formatRelativeTime(proxy.updated_at)}
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-sm">
-                                {formatDate(proxy.updated_at)}
-                              </p>
-                            </TooltipContent>
-                          </Tooltip>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {/* Copy m3u8 URL button */}
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => {
-                                    if (proxy.m3u8_url) {
-                                      copyToClipboard(proxy.m3u8_url, 'm3u8', proxy.id)
-                                    }
-                                  }}
-                                  className="h-8 w-8 p-0"
-                                  disabled={!isOnline || !proxy.m3u8_url}
-                                >
-                                  {copiedUrls.has(`${proxy.id}-m3u8`) ? (
-                                    <Check className="h-4 w-4 text-green-600" />
-                                  ) : (
-                                    <Copy className="h-4 w-4" />
-                                  )}
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p className="text-sm">Copy M3U8</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          {/* Copy xmltv URL button */}
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => {
-                                    if (proxy.xmltv_url) {
-                                      copyToClipboard(proxy.xmltv_url, 'xmltv', proxy.id)
-                                    }
-                                  }}
-                                  className="h-8 w-8 p-0"
-                                  disabled={!isOnline || !proxy.xmltv_url}
-                                >
-                                  {copiedUrls.has(`${proxy.id}-xmltv`) ? (
-                                    <Check className="h-4 w-4 text-green-600" />
-                                  ) : (
-                                    <Copy className="h-4 w-4" />
-                                  )}
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p className="text-sm">Copy XMLTV</p>
-                              </TooltipContent>
-                            </Tooltip>
-                            <RefreshButton
-                              resourceId={proxy.id}
-                              onRefresh={() => handleRegenerateProxy(proxy.id)}
-                              disabled={!isOnline}
-                              size="sm"
-                              className="h-8 w-8 p-0"
-                              tooltipText="Regenerate"
-                            />
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => {
-                                    setEditingProxy(proxy)
-                                    setIsEditSheetOpen(true)
-                                  }}
-                                  className="h-8 w-8 p-0"
-                                  disabled={!proxy}
-                                >
-                                  <Edit className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p className="text-sm">Edit</p>
-                              </TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleDeleteProxy(proxy.id)}
-                                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                                  disabled={loading.delete === proxy.id || !isOnline}
-                                >
-                                  {loading.delete === proxy.id ? (
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                  ) : (
-                                    <Trash2 className="h-4 w-4" />
-                                  )}
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p className="text-sm">Delete</p>
-                              </TooltipContent>
-                            </Tooltip>
-                        </div>
-                      </TableCell>
+              {viewMode === 'table' && (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Mode</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Channel Range</TableHead>
+                      <TableHead>Settings</TableHead>
+                      <TableHead>Last Updated</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredProxies?.map((proxy) => (
+                      <TableRow key={proxy.id}>
+                        <TableCell>
+                          <div>
+                            <div className="font-medium">{proxy.name}</div>
+                            {proxy.description && (
+                              <div className="text-sm text-muted-foreground truncate max-w-[200px]">
+                                {proxy.description}
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {proxy.proxy_mode === "relay" && proxy.relay_profile_id ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Badge variant="outline" className="cursor-help">
+                                    {proxy.proxy_mode.toUpperCase()}
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <div className="space-y-1">
+                                    <p className="font-medium text-sm">Relay Profile</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {getRelayProfileName(proxy.relay_profile_id)}
+                                    </p>
+                                  </div>
+                                </TooltipContent>
+                              </Tooltip>
+                          ) : (
+                            <Badge variant="outline">
+                              {proxy.proxy_mode.toUpperCase()}
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={getStatusColor(proxy.is_active)}>
+                            {proxy.is_active ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-sm">
+                            Ch {proxy.starting_channel_number}+
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-xs space-y-1">
+                            {proxy.auto_regenerate && (
+                              <div className="flex items-center gap-1">
+                                <RefreshCw className="h-3 w-3" />
+                                Auto-regen
+                              </div>
+                            )}
+                            {proxy.cache_channel_logos && (
+                              <div className="flex items-center gap-1">
+                                <Settings className="h-3 w-3" />
+                                Channel logos
+                              </div>
+                            )}
+                            {proxy.cache_program_logos && (
+                              <div className="flex items-center gap-1">
+                                <Settings className="h-3 w-3" />
+                                Program logos
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="text-sm cursor-help">
+                                  {formatRelativeTime(proxy.updated_at)}
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-sm">
+                                  {formatDate(proxy.updated_at)}
+                                </p>
+                              </TooltipContent>
+                            </Tooltip>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            {/* Copy m3u8 URL button */}
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      if (proxy.m3u8_url) {
+                                        copyToClipboard(proxy.m3u8_url, 'm3u8', proxy.id)
+                                      }
+                                    }}
+                                    className="h-8 w-8 p-0"
+                                    disabled={!isOnline || !proxy.m3u8_url}
+                                  >
+                                    {copiedUrls.has(`${proxy.id}-m3u8`) ? (
+                                      <Check className="h-4 w-4 text-green-600" />
+                                    ) : (
+                                      <Copy className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Copy M3U8</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            {/* Copy xmltv URL button */}
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      if (proxy.xmltv_url) {
+                                        copyToClipboard(proxy.xmltv_url, 'xmltv', proxy.id)
+                                      }
+                                    }}
+                                    className="h-8 w-8 p-0"
+                                    disabled={!isOnline || !proxy.xmltv_url}
+                                  >
+                                    {copiedUrls.has(`${proxy.id}-xmltv`) ? (
+                                      <Check className="h-4 w-4 text-green-600" />
+                                    ) : (
+                                      <Copy className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Copy XMLTV</p>
+                                </TooltipContent>
+                              </Tooltip>
+                              <RefreshButton
+                                resourceId={proxy.id}
+                                onRefresh={() => handleRegenerateProxy(proxy.id)}
+                                disabled={!isOnline}
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                tooltipText="Regenerate"
+                              />
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      setEditingProxy(proxy)
+                                      setIsEditSheetOpen(true)
+                                    }}
+                                    className="h-8 w-8 p-0"
+                                    disabled={!proxy}
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Edit</p>
+                                </TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleDeleteProxy(proxy.id)}
+                                    className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                    disabled={loading.delete === proxy.id || !isOnline}
+                                  >
+                                    {loading.delete === proxy.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Delete</p>
+                                </TooltipContent>
+                              </Tooltip>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+
+              {viewMode === 'grid' && (
+                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                  {filteredProxies?.map((proxy) => (
+                    <Card key={proxy.id} className={`transition-all hover:shadow-md ${!proxy.is_active ? 'opacity-60' : ''}`}>
+                      <CardHeader>
+                        <div className="flex items-start justify-between">
+                          <div className="space-y-1 flex-1">
+                            <CardTitle className="text-lg flex items-center gap-2">
+                              {proxy.name}
+                              <Badge className={getStatusColor(proxy.is_active)}>
+                                {proxy.is_active ? 'Active' : 'Inactive'}
+                              </Badge>
+                            </CardTitle>
+                            {proxy.description && (
+                              <CardDescription className="line-clamp-2">
+                                {proxy.description}
+                              </CardDescription>
+                            )}
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-4">
+                          <div className="flex flex-wrap gap-2">
+                            {proxy.proxy_mode === "relay" && proxy.relay_profile_id ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Badge variant="outline" className="cursor-help">
+                                    {proxy.proxy_mode.toUpperCase()}
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <div className="space-y-1">
+                                    <p className="font-medium text-sm">Relay Profile</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {getRelayProfileName(proxy.relay_profile_id)}
+                                    </p>
+                                  </div>
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : (
+                              <Badge variant="outline">
+                                {proxy.proxy_mode.toUpperCase()}
+                              </Badge>
+                            )}
+                            <Badge variant="secondary">
+                              Ch {proxy.starting_channel_number}+
+                            </Badge>
+                          </div>
+
+                          <div className="text-sm space-y-2">
+                            {proxy.auto_regenerate && (
+                              <div className="flex items-center gap-2">
+                                <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                                <span>Auto-regenerate enabled</span>
+                              </div>
+                            )}
+                            {proxy.cache_channel_logos && (
+                              <div className="flex items-center gap-2">
+                                <Settings className="h-4 w-4 text-muted-foreground" />
+                                <span>Channel logos cached</span>
+                              </div>
+                            )}
+                            {proxy.cache_program_logos && (
+                              <div className="flex items-center gap-2">
+                                <Settings className="h-4 w-4 text-muted-foreground" />
+                                <span>Program logos cached</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="text-xs text-muted-foreground">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="cursor-help">
+                                  Updated {formatRelativeTime(proxy.updated_at)}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-sm">
+                                  {formatDate(proxy.updated_at)}
+                                </p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-2 border-t">
+                            <div className="flex items-center gap-1">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      if (proxy.m3u8_url) {
+                                        copyToClipboard(proxy.m3u8_url, 'm3u8', proxy.id)
+                                      }
+                                    }}
+                                    className="h-8 w-8 p-0"
+                                    disabled={!isOnline || !proxy.m3u8_url}
+                                  >
+                                    {copiedUrls.has(`${proxy.id}-m3u8`) ? (
+                                      <Check className="h-4 w-4 text-green-600" />
+                                    ) : (
+                                      <Copy className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Copy M3U8</p>
+                                </TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      if (proxy.xmltv_url) {
+                                        copyToClipboard(proxy.xmltv_url, 'xmltv', proxy.id)
+                                      }
+                                    }}
+                                    className="h-8 w-8 p-0"
+                                    disabled={!isOnline || !proxy.xmltv_url}
+                                  >
+                                    {copiedUrls.has(`${proxy.id}-xmltv`) ? (
+                                      <Check className="h-4 w-4 text-green-600" />
+                                    ) : (
+                                      <Copy className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Copy XMLTV</p>
+                                </TooltipContent>
+                              </Tooltip>
+                              <RefreshButton
+                                resourceId={proxy.id}
+                                onRefresh={() => handleRegenerateProxy(proxy.id)}
+                                disabled={!isOnline}
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                tooltipText="Regenerate"
+                              />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      setEditingProxy(proxy)
+                                      setIsEditSheetOpen(true)
+                                    }}
+                                    className="h-8 w-8 p-0"
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Edit</p>
+                                </TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleDeleteProxy(proxy.id)}
+                                    className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                    disabled={loading.delete === proxy.id || !isOnline}
+                                  >
+                                    {loading.delete === proxy.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Delete</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
                   ))}
-                </TableBody>
-              </Table>
+                </div>
+              )}
+
+              {viewMode === 'list' && (
+                <div className="space-y-3">
+                  {filteredProxies?.map((proxy) => (
+                    <Card key={proxy.id} className={`transition-all hover:shadow-sm ${!proxy.is_active ? 'opacity-60' : ''}`}>
+                      <CardContent className="pt-6">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-4 flex-1">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-3">
+                                <div>
+                                  <p className="font-medium text-sm">{proxy.name}</p>
+                                  {proxy.description && (
+                                    <p className="text-xs text-muted-foreground truncate max-w-[300px]">
+                                      {proxy.description}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {proxy.proxy_mode === "relay" && proxy.relay_profile_id ? (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Badge variant="outline" className="cursor-help text-xs">
+                                          {proxy.proxy_mode.toUpperCase()}
+                                        </Badge>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <div className="space-y-1">
+                                          <p className="font-medium text-sm">Relay Profile</p>
+                                          <p className="text-xs text-muted-foreground">
+                                            {getRelayProfileName(proxy.relay_profile_id)}
+                                          </p>
+                                        </div>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  ) : (
+                                    <Badge variant="outline" className="text-xs">
+                                      {proxy.proxy_mode.toUpperCase()}
+                                    </Badge>
+                                  )}
+                                  <Badge className={getStatusColor(proxy.is_active)} >
+                                    {proxy.is_active ? 'Active' : 'Inactive'}
+                                  </Badge>
+                                  <Badge variant="secondary" className="text-xs">
+                                    Ch {proxy.starting_channel_number}+
+                                  </Badge>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            <div className="flex items-center gap-1">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      if (proxy.m3u8_url) {
+                                        copyToClipboard(proxy.m3u8_url, 'm3u8', proxy.id)
+                                      }
+                                    }}
+                                    className="h-8 w-8 p-0"
+                                    disabled={!isOnline || !proxy.m3u8_url}
+                                  >
+                                    {copiedUrls.has(`${proxy.id}-m3u8`) ? (
+                                      <Check className="h-4 w-4 text-green-600" />
+                                    ) : (
+                                      <Copy className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Copy M3U8</p>
+                                </TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      if (proxy.xmltv_url) {
+                                        copyToClipboard(proxy.xmltv_url, 'xmltv', proxy.id)
+                                      }
+                                    }}
+                                    className="h-8 w-8 p-0"
+                                    disabled={!isOnline || !proxy.xmltv_url}
+                                  >
+                                    {copiedUrls.has(`${proxy.id}-xmltv`) ? (
+                                      <Check className="h-4 w-4 text-green-600" />
+                                    ) : (
+                                      <Copy className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Copy XMLTV</p>
+                                </TooltipContent>
+                              </Tooltip>
+                              <RefreshButton
+                                resourceId={proxy.id}
+                                onRefresh={() => handleRegenerateProxy(proxy.id)}
+                                disabled={!isOnline}
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                tooltipText="Regenerate"
+                              />
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      setEditingProxy(proxy)
+                                      setIsEditSheetOpen(true)
+                                    }}
+                                    className="h-8 w-8 p-0"
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Edit</p>
+                                </TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleDeleteProxy(proxy.id)}
+                                    className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                    disabled={loading.delete === proxy.id || !isOnline}
+                                  >
+                                    {loading.delete === proxy.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Delete</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
               
               {(filteredProxies?.length === 0) && !loading.proxies && (
                 <div className="text-center py-8">

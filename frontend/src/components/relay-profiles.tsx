@@ -19,7 +19,10 @@ import {
   HardDrive,
   Cpu,
   Volume2,
-  Loader2
+  Loader2,
+  Grid,
+  List,
+  Table as TableIcon
 } from "lucide-react"
 import { RelayProfile, RelayHealthResponse, CreateRelayProfileRequest, UpdateRelayProfileRequest, ApiResponse } from "@/types/api"
 import { getBackendUrl } from '@/lib/config'
@@ -73,6 +76,7 @@ export function RelayProfiles() {
   const [searchTerm, setSearchTerm] = useState("")
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [editProfile, setEditProfile] = useState<RelayProfile | null>(null)
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('table')
 
   const fetchProfiles = async () => {
     try {
@@ -327,131 +331,379 @@ export function RelayProfiles() {
                 />
               </div>
             </div>
+            
+            {/* Layout Chooser */}
+            <div className="flex rounded-md border">
+              <Button
+                size="sm"
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                className="rounded-r-none border-r"
+                onClick={() => setViewMode('table')}
+              >
+                <TableIcon className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                className="rounded-none border-r"
+                onClick={() => setViewMode('grid')}
+              >
+                <Grid className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'list' ? 'default' : 'ghost'}
+                className="rounded-l-none"
+                onClick={() => setViewMode('list')}
+              >
+                <List className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Profile Cards */}
-      <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-        {filteredProfiles.map((profile) => (
-          <Card key={profile.id} className={!profile.is_active ? "opacity-60" : ""}>
-            <CardHeader>
-              <div className="flex items-start justify-between">
-                <div className="space-y-1 flex-1">
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    {profile.name}
-                    {profile.is_system_default && (
-                      <Badge variant="secondary">Default</Badge>
-                    )}
-                    {!profile.is_active && (
-                      <Badge variant="outline">Inactive</Badge>
-                    )}
-                  </CardTitle>
-                  {profile.description && (
-                    <CardDescription>{profile.description}</CardDescription>
-                  )}
-                </div>
-                
-                <div className="flex items-center gap-1">
-                  {!profile.is_system_default && (
-                    <>
-                      <Sheet open={editProfile?.id === profile.id} onOpenChange={(open) => setEditProfile(open ? profile : null)}>
-                        <SheetTrigger asChild>
-                          <Button variant="ghost" size="sm">
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                        </SheetTrigger>
-                        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
-                          <SheetHeader>
-                            <SheetTitle>Edit Relay Profile</SheetTitle>
-                            <SheetDescription>
-                              Update the transcoding configuration for this profile.
-                            </SheetDescription>
-                          </SheetHeader>
-                          <RelayProfileForm 
-                            formId="edit-relay-profile-form"
-                            profile={profile}
-                            onSubmit={(data) => handleUpdateProfile(profile.id, data)}
-                            onCancel={() => setEditProfile(null)}
-                            loading={editLoading}
-                          />
-                          <SheetFooter className="gap-2">
-                            <Button type="button" variant="outline" onClick={() => setEditProfile(null)} disabled={editLoading}>
-                              Cancel
-                            </Button>
-                            <Button form="edit-relay-profile-form" type="submit" disabled={editLoading}>
-                              {editLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                              Update Profile
-                            </Button>
-                          </SheetFooter>
-                        </SheetContent>
-                      </Sheet>
+      {/* Profiles Display */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>
+              Relay Profiles ({filteredProfiles?.length || 0})
+            </span>
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+          </CardTitle>
+          <CardDescription>
+            Manage transcoding profiles for stream relay and optimization
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {viewMode === 'table' && (
+            <div className="space-y-4">
+              {filteredProfiles.map((profile) => (
+                <Card key={profile.id} className={!profile.is_active ? "opacity-60" : ""}>
+                  <CardHeader>
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-1 flex-1">
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          {profile.name}
+                          {profile.is_system_default && (
+                            <Badge variant="secondary">Default</Badge>
+                          )}
+                          {!profile.is_active && (
+                            <Badge variant="outline">Inactive</Badge>
+                          )}
+                        </CardTitle>
+                        {profile.description && (
+                          <CardDescription>{profile.description}</CardDescription>
+                        )}
+                      </div>
                       
-                      <Button 
-                        variant="ghost" 
-                        size="sm"
-                        onClick={() => handleDeleteProfile(profile.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
-            </CardHeader>
-            
-            <CardContent>
-              <div className="space-y-4">
-                {/* Summary Labels */}
-                <div className="flex flex-wrap gap-1">
-                  {getProfileSummaryLabels(profile).map((label, index) => (
-                    <Badge key={index} variant="outline" className="text-xs">
-                      {label}
-                    </Badge>
-                  ))}
-                </div>
-
-                {/* Technical Details */}
-                <div className="grid gap-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <Cpu className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-muted-foreground">Video:</span>
-                    <span>{formatCodec(profile.video_codec)}</span>
-                    {profile.video_bitrate && (
-                      <span className="text-muted-foreground">({formatBitrate(profile.video_bitrate)})</span>
-                    )}
-                  </div>
+                      <div className="flex items-center gap-1">
+                        {!profile.is_system_default && (
+                          <>
+                            <Sheet open={editProfile?.id === profile.id} onOpenChange={(open) => setEditProfile(open ? profile : null)}>
+                              <SheetTrigger asChild>
+                                <Button variant="ghost" size="sm">
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                              </SheetTrigger>
+                              <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+                                <SheetHeader>
+                                  <SheetTitle>Edit Relay Profile</SheetTitle>
+                                  <SheetDescription>
+                                    Update the transcoding configuration for this profile.
+                                  </SheetDescription>
+                                </SheetHeader>
+                                <RelayProfileForm 
+                                  formId="edit-relay-profile-form"
+                                  profile={profile}
+                                  onSubmit={(data) => handleUpdateProfile(profile.id, data)}
+                                  onCancel={() => setEditProfile(null)}
+                                  loading={editLoading}
+                                />
+                                <SheetFooter className="gap-2">
+                                  <Button type="button" variant="outline" onClick={() => setEditProfile(null)} disabled={editLoading}>
+                                    Cancel
+                                  </Button>
+                                  <Button form="edit-relay-profile-form" type="submit" disabled={editLoading}>
+                                    {editLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    Update Profile
+                                  </Button>
+                                </SheetFooter>
+                              </SheetContent>
+                            </Sheet>
+                            
+                            <Button 
+                              variant="ghost" 
+                              size="sm"
+                              onClick={() => handleDeleteProfile(profile.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
                   
-                  <div className="flex items-center gap-2">
-                    <Volume2 className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-muted-foreground">Audio:</span>
-                    <span>{formatCodec(profile.audio_codec)}</span>
-                    {profile.audio_bitrate && (
-                      <span className="text-muted-foreground">({formatBitrate(profile.audio_bitrate)})</span>
-                    )}
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                    <HardDrive className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-muted-foreground">Output:</span>
-                    <span>Transport Stream</span>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+                  <CardContent>
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap gap-1">
+                        {getProfileSummaryLabels(profile).map((label, index) => (
+                          <Badge key={index} variant="outline" className="text-xs">
+                            {label}
+                          </Badge>
+                        ))}
+                      </div>
 
-      {filteredProfiles.length === 0 && (
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center text-muted-foreground">
-              {searchTerm ? 'No profiles match your search.' : 'No relay profiles found.'}
+                      <div className="grid gap-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <Cpu className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-muted-foreground">Video:</span>
+                          <span>{formatCodec(profile.video_codec)}</span>
+                          {profile.video_bitrate && (
+                            <span className="text-muted-foreground">({formatBitrate(profile.video_bitrate)})</span>
+                          )}
+                        </div>
+                        
+                        <div className="flex items-center gap-2">
+                          <Volume2 className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-muted-foreground">Audio:</span>
+                          <span>{formatCodec(profile.audio_codec)}</span>
+                          {profile.audio_bitrate && (
+                            <span className="text-muted-foreground">({formatBitrate(profile.audio_bitrate)})</span>
+                          )}
+                        </div>
+                        
+                        <div className="flex items-center gap-2">
+                          <HardDrive className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-muted-foreground">Output:</span>
+                          <span>Transport Stream</span>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+
+          {viewMode === 'grid' && (
+            <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+              {filteredProfiles.map((profile) => (
+                <Card key={profile.id} className={`transition-all hover:shadow-md ${!profile.is_active ? "opacity-60" : ""}`}>
+                  <CardHeader>
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-1 flex-1">
+                        <CardTitle className="text-base flex items-center gap-2">
+                          {profile.name}
+                          {profile.is_system_default && (
+                            <Badge variant="secondary">Default</Badge>
+                          )}
+                          {!profile.is_active && (
+                            <Badge variant="outline">Inactive</Badge>
+                          )}
+                        </CardTitle>
+                        {profile.description && (
+                          <CardDescription className="text-sm">{profile.description}</CardDescription>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  
+                  <CardContent>
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap gap-1">
+                        {getProfileSummaryLabels(profile).slice(0, 3).map((label, index) => (
+                          <Badge key={index} variant="outline" className="text-xs">
+                            {label}
+                          </Badge>
+                        ))}
+                      </div>
+
+                      <div className="grid gap-1 text-sm">
+                        <div className="flex items-center gap-2">
+                          <Cpu className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-muted-foreground">Video:</span>
+                          <span className="text-xs">{formatCodec(profile.video_codec)}</span>
+                        </div>
+                        
+                        <div className="flex items-center gap-2">
+                          <Volume2 className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-muted-foreground">Audio:</span>
+                          <span className="text-xs">{formatCodec(profile.audio_codec)}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t">
+                        <div className="text-xs text-muted-foreground">
+                          Transport Stream
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {!profile.is_system_default && (
+                            <>
+                              <Sheet open={editProfile?.id === profile.id} onOpenChange={(open) => setEditProfile(open ? profile : null)}>
+                                <SheetTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                </SheetTrigger>
+                                <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+                                  <SheetHeader>
+                                    <SheetTitle>Edit Relay Profile</SheetTitle>
+                                    <SheetDescription>
+                                      Update the transcoding configuration for this profile.
+                                    </SheetDescription>
+                                  </SheetHeader>
+                                  <RelayProfileForm 
+                                    formId="edit-relay-profile-form"
+                                    profile={profile}
+                                    onSubmit={(data) => handleUpdateProfile(profile.id, data)}
+                                    onCancel={() => setEditProfile(null)}
+                                    loading={editLoading}
+                                  />
+                                  <SheetFooter className="gap-2">
+                                    <Button type="button" variant="outline" onClick={() => setEditProfile(null)} disabled={editLoading}>
+                                      Cancel
+                                    </Button>
+                                    <Button form="edit-relay-profile-form" type="submit" disabled={editLoading}>
+                                      {editLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                      Update Profile
+                                    </Button>
+                                  </SheetFooter>
+                                </SheetContent>
+                              </Sheet>
+                              
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                onClick={() => handleDeleteProfile(profile.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          {viewMode === 'list' && (
+            <div className="space-y-2">
+              {filteredProfiles.map((profile) => (
+                <Card key={profile.id} className={`transition-all hover:shadow-sm ${!profile.is_active ? "opacity-60" : ""}`}>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-4 flex-1">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-3">
+                            <div>
+                              <p className="font-medium text-sm">{profile.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {profile.description && profile.description.length > 60 
+                                  ? `${profile.description.substring(0, 60)}...` 
+                                  : profile.description || `${formatCodec(profile.video_codec)} + ${formatCodec(profile.audio_codec)} to TS`}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {profile.is_system_default && (
+                                <Badge variant="secondary" className="text-xs">Default</Badge>
+                              )}
+                              {!profile.is_active && (
+                                <Badge variant="outline" className="text-xs">Inactive</Badge>
+                              )}
+                              {profile.enable_hardware_acceleration && (
+                                <Badge variant="outline" className="text-xs">
+                                  <Cpu className="h-3 w-3 mr-1" />
+                                  HW Accel
+                                </Badge>
+                              )}
+                              <Badge variant="outline" className="text-xs">
+                                {formatCodec(profile.video_codec)}
+                              </Badge>
+                              <Badge variant="outline" className="text-xs">
+                                {formatCodec(profile.audio_codec)}
+                              </Badge>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 ml-4">
+                        <div className="flex items-center gap-1">
+                          {!profile.is_system_default && (
+                            <>
+                              <Sheet open={editProfile?.id === profile.id} onOpenChange={(open) => setEditProfile(open ? profile : null)}>
+                                <SheetTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                </SheetTrigger>
+                                <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+                                  <SheetHeader>
+                                    <SheetTitle>Edit Relay Profile</SheetTitle>
+                                    <SheetDescription>
+                                      Update the transcoding configuration for this profile.
+                                    </SheetDescription>
+                                  </SheetHeader>
+                                  <RelayProfileForm 
+                                    formId="edit-relay-profile-form"
+                                    profile={profile}
+                                    onSubmit={(data) => handleUpdateProfile(profile.id, data)}
+                                    onCancel={() => setEditProfile(null)}
+                                    loading={editLoading}
+                                  />
+                                  <SheetFooter className="gap-2">
+                                    <Button type="button" variant="outline" onClick={() => setEditProfile(null)} disabled={editLoading}>
+                                      Cancel
+                                    </Button>
+                                    <Button form="edit-relay-profile-form" type="submit" disabled={editLoading}>
+                                      {editLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                      Update Profile
+                                    </Button>
+                                  </SheetFooter>
+                                </SheetContent>
+                              </Sheet>
+                              
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                onClick={() => handleDeleteProfile(profile.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+        {filteredProfiles.length === 0 && (
+          <div className="text-center py-8">
+            <Settings className="mx-auto h-12 w-12 text-muted-foreground" />
+            <h3 className="mt-4 text-lg font-semibold">
+              {searchTerm ? 'No profiles match your search.' : 'No relay profiles found.'}
+            </h3>
+            <p className="text-muted-foreground">
+              {searchTerm 
+                ? "Try adjusting your search criteria."
+                : "Get started by creating your first relay profile."
+              }
+            </p>
+          </div>
+        )}
     </div>
   )
 }

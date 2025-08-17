@@ -48,6 +48,9 @@ import {
   Monitor,
   Search,
   Filter,
+  Grid,
+  List,
+  Table as TableIcon,
   AlertCircle,
   CheckCircle,
   Loader2,
@@ -495,6 +498,7 @@ export function EpgSources() {
   })
 
   const [editingSource, setEditingSource] = useState<EpgSourceResponse | null>(null)
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('table')
   const [editSheetOpen, setEditSheetOpen] = useState(false)
   const { handleApiError, dismissConflict, getConflictState } = useConflictHandler()
   const [refreshingSources, setRefreshingSources] = useState<Set<string>>(new Set())
@@ -946,6 +950,34 @@ export function EpgSources() {
                 <SelectItem value="inactive">Inactive Only</SelectItem>
               </SelectContent>
             </Select>
+            
+            {/* Layout Chooser */}
+            <div className="flex rounded-md border">
+              <Button
+                size="sm"
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                className="rounded-r-none border-r"
+                onClick={() => setViewMode('table')}
+              >
+                <TableIcon className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                className="rounded-none border-r"
+                onClick={() => setViewMode('grid')}
+              >
+                <Grid className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'list' ? 'default' : 'ghost'}
+                className="rounded-l-none"
+                onClick={() => setViewMode('list')}
+              >
+                <List className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1000,7 +1032,8 @@ export function EpgSources() {
             </Alert>
           ) : (
             <>
-              <Table>
+              {viewMode === 'table' ? (
+                <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Name</TableHead>
@@ -1135,7 +1168,158 @@ export function EpgSources() {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+                </Table>
+              ) : viewMode === 'grid' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {filteredSources?.map((source) => (
+                    <Card key={source.id}>
+                      <CardHeader className="pb-3">
+                        <div className="flex items-start justify-between">
+                          <div className="space-y-1">
+                            <CardTitle className="text-base">{source.name}</CardTitle>
+                            <Badge variant="outline">
+                              {source.source_type?.toUpperCase()}
+                            </Badge>
+                          </div>
+                          <Badge variant={source.is_active ? "default" : "secondary"}>
+                            {source.is_active ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pt-0">
+                        <div className="space-y-2 text-sm">
+                          <p className="text-muted-foreground truncate">{source.url}</p>
+                          <div className="flex justify-between">
+                            <span>Programs:</span>
+                            <span>{source.program_count || 0}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Last Updated:</span>
+                            <span>{source.last_ingested_at ? new Date(source.last_ingested_at).toLocaleDateString() : 'Never'}</span>
+                          </div>
+                        </div>
+                        <div className="flex justify-end gap-2 mt-3 pt-3 border-t">
+                          <RefreshButton
+                            resourceId={source.id}
+                            onRefresh={() => handleRefreshSource(source.id)}
+                            disabled={!isOnline}
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                          />
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleEditSource(source)}
+                                className="h-8 w-8 p-0"
+                                disabled={!isOnline}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-sm">Edit</p>
+                            </TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteSource(source.id)}
+                                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                disabled={loading.delete === source.id || !isOnline}
+                              >
+                                {loading.delete === source.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-sm">Delete</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {filteredSources?.map((source) => (
+                    <Card key={source.id}>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 space-y-1">
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-medium">{source.name}</h3>
+                              <Badge variant="outline">
+                                {source.source_type?.toUpperCase()}
+                              </Badge>
+                              <Badge variant={source.is_active ? "default" : "secondary"}>
+                                {source.is_active ? 'Active' : 'Inactive'}
+                              </Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground truncate">{source.url}</p>
+                            <div className="flex gap-4 text-xs text-muted-foreground">
+                              <span>Programs: {source.program_count || 0}</span>
+                              <span>Last Updated: {source.last_ingested_at ? new Date(source.last_ingested_at).toLocaleDateString() : 'Never'}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            <RefreshButton
+                              resourceId={source.id}
+                              onRefresh={() => handleRefreshSource(source.id)}
+                              disabled={!isOnline}
+                              size="sm"
+                              className="h-8 w-8 p-0"
+                            />
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleEditSource(source)}
+                                  className="h-8 w-8 p-0"
+                                  disabled={!isOnline}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-sm">Edit</p>
+                              </TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteSource(source.id)}
+                                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                  disabled={loading.delete === source.id || !isOnline}
+                                >
+                                  {loading.delete === source.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-sm">Delete</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
               
               {(filteredSources?.length === 0) && !loading.sources && (
                 <div className="text-center py-8">

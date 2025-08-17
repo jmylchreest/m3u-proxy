@@ -5,8 +5,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Search, Play, Filter, Grid, List, Eye, Zap } from 'lucide-react';
+import { Search, Play, Filter, Grid, List, Eye, Zap, Check, Table as TableIcon } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
@@ -49,7 +51,28 @@ interface ChannelsResponse {
   has_more: boolean;
 }
 
+// Helper functions for date formatting
+const formatRelativeTime = (dateString: string): string => {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSeconds = Math.floor(diffMs / 1000);
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  const diffHours = Math.floor(diffMinutes / 60);
+  const diffDays = Math.floor(diffHours / 24);
 
+  if (diffSeconds < 60) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  
+  return date.toLocaleDateString();
+};
+
+const formatPreciseTime = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toLocaleString();
+};
 
 export default function ChannelsPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -58,11 +81,13 @@ export default function ChannelsPage() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<string>('');
+  const [selectedSources, setSelectedSources] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('table');
   const [currentPage, setCurrentPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [groups, setGroups] = useState<string[]>([]);
+  const [sources, setSources] = useState<string[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [isPlayerOpen, setIsPlayerOpen] = useState(false);
   const [probingChannels, setProbingChannels] = useState<Set<string>>(new Set());
@@ -127,12 +152,17 @@ export default function ChannelsPage() {
       setTotal(data.data.total);
       setHasMore(data.data.has_more);
       
-      // Extract unique groups for filtering - only update on fresh fetch
+      // Extract unique groups and sources for filtering - only update on fresh fetch
       if (!append) {
         const uniqueGroups = Array.from(
           new Set(data.data.channels.map(c => c.group).filter(Boolean))
         ) as string[];
         setGroups(uniqueGroups);
+        
+        const uniqueSources = Array.from(
+          new Set(data.data.channels.map(c => c.source_name).filter(Boolean))
+        ) as string[];
+        setSources(uniqueSources);
       }
       
       setError(null);
@@ -150,7 +180,7 @@ export default function ChannelsPage() {
     if (hasMore && !loading) {
       fetchChannels(debouncedSearch, selectedGroup, currentPage + 1, true, false);
     }
-  }, [hasMore, loading, debouncedSearch, selectedGroup, currentPage, fetchChannels]);
+  }, [hasMore, loading, debouncedSearch, selectedGroup, selectedSources, currentPage, fetchChannels]);
 
   // Single effect that handles both search and filter changes intelligently
   useEffect(() => {
@@ -164,7 +194,7 @@ export default function ChannelsPage() {
       setCurrentPage(1);
       fetchChannels(debouncedSearch, selectedGroup, 1, false, false);
     }
-  }, [debouncedSearch, selectedGroup, fetchChannels]);
+  }, [debouncedSearch, selectedGroup, selectedSources, fetchChannels]);
 
   // Intersection observer for infinite scroll
   useEffect(() => {
@@ -201,6 +231,24 @@ export default function ChannelsPage() {
 
   const handleGroupFilter = (value: string) => {
     setSelectedGroup(value === 'all' ? '' : value);
+  };
+
+  const handleSourceToggle = (sourceName: string) => {
+    setSelectedSources(prev => {
+      if (prev.includes(sourceName)) {
+        return prev.filter(s => s !== sourceName);
+      } else {
+        return [...prev, sourceName];
+      }
+    });
+  };
+
+  const handleAllSourcesToggle = () => {
+    if (selectedSources.length === sources.length) {
+      setSelectedSources([]);
+    } else {
+      setSelectedSources([...sources]);
+    }
   };
 
 
@@ -320,38 +368,29 @@ export default function ChannelsPage() {
         {channel.source_name || channel.source_type}
       </TableCell>
       <TableCell className="text-sm">
-        {channel.video_codec ? (
-          <Badge variant="outline" className="text-xs">
-            {channel.video_codec}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground">-</span>
-        )}
+        {channel.video_codec || <span className="text-muted-foreground">-</span>}
       </TableCell>
       <TableCell className="text-sm">
-        {channel.audio_codec ? (
-          <Badge variant="outline" className="text-xs">
-            {channel.audio_codec}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground">-</span>
-        )}
+        {channel.audio_codec || <span className="text-muted-foreground">-</span>}
       </TableCell>
       <TableCell className="text-sm">
         {channel.resolution || <span className="text-muted-foreground">-</span>}
       </TableCell>
       <TableCell className="text-sm">
         {channel.last_probed_at ? (
-          <div className="flex flex-col">
-            <span className="text-xs">
-              {new Date(channel.last_probed_at).toLocaleDateString()}
-            </span>
-            {channel.probe_method && (
-              <Badge variant="outline" className="text-xs mt-1">
-                {channel.probe_method}
-              </Badge>
-            )}
-          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-help text-xs">
+                {formatRelativeTime(channel.last_probed_at)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              <div className="space-y-1">
+                <div>Method: {channel.probe_method || 'Unknown'}</div>
+                <div>Precise time: {formatPreciseTime(channel.last_probed_at)}</div>
+              </div>
+            </TooltipContent>
+          </Tooltip>
         ) : (
           <span className="text-muted-foreground">-</span>
         )}
@@ -580,39 +619,66 @@ export default function ChannelsPage() {
     <TooltipProvider>
       <div className="container mx-auto p-6">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold mb-2">Channel Browser</h1>
         <p className="text-muted-foreground">
           Browse and play channels with detailed information and metadata
         </p>
       </div>
 
       {/* Search and Filters */}
-      <div className="mb-6 space-y-4">
-        <div className="flex flex-col sm:flex-row gap-4">
+      <Card className="mb-6">
+        <CardContent className="p-6">
+          <div className="flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
             <Input
               placeholder="Search channels..."
               value={search}
               onChange={(e) => handleSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                }
+              }}
               className="pl-10"
             />
           </div>
           
-          <Select value={selectedGroup || 'all'} onValueChange={handleGroupFilter}>
-            <SelectTrigger className="w-full sm:w-48">
-              <Filter className="w-4 h-4 mr-2" />
-              <SelectValue placeholder="Filter by group" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Groups</SelectItem>
-              {groups.map((group) => (
-                <SelectItem key={group} value={group}>
-                  {group}
-                </SelectItem>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="w-full sm:w-48 justify-between">
+                <div className="flex items-center">
+                  <Filter className="w-4 h-4 mr-2" />
+                  <span>
+                    {selectedSources.length === 0 
+                      ? 'All Sources' 
+                      : selectedSources.length === sources.length 
+                        ? 'All Sources' 
+                        : `${selectedSources.length} Source${selectedSources.length > 1 ? 's' : ''}`
+                    }
+                  </span>
+                </div>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={handleAllSourcesToggle}>
+                <Checkbox 
+                  checked={selectedSources.length === sources.length && sources.length > 0}
+                  className="mr-2"
+                />
+                All Sources
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {sources.map((source) => (
+                <DropdownMenuItem key={source} onClick={() => handleSourceToggle(source)}>
+                  <Checkbox 
+                    checked={selectedSources.includes(source)}
+                    className="mr-2"
+                  />
+                  {source}
+                </DropdownMenuItem>
               ))}
-            </SelectContent>
-          </Select>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
 
           <div className="flex bg-muted rounded-lg p-1">
@@ -622,7 +688,7 @@ export default function ChannelsPage() {
               onClick={() => setViewMode('table')}
               title="Table view"
             >
-              <List className="w-4 h-4" />
+              <TableIcon className="w-4 h-4" />
             </Button>
             <Button
               variant={viewMode === 'grid' ? 'default' : 'ghost'}
@@ -641,8 +707,9 @@ export default function ChannelsPage() {
               <List className="w-4 h-4 rotate-90" />
             </Button>
           </div>
-        </div>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Error Display */}
       {error && (
@@ -748,12 +815,13 @@ export default function ChannelsPage() {
         <Card>
           <CardContent className="p-8 text-center">
             <p className="text-muted-foreground">No channels found</p>
-            {(search || selectedGroup) && (
+            {(search || selectedGroup || selectedSources.length > 0) && (
               <Button
                 variant="outline"
                 onClick={() => {
                   setSearch('');
                   setSelectedGroup('');
+                  setSelectedSources([]);
                 }}
                 className="mt-4"
               >

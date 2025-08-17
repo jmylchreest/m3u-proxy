@@ -1,4 +1,5 @@
 import { API_CONFIG, REQUEST_TIMEOUT } from './config'
+import { Debug } from '@/utils/debug'
 import { 
   ApiResponse, 
   PaginatedResponse, 
@@ -39,6 +40,7 @@ class ApiError extends Error {
 
 class ApiClient {
   private baseUrl: string
+  private debug = Debug.createLogger('ApiClient')
 
   constructor(baseUrl: string = API_CONFIG.baseUrl) {
     this.baseUrl = baseUrl
@@ -340,7 +342,7 @@ class ApiClient {
         `${API_CONFIG.endpoints.proxies}/${proxyId}/sources`
       )
     } catch (error) {
-      console.warn(`Proxy stream sources endpoint not available for ${proxyId}:`, error)
+      this.debug.warn(`Proxy stream sources endpoint not available for ${proxyId}:`, error)
       return []
     }
   }
@@ -351,7 +353,7 @@ class ApiClient {
         `${API_CONFIG.endpoints.proxies}/${proxyId}/epg-sources`
       )
     } catch (error) {
-      console.warn(`Proxy EPG sources endpoint not available for ${proxyId}:`, error)
+      this.debug.warn(`Proxy EPG sources endpoint not available for ${proxyId}:`, error)
       return []
     }
   }
@@ -362,7 +364,7 @@ class ApiClient {
         `${API_CONFIG.endpoints.proxies}/${proxyId}/filters`
       )
     } catch (error) {
-      console.warn(`Proxy filters endpoint not available for ${proxyId}:`, error)
+      this.debug.warn(`Proxy filters endpoint not available for ${proxyId}:`, error)
       return []
     }
   }
@@ -647,6 +649,18 @@ class ApiClient {
   // Health check
   async healthCheck(): Promise<any> {
     return this.request<any>(API_CONFIG.endpoints.health)
+  }
+
+  // Feature flags API
+  async getFeatures(): Promise<{ flags: Record<string, boolean>; config: Record<string, Record<string, any>>; timestamp: string }> {
+    return this.request<{ flags: Record<string, boolean>; config: Record<string, Record<string, any>>; timestamp: string }>('/api/v1/features')
+  }
+
+  async updateFeatures(data: { flags: Record<string, boolean>; config: Record<string, Record<string, any>> }): Promise<any> {
+    return this.request<any>('/api/v1/features', {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    })
   }
 
   // Relay health check

@@ -1,5 +1,6 @@
 import { LogEntry, LogHandler } from '@/types/api'
 import { getBackendUrl } from '@/lib/config'
+import { Debug } from '@/utils/debug'
 
 export class LogsClient {
   private eventSource: EventSource | null = null
@@ -7,32 +8,33 @@ export class LogsClient {
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
   private reconnectDelay = 1000
+  private debug = Debug.createLogger('LogsClient')
 
   connect() {
     if (this.eventSource) {
-      console.log('[Logs] Disconnecting existing connection before reconnecting')
+      this.debug.log('Disconnecting existing connection before reconnecting')
       this.disconnect()
     }
 
     try {
-      console.log('[Logs] Connecting to logs stream')
+      this.debug.log('Connecting to logs stream')
       const backendUrl = getBackendUrl()
       this.eventSource = new EventSource(`${backendUrl}/api/v1/logs/stream`)
 
       this.eventSource.onopen = () => {
-        console.log('[Logs] Connection opened successfully')
+        this.debug.log('Connection opened successfully')
         this.reconnectAttempts = 0
       }
 
       // Handle ALL message events generically
       this.eventSource.onmessage = (event) => {
-        console.log('[Logs] Default message received:', event.data)
+        this.debug.log('Default message received:', event.data)
         this.parseAndHandleLog(event.data)
       }
 
       // Specifically listen for 'log' events
       this.eventSource.addEventListener('log', (event: MessageEvent) => {
-        console.log('[Logs] Log event received:', event.data)
+        this.debug.log('Log event received:', event.data)
         this.parseAndHandleLog(event.data)
       })
 
@@ -40,7 +42,7 @@ export class LogsClient {
       const otherEventTypes = ['message', 'data', 'update', 'entry', 'record']
       otherEventTypes.forEach(eventType => {
         this.eventSource!.addEventListener(eventType, (event: MessageEvent) => {
-          console.log(`[Logs] ${eventType} event received:`, event.data)
+          this.debug.log(`${eventType} event received:`, event.data)
           this.parseAndHandleLog(event.data)
         })
       })
@@ -58,7 +60,7 @@ export class LogsClient {
   private parseAndHandleLog(data: string) {
     try {
       const logData = JSON.parse(data)
-      console.log('[Logs] Parsed log data:', logData)
+      this.debug.log('Parsed log data:', logData)
       
       // Create a LogEntry from any JSON structure
       let logEntry: LogEntry
@@ -126,14 +128,14 @@ export class LogsClient {
   }
 
   private handleLog(log: LogEntry) {
-    console.log(`[Logs] Handling log: ${log.level} - ${log.message}`)
+    this.debug.log(`Handling log: ${log.level} - ${log.message}`)
     this.handlers.forEach(handler => handler(log))
   }
 
   private handleReconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++
-      console.log(`[Logs] Attempting to reconnect (attempt ${this.reconnectAttempts})`)
+      this.debug.log(`Attempting to reconnect (attempt ${this.reconnectAttempts})`)
       
       setTimeout(() => {
         if (this.eventSource?.readyState === EventSource.CLOSED) {

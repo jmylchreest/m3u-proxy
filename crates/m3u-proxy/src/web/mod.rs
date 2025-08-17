@@ -378,6 +378,19 @@ impl WebServer {
             .route("/settings", get(api::settings::get_settings))
             .route("/settings", put(api::settings::update_settings))
             .route("/settings/info", get(api::settings::get_settings_info))
+            // Feature flags endpoints
+            .route("/features", get(handlers::features::get_features)
+                .put(handlers::features::update_features))
+            // Channel browser endpoints
+            .route("/channels", get(handlers::channels::list_channels))
+            .route("/channels/proxy/{proxy_id}", get(handlers::channels::get_proxy_channels))
+            .route("/channels/{channel_id}/stream", get(handlers::channels::get_channel_stream))
+            .route("/channels/{channel_id}/probe", post(handlers::channels::probe_channel_codecs))
+            // EPG viewer endpoints
+            .route("/epg/programs", get(handlers::epg::list_epg_programs))
+            .route("/epg/programs/{source_id}", get(handlers::epg::get_source_epg_programs))
+            .route("/epg/sources", get(handlers::epg::list_epg_sources))
+            .route("/epg/guide", get(handlers::epg::get_epg_guide))
     }
 
     /// Start the web server

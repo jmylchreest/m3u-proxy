@@ -9,6 +9,7 @@ pub mod channel;
 pub mod data_mapping;
 pub mod epg_source;
 pub mod filter;
+pub mod last_known_codec;
 pub mod linked_xtream;
 pub mod logo_asset;
 pub mod relay;
@@ -1132,6 +1133,21 @@ pub struct EpgProgram {
     pub updated_at: DateTime<Utc>,
 }
 
+/// EPG Program with associated channel information for API responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpgProgramWithChannel {
+    pub id: Uuid,
+    pub source_id: Option<Uuid>,
+    pub channel_id: String,
+    pub channel_name: Option<String>,
+    pub channel_logo: Option<String>,
+    pub title: String,
+    pub description: Option<String>,
+    pub start_time: DateTime<Utc>,
+    pub end_time: DateTime<Utc>,
+    pub category: Option<String>,
+    pub rating: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgSourceCreateRequest {

@@ -328,3 +328,20 @@ channel_debug_interval = 1000
 
 # EPG progress log interval (log every N programs)
 epg_progress_interval = 10000
+
+# ┌─────────────────────────────────────────────────────────────┐
+# │                 FEATURE FLAGS CONFIGURATION                │
+# └─────────────────────────────────────────────────────────────┘
+
+[features.flags]
+# Enable debug logging in the frontend web interface
+debug-frontend = true
+
+# Example feature flags (can be added/removed via settings page):
+# experimental-ui = false
+# advanced-video-player = true
+
+# Feature-specific configuration can be added here:
+# [features.config.some-feature]
+# option1 = "value"
+# option2 = 123

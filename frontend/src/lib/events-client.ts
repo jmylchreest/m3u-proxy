@@ -1,5 +1,6 @@
 import { ServiceEvent, ProgressEvent, EventHandler } from '@/types/api'
 import { getBackendUrl } from '@/lib/config'
+import { Debug } from '@/utils/debug'
 
 export class EventsClient {
   private eventSource: EventSource | null = null
@@ -7,32 +8,33 @@ export class EventsClient {
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
   private reconnectDelay = 1000
+  private debug = Debug.createLogger('EventsClient')
 
   connect() {
     if (this.eventSource) {
-      console.log('[Events] Disconnecting existing connection before reconnecting')
+      this.debug.log('Disconnecting existing connection before reconnecting')
       this.disconnect()
     }
 
     try {
-      console.log('[Events] Connecting to events stream')
+      this.debug.log('Connecting to events stream')
       const backendUrl = getBackendUrl()
       this.eventSource = new EventSource(`${backendUrl}/api/v1/progress/events`)
 
       this.eventSource.onopen = () => {
-        console.log('[Events] Connection opened successfully')
+        this.debug.log('Connection opened successfully')
         this.reconnectAttempts = 0
       }
 
       // Handle ALL message events generically
       this.eventSource.onmessage = (event) => {
-        console.log('[Events] Default message received:', event.data)
+        this.debug.log('Default message received:', event.data)
         this.parseAndHandleEvent(event.data)
       }
 
       // Specifically listen for 'progress' events
       this.eventSource.addEventListener('progress', (event: MessageEvent) => {
-        console.log('[Events] Progress event received:', event.data)
+        this.debug.log('Progress event received:', event.data)
         this.parseAndHandleEvent(event.data)
       })
 
@@ -40,25 +42,25 @@ export class EventsClient {
       const otherEventTypes = ['message', 'data', 'update', 'log', 'status', 'event']
       otherEventTypes.forEach(eventType => {
         this.eventSource!.addEventListener(eventType, (event: MessageEvent) => {
-          console.log(`[Events] ${eventType} event received:`, event.data)
+          this.debug.log(`${eventType} event received:`, event.data)
           this.parseAndHandleEvent(event.data)
         })
       })
 
       this.eventSource.onerror = (error) => {
-        console.error('[Events] Connection error:', error, 'ReadyState:', this.eventSource?.readyState)
+        this.debug.error('Connection error:', error, 'ReadyState:', this.eventSource?.readyState)
         this.handleReconnect()
       }
 
     } catch (error) {
-      console.error('[Events] Failed to create SSE connection:', error)
+      this.debug.error('Failed to create SSE connection:', error)
     }
   }
 
   private parseAndHandleEvent(data: string) {
     try {
       const eventData = JSON.parse(data)
-      console.log('[Events] Parsed event data:', eventData)
+      this.debug.log('Parsed event data:', eventData)
       
       // Create a generic ServiceEvent from any JSON structure
       let serviceEvent: ServiceEvent
@@ -94,7 +96,7 @@ export class EventsClient {
       
       this.handleEvent(serviceEvent)
     } catch (error) {
-      console.error('[Events] Failed to parse event:', error, 'Raw data:', data)
+      this.debug.error('Failed to parse event:', error, 'Raw data:', data)
       // Create a fallback event for unparseable data
       const fallbackEvent: ServiceEvent = {
         id: `parse-error-${Date.now()}`,
@@ -109,14 +111,14 @@ export class EventsClient {
   }
 
   private handleEvent(event: ServiceEvent) {
-    console.log(`[Events] Handling event: ${event.level} - ${event.message}`)
+    this.debug.log(`Handling event: ${event.level} - ${event.message}`)
     this.handlers.forEach(handler => handler(event))
   }
 
   private handleReconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++
-      console.log(`[Events] Attempting to reconnect (attempt ${this.reconnectAttempts})`)
+      this.debug.log(`Attempting to reconnect (attempt ${this.reconnectAttempts})`)
       
       setTimeout(() => {
         if (this.eventSource?.readyState === EventSource.CLOSED) {
@@ -124,7 +126,7 @@ export class EventsClient {
         }
       }, this.reconnectDelay * this.reconnectAttempts)
     } else {
-      console.error('[Events] Max reconnect attempts reached, giving up')
+      this.debug.error('Max reconnect attempts reached, giving up')
     }
   }
 

@@ -164,6 +164,9 @@ async fn main() -> Result<()> {
     let mut config = Config::load_from_file(&cli.config)?;
     info!("Configuration loaded from: {}", cli.config);
 
+    // Initialize feature flags from config in runtime store
+    runtime_settings_store.initialize_feature_flags_from_config(&config).await;
+
     // Override config with CLI arguments
     if let Some(host) = cli.host {
         config.web.host = host;

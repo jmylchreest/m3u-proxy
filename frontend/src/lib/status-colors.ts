@@ -39,7 +39,11 @@ export const statusColors: Record<StatusType, StatusColorConfig> = {
 }
 
 // Utility function to get status colors based on status string
-export function getStatusType(status: string): StatusType {
+export function getStatusType(status: string | undefined | null): StatusType {
+  if (!status || typeof status !== 'string') {
+    return 'neutral'
+  }
+  
   const normalizedStatus = status.toLowerCase()
   
   if (['connected', 'running', 'healthy', 'active', 'success', 'completed'].includes(normalizedStatus)) {
@@ -62,7 +66,7 @@ export function getStatusType(status: string): StatusType {
 }
 
 // Get status badge classes
-export function getStatusBadgeClasses(status: string): string {
+export function getStatusBadgeClasses(status: string | undefined | null): string {
   const statusType = getStatusType(status)
   const colors = statusColors[statusType]
   
@@ -70,7 +74,7 @@ export function getStatusBadgeClasses(status: string): string {
 }
 
 // Get status indicator (dot) classes  
-export function getStatusIndicatorClasses(status: string): string {
+export function getStatusIndicatorClasses(status: string | undefined | null): string {
   const statusType = getStatusType(status)
   
   switch (statusType) {
@@ -88,8 +92,12 @@ export function getStatusIndicatorClasses(status: string): string {
 }
 
 // Operator-specific colors for filter expressions
-export function getOperatorBadgeClasses(operator: string): string {
-  const normalizedOp = operator?.toLowerCase()
+export function getOperatorBadgeClasses(operator: string | undefined | null): string {
+  if (!operator || typeof operator !== 'string') {
+    return statusColors.neutral.bg + ' ' + statusColors.neutral.text + ' ' + statusColors.neutral.border + ' border'
+  }
+  
+  const normalizedOp = operator.toLowerCase()
   
   switch (normalizedOp) {
     case 'contains':

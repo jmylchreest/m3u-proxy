@@ -966,6 +966,32 @@ impl StreamProxyRepository {
 
         Ok(source_ids)
     }
+
+    /// Get the proxy ID that contains a specific source ID
+    pub async fn get_proxy_id_for_source(&self, source_id: Uuid) -> RepositoryResult<Option<Uuid>> {
+        let source_id_str = source_id.to_string();
+        let row = sqlx::query("SELECT proxy_id FROM proxy_sources WHERE source_id = ? LIMIT 1")
+            .bind(&source_id_str)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryFailed {
+                query: "get_proxy_id_for_source".to_string(),
+                message: e.to_string(),
+            })?;
+
+        match row {
+            Some(row) => {
+                let proxy_id = parse_uuid_flexible(&row.get::<String, _>("proxy_id")).map_err(|e| {
+                    RepositoryError::QueryFailed {
+                        query: "get_proxy_id_for_source".to_string(),
+                        message: format!("Failed to parse proxy_id: {e}"),
+                    }
+                })?;
+                Ok(Some(proxy_id))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 #[async_trait]

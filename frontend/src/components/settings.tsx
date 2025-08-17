@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   Select,
   SelectContent,
@@ -23,6 +24,7 @@ import {
 } from "lucide-react"
 import { RuntimeSettings, UpdateSettingsRequest, SettingsResponse } from "@/types/api"
 import { apiClient } from "@/lib/api-client"
+import { FeatureFlagsEditor } from "@/components/feature-flags-editor"
 
 // Standard Rust tracing log levels
 const LOG_LEVELS = [
@@ -167,16 +169,16 @@ export function Settings() {
       )}
 
       {saveSuccess && (
-        <Card className="border-green-500">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-green-600">
-              <CheckCircle className="h-4 w-4" />
-              <span className="font-medium">Success:</span>
-              <span>{saveSuccess}</span>
-            </div>
-          </CardContent>
-        </Card>
+        <Alert variant="success">
+          <CheckCircle className="h-4 w-4" />
+          <AlertDescription>
+            <span className="font-medium">Success:</span> {saveSuccess}
+          </AlertDescription>
+        </Alert>
       )}
+
+      {/* Feature Flags Management */}
+      <FeatureFlagsEditor />
 
       {/* Settings Table */}
       {settings && (

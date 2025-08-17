@@ -1,4 +1,5 @@
 import { API_CONFIG } from './config'
+import { Debug } from '@/utils/debug'
 
 export interface ProgressEvent {
   id: string
@@ -32,10 +33,11 @@ export class SSEClient {
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
   private reconnectDelay = 1000
+  private debug = Debug.createLogger('SSEClient')
 
   connect(operationType?: string) {
     if (this.eventSource) {
-      console.log('[SSE] Disconnecting existing connection before reconnecting')
+      this.debug.log('Disconnecting existing connection before reconnecting')
       this.disconnect()
     }
 
@@ -45,53 +47,53 @@ export class SSEClient {
         url.searchParams.set('operation_type', operationType)
       }
 
-      console.log(`[SSE] Connecting to: ${url.toString()}`)
+      this.debug.log(`Connecting to: ${url.toString()}`)
       this.eventSource = new EventSource(url.toString())
 
       this.eventSource.onopen = () => {
-        console.log('[SSE] Connection opened successfully')
+        this.debug.log('Connection opened successfully')
         this.reconnectAttempts = 0
       }
 
       this.eventSource.onmessage = (event) => {
-        console.log('[SSE] Raw message received:', event.data)
+        this.debug.log('Raw message received:', event.data)
         try {
           const progressEvent: ProgressEvent = JSON.parse(event.data)
-          console.log('[SSE] Parsed progress event:', progressEvent)
+          this.debug.log('Parsed progress event:', progressEvent)
           this.handleEvent(progressEvent)
         } catch (error) {
-          console.error('[SSE] Failed to parse event:', error, 'Raw data:', event.data)
+          this.debug.error('Failed to parse event:', error, 'Raw data:', event.data)
         }
       }
 
       this.eventSource.onerror = (error) => {
-        console.error('[SSE] Connection error:', error, 'ReadyState:', this.eventSource?.readyState)
+        this.debug.error('Connection error:', error, 'ReadyState:', this.eventSource?.readyState)
         this.handleReconnect()
       }
 
     } catch (error) {
-      console.error('[SSE] Failed to create SSE connection:', error)
+      this.debug.error('Failed to create SSE connection:', error)
     }
   }
 
   private handleEvent(event: ProgressEvent) {
-    console.log(`[SSE] Handling event for operation_type: ${event.operation_type}`)
+    this.debug.log(`Handling event for operation_type: ${event.operation_type}`)
     
     // Call handlers for specific operation types
     const typeHandlers = this.handlers.get(event.operation_type) || []
-    console.log(`[SSE] Found ${typeHandlers.length} handlers for ${event.operation_type}`)
+    this.debug.log(`Found ${typeHandlers.length} handlers for ${event.operation_type}`)
     typeHandlers.forEach(handler => handler(event))
 
     // Call global handlers
     const globalHandlers = this.handlers.get('*') || []
-    console.log(`[SSE] Found ${globalHandlers.length} global handlers`)
+    this.debug.log(`Found ${globalHandlers.length} global handlers`)
     globalHandlers.forEach(handler => handler(event))
   }
 
   private handleReconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++
-      console.log(`Attempting to reconnect SSE (attempt ${this.reconnectAttempts})`)
+      this.debug.log(`Attempting to reconnect SSE (attempt ${this.reconnectAttempts})`)
       
       setTimeout(() => {
         if (this.eventSource?.readyState === EventSource.CLOSED) {
@@ -99,7 +101,7 @@ export class SSEClient {
         }
       }, this.reconnectDelay * this.reconnectAttempts)
     } else {
-      console.error('Max reconnect attempts reached, giving up')
+      this.debug.error('Max reconnect attempts reached, giving up')
     }
   }
 

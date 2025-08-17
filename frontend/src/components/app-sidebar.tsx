@@ -13,7 +13,9 @@ import {
   FileText,
   Settings,
   Radio,
-  ArrowUpDown
+  ArrowUpDown,
+  Tv,
+  Calendar
 } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -38,6 +40,16 @@ const navigation = [
         title: "Dashboard",
         url: "/",
         icon: Activity,
+      },
+      {
+        title: "Channel Browser",
+        url: "/channels",
+        icon: Tv,
+      },
+      {
+        title: "EPG Viewer",
+        url: "/epg",
+        icon: Calendar,
       },
     ],
   },

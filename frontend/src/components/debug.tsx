@@ -46,6 +46,7 @@ import { ApiResponse, HealthData, KubernetesProbeResponse } from "@/types/api"
 import { getStatusIndicatorClasses, getStatusType } from "@/lib/status-colors"
 import { getBackendUrl } from '@/lib/config'
 import { useHealthData } from "@/hooks/use-health-data"
+import { FeatureFlagsDebug } from "@/components/feature-flags-debug"
 
 interface ChartDataPoint {
   timestamp: string;
@@ -113,7 +114,7 @@ function formatTime(date: Date): string {
   })
 }
 
-function getStatusIcon(status: string) {
+function getStatusIcon(status: string | undefined | null) {
   const statusType = getStatusType(status)
   switch (statusType) {
     case 'success':
@@ -157,22 +158,22 @@ export function Debug() {
       const backendUrl = getBackendUrl()
 
       // Add data point to chart if we have health data
-      if (healthData) {
+      if (healthData && healthData.cpu_info && healthData.memory && healthData.memory.process_memory) {
         const now = new Date()
         const dataPoint: ChartDataPoint = {
           timestamp: now.toISOString(),
           time: formatTime(now),
-          cpuLoad: healthData.system_load * 100, // Keep for backward compatibility
-          cpuLoad1minPct: (healthData.cpu_info.load_1min / healthData.cpu_info.cores) * 100,
-          cpuLoad5minPct: (healthData.cpu_info.load_5min / healthData.cpu_info.cores) * 100,
-          cpuLoad15minPct: (healthData.cpu_info.load_15min / healthData.cpu_info.cores) * 100,
-          cpuLoadPercentage: healthData.cpu_info.load_percentage_1min,
-          totalMemoryUsed: healthData.memory.used_memory_mb,
-          freeMemory: healthData.memory.free_memory_mb,
-          availableMemory: healthData.memory.available_memory_mb,
-          swapUsed: healthData.memory.swap_used_mb,
-          processMemory: healthData.memory.process_memory.main_process_mb,
-          childProcessMemory: healthData.memory.process_memory.child_processes_mb,
+          cpuLoad: (healthData.system_load || 0) * 100, // Keep for backward compatibility
+          cpuLoad1minPct: ((healthData.cpu_info.load_1min || 0) / (healthData.cpu_info.cores || 1)) * 100,
+          cpuLoad5minPct: ((healthData.cpu_info.load_5min || 0) / (healthData.cpu_info.cores || 1)) * 100,
+          cpuLoad15minPct: ((healthData.cpu_info.load_15min || 0) / (healthData.cpu_info.cores || 1)) * 100,
+          cpuLoadPercentage: healthData.cpu_info.load_percentage_1min || 0,
+          totalMemoryUsed: healthData.memory.used_memory_mb || 0,
+          freeMemory: healthData.memory.free_memory_mb || 0,
+          availableMemory: healthData.memory.available_memory_mb || 0,
+          swapUsed: healthData.memory.swap_used_mb || 0,
+          processMemory: healthData.memory.process_memory.main_process_mb || 0,
+          childProcessMemory: healthData.memory.process_memory.child_processes_mb || 0,
         }
         
         setChartData(prev => {
@@ -335,8 +336,8 @@ export function Debug() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                {getStatusIcon(healthData.status)}
-                <div className="text-2xl font-bold">{healthData.status}</div>
+                {getStatusIcon(healthData?.status)}
+                <div className="text-2xl font-bold">{healthData?.status || 'Unknown'}</div>
               </div>
             </CardContent>
           </Card>
@@ -370,10 +371,10 @@ export function Debug() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {formatPercentage(healthData.cpu_info.load_percentage_1min)}
+                {formatPercentage(healthData?.cpu_info?.load_percentage_1min || 0)}
               </div>
               <p className="text-xs text-muted-foreground">
-                {healthData.cpu_info.load_1min.toFixed(2)} / {healthData.cpu_info.cores} cores
+                {(healthData?.cpu_info?.load_1min || 0).toFixed(2)} / {healthData?.cpu_info?.cores || 0} cores
               </p>
             </CardContent>
           </Card>
@@ -386,11 +387,11 @@ export function Debug() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                {getStatusIcon(healthData.components.relay_system.status)}
-                <div className="text-2xl font-bold">{healthData.components.relay_system.healthy_processes}</div>
+                {getStatusIcon(healthData?.components?.relay_system?.status)}
+                <div className="text-2xl font-bold">{healthData?.components?.relay_system?.healthy_processes || 0}</div>
               </div>
               <p className="text-xs text-muted-foreground">
-                {healthData.components.relay_system.healthy_processes}/{healthData.components.relay_system.total_processes} healthy
+                {healthData?.components?.relay_system?.healthy_processes || 0}/{healthData?.components?.relay_system?.total_processes || 0} healthy
               </p>
             </CardContent>
           </Card>
@@ -481,7 +482,7 @@ export function Debug() {
             CPU Load Average
           </CardTitle>
           <CardDescription>
-            System load averages over time ({chartData.length} data points) {healthData && `• ${healthData.cpu_info.cores} cores`}
+            System load averages over time ({chartData.length} data points) {healthData && `• ${healthData?.cpu_info?.cores || 0} cores`}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -648,9 +649,9 @@ export function Debug() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center gap-2">
-                {getStatusIcon(healthData.components.database.status)}
-                <Badge className={getStatusIndicatorClasses(healthData.components.database.status)}>
-                  {healthData.components.database.status}
+                {getStatusIcon(healthData?.components?.database?.status)}
+                <Badge className={getStatusIndicatorClasses(healthData?.components?.database?.status)}>
+                  {healthData?.components?.database?.status || 'Unknown'}
                 </Badge>
                 <Badge variant="outline" className="ml-auto">
                   {healthData.components.database.response_time_status}
@@ -749,9 +750,9 @@ export function Debug() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center gap-2">
-                {getStatusIcon(healthData.components.scheduler.status)}
-                <Badge className={getStatusIndicatorClasses(healthData.components.scheduler.status)}>
-                  {healthData.components.scheduler.status}
+                {getStatusIcon(healthData?.components?.scheduler?.status)}
+                <Badge className={getStatusIndicatorClasses(healthData?.components?.scheduler?.status)}>
+                  {healthData?.components?.scheduler?.status || 'Unknown'}
                 </Badge>
               </div>
 
@@ -761,11 +762,11 @@ export function Debug() {
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Stream Sources:</span>
-                    <span className="font-medium">{healthData.components.scheduler.sources_scheduled.stream_sources}</span>
+                    <span className="font-medium">{healthData?.components?.scheduler?.sources_scheduled?.stream_sources || 0}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">EPG Sources:</span>
-                    <span className="font-medium">{healthData.components.scheduler.sources_scheduled.epg_sources}</span>
+                    <span className="font-medium">{healthData?.components?.scheduler?.sources_scheduled?.epg_sources || 0}</span>
                   </div>
                 </div>
               </div>
@@ -776,23 +777,23 @@ export function Debug() {
                 <div className="grid grid-cols-1 gap-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Active Ingestions:</span>
-                    <span className="font-medium">{healthData.components.scheduler.active_ingestions}</span>
+                    <span className="font-medium">{healthData?.components?.scheduler?.active_ingestions || 0}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Last Cache Refresh:</span>
                     <span className="font-medium text-xs">
-                      {new Date(healthData.components.scheduler.last_cache_refresh).toLocaleString()}
+                      {new Date(healthData?.components?.scheduler?.last_cache_refresh || new Date()).toLocaleString()}
                     </span>
                   </div>
                 </div>
               </div>
 
               {/* Next Scheduled Times */}
-              {healthData.components.scheduler.next_scheduled_times && healthData.components.scheduler.next_scheduled_times.length > 0 && (
+              {healthData?.components?.scheduler?.next_scheduled_times && healthData.components.scheduler.next_scheduled_times.length > 0 && (
                 <div className="space-y-2">
                   <h4 className="text-sm font-medium text-muted-foreground">Next Scheduled Runs</h4>
                   <div className="space-y-2">
-                    {healthData.components.scheduler.next_scheduled_times.map((schedule, index) => (
+                    {(healthData?.components?.scheduler?.next_scheduled_times || []).map((schedule, index) => (
                       <div key={index} className="bg-muted/50 rounded p-2">
                         <div className="flex justify-between items-start text-xs">
                           <div>
@@ -829,9 +830,9 @@ export function Debug() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center gap-2">
-                {getStatusIcon(healthData.components.sandbox_manager.status)}
-                <Badge className={getStatusIndicatorClasses(healthData.components.sandbox_manager.status)}>
-                  {healthData.components.sandbox_manager.status}
+                {getStatusIcon(healthData?.components?.sandbox_manager?.status)}
+                <Badge className={getStatusIndicatorClasses(healthData?.components?.sandbox_manager?.status)}>
+                  {healthData?.components?.sandbox_manager?.status || 'Unknown'}
                 </Badge>
                 <Badge variant="outline" className="ml-auto capitalize">
                   {healthData.components.sandbox_manager.cleanup_status}
@@ -954,6 +955,9 @@ export function Debug() {
         </div>
       )}
 
+
+      {/* Feature Flags Debug */}
+      <FeatureFlagsDebug />
 
       {/* Raw JSON Data */}
       {healthData && (

@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { SSEClient } from '@/lib/sse-client'
 import { getBackendUrl } from '@/lib/config'
 import { ProgressEvent as APIProgressEvent, ProgressStage } from '@/types/api'
+import { Debug } from '@/utils/debug'
 
 // Extend the API type for UI-specific functionality
 export interface ProgressEvent extends APIProgressEvent {
@@ -45,6 +46,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
   const subscribersRef = useRef<Map<string, Set<(event: ProgressEvent) => void>>>(new Map())
   const allSubscribersRef = useRef<Set<(event: NotificationEvent) => void>>(new Set())
   const sseClientRef = useRef<SSEClient | null>(null)
+  const debug = Debug.createLogger('ProgressProvider')
 
   // Determine if we should include completed events based on current page
   const includeCompleted = pathname === '/events/'
@@ -67,7 +69,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
 
   // Handle progress events (now with single operation ID per process)
   const handleProgressEvent = useCallback((event: ProgressEvent) => {
-      console.log('[ProgressProvider] Received event:', {
+      debug.log('Received event:', {
         id: event.id,
         owner_id: event.owner_id,
         owner_type: event.owner_type,
@@ -103,16 +105,16 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
       if (event.owner_id) {
         const subscribers = subscribersRef.current.get(event.owner_id)
         if (subscribers && subscribers.size > 0) {
-          console.log(`[ProgressProvider] Found ${subscribers.size} subscribers for owner: ${event.owner_id}`)
+          debug.log(`Found ${subscribers.size} subscribers for owner: ${event.owner_id}`)
           subscribers.forEach(callback => {
             try {
               callback(event)
             } catch (error) {
-              console.error('[ProgressProvider] Error in resource subscriber:', error)
+              debug.error('Error in resource subscriber:', error)
             }
           })
         } else {
-          console.log(`[ProgressProvider] No subscribers found for owner: ${event.owner_id}`)
+          debug.log(`No subscribers found for owner: ${event.owner_id}`)
         }
       }
 
@@ -122,7 +124,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         try {
           callback(event)
         } catch (error) {
-          console.error('[ProgressProvider] Error in type subscriber:', error)
+          debug.error('Error in type subscriber:', error)
         }
       })
 
@@ -131,14 +133,14 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         try {
           callback(notificationEvent)
         } catch (error) {
-          console.error('[ProgressProvider] Error in all subscriber:', error)
+          debug.error('Error in all subscriber:', error)
         }
       })
   }, [])
 
   // Initialize SSE connection
   useEffect(() => {
-    console.log('[ProgressProvider] Initializing SSE connection')
+    debug.log('Initializing SSE connection')
     
     // Create a simple EventSource directly since we need to control connection status
     const backendUrl = getBackendUrl()
@@ -154,49 +156,49 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
     }
     
     const sseUrl = `${backendUrl}/api/v1/progress/events?${params}`
-    console.log('[ProgressProvider] SSE URL with filters:', sseUrl)
+    debug.log('SSE URL with filters:', sseUrl)
     const eventSource = new EventSource(sseUrl)
     
     eventSource.onopen = () => {
-      console.log('[ProgressProvider] SSE connection opened')
+      debug.log('SSE connection opened')
       setConnected(true)
     }
     
     // Add listener for all event types (including heartbeat)
     eventSource.addEventListener('heartbeat', (event) => {
-      console.log('[ProgressProvider] Heartbeat received:', event.data)
+      debug.log('Heartbeat received:', event.data)
     })
     
     eventSource.addEventListener('progress', (event) => {
-      console.log('[ProgressProvider] Progress event received:', event.data)
+      debug.log('Progress event received:', event.data)
       try {
         const progressEvent: ProgressEvent = JSON.parse(event.data)
-        console.log('[ProgressProvider] Parsed progress event:', progressEvent)
+        debug.log('Parsed progress event:', progressEvent)
         handleProgressEvent(progressEvent)
       } catch (error) {
-        console.error('[ProgressProvider] Failed to parse progress event:', error, 'Raw data:', event.data)
+        debug.error('Failed to parse progress event:', error, 'Raw data:', event.data)
       }
     })
     
     eventSource.onerror = (error) => {
-      console.log('[ProgressProvider] SSE connection error:', error)
+      debug.log('SSE connection error:', error)
       setConnected(false)
     }
     
     eventSource.onmessage = (event) => {
-      console.log('[ProgressProvider] Raw SSE message received:', event)
-      console.log('[ProgressProvider] Event data:', event.data)
+      debug.log('Raw SSE message received:', event)
+      debug.log('Event data:', event.data)
       try {
         const progressEvent: ProgressEvent = JSON.parse(event.data)
-        console.log('[ProgressProvider] Parsed progress event:', progressEvent)
+        debug.log('Parsed progress event:', progressEvent)
         handleProgressEvent(progressEvent)
       } catch (error) {
-        console.error('[ProgressProvider] Failed to parse event:', error, 'Raw data:', event.data)
+        debug.error('Failed to parse event:', error, 'Raw data:', event.data)
       }
     }
 
     return () => {
-      console.log('[ProgressProvider] Cleaning up SSE connection')
+      debug.log('Cleaning up SSE connection')
       eventSource.close()
       setConnected(false)
     }
@@ -204,7 +206,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
 
   // Subscribe to events for specific resource ID
   const subscribe = useCallback((resourceId: string, callback: (event: ProgressEvent) => void) => {
-    console.log(`[ProgressProvider] Subscribing to resource: ${resourceId}`)
+    debug.log(`Subscribing to resource: ${resourceId}`)
     
     if (!subscribersRef.current.has(resourceId)) {
       subscribersRef.current.set(resourceId, new Set())
@@ -213,7 +215,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
 
     // Return unsubscribe function
     return () => {
-      console.log(`[ProgressProvider] Unsubscribing from resource: ${resourceId}`)
+      debug.log(`Unsubscribing from resource: ${resourceId}`)
       const subscribers = subscribersRef.current.get(resourceId)
       if (subscribers) {
         subscribers.delete(callback)
@@ -226,7 +228,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
 
   // Subscribe to events by operation type
   const subscribeToType = useCallback((operationType: string, callback: (event: ProgressEvent) => void) => {
-    console.log(`[ProgressProvider] Subscribing to operation type: ${operationType}`)
+    debug.log(`Subscribing to operation type: ${operationType}`)
     
     if (!subscribersRef.current.has(operationType)) {
       subscribersRef.current.set(operationType, new Set())
@@ -234,7 +236,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
     subscribersRef.current.get(operationType)!.add(callback)
 
     return () => {
-      console.log(`[ProgressProvider] Unsubscribing from operation type: ${operationType}`)
+      debug.log(`Unsubscribing from operation type: ${operationType}`)
       const subscribers = subscribersRef.current.get(operationType)
       if (subscribers) {
         subscribers.delete(callback)
@@ -247,11 +249,11 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
 
   // Subscribe to all events
   const subscribeToAll = useCallback((callback: (event: NotificationEvent) => void) => {
-    console.log('[ProgressProvider] Subscribing to all events')
+    debug.log('Subscribing to all events')
     allSubscribersRef.current.add(callback)
 
     return () => {
-      console.log('[ProgressProvider] Unsubscribing from all events')
+      debug.log('Unsubscribing from all events')
       allSubscribersRef.current.delete(callback)
     }
   }, [])

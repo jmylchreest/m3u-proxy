@@ -224,6 +224,12 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::validate_pipeline_expression,
         crate::web::api::get_pipeline_stage_fields,
         
+        // Channel browser endpoints
+        crate::web::handlers::channels::list_channels,
+        crate::web::handlers::channels::get_proxy_channels,
+        crate::web::handlers::channels::get_channel_stream,
+        crate::web::handlers::channels::probe_channel_codecs,
+        
         // EPG viewer
         // EPG viewer functionality removed
         
@@ -261,6 +267,9 @@ Check the endpoints below to see the complete API surface.
         crate::web::handlers::health::health_check,
         crate::web::handlers::health::readiness_check,
         crate::web::handlers::health::liveness_check,
+        
+        // Feature flags endpoints
+        crate::web::handlers::features::get_features,
         
         // Stream source management
         crate::web::api::cancel_stream_source_ingestion,

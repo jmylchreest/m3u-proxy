@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { getBackendUrl } from '@/lib/config'
-import { ApiResponse, HealthData } from "@/types/api"
+import { HealthData } from "@/types/api"
 
 export function useHealthData(refreshInterval: number = 30000) {
   const [healthData, setHealthData] = useState<HealthData | null>(null)
@@ -14,9 +14,10 @@ export function useHealthData(refreshInterval: number = 30000) {
         const backendUrl = getBackendUrl()
         const response = await fetch(`${backendUrl}/health`)
         if (response.ok) {
-          const data: ApiResponse<HealthData> = await response.json()
-          if (data.data) {
-            setHealthData(data.data)
+          // The health endpoint returns data wrapped in ApiResponse format
+          const apiResponse = await response.json()
+          if (apiResponse.success && apiResponse.data) {
+            setHealthData(apiResponse.data)
           }
         }
       } catch (error) {

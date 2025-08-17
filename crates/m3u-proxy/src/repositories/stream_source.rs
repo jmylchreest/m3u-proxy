@@ -732,4 +732,39 @@ impl StreamSourceRepository {
 
         Ok(channels)
     }
+
+    /// Get source names for a list of source IDs
+    pub async fn get_source_names(&self, source_ids: &[Uuid]) -> RepositoryResult<HashMap<Uuid, String>> {
+        if source_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // Build query with placeholders for SQLite
+        let placeholders: Vec<String> = (1..=source_ids.len()).map(|i| format!("?{}", i)).collect();
+        let query = format!("SELECT id, name FROM stream_sources WHERE id IN ({})", placeholders.join(","));
+        
+        let mut query_builder = sqlx::query(&query);
+        for source_id in source_ids {
+            query_builder = query_builder.bind(source_id.to_string());
+        }
+
+        let rows = query_builder
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryFailed {
+                query: "get_source_names".to_string(),
+                message: e.to_string(),
+            })?;
+
+        let mut result = HashMap::new();
+        for row in rows {
+            let id_str: String = row.try_get("id")?;
+            let name: String = row.try_get("name")?;
+            if let Ok(id) = crate::utils::uuid_parser::parse_uuid_flexible(&id_str) {
+                result.insert(id, name);
+            }
+        }
+
+        Ok(result)
+    }
 }

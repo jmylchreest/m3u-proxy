@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { getBackendUrl } from '@/lib/config'
+import { Debug } from '@/utils/debug'
 
 export interface BackendConnectivityState {
   isConnected: boolean
@@ -35,13 +36,14 @@ export function BackendConnectivityProvider({
   const [error, setError] = useState<string | null>(null)
   
   const backendUrl = getBackendUrl()
+  const debug = Debug.createLogger('BackendConnectivity')
 
   const checkConnection = useCallback(async () => {
     setIsChecking(true)
     setError(null)
     
     try {
-      console.log('[Backend] Checking connectivity to:', backendUrl)
+      debug.log('Checking connectivity to:', backendUrl)
       
       // Use the /live endpoint as it's a simple health check
       const controller = new AbortController()
@@ -58,14 +60,14 @@ export function BackendConnectivityProvider({
       clearTimeout(timeoutId)
       
       if (response.ok) {
-        console.log('[Backend] Connection successful')
+        debug.log('Connection successful')
         setIsConnected(true)
         setError(null)
       } else {
         throw new Error(`Backend returned ${response.status}: ${response.statusText}`)
       }
     } catch (err) {
-      console.error('[Backend] Connection failed:', err)
+      console.error('[Backend] Connection failed:', err) // Keep as console.error - critical for production
       setIsConnected(false)
       
       if (err instanceof Error) {
@@ -95,7 +97,7 @@ export function BackendConnectivityProvider({
     if (!isConnected) return
 
     const interval = setInterval(() => {
-      console.log('[Backend] Performing periodic health check')
+      debug.log('Performing periodic health check')
       checkConnection()
     }, 60000) // 60 seconds
 
@@ -107,7 +109,7 @@ export function BackendConnectivityProvider({
     if (isConnected || isChecking) return
 
     const retryInterval = setInterval(() => {
-      console.log('[Backend] Retrying connection...')
+      debug.log('Retrying connection...')
       checkConnection()
     }, 30000) // 30 seconds
 

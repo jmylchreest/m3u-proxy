@@ -23,6 +23,58 @@ pub struct Config {
     pub data_mapping_engine: Option<DataMappingEngineConfig>,
     pub relay: Option<RelayConfig>,
     pub security: Option<SecurityConfig>,
+    pub features: Option<FeaturesConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FeaturesConfig {
+    /// Simple boolean flags for enabling/disabling features
+    /// Example: debug-frontend = true, experimental-ui = false
+    #[serde(default)]
+    pub flags: std::collections::HashMap<String, bool>,
+    
+    /// Per-feature configuration settings
+    /// Example: config.debug-frontend.level = "verbose", config.video-player.buffer-size = 1024
+    #[serde(default)]
+    pub config: std::collections::HashMap<String, std::collections::HashMap<String, serde_json::Value>>,
+}
+
+impl FeaturesConfig {
+    /// Check if a feature flag is enabled (defaults to false if not found)
+    pub fn is_feature_enabled(&self, feature_name: &str) -> bool {
+        self.flags.get(feature_name).copied().unwrap_or(false)
+    }
+    
+    /// Get configuration for a specific feature (returns empty map if not found)
+    pub fn get_feature_config(&self, feature_name: &str) -> &std::collections::HashMap<String, serde_json::Value> {
+        use std::sync::LazyLock;
+        static EMPTY_CONFIG: LazyLock<std::collections::HashMap<String, serde_json::Value>> = LazyLock::new(|| std::collections::HashMap::new());
+        self.config.get(feature_name).unwrap_or(&EMPTY_CONFIG)
+    }
+    
+    /// Get a specific config value for a feature (returns None if not found)
+    pub fn get_feature_config_value(&self, feature_name: &str, config_key: &str) -> Option<&serde_json::Value> {
+        self.get_feature_config(feature_name).get(config_key)
+    }
+    
+    /// Get a config value as a string (returns None if not found or not a string)
+    pub fn get_config_string(&self, feature_name: &str, config_key: &str) -> Option<String> {
+        self.get_feature_config_value(feature_name, config_key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+    
+    /// Get a config value as a number (returns None if not found or not a number)
+    pub fn get_config_number(&self, feature_name: &str, config_key: &str) -> Option<f64> {
+        self.get_feature_config_value(feature_name, config_key)
+            .and_then(|v| v.as_f64())
+    }
+    
+    /// Get a config value as a boolean (returns None if not found or not a boolean)
+    pub fn get_config_bool(&self, feature_name: &str, config_key: &str) -> Option<bool> {
+        self.get_feature_config_value(feature_name, config_key)
+            .and_then(|v| v.as_bool())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,6 +513,7 @@ impl Default for Config {
             security: Some(SecurityConfig {
                 max_quantifier_limit: default_max_quantifier_limit(),
             }),
+            features: Some(FeaturesConfig::default()),
         }
     }
 }

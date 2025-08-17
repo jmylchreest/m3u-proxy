@@ -20,6 +20,10 @@ function getPageTitle(pathname: string): string {
   switch (normalizedPathname) {
     case "/":
       return "Dashboard"
+    case "/channels":
+      return "Channel Browser"
+    case "/epg":
+      return "EPG Viewer"
     case "/sources/stream":
       return "Stream Sources"
     case "/sources/epg":

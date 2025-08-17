@@ -5,6 +5,7 @@
 //! and affect the actual server behavior.
 
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tracing::{info, warn, error};
 use tracing_subscriber::reload::Handle;
@@ -57,6 +58,10 @@ pub struct RuntimeFlags {
     pub request_timeout_seconds: u32,
     /// Current max connections limit
     pub max_connections: u32,
+    /// Runtime feature flags
+    pub feature_flags: HashMap<String, bool>,
+    /// Runtime feature configuration
+    pub feature_config: HashMap<String, HashMap<String, serde_json::Value>>,
 }
 
 impl Default for RuntimeFlags {
@@ -66,6 +71,8 @@ impl Default for RuntimeFlags {
             metrics_enabled: true,
             request_timeout_seconds: 30,
             max_connections: 1000,
+            feature_flags: HashMap::new(),
+            feature_config: HashMap::new(),
         }
     }
 }
@@ -267,6 +274,74 @@ impl RuntimeSettingsStore {
         }
 
         applied_changes
+    }
+
+    /// Update feature flags and configuration (temporary, not persisted)
+    pub async fn update_feature_flags(
+        &self,
+        flags: HashMap<String, bool>,
+        config: HashMap<String, HashMap<String, serde_json::Value>>,
+    ) -> bool {
+        let mut runtime_flags = self.runtime_flags.write().await;
+        
+        // Update the runtime feature flags and config
+        runtime_flags.feature_flags = flags.clone();
+        runtime_flags.feature_config = config.clone();
+        
+        info!(
+            "Feature flags updated: {} flags, {} configurations (temporary - resets on restart)",
+            flags.len(),
+            config.len()
+        );
+        
+        true
+    }
+
+    /// Get current feature flags (read-only copy)
+    pub async fn get_feature_flags(&self) -> HashMap<String, bool> {
+        self.runtime_flags.read().await.feature_flags.clone()
+    }
+
+    /// Get current feature configuration (read-only copy)
+    pub async fn get_feature_config(&self) -> HashMap<String, HashMap<String, serde_json::Value>> {
+        self.runtime_flags.read().await.feature_config.clone()
+    }
+
+    /// Check if a specific feature flag is enabled
+    pub async fn is_feature_enabled(&self, feature_key: &str) -> bool {
+        self.runtime_flags
+            .read()
+            .await
+            .feature_flags
+            .get(feature_key)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Get configuration for a specific feature
+    pub async fn get_feature_configuration(&self, feature_key: &str) -> HashMap<String, serde_json::Value> {
+        self.runtime_flags
+            .read()
+            .await
+            .feature_config
+            .get(feature_key)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Initialize feature flags from config (called on startup)
+    pub async fn initialize_feature_flags_from_config(&self, config: &crate::config::Config) {
+        if let Some(features) = &config.features {
+            let mut runtime_flags = self.runtime_flags.write().await;
+            runtime_flags.feature_flags = features.flags.clone();
+            runtime_flags.feature_config = features.config.clone();
+            
+            info!(
+                "Initialized feature flags from config: {} flags, {} configurations",
+                features.flags.len(),
+                features.config.len()
+            );
+        }
     }
 }
 

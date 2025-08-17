@@ -3,6 +3,7 @@ import "./globals.css"
 import { EnhancedThemeProvider } from "@/components/enhanced-theme-provider"
 import { BackendConnectivityProvider } from "@/providers/backend-connectivity-provider"
 import { ProgressProvider } from "@/providers/ProgressProvider"
+import { FeatureFlagsProvider } from "@/providers/FeatureFlagsProvider"
 import { AppLayout } from "@/components/app-layout"
 import { enhancedThemeScript } from "@/lib/enhanced-theme-script"
 
@@ -22,11 +23,13 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: enhancedThemeScript }} />
         <EnhancedThemeProvider defaultTheme="graphite" defaultMode="system">
           <BackendConnectivityProvider>
-            <ProgressProvider>
-              <AppLayout>
-                {children}
-              </AppLayout>
-            </ProgressProvider>
+            <FeatureFlagsProvider>
+              <ProgressProvider>
+                <AppLayout>
+                  {children}
+                </AppLayout>
+              </ProgressProvider>
+            </FeatureFlagsProvider>
           </BackendConnectivityProvider>
         </EnhancedThemeProvider>
       </body>

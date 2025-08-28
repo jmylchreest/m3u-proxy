@@ -9,7 +9,7 @@ use std::fmt;
 #[derive(Debug)]
 pub enum PipelineError {
     /// Database operation failed
-    Database(sqlx::Error),
+    Database(sea_orm::DbErr),
     
     /// File system operation failed
     FileSystem(std::io::Error),
@@ -79,8 +79,8 @@ impl std::error::Error for PipelineError {
 }
 
 // Conversion implementations for common error types
-impl From<sqlx::Error> for PipelineError {
-    fn from(error: sqlx::Error) -> Self {
+impl From<sea_orm::DbErr> for PipelineError {
+    fn from(error: sea_orm::DbErr) -> Self {
         PipelineError::Database(error)
     }
 }

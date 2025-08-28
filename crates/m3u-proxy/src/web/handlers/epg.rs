@@ -11,13 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{
-    repositories::{
-        EpgProgramRepository,
-        EpgSourceRepository,
-        EpgProgramQuery,
-        epg_source::EpgSourceQuery,
-        traits::{Repository, PaginatedRepository},
-    },
     web::{AppState, responses::handle_result},
     utils::uuid_parser::parse_uuid_flexible,
     errors::{AppResult, AppError},
@@ -57,6 +50,7 @@ pub struct EpgProgramResponse {
     pub rating: Option<String>,
     pub source_id: Option<String>,
     pub metadata: Option<HashMap<String, String>>,
+    pub is_streamable: bool,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -102,62 +96,104 @@ pub async fn list_epg_programs(
             Utc::now() + chrono::Duration::hours(24)
         });
 
-        // Use read pool for read-only operations
-        let epg_program_repo = EpgProgramRepository::new(state.database.read_pool());
+        // Use clean SeaORM repository (rationalized approach)
+        let epg_program_repo = crate::database::repositories::EpgProgramSeaOrmRepository::new(state.database.connection().clone());
         
-        // Build query from request parameters
-        let mut query = EpgProgramQuery::new()
-            .time_range(start_time, end_time);
+        // Determine source filter
+        let source_filter = if let Some(source_id_str) = params.source_id {
+            parse_uuid_flexible(&source_id_str).ok()
+        } else {
+            None
+        };
         
-        if let Some(search) = params.search {
-            query.base.search = Some(search);
-        }
+        // Get programs by time range (simplified query approach)
+        let mut programs = epg_program_repo
+            .find_by_time_range(source_filter.as_ref(), &start_time, &end_time)
+            .await.map_err(|e| AppError::Validation { message: e.to_string() })?;
         
-        if let Some(source_id_str) = params.source_id {
-            if let Ok(source_id) = parse_uuid_flexible(&source_id_str) {
-                query = query.source_id(source_id);
-            }
-        }
-        
+        // Apply additional filters in memory (simplified for cleaner code)
         if let Some(channel_id_str) = params.channel_id {
             if let Ok(channel_id) = parse_uuid_flexible(&channel_id_str) {
-                query = query.channel_id(channel_id);
+                programs.retain(|p| p.channel_id == channel_id.to_string());
             }
+        }
+        
+        if let Some(search) = params.search {
+            let search_lower = search.to_lowercase();
+            programs.retain(|p| {
+                p.program_title.to_lowercase().contains(&search_lower) ||
+                p.program_description.as_ref().map_or(false, |d| d.to_lowercase().contains(&search_lower))
+            });
         }
         
         if let Some(category) = params.category {
-            query = query.category(category);
+            programs.retain(|p| {
+                p.program_category.as_ref().map_or(false, |c| c.eq_ignore_ascii_case(&category))
+            });
+        }
+        
+        // Apply pagination manually (simplified approach)
+        let total = programs.len() as u32;
+        let start = ((page - 1) * limit) as usize;
+        let end = (start + limit as usize).min(programs.len());
+        let paginated_programs = if start < programs.len() {
+            programs[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        // Check streamability for all programs (database-only, no external HTTP requests)
+        let channel_repo = crate::database::repositories::ChannelSeaOrmRepository::new(state.database.connection().clone());
+        let mut streamable_channels = std::collections::HashSet::new();
+        
+        // Get unique channel IDs from programs
+        let unique_channel_ids: std::collections::HashSet<_> = paginated_programs.iter()
+            .map(|p| &p.channel_id)
+            .collect();
+        
+        // Check each unique channel ID (UUID or tvg_id lookup)
+        for channel_id in unique_channel_ids {
+            let is_streamable = if let Ok(uuid) = crate::utils::uuid_parser::parse_uuid_flexible(channel_id) {
+                // Try UUID lookup first
+                channel_repo.find_by_id(&uuid).await.unwrap_or(None).is_some()
+            } else {
+                // Try tvg_id lookup
+                channel_repo.find_by_tvg_id(channel_id).await.unwrap_or(None).is_some()
+            };
+            
+            if is_streamable {
+                streamable_channels.insert(channel_id.clone());
+            }
         }
 
-        let paginated_result = epg_program_repo
-            .find_paginated(query, page, limit)
-            .await?;
-
-        let program_responses: Vec<EpgProgramResponse> = paginated_result
-            .items
+        let program_responses: Vec<EpgProgramResponse> = paginated_programs
             .into_iter()
-            .map(|program| EpgProgramResponse {
-                id: program.id.to_string(),
-                channel_id: program.channel_id,
-                channel_name: program.channel_name,
-                channel_logo: None, // Not available in current model
-                title: program.program_title,
-                description: program.program_description,
-                start_time: program.start_time,
-                end_time: program.end_time,
-                category: program.program_category,
-                rating: program.rating,
-                source_id: Some(program.source_id.to_string()),
-                metadata: None,
+            .map(|program| {
+                let is_streamable = streamable_channels.contains(&program.channel_id);
+                EpgProgramResponse {
+                    id: program.id.to_string(),
+                    channel_id: program.channel_id.to_string(),
+                    channel_name: program.channel_name,
+                    channel_logo: None, // Not available in current model
+                    title: program.program_title,
+                    description: program.program_description,
+                    start_time: program.start_time,
+                    end_time: program.end_time,
+                    category: program.program_category,
+                    rating: program.rating,
+                    source_id: Some(program.source_id.to_string()),
+                    metadata: None,
+                    is_streamable,
+                }
             })
             .collect();
 
         let response = EpgListResponse {
             programs: program_responses,
-            total: paginated_result.total_count,
-            page: paginated_result.page,
-            limit: paginated_result.limit,
-            has_more: paginated_result.has_next,
+            total: total as u64,
+            page,
+            limit,
+            has_more: (start + limit as usize) < programs.len(),
         };
 
         Ok(response)
@@ -184,26 +220,23 @@ pub async fn get_source_epg_programs(
     Path(source_id_str): Path<String>,
     Query(params): Query<EpgQuery>,
 ) -> impl IntoResponse {
-    async fn inner(state: AppState, source_id_str: String, mut params: EpgQuery) -> AppResult<EpgListResponse> {
+    async fn inner(state: AppState, source_id_str: String, params: EpgQuery) -> AppResult<EpgListResponse> {
         let source_id = parse_uuid_flexible(&source_id_str)
             .map_err(|e| AppError::Validation { message: format!("Invalid source ID format: {}", e) })?;
 
-        // Use read pool for read-only operations
-        let epg_source_repo = EpgSourceRepository::new(state.database.read_pool());
+        // Use clean SeaORM repository (rationalized approach)
+        let epg_source_repo = crate::database::repositories::EpgSourceSeaOrmRepository::new(state.database.connection().clone());
         
         // Verify source exists
         let _source = epg_source_repo
-            .find_by_id(source_id)
-            .await?
+            .find_by_id(&source_id)
+            .await.map_err(|e| AppError::Validation { message: e.to_string() })?
             .ok_or_else(|| AppError::NotFound { 
                 resource: "EPG source".to_string(), 
                 id: source_id_str 
             })?;
 
-        // Override source_id in params
-        params.source_id = Some(source_id.to_string());
-
-        // Call inner logic directly
+        // Call rationalized logic using SeaORM repository
         let page = params.page.unwrap_or(1).max(1);
         let limit = params.limit.unwrap_or(50).min(200);
 
@@ -212,55 +245,96 @@ pub async fn get_source_epg_programs(
             Utc::now() + chrono::Duration::hours(24)
         });
 
-        let epg_program_repo = EpgProgramRepository::new(state.database.read_pool());
+        let epg_program_repo = crate::database::repositories::EpgProgramSeaOrmRepository::new(state.database.connection().clone());
         
-        let mut query = EpgProgramQuery::new()
-            .time_range(start_time, end_time)
-            .source_id(source_id);
+        // Get programs by time range for specific source
+        let mut programs = epg_program_repo
+            .find_by_time_range(Some(&source_id), &start_time, &end_time)
+            .await.map_err(|e| AppError::Validation { message: e.to_string() })?;
         
-        if let Some(search) = params.search {
-            query.base.search = Some(search);
-        }
-        
+        // Apply additional filters in memory (simplified approach)
         if let Some(channel_id_str) = params.channel_id {
             if let Ok(channel_id) = parse_uuid_flexible(&channel_id_str) {
-                query = query.channel_id(channel_id);
+                programs.retain(|p| p.channel_id == channel_id.to_string());
             }
         }
         
+        if let Some(search) = params.search {
+            let search_lower = search.to_lowercase();
+            programs.retain(|p| {
+                p.program_title.to_lowercase().contains(&search_lower) ||
+                p.program_description.as_ref().map_or(false, |d| d.to_lowercase().contains(&search_lower))
+            });
+        }
+        
         if let Some(category) = params.category {
-            query = query.category(category);
+            programs.retain(|p| {
+                p.program_category.as_ref().map_or(false, |c| c.eq_ignore_ascii_case(&category))
+            });
         }
 
-        let paginated_result = epg_program_repo
-            .find_paginated(query, page, limit)
-            .await?;
+        // Apply pagination manually (simplified approach)
+        let total = programs.len() as u32;
+        let start = ((page - 1) * limit) as usize;
+        let end = (start + limit as usize).min(programs.len());
+        let paginated_programs = if start < programs.len() {
+            programs[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
 
-        let program_responses: Vec<EpgProgramResponse> = paginated_result
-            .items
+        // Check streamability for all programs (database-only, no external HTTP requests)  
+        let channel_repo = crate::database::repositories::ChannelSeaOrmRepository::new(state.database.connection().clone());
+        let mut streamable_channels = std::collections::HashSet::new();
+        
+        // Get unique channel IDs from programs
+        let unique_channel_ids: std::collections::HashSet<_> = paginated_programs.iter()
+            .map(|p| &p.channel_id)
+            .collect();
+        
+        // Check each unique channel ID (UUID or tvg_id lookup)
+        for channel_id in unique_channel_ids {
+            let is_streamable = if let Ok(uuid) = crate::utils::uuid_parser::parse_uuid_flexible(channel_id) {
+                // Try UUID lookup first
+                channel_repo.find_by_id(&uuid).await.unwrap_or(None).is_some()
+            } else {
+                // Try tvg_id lookup
+                channel_repo.find_by_tvg_id(channel_id).await.unwrap_or(None).is_some()
+            };
+            
+            if is_streamable {
+                streamable_channels.insert(channel_id.clone());
+            }
+        }
+
+        let program_responses: Vec<EpgProgramResponse> = paginated_programs
             .into_iter()
-            .map(|program| EpgProgramResponse {
-                id: program.id.to_string(),
-                channel_id: program.channel_id,
-                channel_name: program.channel_name,
-                channel_logo: None,
-                title: program.program_title,
-                description: program.program_description,
-                start_time: program.start_time,
-                end_time: program.end_time,
-                category: program.program_category,
-                rating: program.rating,
-                source_id: Some(program.source_id.to_string()),
-                metadata: None,
+            .map(|program| {
+                let is_streamable = streamable_channels.contains(&program.channel_id);
+                EpgProgramResponse {
+                    id: program.id.to_string(),
+                    channel_id: program.channel_id.to_string(),
+                    channel_name: program.channel_name,
+                    channel_logo: None,
+                    title: program.program_title,
+                    description: program.program_description,
+                    start_time: program.start_time,
+                    end_time: program.end_time,
+                    category: program.program_category,
+                    rating: program.rating,
+                    source_id: Some(program.source_id.to_string()),
+                    metadata: None,
+                    is_streamable,
+                }
             })
             .collect();
 
         let response = EpgListResponse {
             programs: program_responses,
-            total: paginated_result.total_count,
-            page: paginated_result.page,
-            limit: paginated_result.limit,
-            has_more: paginated_result.has_next,
+            total: total as u64,
+            page,
+            limit,
+            has_more: (start + limit as usize) < programs.len(),
         };
 
         Ok(response)
@@ -282,13 +356,12 @@ pub async fn list_epg_sources(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     async fn inner(state: AppState) -> AppResult<Vec<EpgSourceResponse>> {
-        // Use read pool for read-only operations
-        let epg_source_repo = EpgSourceRepository::new(state.database.read_pool());
+        // Use clean SeaORM repository (rationalized approach)
+        let epg_source_repo = crate::database::repositories::EpgSourceSeaOrmRepository::new(state.database.connection().clone());
         
-        let query = EpgSourceQuery::new();
         let sources = epg_source_repo
-            .find_all(query)
-            .await?;
+            .find_all()
+            .await.map_err(|e| AppError::Validation { message: e.to_string() })?;
 
         let source_responses: Vec<EpgSourceResponse> = sources
             .into_iter()
@@ -330,31 +403,30 @@ pub async fn get_epg_guide(
             Utc::now() + chrono::Duration::hours(6)
         });
 
-        // Use read pool for read-only operations
-        let epg_program_repo = EpgProgramRepository::new(state.database.read_pool());
+        // Use clean SeaORM repository (rationalized approach)
+        let epg_program_repo = crate::database::repositories::EpgProgramSeaOrmRepository::new(state.database.connection().clone());
         
-        // Build query from request parameters
-        let mut query = EpgProgramQuery::new()
-            .time_range(start_time, end_time);
+        // Determine source filter
+        let source_filter = if let Some(source_id_str) = params.source_id {
+            parse_uuid_flexible(&source_id_str).ok()
+        } else {
+            None
+        };
         
-        if let Some(source_id_str) = params.source_id {
-            if let Ok(source_id) = parse_uuid_flexible(&source_id_str) {
-                query = query.source_id(source_id);
-            }
-        }
+        // Get programs by time range
+        let mut programs = epg_program_repo
+            .find_by_time_range(source_filter.as_ref(), &start_time, &end_time)
+            .await.map_err(|e| AppError::Validation { message: e.to_string() })?;
         
+        // Apply channel filter if specified
         if let Some(channel_id_str) = params.channel_id {
             if let Ok(channel_id) = parse_uuid_flexible(&channel_id_str) {
-                query = query.channel_id(channel_id);
+                programs.retain(|p| p.channel_id == channel_id.to_string());
             }
         }
         
-        // Set high limit for grid view
-        query.base.limit = Some(1000);
-
-        let programs = epg_program_repo
-            .find_all(query)
-            .await?;
+        // Limit results for grid view (in-memory approach)
+        programs.truncate(1000);
 
         // Group programs by channel for grid display
         let mut grid_data = HashMap::new();
@@ -362,7 +434,7 @@ pub async fn get_epg_guide(
         let mut time_slots = Vec::new();
 
         for program in programs {
-            let channel_id = program.channel_id.clone();
+            let channel_id = program.channel_id.to_string();
             
             // Track channels
             channels.insert(channel_id.clone(), serde_json::json!({
@@ -406,3 +478,4 @@ pub async fn get_epg_guide(
     
     handle_result(inner(state, params).await)
 }
+

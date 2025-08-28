@@ -254,11 +254,8 @@ export default function ChannelsPage() {
 
   const handlePlayChannel = async (channel: Channel) => {
     try {
-      // Convert relative URLs to absolute URLs
-      let streamUrl = channel.stream_url;
-      if (streamUrl.startsWith('/')) {
-        streamUrl = `${window.location.origin}${streamUrl}`;
-      }
+      // Use the new unified channel streaming endpoint (directly streams content, no CORS issues)
+      const streamUrl = `/channel/${channel.id}/stream`;
       
       setSelectedChannel({
         ...channel,
@@ -288,10 +285,23 @@ export default function ChannelsPage() {
       const result = await response.json();
       
       if (result.success === 'true' || result.success === true) {
-        // Refresh the channels list to show updated codec information
-        fetchChannels(debouncedSearch, selectedGroup, 1, false, false);
+        // Update the specific channel in the local state with the new codec information
+        setChannels(prev => prev.map(ch => {
+          if (ch.id === channel.id) {
+            return {
+              ...ch,
+              video_codec: result.data?.video_codec || ch.video_codec,
+              audio_codec: result.data?.audio_codec || ch.audio_codec,
+              resolution: result.data?.resolution || ch.resolution,
+              last_probed_at: new Date().toISOString(),
+              probe_method: 'ffprobe_manual'
+            };
+          }
+          return ch;
+        }));
+        setError(null);
       } else {
-        setError(result.error || 'Failed to probe channel');
+        setError(result.data?.error || result.error || 'Failed to probe channel');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to probe channel');
@@ -305,7 +315,10 @@ export default function ChannelsPage() {
   };
 
   const LogoWithPopover = ({ channel }: { channel: Channel }) => {
-    if (!channel.logo_url) {
+    const [imageError, setImageError] = useState(false);
+    const [popoverImageError, setPopoverImageError] = useState(false);
+
+    if (!channel.logo_url || imageError) {
       return <div className="w-8 h-8 bg-muted rounded flex items-center justify-center text-muted-foreground text-xs">
         No Logo
       </div>;
@@ -319,23 +332,25 @@ export default function ChannelsPage() {
               src={channel.logo_url}
               alt={channel.name}
               className="w-8 h-8 object-contain rounded hover:scale-110 transition-transform"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
-              }}
+              onError={() => setImageError(true)}
             />
           </div>
         </PopoverTrigger>
         <PopoverContent className="w-80">
           <div className="space-y-2">
             <h4 className="font-semibold">{channel.name}</h4>
-            <img
-              src={channel.logo_url}
-              alt={channel.name}
-              className="w-full max-w-64 h-auto object-contain mx-auto"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
-              }}
-            />
+            {popoverImageError ? (
+              <div className="w-full max-w-64 h-32 bg-muted rounded flex items-center justify-center mx-auto">
+                <span className="text-muted-foreground text-sm">Logo not available</span>
+              </div>
+            ) : (
+              <img
+                src={channel.logo_url}
+                alt={channel.name}
+                className="w-full max-w-64 h-auto object-contain mx-auto"
+                onError={() => setPopoverImageError(true)}
+              />
+            )}
           </div>
         </PopoverContent>
       </Popover>
@@ -458,7 +473,8 @@ export default function ChannelsPage() {
               alt={channel.name}
               className="w-8 h-8 object-contain ml-2 flex-shrink-0"
               onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
+                const img = e.target as HTMLImageElement;
+                img.style.display = 'none';
               }}
             />
           )}
@@ -532,7 +548,8 @@ export default function ChannelsPage() {
                 alt={channel.name}
                 className="w-10 h-10 object-contain"
                 onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
+                  const img = e.target as HTMLImageElement;
+                  img.style.display = 'none';
                 }}
               />
             )}
@@ -704,7 +721,7 @@ export default function ChannelsPage() {
               onClick={() => setViewMode('list')}
               title="Compact list view"
             >
-              <List className="w-4 h-4 rotate-90" />
+              <List className="w-4 h-4" />
             </Button>
           </div>
           </div>

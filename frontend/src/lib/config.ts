@@ -23,7 +23,7 @@ export const API_CONFIG = {
     dataMapping: '/api/v1/data-mapping',
     logos: '/api/v1/logos',
     relays: '/api/v1/relay',
-    dashboard: '/api/v1/dashboard/metrics',
+    dashboard: '/api/v1/metrics/dashboard',
     health: '/health'
   }
 } as const

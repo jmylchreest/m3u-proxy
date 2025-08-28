@@ -1,6 +1,6 @@
 use anyhow::Result;
 use sandboxed_file_manager::SandboxedManager;
-use sqlx::SqlitePool;
+use sea_orm::DatabaseConnection;
 use std::collections::{HashMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,7 +28,7 @@ struct ChannelInfo {
 /// Files will be atomically published by the publish_content stage
 pub struct GenerationStage {
     
-    db_pool: SqlitePool,
+    db_connection: Arc<DatabaseConnection>,
     pipeline_file_manager: SandboxedManager,  // Pipeline temporary storage
     pipeline_execution_prefix: String,
     proxy_id: Uuid,
@@ -39,7 +39,7 @@ pub struct GenerationStage {
 
 impl GenerationStage {
     pub async fn new(
-        db_pool: SqlitePool,
+        db_connection: Arc<DatabaseConnection>,
         pipeline_file_manager: SandboxedManager,  // Pipeline temporary storage
         pipeline_execution_prefix: String,
         proxy_id: Uuid,
@@ -47,7 +47,7 @@ impl GenerationStage {
         progress_manager: Option<Arc<ProgressManager>>,
     ) -> Result<Self> {
         Ok(Self {
-            db_pool,
+            db_connection,
             pipeline_file_manager,
             pipeline_execution_prefix,
             proxy_id,
@@ -519,7 +519,7 @@ impl PipelineStage for GenerationStage {
             std::path::PathBuf::from("/tmp/logos_cached")
         );
         let logo_service = crate::logo_assets::service::LogoAssetService::new(
-            self.db_pool.clone(),
+            self.db_connection.clone(),
             logo_storage
         );
         let artifacts = self.process_channels_and_programs(numbered_channels, epg_programs, false, &logo_service).await

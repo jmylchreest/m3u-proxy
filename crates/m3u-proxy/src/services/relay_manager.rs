@@ -19,7 +19,7 @@ use crate::database::Database;
 use crate::metrics::MetricsLogger;
 use crate::models::relay::*;
 use crate::proxy::session_tracker::ClientInfo;
-use crate::repositories::channel::ChannelRepository;
+use crate::database::repositories::channel::ChannelSeaOrmRepository;
 use crate::services::ffmpeg_wrapper::{FFmpegProcess, FFmpegProcessWrapper};
 use sandboxed_file_manager::SandboxedManager;
 
@@ -402,7 +402,7 @@ impl RelayManager {
 
     /// Get channel name from database using repository
     async fn get_channel_name(&self, channel_id: Uuid) -> Option<String> {
-        let channel_repo = ChannelRepository::new(self.database.pool());
+        let channel_repo = ChannelSeaOrmRepository::new(self.database.connection().clone());
         let channel_name: Option<String> = (channel_repo.get_channel_name(channel_id).await).unwrap_or_default();
         channel_name
     }
@@ -482,7 +482,7 @@ impl RelayManager {
                     let bytes_delivered = buffer_stats.total_bytes_written;
                     
                     // Get actual channel name using repository
-                    let channel_repo = ChannelRepository::new(database.pool());
+                    let channel_repo = ChannelSeaOrmRepository::new(database.connection().clone());
                     let channel_name = match channel_repo.get_channel_name(process.config.config.channel_id).await {
                         Ok(Some(name)) => name,
                         _ => format!("Channel {}", process.config.config.channel_id),

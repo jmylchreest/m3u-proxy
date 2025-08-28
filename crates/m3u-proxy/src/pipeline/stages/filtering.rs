@@ -14,7 +14,9 @@ use crate::models::{Channel, FilterSourceType};
 use crate::services::progress_service::ProgressManager;
 use crate::utils::regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
 use sandboxed_file_manager::SandboxedManager;
-use sqlx::SqlitePool;
+use sea_orm::DatabaseConnection;
+use crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository;
+use crate::database::repositories::filter::FilterSeaOrmRepository;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
@@ -32,7 +34,8 @@ struct FilterRule {
 }
 
 pub struct FilteringStage {
-    db_pool: SqlitePool,
+    proxy_repository: StreamProxySeaOrmRepository,
+    filter_repository: FilterSeaOrmRepository,
     file_manager: SandboxedManager,
     
     regex_preprocessor: RegexPreprocessor,
@@ -42,7 +45,7 @@ pub struct FilteringStage {
 
 impl FilteringStage {
     pub async fn new(
-        db_pool: SqlitePool, 
+        db_connection: Arc<DatabaseConnection>, 
         file_manager: SandboxedManager, 
         _pipeline_execution_prefix: String, 
         proxy_id: Option<uuid::Uuid>,
@@ -50,8 +53,13 @@ impl FilteringStage {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let regex_preprocessor = RegexPreprocessor::new(RegexPreprocessorConfig::default());
         
+        // Create repositories using the Arc<DatabaseConnection>
+        let proxy_repository = StreamProxySeaOrmRepository::new(db_connection.clone());
+        let filter_repository = FilterSeaOrmRepository::new(db_connection);
+        
         Ok(Self {
-            db_pool,
+            proxy_repository,
+            filter_repository,
             file_manager,
             regex_preprocessor,
             proxy_id,
@@ -313,38 +321,35 @@ impl FilteringStage {
     
     async fn load_filter_rules(&self, source_type: FilterSourceType) -> Result<Vec<FilterRule>, Box<dyn std::error::Error>> {
         if let Some(proxy_id) = self.proxy_id {
-            // Load proxy-specific filters with priority ordering
-            let query = r#"
-                SELECT pf.priority_order, f.id, f.name, f.source_type, f.expression, f.is_inverse, f.is_system_default
-                FROM proxy_filters pf
-                JOIN filters f ON pf.filter_id = f.id
-                WHERE pf.proxy_id = ? AND pf.is_active = 1 AND f.source_type = ?
-                ORDER BY pf.priority_order ASC
-            "#;
-            
-            let source_type_str = match source_type {
-                FilterSourceType::Stream => "stream",
-                FilterSourceType::Epg => "epg",
-            };
-            
-            let rows = sqlx::query_as::<_, (i32, String, String, String, String, bool, bool)>(query)
-                .bind(proxy_id.to_string())
-                .bind(source_type_str)
-                .fetch_all(&self.db_pool)
-                .await?;
+            // Use SeaORM repository to get proxy filters with proper relationships
+            let proxy_filters = self.proxy_repository.get_proxy_filters(proxy_id).await?;
             
             let mut rules = Vec::new();
-            for (priority_order, id, name, _source_type, expression, is_inverse, is_system_default) in rows {
-                rules.push(FilterRule {
-                    id,
-                    name,
-                    source_type: source_type.clone(),
-                    expression,
-                    is_inverse,
-                    is_system_default,
-                    priority_order,
-                });
+            for proxy_filter in proxy_filters {
+                // Get the actual filter details using the filter repository
+                if let Some(filter) = self.filter_repository.find_by_id(proxy_filter.filter_id).await? {
+                    // Only include filters that match the requested source type and are active
+                    let filter_source_type = match filter.source_type {
+                        crate::models::FilterSourceType::Stream => FilterSourceType::Stream,
+                        crate::models::FilterSourceType::Epg => FilterSourceType::Epg,
+                    };
+                    
+                    if filter_source_type == source_type && proxy_filter.is_active {
+                        rules.push(FilterRule {
+                            id: filter.id.to_string(),
+                            name: filter.name,
+                            source_type: filter_source_type,
+                            expression: filter.expression,
+                            is_inverse: filter.is_inverse,
+                            is_system_default: filter.is_system_default,
+                            priority_order: proxy_filter.priority_order,
+                        });
+                    }
+                }
             }
+            
+            // Sort by priority order
+            rules.sort_by_key(|r| r.priority_order);
             
             Ok(rules)
         } else {

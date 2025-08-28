@@ -32,15 +32,6 @@ impl StreamSource {
     }
 }
 
-impl std::fmt::Display for StreamSourceType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StreamSourceType::M3u => write!(f, "m3u"),
-            StreamSourceType::Xtream => write!(f, "xtream"),
-        }
-    }
-}
-
 impl std::str::FromStr for StreamSourceType {
     type Err = anyhow::Error;
 
@@ -49,6 +40,15 @@ impl std::str::FromStr for StreamSourceType {
             "m3u" => Ok(StreamSourceType::M3u),
             "xtream" => Ok(StreamSourceType::Xtream),
             _ => Err(anyhow::anyhow!("Invalid stream source type: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for StreamSourceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamSourceType::M3u => write!(f, "m3u"),
+            StreamSourceType::Xtream => write!(f, "xtream"),
         }
     }
 }

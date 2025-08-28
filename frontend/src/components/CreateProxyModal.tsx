@@ -484,55 +484,43 @@ export function ProxySheet({
           
           // If editing, load existing proxy data
           if (mode === 'edit' && proxy) {
-            // Try multiple approaches to get proxy associations
+            // Get detailed proxy information with relationships
             let streamSources: any[] = []
             let epgSources: any[] = []
             let filters: any[] = []
+            let detailedProxy: any = null
             
-            // Approach 1: Try to get detailed proxy information
             try {
               const proxyResponse = await apiClient.getProxy(proxy.id)
-              const detailedProxy = proxyResponse.data || proxyResponse
+              detailedProxy = proxyResponse.data || proxyResponse
               
               if (detailedProxy && typeof detailedProxy === 'object') {
                 const proxyData = detailedProxy as any
                 console.log('Detailed proxy data:', proxyData)
                 
+                // Extract relationships from proxy response
                 if (proxyData.stream_sources && Array.isArray(proxyData.stream_sources)) {
-                  streamSources = proxyData.stream_sources
+                  streamSources = proxyData.stream_sources.map((source: any) => ({
+                    source_id: source.source_id,
+                    priority_order: source.priority_order
+                  }))
                 }
                 if (proxyData.epg_sources && Array.isArray(proxyData.epg_sources)) {
-                  epgSources = proxyData.epg_sources
+                  epgSources = proxyData.epg_sources.map((source: any) => ({
+                    epg_source_id: source.epg_source_id,
+                    priority_order: source.priority_order
+                  }))
                 }
                 if (proxyData.filters && Array.isArray(proxyData.filters)) {
-                  filters = proxyData.filters
+                  filters = proxyData.filters.map((filter: any) => ({
+                    filter_id: filter.filter_id,
+                    priority_order: filter.priority_order,
+                    is_active: filter.is_active
+                  }))
                 }
               }
             } catch (proxyError) {
-              console.warn('Failed to load detailed proxy data:', proxyError)
-            }
-            
-            // Approach 2: Try separate endpoints for proxy associations
-            if (streamSources.length === 0 || epgSources.length === 0 || filters.length === 0) {
-              try {
-                const [proxyStreamSources, proxyEpgSources, proxyFilters] = await Promise.allSettled([
-                  apiClient.getProxyStreamSources(proxy.id),
-                  apiClient.getProxyEpgSources(proxy.id),
-                  apiClient.getProxyFilters(proxy.id)
-                ])
-                
-                if (proxyStreamSources.status === 'fulfilled' && Array.isArray(proxyStreamSources.value)) {
-                  streamSources = proxyStreamSources.value
-                }
-                if (proxyEpgSources.status === 'fulfilled' && Array.isArray(proxyEpgSources.value)) {
-                  epgSources = proxyEpgSources.value
-                }
-                if (proxyFilters.status === 'fulfilled' && Array.isArray(proxyFilters.value)) {
-                  filters = proxyFilters.value
-                }
-              } catch (associationError) {
-                console.warn('Failed to load proxy associations:', associationError)
-              }
+              console.error('Failed to load detailed proxy data:', proxyError)
             }
             
             console.log('Loaded proxy associations:', {
@@ -541,25 +529,25 @@ export function ProxySheet({
               filters
             })
             
-            // Cast proxy to any to check for additional fields
-            const proxyData = proxy as any
-            
             // Update form data with proxy values and loaded associations
+            // Use the detailed proxy data from API response if available, otherwise fall back to input proxy
+            const sourceProxyData = detailedProxy || proxy
+            
             setFormData({
-              name: proxy.name,
-              description: proxy.description || "",
-              proxy_mode: proxy.proxy_mode as "redirect" | "proxy" | "relay",
-              upstream_timeout: proxy.upstream_timeout || 30,
-              max_concurrent_streams: proxy.max_concurrent_streams || 10,
-              starting_channel_number: proxy.starting_channel_number,
+              name: sourceProxyData.name,
+              description: sourceProxyData.description || "",
+              proxy_mode: sourceProxyData.proxy_mode as "redirect" | "proxy" | "relay",
+              upstream_timeout: sourceProxyData.upstream_timeout || 30,
+              max_concurrent_streams: sourceProxyData.max_concurrent_streams || 10,
+              starting_channel_number: sourceProxyData.starting_channel_number,
               stream_sources: streamSources,
               epg_sources: epgSources,
               filters: filters,
-              is_active: proxy.is_active,
-              auto_regenerate: proxy.auto_regenerate,
-              cache_channel_logos: proxy.cache_channel_logos,
-              cache_program_logos: proxy.cache_program_logos,
-              relay_profile_id: proxy.relay_profile_id || ""
+              is_active: sourceProxyData.is_active,
+              auto_regenerate: sourceProxyData.auto_regenerate,
+              cache_channel_logos: sourceProxyData.cache_channel_logos,
+              cache_program_logos: sourceProxyData.cache_program_logos,
+              relay_profile_id: sourceProxyData.relay_profile_id || ""
             })
           } else {
             // Reset form for create mode

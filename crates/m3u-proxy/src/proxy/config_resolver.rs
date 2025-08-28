@@ -10,24 +10,26 @@ use uuid::Uuid;
 use crate::{
     errors::types::AppError,
     models::*,
-    repositories::{
-        FilterRepository, StreamProxyRepository, StreamSourceRepository, traits::Repository,
+    database::repositories::{
+        stream_source::StreamSourceSeaOrmRepository,
+        stream_proxy::StreamProxySeaOrmRepository,
+        filter::FilterSeaOrmRepository,
     },
     web::handlers::proxies::PreviewProxyRequest,
 };
 
 /// Service for resolving proxy configurations from database
 pub struct ProxyConfigResolver {
-    proxy_repo: StreamProxyRepository,
-    stream_source_repo: StreamSourceRepository,
-    filter_repo: FilterRepository,
+    proxy_repo: StreamProxySeaOrmRepository,
+    stream_source_repo: StreamSourceSeaOrmRepository,
+    filter_repo: FilterSeaOrmRepository,
 }
 
 impl ProxyConfigResolver {
     pub fn new(
-        proxy_repo: StreamProxyRepository,
-        stream_source_repo: StreamSourceRepository,
-        filter_repo: FilterRepository,
+        proxy_repo: StreamProxySeaOrmRepository,
+        stream_source_repo: StreamSourceSeaOrmRepository,
+        filter_repo: FilterSeaOrmRepository,
     ) -> Self {
         Self {
             proxy_repo,
@@ -43,9 +45,9 @@ impl ProxyConfigResolver {
         // Get the proxy
         let proxy = self
             .proxy_repo
-            .find_by_id(proxy_id)
+            .find_by_id(&proxy_id)
             .await
-            .map_err(AppError::Repository)?
+            .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             .ok_or_else(|| AppError::NotFound {
                 resource: "stream_proxy".to_string(),
                 id: proxy_id.to_string(),
@@ -57,16 +59,16 @@ impl ProxyConfigResolver {
             self.proxy_repo.get_proxy_epg_sources(proxy.id),
             self.proxy_repo.get_proxy_filters(proxy.id)
         )
-        .map_err(AppError::Repository)?;
+        .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?;
 
         // Resolve source configurations
         let mut sources = Vec::new();
         for proxy_source in proxy_sources {
             if let Some(source) = self
                 .stream_source_repo
-                .find_by_id(proxy_source.source_id)
+                .find_by_id(&proxy_source.source_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             {
                 // Filter out inactive sources entirely
                 if !source.is_active {
@@ -93,7 +95,7 @@ impl ProxyConfigResolver {
                 .filter_repo
                 .find_by_id(proxy_filter.filter_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             {
                 filters.push(ProxyFilterConfig {
                     filter,
@@ -113,7 +115,7 @@ impl ProxyConfigResolver {
                 .proxy_repo
                 .find_epg_source_by_id(proxy_epg_source.epg_source_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             {
                 // Filter out inactive EPG sources entirely
                 if !epg_source.is_active {
@@ -187,9 +189,9 @@ impl ProxyConfigResolver {
         for source_req in &request.stream_sources {
             if let Some(source) = self
                 .stream_source_repo
-                .find_by_id(source_req.source_id)
+                .find_by_id(&source_req.source_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             {
                 // Filter out inactive sources entirely
                 if !source.is_active {
@@ -219,7 +221,7 @@ impl ProxyConfigResolver {
                 .filter_repo
                 .find_by_id(filter_req.filter_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             {
                 filters.push(ProxyFilterConfig {
                     filter,
@@ -245,7 +247,7 @@ impl ProxyConfigResolver {
                 .proxy_repo
                 .find_epg_source_by_id(epg_source_req.epg_source_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             {
                 // Filter out inactive EPG sources entirely
                 if !epg_source.is_active {

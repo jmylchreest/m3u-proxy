@@ -1,9 +1,9 @@
 use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use utoipa::ToSchema;
 use uuid::Uuid;
+use sea_orm::sea_query::StringLen;
 
 pub mod channel;
 pub mod data_mapping;
@@ -16,7 +16,7 @@ pub mod relay;
 pub mod stream_proxy;
 pub mod stream_source;
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(description = "Stream source configuration for M3U playlists or Xtream Codes APIs")]
 pub struct StreamSource {
     pub id: Uuid,
@@ -37,21 +37,28 @@ pub struct StreamSource {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Hash, ToSchema)]
-#[sqlx(type_name = "stream_source_type", rename_all = "lowercase")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, ToSchema, sea_orm::DeriveActiveEnum, strum::EnumIter)]
 #[serde(rename_all = "lowercase")]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 pub enum StreamSourceType {
+    #[sea_orm(string_value = "m3u")]
     M3u,
+    #[sea_orm(string_value = "xtream")]
     Xtream,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Hash, Default)]
-#[sqlx(type_name = "stream_proxy_mode", rename_all = "lowercase")]
+
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default, sea_orm::DeriveActiveEnum, strum::EnumIter)]
 #[serde(rename_all = "lowercase")]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 pub enum StreamProxyMode {
     #[default]
+    #[sea_orm(string_value = "redirect")]
     Redirect,
+    #[sea_orm(string_value = "proxy")]
     Proxy,
+    #[sea_orm(string_value = "relay")]
     Relay,
 }
 
@@ -71,7 +78,7 @@ impl FromStr for StreamProxyMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamProxy {
     pub id: Uuid,
     pub name: String,
@@ -105,7 +112,7 @@ fn default_update_linked() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxySource {
     pub proxy_id: Uuid,
     pub source_id: Uuid,
@@ -113,7 +120,7 @@ pub struct ProxySource {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyEpgSource {
     pub proxy_id: Uuid,
     pub epg_source_id: Uuid,
@@ -134,15 +141,38 @@ pub struct Filter {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, ToSchema)]
-#[sqlx(type_name = "filter_source_type", rename_all = "lowercase")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema, sea_orm::DeriveActiveEnum, strum::EnumIter)]
 #[serde(rename_all = "lowercase")]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 pub enum FilterSourceType {
+    #[sea_orm(string_value = "stream")]
     Stream,
+    #[sea_orm(string_value = "epg")]
     Epg,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+impl std::str::FromStr for FilterSourceType {
+    type Err = String;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "stream" => Ok(FilterSourceType::Stream),
+            "epg" => Ok(FilterSourceType::Epg),
+            _ => Err(format!("Unknown filter source type: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for FilterSourceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FilterSourceType::Stream => write!(f, "stream"),
+            FilterSourceType::Epg => write!(f, "epg"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyFilter {
     pub proxy_id: Uuid,
     pub filter_id: Uuid,
@@ -209,7 +239,7 @@ pub struct ProxyFilterCreateRequest {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Channel {
     pub id: Uuid,
     pub source_id: Uuid,
@@ -221,11 +251,16 @@ pub struct Channel {
     pub group_title: Option<String>,
     pub channel_name: String,
     pub stream_url: String,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub resolution: Option<String>,
+    pub probe_method: Option<String>,
+    pub last_probed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyGeneration {
     pub id: Uuid,
     pub proxy_id: Uuid,
@@ -517,8 +552,7 @@ pub struct FilterField {
     pub name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
-#[sqlx(type_name = "text", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FilterOperator {
     #[serde(rename = "matches")]
     Matches, // Regex match
@@ -571,8 +605,7 @@ impl std::fmt::Display for FilterOperator {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
-#[sqlx(type_name = "text", rename_all = "lowercase")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum LogicalOperator {
     #[serde(rename = "and")]
     And,
@@ -676,8 +709,7 @@ pub struct Action {
 /// // Remove substring
 /// SET channel-name-="[HD]"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActionOperator {
     /// Set field to new value (overwrites existing value)
     /// Syntax: `SET field="value"` or `field="value"`
@@ -1086,7 +1118,7 @@ impl GenerationTiming {
 }
 
 // EPG Source Models
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EpgSource {
     pub id: Uuid,
     pub name: String,
@@ -1103,15 +1135,14 @@ pub struct EpgSource {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, ToSchema)]
-#[sqlx(type_name = "epg_source_type", rename_all = "lowercase")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EpgSourceType {
     Xmltv,
     Xtream,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgProgram {
     pub id: Uuid,
     pub source_id: Uuid,

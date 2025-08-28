@@ -4,7 +4,6 @@
 //! This builder ensures orchestrators are properly configured with their dependencies and stage settings.
 
 use anyhow::Result;
-use sqlx::SqlitePool;
 use std::sync::Arc;
 
 use crate::{
@@ -44,7 +43,7 @@ impl Default for PipelineConfig {
 
 /// Builder for constructing pipeline orchestrators with proper configuration
 pub struct PipelineBuilder {
-    db_pool: SqlitePool,
+    database: crate::database::Database,
     app_config: Config,
     file_manager: SandboxedManager,
     logo_service: Arc<LogoAssetService>,
@@ -54,13 +53,13 @@ pub struct PipelineBuilder {
 impl PipelineBuilder {
     /// Create a new pipeline builder with core dependencies
     pub fn new(
-        db_pool: SqlitePool,
+        database: crate::database::Database,
         app_config: Config,
         file_manager: SandboxedManager,
         logo_service: Arc<LogoAssetService>,
     ) -> Self {
         Self {
-            db_pool,
+            database,
             app_config,
             file_manager,
             logo_service,
@@ -126,7 +125,7 @@ impl PipelineBuilder {
             self.file_manager, // TODO: Use proper proxy output file manager
             self.logo_service,
             logo_config,
-            self.db_pool,
+            self.database,
         ))
     }
 

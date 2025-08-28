@@ -39,6 +39,7 @@ impl LogoAssetStorage {
         let relative_path = format!("uploaded/{file_name}");
         let file_path = self.uploaded_logo_dir.join(&file_name);
 
+        // Map file extension to MIME type - this is used when we don't have the original MIME type
         let mime_type = match file_extension.to_lowercase().as_str() {
             "png" => "image/png",
             "jpg" | "jpeg" => "image/jpeg",

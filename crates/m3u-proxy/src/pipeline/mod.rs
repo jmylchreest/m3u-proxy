@@ -31,7 +31,7 @@ pub use engines::{
 };
 pub use models::{PipelineExecution, PipelineStageExecution, PipelineStatus, StageStatus};
 pub use stages::{DataMappingStage, FilteringStage, LogoCachingStage, LogoCachingConfig, NumberingStage, GenerationStage};
-pub use services::{EngineBasedDataMappingService, PipelineValidationService, ApiValidationService};
+pub use services::{SeaOrmDataMappingService, PipelineValidationService, ApiValidationService};
 pub use traits::{ProgressAware, PipelineStage, PipelineStageFactory};
 pub use error::PipelineError;
 

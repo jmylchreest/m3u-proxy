@@ -1,9 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogoAsset {
     pub id: String, // Changed from Uuid to String to support both UUID and cache_id formats
     pub name: String,
@@ -22,8 +21,7 @@ pub struct LogoAsset {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LogoAssetType {
     #[serde(rename = "uploaded")]
     Uploaded,
@@ -31,8 +29,16 @@ pub enum LogoAssetType {
     Cached,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text", rename_all = "snake_case")]
+impl std::fmt::Display for LogoAssetType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogoAssetType::Uploaded => write!(f, "uploaded"),
+            LogoAssetType::Cached => write!(f, "cached"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LogoFormatType {
     #[serde(rename = "original")]
     Original,

@@ -188,8 +188,8 @@ pub async fn list_epg_sources(
             let mut response_items = Vec::new();
             for source_with_stats in sources_with_stats {
                 let mut response = EpgSourceResponse::from(source_with_stats.source);
-                response.channel_count = source_with_stats.channel_count;
-                response.program_count = source_with_stats.program_count;
+                response.channel_count = source_with_stats.channel_count as u64;
+                response.program_count = source_with_stats.program_count as u64;
                 response.next_scheduled_update = source_with_stats.next_scheduled_update;
                 response_items.push(response);
             }

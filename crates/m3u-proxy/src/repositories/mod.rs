@@ -30,24 +30,6 @@
 
 pub mod traits;
 pub mod retry_wrapper;
-pub mod stream_source;
-pub mod stream_proxy;
-pub mod channel;
-pub mod filter;
-pub mod epg_source;
-pub mod epg_program;
-pub mod url_linking;
-pub mod relay;
-pub mod health;
 
 // Re-export main traits and types
 pub use traits::*;
-pub use stream_source::StreamSourceRepository;
-pub use stream_proxy::StreamProxyRepository;
-pub use channel::ChannelRepository;
-pub use filter::FilterRepository;
-pub use epg_source::{EpgSourceRepository, EpgSourceWithStats};
-pub use epg_program::{EpgProgramRepository, EpgProgramQuery};
-pub use url_linking::UrlLinkingRepository;
-pub use relay::RelayRepository;
-pub use health::{HealthRepository, ScheduledSource, ChannelInfo};

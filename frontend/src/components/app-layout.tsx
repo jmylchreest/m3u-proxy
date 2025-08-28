@@ -5,9 +5,10 @@ import { BackendUnavailable } from "@/components/backend-unavailable"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarInset, SidebarTrigger, SidebarProvider } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
-import { EnhancedThemeSelector } from "@/components/enhanced-theme-selector"
-import { NotificationBell } from "@/components/NotificationBell"
 import { usePathname } from "next/navigation"
+import { NotificationBell } from "@/components/NotificationBell"
+import { EnhancedThemeSelector } from "@/components/enhanced-theme-selector"
+import { PageLoadingSpinner } from "@/components/page-loading-spinner"
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -47,33 +48,37 @@ function getPageTitle(pathname: string): string {
     case "/logs":
       return "Logs"
     case "/color-palette":
-      return "Color Palette"
+      return "Colour Palette"
+    case "/test-loading":
+      return "Loading Test"
     default:
       return "M3U Proxy"
   }
 }
 
-function getOperationTypeForPage(title: string): string | undefined {
-  switch (title) {
-    case "Stream Sources":
+function getOperationTypeForPath(pathname: string): string | undefined {
+  // Remove trailing slash for consistent matching
+  const normalizedPathname = pathname.endsWith('/') && pathname !== '/' ? pathname.slice(0, -1) : pathname
+  
+  switch (normalizedPathname) {
+    case "/sources/stream":
       return "stream_ingestion"
-    case "EPG Sources":
+    case "/sources/epg":
       return "epg_ingestion"
-    case "Proxies":
+    case "/proxies":
       return "proxy_regeneration"
-    case "Events":
+    case "/events":
       return undefined // Show all operation types
     default:
       return undefined
   }
 }
 
-
 export function AppLayout({ children }: AppLayoutProps) {
   const { isConnected, isChecking, checkConnection, backendUrl } = useBackendConnectivity()
   const pathname = usePathname()
   const pageTitle = getPageTitle(pathname)
-  const operationType = getOperationTypeForPage(pageTitle)
+  const operationType = getOperationTypeForPath(pathname)
 
   // Show loading state during initial check
   if (isChecking && !isConnected) {
@@ -88,9 +93,11 @@ export function AppLayout({ children }: AppLayoutProps) {
                 <Separator orientation="vertical" className="mr-2 h-4" />
                 <h1 className="text-2xl font-bold">Connecting...</h1>
               </div>
-              <div className="ml-auto flex items-center gap-2 px-4">
-                <NotificationBell operationType={operationType} />
+              <div className="flex items-center gap-2 ml-auto px-4">
                 <EnhancedThemeSelector />
+                <NotificationBell 
+                  operationType={operationType}
+                />
               </div>
             </header>
             <div className="flex flex-1 items-center justify-center">
@@ -128,15 +135,18 @@ export function AppLayout({ children }: AppLayoutProps) {
               <Separator orientation="vertical" className="mr-2 h-4" />
               <h1 className="text-2xl font-bold">{pageTitle}</h1>
             </div>
-            <div className="ml-auto flex items-center gap-2 px-4">
-              <NotificationBell operationType={operationType} />
+            <div className="flex items-center gap-2 ml-auto px-4">
               <EnhancedThemeSelector />
+              <NotificationBell 
+                operationType={operationType}
+              />
             </div>
           </header>
           <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
             {children}
           </div>
         </main>
+        <PageLoadingSpinner />
       </SidebarInset>
     </SidebarProvider>
   )

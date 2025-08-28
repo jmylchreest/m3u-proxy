@@ -15,20 +15,19 @@ use crate::{
         GenerationOutput, StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest,
     },
     // TODO: Remove - superseded by pipeline-based filtering
-    repositories::{
-        ChannelRepository, FilterRepository, StreamProxyRepository, StreamSourceRepository,
-        traits::Repository,
+    database::repositories::{
+        ChannelSeaOrmRepository, FilterSeaOrmRepository, StreamProxySeaOrmRepository, StreamSourceSeaOrmRepository,
     },
     web::handlers::proxies::{PreviewProxyRequest, PreviewProxyResponse, StreamProxyResponse},
 };
 use sandboxed_file_manager::SandboxedManager;
 
 pub struct StreamProxyService {
-    proxy_repo: StreamProxyRepository,
+    proxy_repo: StreamProxySeaOrmRepository,
     
-    channel_repo: ChannelRepository,
-    filter_repo: FilterRepository,
-    stream_source_repo: StreamSourceRepository,
+    channel_repo: ChannelSeaOrmRepository,
+    filter_repo: FilterSeaOrmRepository,
+    stream_source_repo: StreamSourceSeaOrmRepository,
     
     // TODO: Remove - superseded by pipeline-based filtering
     database: Database,
@@ -45,10 +44,10 @@ pub struct StreamProxyService {
 
 /// Builder for StreamProxyService with many dependencies
 pub struct StreamProxyServiceBuilder {
-    pub proxy_repo: StreamProxyRepository,
-    pub channel_repo: ChannelRepository,
-    pub filter_repo: FilterRepository,
-    pub stream_source_repo: StreamSourceRepository,
+    pub proxy_repo: StreamProxySeaOrmRepository,
+    pub channel_repo: ChannelSeaOrmRepository,
+    pub filter_repo: FilterSeaOrmRepository,
+    pub stream_source_repo: StreamSourceSeaOrmRepository,
     // TODO: Remove - superseded by pipeline-based filtering
     pub database: Database,
     pub preview_file_manager: SandboxedManager,
@@ -98,12 +97,16 @@ impl StreamProxyService {
         self.validate_proxy_request(&request.stream_sources, &request.filters)
             .await?;
 
+        // Extract relationship IDs from request
+        let source_ids: Vec<Uuid> = request.stream_sources.iter().map(|s| s.source_id).collect();
+        let epg_source_ids: Vec<Uuid> = request.epg_sources.iter().map(|e| e.epg_source_id).collect();
+
         // Create the proxy with all relationships
         let proxy = self
             .proxy_repo
-            .create_with_relationships(request)
+            .create_with_relationships(request, source_ids, epg_source_ids)
             .await
-            .map_err(AppError::Repository)?;
+            .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?;
 
         // Build full response with relationships
         self.build_proxy_response(proxy).await
@@ -118,9 +121,9 @@ impl StreamProxyService {
         // Validate that proxy exists
         let _existing = self
             .proxy_repo
-            .find_by_id(proxy_id)
+            .find_by_id(&proxy_id)
             .await
-            .map_err(AppError::Repository)?
+            .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             .ok_or_else(|| AppError::NotFound {
                 resource: "stream_proxy".to_string(),
                 id: proxy_id.to_string(),
@@ -130,12 +133,16 @@ impl StreamProxyService {
         self.validate_proxy_request(&request.stream_sources, &request.filters)
             .await?;
 
+        // Extract relationship IDs from request
+        let source_ids: Vec<Uuid> = request.stream_sources.iter().map(|s| s.source_id).collect();
+        let epg_source_ids: Vec<Uuid> = request.epg_sources.iter().map(|e| e.epg_source_id).collect();
+
         // Update the proxy with all relationships
         let proxy = self
             .proxy_repo
-            .update_with_relationships(proxy_id, request)
+            .update_with_relationships(&proxy_id, request, source_ids, epg_source_ids)
             .await
-            .map_err(AppError::Repository)?;
+            .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?;
 
         // Build full response with relationships
         self.build_proxy_response(proxy).await
@@ -145,9 +152,9 @@ impl StreamProxyService {
     pub async fn get_by_id(&self, proxy_id: Uuid) -> Result<Option<StreamProxyResponse>, AppError> {
         let proxy = self
             .proxy_repo
-            .find_by_id(proxy_id)
+            .find_by_id(&proxy_id)
             .await
-            .map_err(AppError::Repository)?;
+            .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?;
 
         match proxy {
             Some(proxy) => Ok(Some(self.build_proxy_response(proxy).await?)),
@@ -160,11 +167,13 @@ impl StreamProxyService {
         &self,
         id: &str,
     ) -> Result<Option<StreamProxyResponse>, AppError> {
+        let proxy_uuid = crate::utils::uuid_parser::parse_uuid_flexible(id)
+            .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?;
         let proxy = self
             .proxy_repo
-            .get_by_id(id)
+            .get_by_id(&proxy_uuid)
             .await
-            .map_err(AppError::Repository)?;
+            .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?;
 
         match proxy {
             Some(proxy) => Ok(Some(self.build_proxy_response(proxy).await?)),
@@ -178,17 +187,24 @@ impl StreamProxyService {
         _limit: Option<usize>,
         _offset: Option<usize>,
     ) -> Result<Vec<StreamProxyResponse>, AppError> {
+        tracing::debug!("StreamProxyService::list called");
         let proxies = self
             .proxy_repo
-            .find_all(crate::repositories::traits::QueryParams::new())
+            .find_all()
             .await
-            .map_err(AppError::Repository)?;
+            .map_err(|e| {
+                tracing::error!("Failed to find all proxies: {}", e);
+                AppError::Repository(crate::errors::RepositoryError::UuidParse(e))
+            })?;
 
+        tracing::debug!("Found {} proxies", proxies.len());
         let mut responses = Vec::new();
         for proxy in proxies {
+            tracing::debug!("Building response for proxy: {}", proxy.id);
             responses.push(self.build_proxy_response(proxy).await?);
         }
 
+        tracing::debug!("Successfully built {} proxy responses", responses.len());
         Ok(responses)
     }
 
@@ -197,18 +213,18 @@ impl StreamProxyService {
         // Validate that proxy exists
         let _existing = self
             .proxy_repo
-            .find_by_id(proxy_id)
+            .find_by_id(&proxy_id)
             .await
-            .map_err(AppError::Repository)?
+            .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             .ok_or_else(|| AppError::NotFound {
                 resource: "stream_proxy".to_string(),
                 id: proxy_id.to_string(),
             })?;
 
         self.proxy_repo
-            .delete(proxy_id)
+            .delete(&proxy_id)
             .await
-            .map_err(AppError::Repository)?;
+            .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?;
 
         Ok(())
     }
@@ -292,7 +308,7 @@ impl StreamProxyService {
         for source_config in &resolved_config.sources {
             let source_channels = self
                 .channel_repo
-                .get_channels_for_source(source_config.source.id)
+                .find_by_source_id(&source_config.source.id)
                 .await
                 .unwrap_or_default();
             channels_by_source.insert(source_config.source.name.clone(), source_channels.len());
@@ -503,16 +519,16 @@ impl StreamProxyService {
             self.proxy_repo.get_proxy_epg_sources(proxy.id),
             self.proxy_repo.get_proxy_filters(proxy.id)
         )
-        .map_err(AppError::Repository)?;
+        .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?;
 
         // Build stream sources responses
         let mut stream_sources = Vec::new();
         for proxy_source in proxy_sources {
             if let Some(source) = self
                 .stream_source_repo
-                .find_by_id(proxy_source.source_id)
+                .find_by_id(&proxy_source.source_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             {
                 stream_sources.push(crate::web::handlers::proxies::ProxySourceResponse {
                     source_id: proxy_source.source_id,
@@ -530,7 +546,7 @@ impl StreamProxyService {
                 .proxy_repo
                 .find_epg_source_by_id(proxy_epg_source.epg_source_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             {
                 epg_sources.push(crate::web::handlers::proxies::ProxyEpgSourceResponse {
                     epg_source_id: proxy_epg_source.epg_source_id,
@@ -547,7 +563,7 @@ impl StreamProxyService {
                 .filter_repo
                 .find_by_id(proxy_filter.filter_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
             {
                 filters.push(crate::web::handlers::proxies::ProxyFilterResponse {
                     filter_id: proxy_filter.filter_id,
@@ -561,21 +577,34 @@ impl StreamProxyService {
         }
 
         // Build the response with populated relationships and URLs
-        let mut response = StreamProxyResponse::from_proxy_with_base_url(proxy, &self.app_config.web.base_url);
-        response.stream_sources = stream_sources;
-        response.epg_sources = epg_sources;
-        response.filters = filters;
+        let response = StreamProxyResponse {
+            id: proxy.id,
+            name: proxy.name,
+            description: proxy.description,
+            proxy_mode: match proxy.proxy_mode {
+                crate::models::StreamProxyMode::Redirect => "redirect".to_string(),
+                crate::models::StreamProxyMode::Proxy => "proxy".to_string(),
+                crate::models::StreamProxyMode::Relay => "relay".to_string(),
+            },
+            upstream_timeout: proxy.upstream_timeout,
+            buffer_size: proxy.buffer_size,
+            max_concurrent_streams: proxy.max_concurrent_streams,
+            starting_channel_number: proxy.starting_channel_number,
+            created_at: proxy.created_at,
+            updated_at: proxy.updated_at,
+            is_active: proxy.is_active,
+            auto_regenerate: proxy.auto_regenerate,
+            cache_channel_logos: proxy.cache_channel_logos,
+            cache_program_logos: proxy.cache_program_logos,
+            relay_profile_id: proxy.relay_profile_id,
+            stream_sources,
+            epg_sources,
+            filters,
+            m3u8_url: format!("{}/proxy/{}/m3u8", self.app_config.web.base_url.trim_end_matches('/'), crate::utils::uuid_parser::uuid_to_base64(&proxy.id)),
+            xmltv_url: format!("{}/proxy/{}/xmltv", self.app_config.web.base_url.trim_end_matches('/'), crate::utils::uuid_parser::uuid_to_base64(&proxy.id)),
+        };
 
         Ok(response)
-    }
-
-    /// Build a complete proxy response with all relationships (placeholder)
-    async fn _build_proxy_response_full(
-        &self,
-        _proxy: StreamProxy,
-    ) -> Result<StreamProxyResponse, AppError> {
-        // TODO: Implement when repository methods are ready
-        unimplemented!("Placeholder method")
     }
 
     /// Validate that all referenced sources and filters exist
@@ -588,9 +617,9 @@ impl StreamProxyService {
         for source_req in stream_sources {
             let _source = self
                 .stream_source_repo
-                .find_by_id(source_req.source_id)
+                .find_by_id(&source_req.source_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
                 .ok_or_else(|| AppError::NotFound {
                     resource: "stream_source".to_string(),
                     id: source_req.source_id.to_string(),
@@ -603,7 +632,7 @@ impl StreamProxyService {
                 .filter_repo
                 .find_by_id(filter_req.filter_id)
                 .await
-                .map_err(AppError::Repository)?
+                .map_err(|e| AppError::Repository(crate::errors::RepositoryError::UuidParse(e)))?
                 .ok_or_else(|| AppError::NotFound {
                     resource: "filter".to_string(),
                     id: filter_req.filter_id.to_string(),

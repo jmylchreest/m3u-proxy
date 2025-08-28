@@ -5,13 +5,13 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
-use std::sync::Arc;
+use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, PaginatorTrait};
 use std::time::Duration;
 use tracing::{debug, error, trace, warn};
 use uuid::Uuid;
 
 use crate::pipeline::engines::rule_processor::{FieldModification, ModificationType};
+use crate::entities::{logo_assets, prelude::*};
 
 /// Error types for helper processing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,14 +162,14 @@ impl HelperPostProcessor {
 
 /// Logo helper processor that validates UUIDs against the database
 pub struct LogoHelperProcessor {
-    db_pool: Arc<SqlitePool>,
+    db_connection: DatabaseConnection,
     base_url: String,
 }
 
 impl LogoHelperProcessor {
-    pub fn new(db_pool: Arc<SqlitePool>, base_url: String) -> Self {
+    pub fn new(db_connection: DatabaseConnection, base_url: String) -> Self {
         Self {
-            db_pool,
+            db_connection,
             base_url,
         }
     }
@@ -179,12 +179,11 @@ impl LogoHelperProcessor {
         const MAX_RETRIES: u32 = 3;
         const BASE_DELAY_MS: u64 = 100;
         
-        let query = "SELECT COUNT(*) as count FROM logo_assets WHERE id = ? AND asset_type = 'uploaded'";
-        
         for attempt in 1..=MAX_RETRIES {
-            match sqlx::query_scalar::<_, i64>(query)
-                .bind(uuid.to_string())
-                .fetch_one(self.db_pool.as_ref())
+            match LogoAssets::find()
+                .filter(logo_assets::Column::Id.eq(*uuid))
+                .filter(logo_assets::Column::AssetType.eq("uploaded"))
+                .count(&self.db_connection)
                 .await
             {
                 Ok(result) => {
@@ -300,16 +299,19 @@ impl HelperProcessor for TimeHelperProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sea_orm::{DatabaseBackend, DatabaseConnection, MockDatabase, MockExecResult, DatabaseTransaction};
+    use crate::entities::{logo_assets, prelude::*};
     
     #[tokio::test]
     async fn test_logo_helper_processor_invalid_uuid() {
-        let pool = SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
+        // Create mock database that returns empty results for any query
+        let db = MockDatabase::new(DatabaseBackend::Sqlite)
+            .append_query_results(vec![
+                vec![], // Empty result for any logo lookup
+            ])
+            .into_connection();
             
-        let processor = LogoHelperProcessor::new(Arc::new(pool), "https://example.com".to_string());
+        let processor = LogoHelperProcessor::new(db, "https://example.com".to_string());
         
         // Malformed UUID should result in field removal (None), not an error
         let result = processor.resolve_helper("@logo:invalid-uuid").await;
@@ -319,23 +321,16 @@ mod tests {
     
     #[tokio::test]
     async fn test_logo_helper_processor_valid_uuid_not_found() {
-        let pool = SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
+        // Create mock database that returns 0 count for any query (UUID not found)
+        let db = MockDatabase::new(DatabaseBackend::Sqlite)
+            .append_query_results(vec![
+                vec![
+                    sea_orm::MockRow::from_values(vec!["0".into()]) // Count query returns 0
+                ],
+            ])
+            .into_connection();
             
-        // Create the logo_assets table for testing
-        sqlx::query(r#"
-            CREATE TABLE logo_assets (
-                id TEXT PRIMARY KEY,
-                asset_type TEXT NOT NULL
-            )
-        "#)
-        .execute(&pool)
-        .await
-        .unwrap();
-            
-        let processor = LogoHelperProcessor::new(Arc::new(pool), "https://example.com".to_string());
+        let processor = LogoHelperProcessor::new(db, "https://example.com".to_string());
         
         // Valid UUID format but doesn't exist in database
         let result = processor.resolve_helper("@logo:550e8400-e29b-41d4-a716-446655440000").await;
@@ -345,30 +340,18 @@ mod tests {
     
     #[tokio::test]
     async fn test_logo_helper_processor_valid_uuid_found() {
-        let pool = SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
+        // Create mock database that returns count > 0 for the UUID query (found scenario)
+        let db = MockDatabase::new(DatabaseBackend::Sqlite)
+            .append_query_results(vec![
+                vec![
+                    sea_orm::MockRow::from_values(vec!["1".into()]) // Count query returns 1 (found)
+                ],
+            ])
+            .into_connection();
             
-        // Create the logo_assets table and insert a test logo
-        sqlx::query(r#"
-            CREATE TABLE logo_assets (
-                id TEXT PRIMARY KEY,
-                asset_type TEXT NOT NULL
-            )
-        "#)
-        .execute(&pool)
-        .await
-        .unwrap();
+        let processor = LogoHelperProcessor::new(db, "https://example.com".to_string());
         
         let test_uuid = "550e8400-e29b-41d4-a716-446655440000";
-        sqlx::query("INSERT INTO logo_assets (id, asset_type) VALUES (?, 'uploaded')")
-            .bind(test_uuid)
-            .execute(&pool)
-            .await
-            .unwrap();
-            
-        let processor = LogoHelperProcessor::new(Arc::new(pool), "https://example.com".to_string());
         
         // Valid UUID that exists in database
         let result = processor.resolve_helper(&format!("@logo:{test_uuid}")).await;

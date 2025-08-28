@@ -14,7 +14,6 @@ use crate::{
     },
 };
 use sandboxed_file_manager::{SandboxedManager, CleanupPolicy, TimeMatch};
-use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
@@ -26,7 +25,7 @@ use uuid::Uuid;
 /// Factory for creating properly configured PipelineOrchestrator instances
 #[derive(Clone)]
 pub struct PipelineOrchestratorFactory {
-    db_pool: SqlitePool,
+    database: crate::database::Database,
     logo_service: Arc<LogoAssetService>,
     app_config: Config,
     pipeline_file_manager: SandboxedManager,
@@ -38,14 +37,14 @@ pub struct PipelineOrchestratorFactory {
 impl PipelineOrchestratorFactory {
     /// Create a new factory with all required dependencies
     pub fn new(
-        db_pool: SqlitePool,
+        database: crate::database::Database,
         logo_service: Arc<LogoAssetService>,
         app_config: Config,
         pipeline_file_manager: SandboxedManager,
         proxy_output_file_manager: SandboxedManager,
     ) -> Self {
         Self {
-            db_pool,
+            database,
             logo_service,
             app_config,
             pipeline_file_manager,
@@ -56,7 +55,7 @@ impl PipelineOrchestratorFactory {
 
     /// Create a factory from basic components, creating shared services
     pub async fn from_components(
-        db_pool: SqlitePool,
+        database: crate::database::Database,
         app_config: Config,
         storage_config: StorageConfig,
         pipeline_file_manager: SandboxedManager,
@@ -68,7 +67,7 @@ impl PipelineOrchestratorFactory {
         );
 
         // Create shared logo service
-        let logo_service = Arc::new(LogoAssetService::new(db_pool.clone(), logo_storage));
+        let logo_service = Arc::new(LogoAssetService::new(database.connection().clone(), logo_storage));
 
         // Create proxy output file manager for final M3U/XMLTV files
         let proxy_output_file_manager = SandboxedManager::builder()
@@ -80,7 +79,7 @@ impl PipelineOrchestratorFactory {
             .build()
             .await?;
 
-        Ok(Self::new(db_pool, logo_service, app_config, pipeline_file_manager, proxy_output_file_manager))
+        Ok(Self::new(database, logo_service, app_config, pipeline_file_manager, proxy_output_file_manager))
     }
 
     /// Create a PipelineOrchestrator for a specific proxy
@@ -119,7 +118,7 @@ impl PipelineOrchestratorFactory {
             self.proxy_output_file_manager.clone(),
             self.logo_service.clone(),
             logo_config,
-            self.db_pool.clone(),
+            self.database.clone(),
         );
 
         // Register this orchestrator as active (get pipeline execution ID from orchestrator)
@@ -135,45 +134,37 @@ impl PipelineOrchestratorFactory {
 
     /// Load proxy configuration from database using flexible UUID parsing
     async fn load_proxy_config(&self, proxy_id: Uuid) -> Result<StreamProxy, Box<dyn std::error::Error>> {
-        use crate::utils::uuid_parser::parse_uuid_flexible;
-        use sqlx::Row;
         
-        let row = sqlx::query(
-            "SELECT id, name, description, starting_channel_number, is_active, auto_regenerate, 
-             cache_channel_logos, cache_program_logos, proxy_mode, upstream_timeout, 
-             buffer_size, max_concurrent_streams, created_at, updated_at, last_generated_at, 
-             relay_profile_id FROM stream_proxies WHERE id = ? AND is_active = 1"
-        )
-        .bind(proxy_id.to_string())
-        .fetch_optional(&self.db_pool)
-        .await?;
+        // Use SeaORM entity query instead of raw SQL
+        use crate::entities::{prelude::*, stream_proxies};
+        use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
+        
+        let proxy_entity = StreamProxies::find()
+            .filter(stream_proxies::Column::Id.eq(proxy_id))
+            .filter(stream_proxies::Column::IsActive.eq(true))
+            .one(&*self.database.connection())
+            .await?;
 
-        match row {
-            Some(row) => {
-                // Parse proxy mode
-                let proxy_mode_str = row.get::<String, _>("proxy_mode");
-                let proxy_mode = proxy_mode_str.parse::<crate::models::StreamProxyMode>().unwrap_or_default();
-                
-                // Build StreamProxy using flexible UUID parsing
+        match proxy_entity {
+            Some(entity) => {
+                // Convert SeaORM entity to domain model with type conversions
                 let config = StreamProxy {
-                    id: parse_uuid_flexible(&row.get::<String, _>("id"))?,
-                    name: row.get("name"),
-                    description: row.get("description"),
-                    starting_channel_number: row.get::<i64, _>("starting_channel_number") as i32,
-                    is_active: row.get("is_active"),
-                    auto_regenerate: row.get("auto_regenerate"),
-                    cache_channel_logos: row.get("cache_channel_logos"),
-                    cache_program_logos: row.get("cache_program_logos"),
-                    proxy_mode,
-                    upstream_timeout: row.get::<Option<i64>, _>("upstream_timeout").map(|v| v as i32),
-                    buffer_size: row.get::<Option<i64>, _>("buffer_size").map(|v| v as i32),
-                    max_concurrent_streams: row.get::<Option<i64>, _>("max_concurrent_streams").map(|v| v as i32),
-                    created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("created_at"))?,
-                    updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(&row.get::<String, _>("updated_at"))?,
-                    last_generated_at: row.get::<Option<String>, _>("last_generated_at")
-                        .and_then(|s| crate::utils::datetime::DateTimeParser::parse_flexible(&s).ok()),
-                    relay_profile_id: row.get::<Option<String>, _>("relay_profile_id")
-                        .and_then(|s| parse_uuid_flexible(&s).ok()),
+                    id: entity.id,
+                    name: entity.name,
+                    description: entity.description,
+                    starting_channel_number: entity.starting_channel_number,
+                    is_active: entity.is_active,
+                    auto_regenerate: entity.auto_regenerate,
+                    cache_channel_logos: entity.cache_channel_logos,
+                    cache_program_logos: entity.cache_program_logos,
+                    proxy_mode: entity.proxy_mode,
+                    upstream_timeout: entity.upstream_timeout,
+                    buffer_size: entity.buffer_size,
+                    max_concurrent_streams: entity.max_concurrent_streams,
+                    created_at: entity.created_at,
+                    updated_at: entity.updated_at,
+                    last_generated_at: entity.last_generated_at,
+                    relay_profile_id: entity.relay_profile_id,
                 };
                 
                 debug!("Loaded configuration for proxy '{}' ({})", config.name, proxy_id);

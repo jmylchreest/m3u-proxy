@@ -1,7 +1,7 @@
 use crate::models::EpgProgram;
 use chrono::{DateTime, Utc};
+use sea_orm_migration::sea_query::StringLen;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use std::collections::HashMap;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -19,37 +19,14 @@ pub struct DataMappingRule {
     pub updated_at: DateTime<Utc>,
 }
 
-impl FromRow<'_, sqlx::sqlite::SqliteRow> for DataMappingRule {
-    fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        use sqlx::Row;
-        use crate::utils::uuid_parser::parse_uuid_flexible;
-        
-        let id_str: String = row.try_get("id")?;
-        let id = parse_uuid_flexible(&id_str)
-            .map_err(|e| sqlx::Error::ColumnDecode {
-                index: "id".to_string(),
-                source: format!("UUID parsing error: {e}").into(),
-            })?;
-        
-        Ok(DataMappingRule {
-            id,
-            name: row.try_get("name")?,
-            description: row.try_get("description")?,
-            source_type: row.try_get("source_type")?,
-            sort_order: row.try_get("sort_order")?,
-            is_active: row.try_get("is_active")?,
-            expression: row.try_get("expression")?,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-        })
-    }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, ToSchema)]
-#[sqlx(type_name = "data_mapping_source_type", rename_all = "lowercase")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema, sea_orm::DeriveActiveEnum, strum::EnumIter)]
 #[serde(rename_all = "lowercase")]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 pub enum DataMappingSourceType {
+    #[sea_orm(string_value = "stream")]
     Stream,
+    #[sea_orm(string_value = "epg")]
     Epg,
 }
 
@@ -61,6 +38,7 @@ impl std::fmt::Display for DataMappingSourceType {
         }
     }
 }
+
 
 
 pub struct StreamMappingFields;

@@ -9,13 +9,13 @@ use serde_json::Value;
 use m3u_proxy::{
     config::Config,
     data_mapping::DataMappingService,
-    database::Database,
+    database::{Database, repositories::{StreamProxySeaOrmRepository, EpgSourceSeaOrmRepository, StreamSourceSeaOrmRepository, ChannelSeaOrmRepository}},
     ingestor::{
         IngestionStateManager,
         scheduler::{SchedulerService, create_cache_invalidation_channel},
     },
     logo_assets::{LogoAssetService, LogoAssetStorage},
-    services::{ProxyRegenerationService, StreamSourceBusinessService, EpgSourceService},
+    services::{ProxyRegenerationService, StreamSourceBusinessService, EpgSourceService, UrlLinkingService},
     utils::{
         SystemManager,
     },
@@ -166,6 +166,9 @@ async fn main() -> Result<()> {
 
     // Initialize feature flags from config in runtime store
     runtime_settings_store.initialize_feature_flags_from_config(&config).await;
+    
+    // Initialize request logging setting from config
+    runtime_settings_store.update_request_logging(config.web.enable_request_logging).await;
 
     // Override config with CLI arguments
     if let Some(host) = cli.host {
@@ -212,8 +215,8 @@ async fn main() -> Result<()> {
     );
     tracing::debug!("Universal progress service initialized");
 
-    // Initialize data mapping service
-    let data_mapping_service = DataMappingService::new(database.pool());
+    // Initialize data mapping service 
+    let data_mapping_service = DataMappingService::new(database.connection().clone());
     tracing::debug!("Data mapping service initialized");
 
     // Initialize logo asset service and storage using config paths
@@ -221,7 +224,7 @@ async fn main() -> Result<()> {
         config.storage.uploaded_logo_path.clone(),
         config.storage.cached_logo_path.clone(),
     );
-    let mut logo_asset_service = LogoAssetService::new(database.pool(), logo_asset_storage.clone());
+    let mut logo_asset_service = LogoAssetService::new(database.connection().clone(), logo_asset_storage.clone());
 
     // Create cache invalidation channel for scheduler
     let (cache_invalidation_tx, cache_invalidation_rx) = create_cache_invalidation_channel();
@@ -316,29 +319,52 @@ async fn main() -> Result<()> {
     info!("Shared system manager initialized with 10-second refresh interval");
 
 
-    // Initialize proxy regeneration service with managed pipeline file manager
-    let proxy_regeneration_service = ProxyRegenerationService::new(
-        database.pool(),
-        config.clone(),
-        None,
-        pipeline_file_manager.clone(),
-        system_manager.get_system(),
-        progress_service.clone(), // Pass ProgressService to create ProgressManagers
-        state_manager.clone(), // Pass IngestionStateManager to check for active operations
-    );
+    let proxy_regeneration_service = {
+        let proxy_repository = StreamProxySeaOrmRepository::new(database.connection().clone());
+        ProxyRegenerationService::new(
+            database.clone(),
+            proxy_repository,
+            config.clone(),
+            None,
+            pipeline_file_manager.clone(),
+            system_manager.get_system(),
+            progress_service.clone(), // Pass ProgressService to create ProgressManagers
+            state_manager.clone(), // Pass IngestionStateManager to check for active operations
+        )
+    };
     info!("Proxy regeneration service initialized with in-memory state");
 
     // Create shared services for both web server and scheduler
-    let epg_source_service = std::sync::Arc::new(EpgSourceService::new(
-        database.clone(),
-        cache_invalidation_tx.clone(),
-    ));
+    let epg_source_service = {
+        let epg_source_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());
+        let stream_source_repo_for_url = StreamSourceSeaOrmRepository::new(database.connection().clone());
+        let epg_source_repo_for_url = EpgSourceSeaOrmRepository::new(database.connection().clone());
+        let url_linking_service = UrlLinkingService::new(stream_source_repo_for_url, epg_source_repo_for_url);
+        
+        std::sync::Arc::new(EpgSourceService::new(
+            database.clone(),
+            epg_source_repo,
+            url_linking_service,
+            cache_invalidation_tx.clone(),
+        ))
+    };
 
-    let stream_source_service = std::sync::Arc::new(StreamSourceBusinessService::new(
-        database.clone(),
-        epg_source_service.clone(),
-        cache_invalidation_tx.clone(),
-    ));
+    let stream_source_service = {
+        let stream_source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
+        let channel_repo = ChannelSeaOrmRepository::new(database.connection().clone());
+        let stream_source_repo_for_url = StreamSourceSeaOrmRepository::new(database.connection().clone());
+        let epg_source_repo_for_url = EpgSourceSeaOrmRepository::new(database.connection().clone());
+        let epg_source_repo_for_service = epg_source_repo_for_url.clone();
+        let url_linking_service = UrlLinkingService::new(stream_source_repo_for_url, epg_source_repo_for_url);
+        
+        std::sync::Arc::new(StreamSourceBusinessService::new(
+            stream_source_repo,
+            channel_repo,
+            epg_source_repo_for_service,
+            url_linking_service,
+            cache_invalidation_tx.clone(),
+        ))
+    };
 
     // Create scheduler service now that proxy regeneration service exists
     let scheduler = SchedulerService::new(
@@ -354,20 +380,20 @@ async fn main() -> Result<()> {
 
 
 
-    // Initialize relay manager with shared system
+    // Initialize relay manager with shared system (SeaORM)
     let relay_manager = std::sync::Arc::new(
         m3u_proxy::services::RelayManager::new(
             database.clone(),
             temp_file_manager.clone(),
-            std::sync::Arc::new(m3u_proxy::metrics::MetricsLogger::new(database.pool())),
+            std::sync::Arc::new(m3u_proxy::metrics::MetricsLogger::new(database.connection())),
             config.clone(),
         )
         .await,
     );
     info!("Relay manager initialized with shared system monitoring");
 
-    // Initialize relay configuration resolver
-    let relay_repository = m3u_proxy::repositories::relay::RelayRepository::new(database.pool());
+    // Initialize relay configuration resolver with SeaORM
+    let relay_repository = m3u_proxy::database::repositories::relay::RelaySeaOrmRepository::new(database.connection().clone());
     let relay_config_resolver = m3u_proxy::services::RelayConfigResolver::new(relay_repository);
     info!("Relay configuration resolver initialized");
 
@@ -413,16 +439,23 @@ async fn main() -> Result<()> {
     // Clone services for shutdown handling before they get moved
     let shutdown_proxy_service = proxy_regeneration_service.clone();
     
-    // Set up signal handlers for graceful shutdown
+    // Set up signal handlers for graceful shutdown with force-kill capability
     let shutdown_token = cancellation_token.clone();
     let shutdown_state_manager = state_manager.clone();
     tokio::spawn(async move {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        
+        let signal_count = Arc::new(AtomicUsize::new(0));
+        const FORCE_KILL_THRESHOLD: usize = 3;
+        
         #[cfg(unix)]
         {
             use tokio::signal::unix::{signal, SignalKind};
             let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
             let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
             
+            // First signal - initiate graceful shutdown
             tokio::select! {
                 _ = sigterm.recv() => {
                     tracing::info!("Received SIGTERM, initiating graceful shutdown of all services");
@@ -431,6 +464,42 @@ async fn main() -> Result<()> {
                     tracing::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown of all services");
                 }
             }
+            
+            // Cancel all active ingestions first
+            shutdown_state_manager.cancel_all_ingestions().await;
+            
+            // Shutdown proxy regeneration service to cancel pending delays
+            shutdown_proxy_service.shutdown();
+            
+            // Cancel all background services
+            shutdown_token.cancel();
+            
+            // Set up force-kill handler for additional signals
+            let signal_count_clone = signal_count.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = sigterm.recv() => {
+                            let count = signal_count_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                            if count >= FORCE_KILL_THRESHOLD {
+                                tracing::warn!("Received {} SIGTERM signals - force killing application", count + 1);
+                                std::process::exit(1);
+                            } else {
+                                tracing::warn!("Received additional SIGTERM ({}/{}), send {} more to force kill", count + 1, FORCE_KILL_THRESHOLD + 1, FORCE_KILL_THRESHOLD - count);
+                            }
+                        }
+                        _ = sigint.recv() => {
+                            let count = signal_count_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                            if count >= FORCE_KILL_THRESHOLD {
+                                tracing::warn!("Received {} SIGINT signals - force killing application", count + 1);
+                                std::process::exit(1);
+                            } else {
+                                tracing::warn!("Received additional SIGINT (Ctrl+C) ({}/{}), send {} more to force kill", count + 1, FORCE_KILL_THRESHOLD + 1, FORCE_KILL_THRESHOLD - count);
+                            }
+                        }
+                    }
+                }
+            });
         }
         
         #[cfg(not(unix))]
@@ -438,16 +507,32 @@ async fn main() -> Result<()> {
             use tokio::signal;
             signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
             tracing::info!("Received Ctrl+C, initiating graceful shutdown of all services");
+            
+            // Cancel all active ingestions first
+            shutdown_state_manager.cancel_all_ingestions().await;
+            
+            // Shutdown proxy regeneration service to cancel pending delays
+            shutdown_proxy_service.shutdown();
+            
+            // Cancel all background services
+            shutdown_token.cancel();
+            
+            // Set up force-kill handler for additional Ctrl+C
+            let signal_count_clone = signal_count.clone();
+            tokio::spawn(async move {
+                loop {
+                    if signal::ctrl_c().await.is_ok() {
+                        let count = signal_count_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                        if count >= FORCE_KILL_THRESHOLD {
+                            tracing::warn!("Received {} Ctrl+C signals - force killing application", count + 1);
+                            std::process::exit(1);
+                        } else {
+                            tracing::warn!("Received additional Ctrl+C ({}/{}), send {} more to force kill", count + 1, FORCE_KILL_THRESHOLD + 1, FORCE_KILL_THRESHOLD - count);
+                        }
+                    }
+                }
+            });
         }
-        
-        // Cancel all active ingestions first
-        shutdown_state_manager.cancel_all_ingestions().await;
-        
-        // Shutdown proxy regeneration service to cancel pending delays
-        shutdown_proxy_service.shutdown();
-        
-        // Cancel all background services
-        shutdown_token.cancel();
     });
 
     // Create a channel to signal when the server is ready or fails to bind

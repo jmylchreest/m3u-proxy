@@ -2,8 +2,7 @@
 
 import React, { createContext, useContext, useRef, useEffect, useCallback, useState, useMemo, ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
-import { SSEClient } from '@/lib/sse-client'
-import { getBackendUrl } from '@/lib/config'
+import { sseManager, ProgressEvent as SSEProgressEvent } from '@/lib/sse-singleton'
 import { ProgressEvent as APIProgressEvent, ProgressStage } from '@/types/api'
 import { Debug } from '@/utils/debug'
 
@@ -43,17 +42,15 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname()
   const [events, setEvents] = useState<Map<string, NotificationEvent>>(new Map())
   const [connected, setConnected] = useState(false)
-  const subscribersRef = useRef<Map<string, Set<(event: ProgressEvent) => void>>>(new Map())
-  const allSubscribersRef = useRef<Set<(event: NotificationEvent) => void>>(new Set())
-  const sseClientRef = useRef<SSEClient | null>(null)
   const debug = Debug.createLogger('ProgressProvider')
+  const notificationSubscribersRef = useRef<Set<{ current: (event: NotificationEvent) => void }>>(new Set())
 
-  // Determine if we should include completed events based on current page
-  const includeCompleted = pathname === '/events/'
-  
-  // Determine operation type filter based on current page
-  const getOperationTypeForPath = (path: string): string | null => {
-    switch (path) {
+  // Local filtering logic based on current page
+  const getOperationTypeFilter = useCallback((path: string): string | null => {
+    // Normalize path to handle both with and without trailing slashes
+    const normalizedPath = path.endsWith('/') ? path : path + '/'
+    
+    switch (normalizedPath) {
       case '/sources/stream/':
         return 'stream_ingestion'
       case '/sources/epg/':
@@ -63,9 +60,29 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
       default:
         return null // No filter for events page and other pages
     }
-  }
-  
-  const operationType = getOperationTypeForPath(pathname)
+  }, [])
+
+  const shouldIncludeCompleted = useCallback((path: string): boolean => {
+    return path === '/events' || path === '/events/'
+  }, [])
+
+  // Local event filtering based on current page context
+  const filterEventForCurrentPage = useCallback((event: ProgressEvent, currentPath: string): boolean => {
+    const operationTypeFilter = getOperationTypeFilter(currentPath)
+    const includeCompleted = shouldIncludeCompleted(currentPath)
+
+    // Operation type filtering
+    if (operationTypeFilter && event.operation_type !== operationTypeFilter) {
+      return false
+    }
+
+    // Completion filtering - on most pages we don't want to show completed events cluttering the UI
+    if (!includeCompleted && (event.state === 'completed' || event.state === 'error')) {
+      return false
+    }
+
+    return true
+  }, [getOperationTypeFilter, shouldIncludeCompleted])
 
   // Handle progress events (now with single operation ID per process)
   const handleProgressEvent = useCallback((event: ProgressEvent) => {
@@ -101,162 +118,78 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         return newEvents
       })
 
-      // Route to resource-specific subscribers using owner_id
-      if (event.owner_id) {
-        const subscribers = subscribersRef.current.get(event.owner_id)
-        if (subscribers && subscribers.size > 0) {
-          debug.log(`Found ${subscribers.size} subscribers for owner: ${event.owner_id}`)
-          subscribers.forEach(callback => {
-            try {
-              callback(event)
-            } catch (error) {
-              debug.error('Error in resource subscriber:', error)
-            }
-          })
-        } else {
-          debug.log(`No subscribers found for owner: ${event.owner_id}`)
-        }
+      // Notify all notification subscribers
+      for (const subscriberRef of notificationSubscribersRef.current) {
+        subscriberRef.current(notificationEvent)
       }
 
-      // Route to operation-type subscribers
-      const typeSubscribers = subscribersRef.current.get(event.operation_type)
-      typeSubscribers?.forEach(callback => {
-        try {
-          callback(event)
-        } catch (error) {
-          debug.error('Error in type subscriber:', error)
-        }
-      })
+      debug.log('Event processed, stored in local events map, and sent to notification subscribers')
+  }, []) // NO DEPENDENCIES - stable callback to prevent SSE reconnections
 
-      // Route to all subscribers (for notifications)
-      allSubscribersRef.current.forEach(callback => {
-        try {
-          callback(notificationEvent)
-        } catch (error) {
-          debug.error('Error in all subscriber:', error)
-        }
-      })
-  }, [])
-
-  // Initialize SSE connection
+  // Use global SSE singleton - no more per-component connections
   useEffect(() => {
-    debug.log('Initializing SSE connection')
+    debug.log('ProgressProvider: Setting up connection to global SSE singleton')
     
-    // Create a simple EventSource directly since we need to control connection status
-    const backendUrl = getBackendUrl()
-    
-    // Build query parameters
-    const params = new URLSearchParams({
-      include_completed: includeCompleted.toString()
+    // Subscribe to all events from the singleton
+    const unsubscribeFromAll = sseManager.subscribeToAll((event) => {
+      handleProgressEvent(event)
     })
     
-    // Add operation_type filter if specified (not for events page)
-    if (operationType) {
-      params.append('operation_type', operationType)
+    // Monitor connection status
+    const checkConnectionStatus = () => {
+      setConnected(sseManager.isConnected())
     }
     
-    const sseUrl = `${backendUrl}/api/v1/progress/events?${params}`
-    debug.log('SSE URL with filters:', sseUrl)
-    const eventSource = new EventSource(sseUrl)
+    // Initial connection status check
+    checkConnectionStatus()
     
-    eventSource.onopen = () => {
-      debug.log('SSE connection opened')
-      setConnected(true)
-    }
-    
-    // Add listener for all event types (including heartbeat)
-    eventSource.addEventListener('heartbeat', (event) => {
-      debug.log('Heartbeat received:', event.data)
-    })
-    
-    eventSource.addEventListener('progress', (event) => {
-      debug.log('Progress event received:', event.data)
-      try {
-        const progressEvent: ProgressEvent = JSON.parse(event.data)
-        debug.log('Parsed progress event:', progressEvent)
-        handleProgressEvent(progressEvent)
-      } catch (error) {
-        debug.error('Failed to parse progress event:', error, 'Raw data:', event.data)
-      }
-    })
-    
-    eventSource.onerror = (error) => {
-      debug.log('SSE connection error:', error)
-      setConnected(false)
-    }
-    
-    eventSource.onmessage = (event) => {
-      debug.log('Raw SSE message received:', event)
-      debug.log('Event data:', event.data)
-      try {
-        const progressEvent: ProgressEvent = JSON.parse(event.data)
-        debug.log('Parsed progress event:', progressEvent)
-        handleProgressEvent(progressEvent)
-      } catch (error) {
-        debug.error('Failed to parse event:', error, 'Raw data:', event.data)
-      }
-    }
+    // Poll connection status periodically
+    const statusInterval = setInterval(checkConnectionStatus, 1000)
 
+    // Cleanup on unmount
     return () => {
-      debug.log('Cleaning up SSE connection')
-      eventSource.close()
-      setConnected(false)
+      debug.log('ProgressProvider: Cleaning up SSE singleton subscriptions')
+      unsubscribeFromAll()
+      clearInterval(statusInterval)
     }
-  }, [includeCompleted, operationType])
+  }, [handleProgressEvent])
 
-  // Subscribe to events for specific resource ID
+  // Subscribe to events for specific resource ID using global singleton
   const subscribe = useCallback((resourceId: string, callback: (event: ProgressEvent) => void) => {
-    debug.log(`Subscribing to resource: ${resourceId}`)
+    debug.log(`Subscribing to resource via singleton: ${resourceId}`)
     
-    if (!subscribersRef.current.has(resourceId)) {
-      subscribersRef.current.set(resourceId, new Set())
-    }
-    subscribersRef.current.get(resourceId)!.add(callback)
-
-    // Return unsubscribe function
-    return () => {
-      debug.log(`Unsubscribing from resource: ${resourceId}`)
-      const subscribers = subscribersRef.current.get(resourceId)
-      if (subscribers) {
-        subscribers.delete(callback)
-        if (subscribers.size === 0) {
-          subscribersRef.current.delete(resourceId)
-        }
-      }
-    }
+    // Use the global singleton manager for subscriptions
+    return sseManager.subscribe(resourceId, callback)
   }, [])
 
-  // Subscribe to events by operation type
+  // Subscribe to events by operation type using global singleton
   const subscribeToType = useCallback((operationType: string, callback: (event: ProgressEvent) => void) => {
-    debug.log(`Subscribing to operation type: ${operationType}`)
+    debug.log(`Subscribing to operation type via singleton: ${operationType}`)
     
-    if (!subscribersRef.current.has(operationType)) {
-      subscribersRef.current.set(operationType, new Set())
-    }
-    subscribersRef.current.get(operationType)!.add(callback)
-
-    return () => {
-      debug.log(`Unsubscribing from operation type: ${operationType}`)
-      const subscribers = subscribersRef.current.get(operationType)
-      if (subscribers) {
-        subscribers.delete(callback)
-        if (subscribers.size === 0) {
-          subscribersRef.current.delete(operationType)
-        }
-      }
-    }
+    // Use the global singleton manager for subscriptions
+    return sseManager.subscribe(operationType, callback)
   }, [])
 
-  // Subscribe to all events
+  // Subscribe to all events (for notifications)
   const subscribeToAll = useCallback((callback: (event: NotificationEvent) => void) => {
-    debug.log('Subscribing to all events')
-    allSubscribersRef.current.add(callback)
-
-    return () => {
-      debug.log('Unsubscribing from all events')
-      allSubscribersRef.current.delete(callback)
+    debug.log('Subscribing to all events (for notifications)')
+    
+    // Store the callback in a ref so we can call it from handleProgressEvent
+    const callbackRef = { current: callback }
+    
+    // Add callback to the subscribers set
+    notificationSubscribersRef.current.add(callbackRef)
+    
+    // Send existing events to new subscriber
+    for (const event of events.values()) {
+      callback(event)
     }
-  }, [])
+    
+    return () => {
+      debug.log('Unsubscribing from all events (notifications)')
+      notificationSubscribersRef.current.delete(callbackRef)
+    }
+  }, [events])
 
   // Get current state for a resource
   const getResourceState = useCallback((resourceId: string): ProgressEvent | null => {
@@ -269,12 +202,18 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
     return null
   }, [events])
 
-  // Get all events with visibility tracking
-  const getAllEvents = useCallback(() => {
-    return Array.from(events.values()).sort((a, b) => 
+  // Get all events with visibility tracking (optionally filtered by current page)
+  const getAllEvents = useCallback((filterByCurrentPage: boolean = false) => {
+    const allEvents = Array.from(events.values())
+    
+    const filteredEvents = filterByCurrentPage 
+      ? allEvents.filter(event => filterEventForCurrentPage(event, pathname))
+      : allEvents
+      
+    return filteredEvents.sort((a, b) => 
       new Date(b.last_update).getTime() - new Date(a.last_update).getTime()
     )
-  }, [events])
+  }, [events, pathname, filterEventForCurrentPage])
 
   // Mark events as visible
   const markAsVisible = useCallback((eventIds: string[]) => {

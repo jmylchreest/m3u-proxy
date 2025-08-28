@@ -29,7 +29,7 @@
 //!         source_type: StreamSourceType::M3u,
 //!         url: "http://example.com/playlist.m3u".to_string(),
 //!         max_concurrent_streams: 10,
-//!         update_cron: "0 */6 * * *".to_string(),
+//!         update_cron: "0 0 */6 * * * *".to_string(),
 //!         username: None,
 //!         password: None,
 //!         field_map: None,

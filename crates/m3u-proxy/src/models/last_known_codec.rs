@@ -5,7 +5,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LastKnownCodec {
     pub id: Uuid,
-    pub channel_id: Uuid,
+    pub stream_url: String,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
     pub container_format: Option<String>,
@@ -59,7 +59,6 @@ impl std::str::FromStr for ProbeMethod {
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateLastKnownCodecRequest {
-    pub channel_id: Uuid,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
     pub container_format: Option<String>,

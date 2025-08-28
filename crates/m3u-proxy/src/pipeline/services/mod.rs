@@ -1,9 +1,9 @@
-pub mod data_mapping;
+pub mod seaorm_data_mapping;
 pub mod helper_processor;
 pub mod helper_traits;
 pub mod validation;
 
-pub use data_mapping::EngineBasedDataMappingService;
+pub use seaorm_data_mapping::SeaOrmDataMappingService;
 pub use helper_processor::{
     HelperProcessor, HelperPostProcessor, HelperProcessorError,
     HelperDetectable, HelperProcessable, HelperField,

@@ -5,26 +5,26 @@
 //! Tests use the existing SQL injection prevention infrastructure.
 
 use serde_json::json;
-use sqlx::{Pool, Sqlite};
+use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
 use m3u_proxy::{
     database::Database,
     models::*,
-    repositories::{
+    database::repositories::{
+        stream_source::{StreamSourceSeaOrmRepository, StreamSourceCreateRequest, StreamSourceUpdateRequest, StreamSourceQuery},
+        channel::{ChannelSeaOrmRepository, ChannelCreateRequest, ChannelUpdateRequest, ChannelQuery},
+        filter::FilterSeaOrmRepository,
         traits::Repository,
-        StreamSourceRepository, ChannelRepository, FilterRepository, EpgSourceRepository,
-        channel::{ChannelCreateRequest, ChannelUpdateRequest, ChannelQuery},
-        stream_source::StreamSourceQuery,
     },
 };
 
-/// Helper to create test database using existing infrastructure
-async fn create_test_database() -> (Database, Pool<Sqlite>) {
+/// Helper to create test database using SeaORM infrastructure
+async fn create_test_database() -> (Database, DatabaseConnection) {
     let database = create_in_memory_database().await;
     database.migrate().await.expect("Failed to run migrations");
-    let pool = database.pool().clone();
-    (database, pool)
+    let connection = database.connection().clone();
+    (database, connection)
 }
 
 // =============================================================================
@@ -33,8 +33,8 @@ async fn create_test_database() -> (Database, Pool<Sqlite>) {
 
 #[tokio::test]
 async fn test_stream_source_repository_complete_lifecycle() {
-    let (_db, pool) = create_test_database().await;
-    let repo = StreamSourceRepository::new(pool);
+    let (_db, connection) = create_test_database().await;
+    let repo = StreamSourceSeaOrmRepository::new(connection);
 
     // Test create with all fields
     let create_request = StreamSourceCreateRequest {
@@ -122,8 +122,8 @@ async fn test_stream_source_repository_complete_lifecycle() {
 
 #[tokio::test]
 async fn test_stream_source_validation_and_constraints() {
-    let (_db, pool) = create_test_database().await;
-    let repo = StreamSourceRepository::new(pool);
+    let (_db, connection) = create_test_database().await;
+    let repo = StreamSourceSeaOrmRepository::new(connection);
 
     // Test duplicate name constraint (if exists)
     let request1 = StreamSourceCreateRequest {
@@ -131,7 +131,7 @@ async fn test_stream_source_validation_and_constraints() {
         source_type: StreamSourceType::M3u,
         url: "http://example.com/test1.m3u".to_string(),
         max_concurrent_streams: 10,
-        update_cron: "0 */6 * * *".to_string(),
+        update_cron: "0 0 */6 * * * *".to_string(),
         username: None,
         password: None,
         field_map: None,
@@ -146,7 +146,7 @@ async fn test_stream_source_validation_and_constraints() {
         source_type: StreamSourceType::M3u,
         url: "http://example.com/empty.m3u".to_string(),
         max_concurrent_streams: 10,
-        update_cron: "0 */6 * * *".to_string(),
+        update_cron: "0 0 */6 * * * *".to_string(),
         username: None,
         password: None,
         field_map: None,
@@ -162,7 +162,7 @@ async fn test_stream_source_validation_and_constraints() {
         source_type: StreamSourceType::M3u,
         url: "http://example.com/json.m3u".to_string(),
         max_concurrent_streams: 10,
-        update_cron: "0 */6 * * *".to_string(),
+        update_cron: "0 0 */6 * * * *".to_string(),
         username: None,
         password: None,
         field_map: Some(json!({"valid": "json"}).to_string()), // This should work
@@ -178,7 +178,7 @@ async fn test_stream_source_validation_and_constraints() {
         source_type: StreamSourceType::M3u,
         url: "http://example.com/nonexistent.m3u".to_string(),
         max_concurrent_streams: 10,
-        update_cron: "0 */6 * * *".to_string(),
+        update_cron: "0 0 */6 * * * *".to_string(),
         username: None,
         password: None,
         field_map: None,
@@ -197,9 +197,9 @@ async fn test_stream_source_validation_and_constraints() {
 
 #[tokio::test]
 async fn test_channel_repository_with_source_relationship() {
-    let (_db, pool) = create_test_database().await;
-    let source_repo = StreamSourceRepository::new(pool.clone());
-    let channel_repo = ChannelRepository::new(pool);
+    let (_db, connection) = create_test_database().await;
+    let source_repo = StreamSourceSeaOrmRepository::new(connection.clone());
+    let channel_repo = ChannelSeaOrmRepository::new(connection);
 
     // Create source first (foreign key relationship)
     let source = create_test_stream_source(&source_repo).await;
@@ -267,8 +267,8 @@ async fn test_channel_repository_with_source_relationship() {
 
 #[tokio::test] 
 async fn test_channel_repository_foreign_key_constraints() {
-    let (_db, pool) = create_test_database().await;
-    let channel_repo = ChannelRepository::new(pool);
+    let (_db, connection) = create_test_database().await;
+    let channel_repo = ChannelSeaOrmRepository::new(connection);
 
     // Test creating channel with non-existent source_id
     let invalid_source_id = Uuid::new_v4();
@@ -298,8 +298,8 @@ async fn test_channel_repository_foreign_key_constraints() {
 
 #[tokio::test]
 async fn test_epg_source_repository_basic_operations() {
-    let (_db, pool) = create_test_database().await;
-    let epg_repo = EpgSourceRepository::new(pool);
+    let (_db, connection) = create_test_database().await;
+    let epg_repo = EpgSourceSeaOrmRepository::new(connection);
 
     // Test create
     let create_request = EpgSourceCreateRequest {
@@ -336,9 +336,9 @@ async fn test_epg_source_repository_basic_operations() {
 
 #[tokio::test]
 async fn test_filter_repository_complete_lifecycle() {
-    let (_db, pool) = create_test_database().await;
-    let source_repo = StreamSourceRepository::new(pool.clone());
-    let filter_repo = FilterRepository::new(pool);
+    let (_db, connection) = create_test_database().await;
+    let source_repo = StreamSourceSeaOrmRepository::new(connection.clone());
+    let filter_repo = FilterSeaOrmRepository::new(connection);
 
     // Create source for filter
     let _source = create_test_stream_source(&source_repo).await;
@@ -385,10 +385,10 @@ async fn test_filter_repository_complete_lifecycle() {
 
 #[tokio::test]
 async fn test_cross_repository_cascade_operations() {
-    let (_db, pool) = create_test_database().await;
-    let source_repo = StreamSourceRepository::new(pool.clone());
-    let channel_repo = ChannelRepository::new(pool.clone());
-    let filter_repo = FilterRepository::new(pool.clone());
+    let (_db, connection) = create_test_database().await;
+    let source_repo = StreamSourceSeaOrmRepository::new(connection.clone());
+    let channel_repo = ChannelSeaOrmRepository::new(connection.clone());
+    let filter_repo = FilterSeaOrmRepository::new(connection.clone());
 
     // Create source
     let source = create_test_stream_source(&source_repo).await;
@@ -446,13 +446,13 @@ async fn test_cross_repository_cascade_operations() {
 
 #[tokio::test]
 async fn test_repository_error_handling_consistency() {
-    let (_db, pool) = create_test_database().await;
-    let source_repo = StreamSourceRepository::new(pool.clone());
-    let channel_repo = ChannelRepository::new(pool);
+    let (_db, connection) = create_test_database().await;
+    let source_repo = StreamSourceSeaOrmRepository::new(connection.clone());
+    let channel_repo = ChannelSeaOrmRepository::new(connection);
 
     // Test find non-existent entity
     let non_existent_id = Uuid::new_v4();
-    let result = source_repo.find_by_id(non_existent_id).await;
+    let result = source_repo.find_by_id(&non_existent_id).await;
     assert!(result.is_ok()); // Should return Ok(None), not error
     assert!(result.unwrap().is_none());
 
@@ -462,7 +462,7 @@ async fn test_repository_error_handling_consistency() {
         source_type: StreamSourceType::M3u,
         url: "http://example.com/nonexistent.m3u".to_string(),
         max_concurrent_streams: 10,
-        update_cron: "0 */6 * * *".to_string(),
+        update_cron: "0 0 */6 * * * *".to_string(),
         username: None,
         password: None,
         field_map: None,
@@ -470,11 +470,11 @@ async fn test_repository_error_handling_consistency() {
         is_active: true,
         update_linked: true,
     };
-    let update_result = source_repo.update(non_existent_id, update_request).await;
+    let update_result = source_repo.update(&non_existent_id, update_request).await;
     assert!(update_result.is_err()); // Should error
 
     // Test delete non-existent entity
-    let delete_result = source_repo.delete(non_existent_id).await;
+    let delete_result = source_repo.delete(&non_existent_id).await;
     assert!(delete_result.is_err()); // Should error
 
     // Test foreign key constraint violation
@@ -499,9 +499,9 @@ async fn test_repository_error_handling_consistency() {
 
 #[tokio::test]
 async fn test_repository_bulk_operations_performance() {
-    let (_db, pool) = create_test_database().await;
-    let source_repo = StreamSourceRepository::new(pool.clone());
-    let channel_repo = ChannelRepository::new(pool);
+    let (_db, connection) = create_test_database().await;
+    let source_repo = StreamSourceSeaOrmRepository::new(connection.clone());
+    let channel_repo = ChannelSeaOrmRepository::new(connection);
 
     // Create source for channels
     let source = create_test_stream_source(&source_repo).await;
@@ -558,8 +558,8 @@ async fn test_repository_bulk_operations_performance() {
 async fn test_concurrent_repository_operations() {
     use tokio::task::JoinSet;
     
-    let (_db, pool) = create_test_database().await;
-    let source_repo = StreamSourceRepository::new(pool);
+    let (_db, connection) = create_test_database().await;
+    let source_repo = StreamSourceSeaOrmRepository::new(connection);
 
     // Test concurrent operations
     let mut join_set = JoinSet::new();
@@ -573,7 +573,7 @@ async fn test_concurrent_repository_operations() {
                 source_type: StreamSourceType::M3u,
                 url: format!("http://example.com/concurrent_{i}.m3u"),
                 max_concurrent_streams: 10,
-                update_cron: "0 */6 * * *".to_string(),
+                update_cron: "0 0 */6 * * * *".to_string(),
                 username: None,
                 password: None,
                 field_map: None,
@@ -602,15 +602,15 @@ async fn test_concurrent_repository_operations() {
 }
 /// Helper function to create in-memory database for testing
 async fn create_in_memory_database() -> Database {
-    use m3u_proxy::config::{DatabaseConfig, IngestionConfig};
+    use m3u_proxy::config::{DatabaseConfig, IngestionConfig, SqliteConfig, PostgreSqlConfig, MySqlConfig};
     
     let db_config = DatabaseConfig {
         url: "sqlite::memory:".to_string(),
         max_connections: Some(10),
         batch_sizes: None,
-        busy_timeout: "5000".to_string(),
-        cache_size: "-64000".to_string(),
-        wal_autocheckpoint: 1000,
+        sqlite: SqliteConfig::default(),
+        postgresql: PostgreSqlConfig::default(),
+        mysql: MySqlConfig::default(),
     };
     
     let ingestion_config = IngestionConfig::default();
@@ -620,13 +620,13 @@ async fn create_in_memory_database() -> Database {
 }
 
 /// Helper function to create a test stream source
-async fn create_test_stream_source(repo: &StreamSourceRepository) -> StreamSource {
+async fn create_test_stream_source(repo: &StreamSourceSeaOrmRepository) -> StreamSource {
     let request = StreamSourceCreateRequest {
         name: "Test Stream Source".to_string(),
         source_type: StreamSourceType::M3u,
         url: "http://example.com/test.m3u".to_string(),
         max_concurrent_streams: 10,
-        update_cron: "0 */6 * * *".to_string(),
+        update_cron: "0 0 */6 * * * *".to_string(),
         username: None,
         password: None,
         field_map: None,

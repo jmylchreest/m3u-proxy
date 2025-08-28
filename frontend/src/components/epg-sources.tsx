@@ -69,6 +69,7 @@ import { useConflictHandler } from "@/hooks/useConflictHandler"
 import { ConflictNotification } from "@/components/ConflictNotification"
 import { sseClient } from "@/lib/sse-client"
 import { formatDate, formatRelativeTime } from "@/lib/utils"
+import { validateCronExpression, describeCronExpression, COMMON_CRON_TEMPLATES } from "@/lib/cron-validation"
 
 interface LoadingState {
   sources: boolean;
@@ -113,12 +114,13 @@ function CreateEpgSourceSheet({
     name: "",
     source_type: "xtream",
     url: "",
-    update_cron: "0 0 */12 * * *",
+    update_cron: "0 0 */6 * * * *",
     original_timezone: "UTC",
     time_offset: "+00:00",
     username: "",
     password: ""
   })
+  const [cronValidation, setCronValidation] = useState(validateCronExpression("0 0 */6 * * * *"))
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -129,7 +131,7 @@ function CreateEpgSourceSheet({
         name: "",
         source_type: "xtream", 
         url: "",
-        update_cron: "0 0 */12 * * *",
+        update_cron: "0 0 */6 * * * *",
         original_timezone: "UTC",
         time_offset: "+00:00",
         username: "",
@@ -259,16 +261,71 @@ function CreateEpgSourceSheet({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="update_cron">Update Schedule (Cron)</Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="update_cron">Update Schedule (Cron)</Label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">
+                      ?
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm">
+                    <div className="space-y-2">
+                      <p className="font-medium">7-field cron format:</p>
+                      <p className="text-xs">sec min hour day-of-month month day-of-week year</p>
+                      <div className="space-y-1 text-xs">
+                        <p><code>"0 0 */6 * * * *"</code> - Every 6 hours</p>
+                        <p><code>"0 0 2 * * * *"</code> - Daily at 2:00 AM</p>
+                        <p><code>"0 */30 * * * * *"</code> - Every 30 minutes</p>
+                      </div>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <Input
               id="update_cron"
               value={formData.update_cron}
-              onChange={(e) => setFormData({ ...formData, update_cron: e.target.value })}
-              placeholder="0 0 */12 * * *"
+              onChange={(e) => {
+                const newValue = e.target.value
+                setFormData({ ...formData, update_cron: newValue })
+                setCronValidation(validateCronExpression(newValue))
+              }}
+              placeholder="0 0 */6 * * * *"
               required
               disabled={loading}
               autoComplete="off"
+              className={cronValidation.isValid ? "" : "border-destructive focus:border-destructive"}
             />
+            {!cronValidation.isValid && cronValidation.error && (
+              <div className="text-sm text-destructive space-y-1">
+                <p>{cronValidation.error}</p>
+                {cronValidation.suggestion && (
+                  <p className="text-xs text-muted-foreground">
+                    💡 {cronValidation.suggestion}
+                  </p>
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-1 text-xs">
+              {COMMON_CRON_TEMPLATES.slice(0, 3).map((template) => (
+                <Button
+                  key={template.expression}
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => {
+                    setFormData({ ...formData, update_cron: template.expression })
+                    setCronValidation(validateCronExpression(template.expression))
+                  }}
+                  disabled={loading}
+                  type="button"
+                >
+                  {template.description}
+                </Button>
+              ))}
+            </div>
           </div>
         </form>
 
@@ -305,17 +362,18 @@ function EditEpgSourceSheet({
     name: "",
     source_type: "xtream",
     url: "",
-    update_cron: "0 0 */12 * * *",
+    update_cron: "0 0 */6 * * * *",
     original_timezone: "UTC",
     time_offset: "+00:00",
     username: "",
     password: ""
   })
+  const [cronValidation, setCronValidation] = useState(validateCronExpression("0 0 */6 * * * *"))
 
   // Update form data when source changes
   useEffect(() => {
     if (source) {
-      setFormData({
+      const newFormData = {
         name: source.name,
         source_type: source.source_type,
         url: source.url,
@@ -324,7 +382,9 @@ function EditEpgSourceSheet({
         time_offset: source.time_offset || "+00:00",
         username: source.username || "",
         password: source.password || ""
-      })
+      }
+      setFormData(newFormData)
+      setCronValidation(validateCronExpression(newFormData.update_cron))
     }
   }, [source])
 
@@ -448,16 +508,71 @@ function EditEpgSourceSheet({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="edit-update_cron">Update Schedule (Cron)</Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="edit-update_cron">Update Schedule (Cron)</Label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">
+                      ?
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm">
+                    <div className="space-y-2">
+                      <p className="font-medium">7-field cron format:</p>
+                      <p className="text-xs">sec min hour day-of-month month day-of-week year</p>
+                      <div className="space-y-1 text-xs">
+                        <p><code>"0 0 */6 * * * *"</code> - Every 6 hours</p>
+                        <p><code>"0 0 2 * * * *"</code> - Daily at 2:00 AM</p>
+                        <p><code>"0 */30 * * * * *"</code> - Every 30 minutes</p>
+                      </div>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <Input
               id="edit-update_cron"
               value={formData.update_cron}
-              onChange={(e) => setFormData({ ...formData, update_cron: e.target.value })}
-              placeholder="0 0 */12 * * *"
+              onChange={(e) => {
+                const newValue = e.target.value
+                setFormData({ ...formData, update_cron: newValue })
+                setCronValidation(validateCronExpression(newValue))
+              }}
+              placeholder="0 0 */6 * * * *"
               required
               disabled={loading}
               autoComplete="off"
+              className={cronValidation.isValid ? "" : "border-destructive focus:border-destructive"}
             />
+            {!cronValidation.isValid && cronValidation.error && (
+              <div className="text-sm text-destructive space-y-1">
+                <p>{cronValidation.error}</p>
+                {cronValidation.suggestion && (
+                  <p className="text-xs text-muted-foreground">
+                    💡 {cronValidation.suggestion}
+                  </p>
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-1 text-xs">
+              {COMMON_CRON_TEMPLATES.slice(0, 3).map((template) => (
+                <Button
+                  key={template.expression}
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => {
+                    setFormData({ ...formData, update_cron: template.expression })
+                    setCronValidation(validateCronExpression(template.expression))
+                  }}
+                  disabled={loading}
+                  type="button"
+                >
+                  {template.description}
+                </Button>
+              ))}
+            </div>
           </div>
         </form>
 
@@ -572,14 +687,15 @@ export function EpgSources() {
         })
       }
       
-      // If we see a completion event, remove from refreshing set
+      // If we see a completion event, remove from refreshing set and reload sources
       if ((event.state === 'completed' || event.state === 'error') && event.id && event.operation_type === 'epg_ingestion') {
         console.log(`[EpgSources] Removing ${event.id} from refreshing set (state: ${event.state})`)
         setRefreshingSources(prev => {
           const newSet = new Set(prev)
+          const wasRefreshing = newSet.has(event.id)
           newSet.delete(event.id)
           // Reload sources when refresh completes
-          if (newSet.has(event.id)) {
+          if (wasRefreshing) {
             setTimeout(() => loadSources(), 1000)
           }
           return newSet

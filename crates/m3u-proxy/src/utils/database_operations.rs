@@ -1,5 +1,5 @@
 use std::time::Duration;
-use sqlx::{Pool, Sqlite};
+use sea_orm::{DatabaseConnection, ConnectionTrait, Statement, DatabaseBackend, TransactionTrait};
 use tracing::{debug, info, trace};
 use tokio::time::sleep;
 
@@ -72,11 +72,12 @@ impl DatabaseOperations {
 
     /// Save EPG programs in batches with retry logic - simplified version
     pub async fn save_epg_programs_in_batches(
-        pool: &Pool<Sqlite>,
+        db: &DatabaseConnection,
         _source_id: uuid::Uuid,
         programs: Vec<crate::models::EpgProgram>,
         batch_size: usize,
         progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
+        batch_config: Option<&crate::config::DatabaseBatchConfig>,
     ) -> AppResult<usize> {
         let total_items = programs.len();
         let mut total_processed = 0;
@@ -96,7 +97,7 @@ impl DatabaseOperations {
             let max_attempts = 3;
             
             loop {
-                match Self::insert_epg_programs_batch(chunk.to_vec(), pool).await {
+                match Self::insert_epg_programs_batch(chunk.to_vec(), db, batch_config).await {
                     Ok(count) => {
                         total_processed += count;
                         debug!("Successfully processed EPG batch {}: {} items", chunk_index + 1, count);
@@ -142,7 +143,7 @@ impl DatabaseOperations {
     }
 
     /// Optimize SQLite database for high-volume operations
-    pub async fn optimize_for_bulk_operations(pool: &Pool<Sqlite>) -> AppResult<()> {
+    pub async fn optimize_for_bulk_operations(db: &DatabaseConnection) -> AppResult<()> {
         debug!("Optimizing SQLite database for bulk operations");
 
         let optimizations = [
@@ -154,8 +155,8 @@ impl DatabaseOperations {
         ];
 
         for (pragma, description) in &optimizations {
-            sqlx::query(pragma)
-                .execute(pool)
+            let stmt = Statement::from_string(DatabaseBackend::Sqlite, pragma.to_string());
+            db.execute(stmt)
                 .await
                 .map_err(|e| AppError::internal(format!("Failed to set pragma '{pragma}': {e}")))?;
             
@@ -166,11 +167,11 @@ impl DatabaseOperations {
     }
 
     /// Perform WAL checkpoint after large operations
-    pub async fn checkpoint_wal(pool: &Pool<Sqlite>) -> AppResult<()> {
+    pub async fn checkpoint_wal(db: &DatabaseConnection) -> AppResult<()> {
         debug!("Performing WAL checkpoint");
         
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(pool)
+        let stmt = Statement::from_string(DatabaseBackend::Sqlite, "PRAGMA wal_checkpoint(TRUNCATE)".to_string());
+        db.execute(stmt)
             .await
             .map_err(|e| AppError::internal(format!("Failed to checkpoint WAL: {e}")))?;
         
@@ -181,7 +182,8 @@ impl DatabaseOperations {
     /// Create a batch insert operation for EPG programs using efficient multi-value INSERT
     pub async fn insert_epg_programs_batch(
         programs: Vec<crate::models::EpgProgram>,
-        pool: &Pool<Sqlite>,
+        db: &DatabaseConnection,
+        batch_config: Option<&crate::config::DatabaseBatchConfig>,
     ) -> AppResult<usize> {
         if programs.is_empty() {
             return Ok(0);
@@ -191,12 +193,19 @@ impl DatabaseOperations {
         debug!("Inserting batch of {} EPG programs using multi-value INSERT", batch_size);
 
         // Use a transaction for the batch
-        let mut tx = pool.begin().await
+        let txn = db.begin().await
             .map_err(|e| AppError::internal(format!("Failed to begin transaction: {e}")))?;
 
-        // Use the full batch size - config already accounts for SQLite parameter limits
-        // EPG programs have 12 fields, so 1800 * 12 = 21,600 parameters (well under 32,766 limit)
-        let max_records_per_query = batch_size;
+        // Use configurable batch size based on database backend and user configuration
+        let max_records_per_query = if let Some(config) = batch_config {
+            config.safe_epg_program_batch_size(db.get_database_backend())
+        } else {
+            // Fallback to defaults if no config provided
+            let default_config = crate::config::DatabaseBatchConfig::default();
+            default_config.safe_epg_program_batch_size(db.get_database_backend())
+        };
+        
+        debug!("Using EPG program batch size: {} for backend: {:?}", max_records_per_query, db.get_database_backend());
         
         let mut total_inserted = 0;
         
@@ -206,48 +215,159 @@ impl DatabaseOperations {
                 "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, language, created_at, updated_at) VALUES "
             );
             
+            // Generate placeholders based on database backend
             let placeholders: Vec<String> = (0..chunk.len())
-                .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string())
+                .enumerate()
+                .map(|(i, _)| {
+                    let base_idx = i * 12; // 12 fields per EPG program
+                    match db.get_database_backend() {
+                        sea_orm::DatabaseBackend::Postgres => {
+                            format!("(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                                base_idx + 1, base_idx + 2, base_idx + 3, base_idx + 4,
+                                base_idx + 5, base_idx + 6, base_idx + 7, base_idx + 8,
+                                base_idx + 9, base_idx + 10, base_idx + 11, base_idx + 12)
+                        }
+                        _ => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string()
+                    }
+                })
                 .collect();
             query.push_str(&placeholders.join(", "));
             
-            let mut db_query = sqlx::query(&query);
+            let mut values = Vec::new();
             
-            // Bind all parameters
+            // Collect all parameters
             for program in chunk {
-                db_query = db_query
-                    .bind(program.id.to_string())
-                    .bind(program.source_id.to_string())
-                    .bind(&program.channel_id)
-                    .bind(&program.channel_name)
-                    .bind(&program.program_title)
-                    .bind(&program.program_description)
-                    .bind(&program.program_category)
-                    .bind(program.start_time)
-                    .bind(program.end_time)
-                    .bind(&program.language)
-                    .bind(program.created_at)
-                    .bind(program.updated_at);
+                values.push(program.id.into());
+                values.push(program.source_id.into());
+                values.push(program.channel_id.clone().into());
+                values.push(program.channel_name.clone().into());
+                values.push(program.program_title.clone().into());
+                values.push(program.program_description.clone().into());
+                values.push(program.program_category.clone().into());
+                values.push(program.start_time.into());
+                values.push(program.end_time.into());
+                values.push(program.language.clone().into());
+                values.push(program.created_at.into());
+                values.push(program.updated_at.into());
             }
             
-            let result = db_query.execute(&mut *tx).await
+            let stmt = Statement::from_sql_and_values(db.get_database_backend(), &query, values);
+            let result = txn.execute(stmt).await
                 .map_err(|e| AppError::internal(format!("Failed to insert EPG programs batch: {e}")))?;
             
             total_inserted += result.rows_affected() as usize;
             trace!("Inserted {} programs in multi-value query", result.rows_affected());
         }
 
-        tx.commit().await
+        txn.commit().await
             .map_err(|e| AppError::internal(format!("Failed to commit batch transaction: {e}")))?;
 
         debug!("Successfully inserted {} EPG programs in optimized batch", total_inserted);
         Ok(total_inserted)
     }
 
+    /// Insert stream channels in optimized batches using multi-value INSERT statements
+    pub async fn insert_stream_channels_batch(
+        channels: Vec<crate::models::Channel>,
+        db: &DatabaseConnection,
+        batch_config: Option<&crate::config::DatabaseBatchConfig>,
+    ) -> AppResult<usize> {
+        if channels.is_empty() {
+            return Ok(0);
+        }
+
+        let batch_size = channels.len();
+        debug!("Inserting batch of {} stream channels using multi-value INSERT", batch_size);
+
+        // Use a transaction for the batch
+        let txn = db.begin().await
+            .map_err(|e| AppError::internal(format!("Failed to begin transaction: {e}")))?;
+
+        // Use configurable batch size based on database backend and user configuration
+        let max_records_per_query = if let Some(config) = batch_config {
+            config.safe_stream_channel_batch_size(db.get_database_backend())
+        } else {
+            // Fallback to defaults if no config provided
+            let default_config = crate::config::DatabaseBatchConfig::default();
+            default_config.safe_stream_channel_batch_size(db.get_database_backend())
+        };
+        
+        debug!("Using stream channel batch size: {} for backend: {:?}", max_records_per_query, db.get_database_backend());
+        
+        let mut total_inserted = 0;
+        
+        for chunk in channels.chunks(max_records_per_query) {
+            if chunk.is_empty() {
+                continue;
+            }
+            
+            // Build multi-value INSERT statement
+            let mut query = String::from(
+                "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES "
+            );
+            
+            // Generate placeholders based on database backend
+            let placeholders: Vec<String> = (0..chunk.len())
+                .enumerate()
+                .map(|(i, _)| {
+                    let base_idx = i * 12; // 12 fields per channel
+                    match db.get_database_backend() {
+                        sea_orm::DatabaseBackend::Postgres => {
+                            format!("(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                                base_idx + 1, base_idx + 2, base_idx + 3, base_idx + 4,
+                                base_idx + 5, base_idx + 6, base_idx + 7, base_idx + 8,
+                                base_idx + 9, base_idx + 10, base_idx + 11, base_idx + 12)
+                        }
+                        _ => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string()
+                    }
+                })
+                .collect();
+            query.push_str(&placeholders.join(", "));
+            
+            let mut values = Vec::new();
+            
+            // Collect all parameters
+            for channel in chunk {
+                values.push(channel.id.into());
+                values.push(channel.source_id.into());
+                values.push(channel.tvg_id.clone().into());
+                values.push(channel.tvg_name.clone().into());
+                values.push(channel.tvg_chno.clone().into());
+                values.push(channel.channel_name.clone().into());
+                values.push(channel.tvg_logo.clone().into());
+                values.push(channel.tvg_shift.clone().into());
+                values.push(channel.group_title.clone().into());
+                values.push(channel.stream_url.clone().into());
+                values.push(channel.created_at.into());
+                values.push(channel.updated_at.into());
+            }
+            
+            debug!("Generated SQL query: {}", query);
+            debug!("Values count: {}, expected: {}", values.len(), chunk.len() * 12);
+            
+            let stmt = Statement::from_sql_and_values(db.get_database_backend(), &query, values);
+            let result = txn.execute(stmt).await
+                .map_err(|e| {
+                    debug!("SQL execution failed: {}", e);
+                    debug!("Query was: {}", query);
+                    AppError::internal(format!("Failed to insert stream channels batch: {e}"))
+                })?;
+            
+            total_inserted += result.rows_affected() as usize;
+            trace!("Inserted {} channels in multi-value query", result.rows_affected());
+        }
+
+        txn.commit().await
+            .map_err(|e| AppError::internal(format!("Failed to commit batch transaction: {e}")))?;
+
+        debug!("Successfully inserted {} stream channels in optimized batch", total_inserted);
+        Ok(total_inserted)
+    }
+
     /// Delete EPG programs for a source with retry logic - simplified version
     pub async fn delete_epg_programs_for_source(
         source_id: uuid::Uuid,
-        pool: &Pool<Sqlite>,
+        db: &DatabaseConnection,
     ) -> AppResult<u64> {
         debug!("Deleting existing EPG programs for source: {}", source_id);
 
@@ -257,14 +377,19 @@ impl DatabaseOperations {
         
         loop {
             match async {
-                let mut tx = pool.begin().await?;
+                let txn = db.begin().await
+                    .map_err(|e| AppError::Database(e))?;
 
-                let result = sqlx::query("DELETE FROM epg_programs WHERE source_id = ?")
-                    .bind(&source_id_string)
-                    .execute(&mut *tx)
-                    .await?;
+                let stmt = Statement::from_sql_and_values(
+                    db.get_database_backend(),
+                    "DELETE FROM epg_programs WHERE source_id = ?",
+                    vec![source_id_string.clone().into()]
+                );
+                let result = txn.execute(stmt).await
+                    .map_err(|e| AppError::Database(e))?;
 
-                tx.commit().await?;
+                txn.commit().await
+                    .map_err(|e| AppError::Database(e))?;
 
                 AppResult::Ok(result.rows_affected())
             }.await {

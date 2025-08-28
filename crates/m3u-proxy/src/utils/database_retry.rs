@@ -142,20 +142,24 @@ where
 /// Determine if an error is worth retrying
 fn is_retryable_error(error: &RepositoryError) -> bool {
     match error {
-        RepositoryError::Database(sqlx_error) => {
-            match sqlx_error {
-                // SQLite database is locked
-                sqlx::Error::Database(db_err) if db_err.code() == Some("5".into()) => true,
-                // SQLite database is busy
-                sqlx::Error::Database(db_err) if db_err.code() == Some("SQLITE_BUSY".into()) => true,
-                // Connection pool timeout
-                sqlx::Error::PoolTimedOut => true,
-                // Connection closed unexpectedly
-                sqlx::Error::PoolClosed => true,
-                // Other database errors are generally not retryable
+        RepositoryError::Database(sea_orm_error) => {
+            match sea_orm_error {
+                // Connection-related errors that are retryable
+                sea_orm::DbErr::ConnectionAcquire(_) => true,
+                sea_orm::DbErr::Conn(_) => true,
+                sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx_err)) => {
+                    // Handle SQLx errors within SeaORM
+                    let error_msg = format!("{sqlx_err}").to_lowercase();
+                    error_msg.contains("database is locked") ||
+                    error_msg.contains("database is busy") ||
+                    error_msg.contains("connection reset") ||
+                    error_msg.contains("timeout") ||
+                    error_msg.contains("pool timed out") ||
+                    error_msg.contains("pool closed")
+                }
+                // Other SeaORM errors - check message for retryable patterns
                 _ => {
-                    // Check error message for common retryable patterns
-                    let error_msg = format!("{sqlx_error}").to_lowercase();
+                    let error_msg = format!("{sea_orm_error}").to_lowercase();
                     error_msg.contains("database is locked") ||
                     error_msg.contains("database is busy") ||
                     error_msg.contains("connection reset") ||

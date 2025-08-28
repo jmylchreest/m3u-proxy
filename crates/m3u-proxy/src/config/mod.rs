@@ -82,12 +82,50 @@ pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: Option<u32>,
     pub batch_sizes: Option<DatabaseBatchConfig>,
+    
+    /// SQLite-specific configuration
+    #[serde(default)]
+    pub sqlite: SqliteConfig,
+    
+    /// PostgreSQL-specific configuration  
+    #[serde(default)]
+    pub postgresql: PostgreSqlConfig,
+    
+    /// MySQL-specific configuration
+    #[serde(default)]
+    pub mysql: MySqlConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqliteConfig {
     #[serde(default = "default_busy_timeout")]
     pub busy_timeout: String,
     #[serde(default = "default_cache_size")]
     pub cache_size: String,
     #[serde(default = "default_wal_autocheckpoint")]
     pub wal_autocheckpoint: u32,
+    #[serde(default = "default_journal_mode")]
+    pub journal_mode: String,
+    #[serde(default = "default_synchronous")]
+    pub synchronous: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostgreSqlConfig {
+    #[serde(default = "default_statement_timeout")]
+    pub statement_timeout: Option<String>,
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout: Option<String>,
+    #[serde(default = "default_max_lifetime")]
+    pub max_lifetime: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MySqlConfig {
+    #[serde(default = "default_wait_timeout")]
+    pub wait_timeout: Option<u32>,
+    #[serde(default = "default_interactive_timeout")]
+    pub interactive_timeout: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +149,8 @@ pub struct WebConfig {
     pub request_timeout: String,
     #[serde(default = "default_max_request_size")]
     pub max_request_size: String,
+    #[serde(default = "default_enable_request_logging")]
+    pub enable_request_logging: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -171,6 +211,10 @@ fn default_base_url() -> String {
     "http://localhost:8080".to_string()
 }
 
+fn default_enable_request_logging() -> bool {
+    true
+}
+
 fn default_busy_timeout() -> String {
     "5000".to_string()
 }
@@ -181,6 +225,34 @@ fn default_cache_size() -> String {
 
 fn default_wal_autocheckpoint() -> u32 {
     1000
+}
+
+fn default_journal_mode() -> String {
+    "WAL".to_string()
+}
+
+fn default_synchronous() -> String {
+    "NORMAL".to_string()
+}
+
+fn default_statement_timeout() -> Option<String> {
+    Some("30s".to_string())
+}
+
+fn default_idle_timeout() -> Option<String> {
+    Some("10m".to_string())
+}
+
+fn default_max_lifetime() -> Option<String> {
+    Some("30m".to_string())
+}
+
+fn default_wait_timeout() -> Option<u32> {
+    Some(28800)
+}
+
+fn default_interactive_timeout() -> Option<u32> {
+    Some(28800)
 }
 
 
@@ -316,9 +388,19 @@ fn default_max_quantifier_limit() -> usize {
 impl DatabaseBatchConfig {
     /// SQLite variable limit (32,766 in 3.32.0+, 999 in older versions)
     const SQLITE_MAX_VARIABLES: usize = 32766;
+    
+    /// PostgreSQL variable limit (65,535 parameters per query)
+    const POSTGRES_MAX_VARIABLES: usize = 65535;
+    
+    /// MySQL variable limit (65,535 placeholders per prepared statement)
+    const MYSQL_MAX_VARIABLES: usize = 65535;
 
     /// Number of fields per EPG program record
-    const EPG_PROGRAM_FIELDS: usize = 18;
+    const EPG_PROGRAM_FIELDS: usize = 12;
+
+    /// Number of fields per stream channel record  
+    /// (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at)
+    const STREAM_CHANNEL_FIELDS: usize = 12;
 
     /// Validate batch sizes to ensure they don't exceed SQLite limits
     pub fn validate(&self) -> Result<(), String> {
@@ -334,13 +416,59 @@ impl DatabaseBatchConfig {
             }
         }
 
+        if let Some(stream_channels) = self.stream_channels {
+            let variables = stream_channels * Self::STREAM_CHANNEL_FIELDS;
+            if variables > Self::SQLITE_MAX_VARIABLES {
+                return Err(format!(
+                    "Stream channel batch size {} would require {} variables, exceeding SQLite limit of {}",
+                    stream_channels,
+                    variables,
+                    Self::SQLITE_MAX_VARIABLES
+                ));
+            }
+        }
+
         Ok(())
     }
 
-    /// Get safe batch size for EPG programs (respects SQLite limits)
-    pub fn safe_epg_program_batch_size(&self) -> usize {
-        let configured = self.epg_programs.unwrap_or(1900);
-        let max_safe = Self::SQLITE_MAX_VARIABLES / Self::EPG_PROGRAM_FIELDS;
+    /// Get safe batch size for EPG programs based on database backend
+    pub fn safe_epg_program_batch_size(&self, backend: sea_orm::DatabaseBackend) -> usize {
+        let default_size = match backend {
+            sea_orm::DatabaseBackend::Sqlite => 2000,    // Conservative for SQLite
+            sea_orm::DatabaseBackend::Postgres => 4000,  // More aggressive for PostgreSQL
+            sea_orm::DatabaseBackend::MySql => 3000,     // Moderate for MySQL
+        };
+        
+        let configured = self.epg_programs.unwrap_or(default_size);
+        let max_safe = match backend {
+            sea_orm::DatabaseBackend::Sqlite => Self::SQLITE_MAX_VARIABLES / Self::EPG_PROGRAM_FIELDS,
+            sea_orm::DatabaseBackend::Postgres => Self::POSTGRES_MAX_VARIABLES / Self::EPG_PROGRAM_FIELDS,
+            sea_orm::DatabaseBackend::MySql => Self::MYSQL_MAX_VARIABLES / Self::EPG_PROGRAM_FIELDS,
+        };
+        
+        configured.min(max_safe)
+    }
+
+    /// Get safe batch size for EPG programs (legacy SQLite-only method for compatibility)
+    pub fn safe_epg_program_batch_size_legacy(&self) -> usize {
+        self.safe_epg_program_batch_size(sea_orm::DatabaseBackend::Sqlite)
+    }
+
+    /// Get safe batch size for stream channels based on database backend
+    pub fn safe_stream_channel_batch_size(&self, backend: sea_orm::DatabaseBackend) -> usize {
+        let default_size = match backend {
+            sea_orm::DatabaseBackend::Sqlite => 2000,    // Conservative for SQLite
+            sea_orm::DatabaseBackend::Postgres => 4000,  // More aggressive for PostgreSQL
+            sea_orm::DatabaseBackend::MySql => 3000,     // Moderate for MySQL
+        };
+        
+        let configured = self.stream_channels.unwrap_or(default_size);
+        let max_safe = match backend {
+            sea_orm::DatabaseBackend::Sqlite => Self::SQLITE_MAX_VARIABLES / Self::STREAM_CHANNEL_FIELDS,
+            sea_orm::DatabaseBackend::Postgres => Self::POSTGRES_MAX_VARIABLES / Self::STREAM_CHANNEL_FIELDS,
+            sea_orm::DatabaseBackend::MySql => Self::MYSQL_MAX_VARIABLES / Self::STREAM_CHANNEL_FIELDS,
+        };
+        
         configured.min(max_safe)
     }
 }
@@ -348,15 +476,46 @@ impl DatabaseBatchConfig {
 impl Default for DatabaseBatchConfig {
     fn default() -> Self {
         Self {
-            // SQLite 3.32.0+ supports up to 32,766 variables per query
-            // EPG programs: 18 fields * 1800 = 32,400 variables (safe margin)
-            epg_programs: Some(1800),
-            // Stream channels: reduced for better SQLite performance with large datasets
-            stream_channels: Some(500),
+            // Database-agnostic default - will be adjusted per backend in safe_epg_program_batch_size()
+            // This default will be overridden based on actual database backend used
+            epg_programs: None, // Use backend-specific defaults
+            // Stream channels: conservative default for all databases
+            stream_channels: Some(1000),
         }
     }
 }
 
+
+impl Default for SqliteConfig {
+    fn default() -> Self {
+        Self {
+            busy_timeout: default_busy_timeout(),
+            cache_size: default_cache_size(),
+            wal_autocheckpoint: default_wal_autocheckpoint(),
+            journal_mode: default_journal_mode(),
+            synchronous: default_synchronous(),
+        }
+    }
+}
+
+impl Default for PostgreSqlConfig {
+    fn default() -> Self {
+        Self {
+            statement_timeout: default_statement_timeout(),
+            idle_timeout: default_idle_timeout(),
+            max_lifetime: default_max_lifetime(),
+        }
+    }
+}
+
+impl Default for MySqlConfig {
+    fn default() -> Self {
+        Self {
+            wait_timeout: default_wait_timeout(),
+            interactive_timeout: default_interactive_timeout(),
+        }
+    }
+}
 
 impl Default for DataMappingEngineConfig {
     fn default() -> Self {
@@ -477,9 +636,9 @@ impl Default for Config {
                 url: "sqlite:./data/m3u-proxy.db".to_string(),
                 max_connections: Some(10),
                 batch_sizes: Some(DatabaseBatchConfig::default()),
-                busy_timeout: default_busy_timeout(),
-                cache_size: default_cache_size(),
-                wal_autocheckpoint: default_wal_autocheckpoint(),
+                sqlite: SqliteConfig::default(),
+                postgresql: PostgreSqlConfig::default(),
+                mysql: MySqlConfig::default(),
             },
             web: WebConfig {
                 host: "0.0.0.0".to_string(),
@@ -487,6 +646,7 @@ impl Default for Config {
                 base_url: "http://localhost:8080".to_string(),
                 request_timeout: default_request_timeout(),
                 max_request_size: default_max_request_size(),
+                enable_request_logging: default_enable_request_logging(),
             },
             storage: StorageConfig {
                 m3u_path: PathBuf::from("./data/m3u"),

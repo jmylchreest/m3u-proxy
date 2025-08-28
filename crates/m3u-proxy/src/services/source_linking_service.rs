@@ -9,29 +9,51 @@ use tracing::{debug, error, info};
 
 use crate::database::Database;
 use crate::models::{EpgSource, EpgSourceType, StreamSource, StreamSourceType};
-use crate::repositories::{UrlLinkingRepository, StreamSourceRepository, EpgSourceRepository};
-use crate::repositories::traits::Repository;
+use crate::database::repositories::{
+    stream_source::StreamSourceSeaOrmRepository,
+    epg_source::EpgSourceSeaOrmRepository,
+};
+use crate::services::UrlLinkingService;
 
 /// Service for managing links between stream and EPG sources
 pub struct SourceLinkingService {
-    database: Database,
     client: reqwest::Client,
-    stream_source_repo: StreamSourceRepository,
-    epg_source_repo: EpgSourceRepository,
+    stream_source_repo: StreamSourceSeaOrmRepository,
+    epg_source_repo: EpgSourceSeaOrmRepository,
+    url_linking_service: UrlLinkingService,
 }
 
 impl SourceLinkingService {
-    /// Create a new source linking service
-    pub fn new(database: Database) -> Self {
+    /// Create a new source linking service with dependency injection
+    pub fn new(
+        stream_source_repo: StreamSourceSeaOrmRepository,
+        epg_source_repo: EpgSourceSeaOrmRepository,
+        url_linking_service: UrlLinkingService,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
             .expect("Failed to create HTTP client");
 
-        let stream_source_repo = StreamSourceRepository::new(database.pool().clone());
-        let epg_source_repo = EpgSourceRepository::new(database.pool().clone());
+        Self {
+            client,
+            stream_source_repo,
+            epg_source_repo,
+            url_linking_service,
+        }
+    }
 
-        Self { database, client, stream_source_repo, epg_source_repo }
+    /// Legacy constructor for backward compatibility (deprecated)
+    /// TODO: Remove once all callers are updated to use dependency injection
+    #[deprecated(note = "Use dependency injection constructor instead")]
+    pub fn new_legacy(database: Database) -> Self {
+        let stream_source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
+        let epg_source_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());
+        let url_linking_service = UrlLinkingService::new(
+            stream_source_repo.clone(),
+            epg_source_repo.clone(),
+        );
+        Self::new(stream_source_repo, epg_source_repo, url_linking_service)
     }
 
     /// Auto-link Xtream sources (both directions)
@@ -41,12 +63,9 @@ impl SourceLinkingService {
         let mut stats = LinkingStats::default();
 
         // Get all Xtream sources using repositories
-        let stream_query = crate::repositories::stream_source::StreamSourceQuery::new();
-        let epg_query = crate::repositories::epg_source::EpgSourceQuery::new();
-        
-        let stream_sources = self.stream_source_repo.find_all(stream_query).await
+        let stream_sources = self.stream_source_repo.find_all().await
             .map_err(|e| anyhow::anyhow!("Failed to get stream sources: {}", e))?;
-        let epg_sources = self.epg_source_repo.find_all(epg_query).await
+        let epg_sources = self.epg_source_repo.find_all().await
             .map_err(|e| anyhow::anyhow!("Failed to get EPG sources: {}", e))?;
 
         let xtream_streams: Vec<_> = stream_sources
@@ -114,9 +133,8 @@ impl SourceLinkingService {
         stream_source: &StreamSource,
         epg_sources: &[EpgSource],
     ) -> Result<bool> {
-        // Check if already linked using repository pattern
-        let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
-        let linked_epgs = url_linking_repo.find_linked_epg_sources(stream_source).await.unwrap_or_default();
+        // Check if already linked using service pattern
+        let linked_epgs = self.url_linking_service.find_linked_epg_sources(stream_source).await.unwrap_or_default();
         if !linked_epgs.is_empty() {
             return Ok(false);
         }
@@ -158,9 +176,8 @@ impl SourceLinkingService {
         epg_source: &EpgSource,
         stream_sources: &[StreamSource],
     ) -> Result<bool> {
-        // Check if already linked using repository pattern
-        let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
-        let linked_streams = url_linking_repo.find_linked_stream_sources(epg_source).await.unwrap_or_default();
+        // Check if already linked using service pattern
+        let linked_streams = self.url_linking_service.find_linked_stream_sources(epg_source).await.unwrap_or_default();
         if !linked_streams.is_empty() {
             return Ok(false);
         }
@@ -273,7 +290,8 @@ impl SourceLinkingService {
         username: &str,
         password: &str,
     ) -> Result<bool> {
-        let epg_url = format!("{url}xmltv.php?username={username}&password={password}");
+        let epg_url = crate::utils::UrlUtils::build_xtream_xmltv_url(url, username, password)
+            .map_err(|e| anyhow::anyhow!("Invalid URL for Xtream EPG validation: {}", e))?;
 
         match self.client.head(&epg_url).send().await {
             Ok(response) if response.status().is_success() => {
@@ -315,19 +333,46 @@ impl SourceLinkingService {
             return Err(anyhow::anyhow!("At least one source ID must be provided"));
         }
 
-        // Create bidirectional link by updating the linked_xtream_sources table
-        // This is a simplified implementation - the actual implementation would depend on the database schema
         if let (Some(stream_id), Some(epg_id)) = (stream_source_id, epg_source_id) {
-            // For now, just log the intent since we need to check the actual database schema
+            // Get the stream and EPG sources to extract URL and credentials
+            let stream_source = self.stream_source_repo.find_by_id(&stream_id).await
+                .map_err(|e| anyhow::anyhow!("Failed to find stream source: {}", e))?
+                .ok_or_else(|| anyhow::anyhow!("Stream source not found: {}", stream_id))?;
+                
+            let epg_source = self.epg_source_repo.find_by_id(&epg_id).await
+                .map_err(|e| anyhow::anyhow!("Failed to find EPG source: {}", e))?
+                .ok_or_else(|| anyhow::anyhow!("EPG source not found: {}", epg_id))?;
+
+            // Create a linked entry using the stream source's credentials and URL as the primary
+            use crate::entities::linked_xtream_sources;
+            use sea_orm::{ActiveModelTrait, Set};
+            
+            let link_id = format!("link_{}", uuid::Uuid::new_v4());
+            let now = chrono::Utc::now().to_rfc3339();
+            
+            let active_model = linked_xtream_sources::ActiveModel {
+                id: Set(uuid::Uuid::new_v4().to_string()),
+                link_id: Set(link_id),
+                name: Set(stream_source.name.clone()),
+                url: Set(stream_source.url.clone()),
+                username: Set(stream_source.username.unwrap_or_default()),
+                password: Set(stream_source.password.unwrap_or_default()),
+                stream_source_id: Set(Some(stream_id.to_string())),
+                epg_source_id: Set(Some(epg_id.to_string())),
+                created_at: Set(now.clone()),
+                updated_at: Set(now),
+            };
+            
+            // Insert using the database connection (access through new method)
+            active_model.insert(self.stream_source_repo.get_connection().as_ref()).await
+                .map_err(|e| anyhow::anyhow!("Failed to create link: {}", e))?;
+
             info!(
-                "Would create bidirectional link between stream {} and epg {}",
-                stream_id, epg_id
+                "Created bidirectional link between stream '{}' ({}) and epg '{}' ({})",
+                stream_source.name, stream_id, epg_source.name, epg_id
             );
         }
-        info!(
-            "Created bidirectional link between stream_source_id: {:?} and epg_source_id: {:?}",
-            stream_source_id, epg_source_id
-        );
+        
         Ok(())
     }
 
@@ -368,16 +413,19 @@ impl SourceLinkingService {
 
     /// Get linking statistics
     pub async fn get_linking_stats(&self) -> Result<LinkingStats> {
-        // Get counts using repositories
-        let stream_query = crate::repositories::stream_source::StreamSourceQuery::new();
-        let epg_query = crate::repositories::epg_source::EpgSourceQuery::new();
-        
-        let stream_sources_list = self.stream_source_repo.find_all(stream_query).await
+        // Get counts using SeaORM repositories directly
+        let stream_sources_list = self.stream_source_repo.find_all().await
             .map_err(|e| anyhow::anyhow!("Failed to get stream sources for stats: {}", e))?;
-        let epg_sources_list = self.epg_source_repo.find_all(epg_query).await
+        let epg_sources_list = self.epg_source_repo.find_all().await
             .map_err(|e| anyhow::anyhow!("Failed to get EPG sources for stats: {}", e))?;
 
-        let total_links = 0; // TODO: Implement proper count
+        // Calculate total links by counting relationships
+        let mut total_links = 0u64;
+        for stream_source in &stream_sources_list {
+            if let Ok(linked_epgs) = self.url_linking_service.find_linked_epg_sources(stream_source).await {
+                total_links += linked_epgs.len() as u64;
+            }
+        }
         let stream_sources = stream_sources_list.len() as u64;
         let epg_sources = epg_sources_list.len() as u64;
         let xtream_streams = stream_sources_list

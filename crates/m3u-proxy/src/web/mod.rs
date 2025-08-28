@@ -115,8 +115,19 @@ impl WebServer {
             ))
         };
 
-        let source_linking_service =
-            std::sync::Arc::new(crate::services::SourceLinkingService::new(builder.database.clone()));
+        let source_linking_service = {
+            use crate::database::repositories::{StreamSourceSeaOrmRepository, EpgSourceSeaOrmRepository};
+            
+            let stream_source_repo = StreamSourceSeaOrmRepository::new(builder.database.connection().clone());
+            let epg_source_repo = EpgSourceSeaOrmRepository::new(builder.database.connection().clone());
+            let url_linking_service = crate::services::UrlLinkingService::new(stream_source_repo, epg_source_repo);
+            
+            std::sync::Arc::new(crate::services::SourceLinkingService::new(
+                StreamSourceSeaOrmRepository::new(builder.database.connection().clone()),
+                EpgSourceSeaOrmRepository::new(builder.database.connection().clone()),
+                url_linking_service,
+            ))
+        };
 
         let proxy_service = crate::proxy::ProxyService::new(
             builder.config.storage.clone(),
@@ -140,7 +151,7 @@ impl WebServer {
             logo_file_manager: builder.logos_cached_file_manager,
             proxy_output_file_manager: builder.proxy_output_file_manager,
             temp_file_manager: builder.temp_file_manager,
-            metrics_logger: MetricsLogger::new(builder.database.pool()),
+            metrics_logger: MetricsLogger::new(builder.database.connection().clone()),
             scheduler_event_tx: None,
             logo_cache_scanner,
             session_tracker: std::sync::Arc::new(
@@ -187,6 +198,10 @@ impl WebServer {
                 "/stream/{proxy_ulid}/{channel_id}",
                 get(handlers::proxies::proxy_stream),
             )
+            .route(
+                "/channel/{channel_id}/stream",
+                get(handlers::channels::proxy_channel_stream),
+            )
             // .route("/logos/{logo_id}", get(handlers::static_assets::serve_logo))
             // Root route for basic index page
             .route("/", get(handlers::index::index))
@@ -197,8 +212,13 @@ impl WebServer {
             .fallback(handlers::static_assets::serve_embedded_asset)
             // Middleware (applied in reverse order)
             .layer(CorsLayer::permissive())
-            // .layer(axum::middleware::from_fn(middleware::security_headers_middleware))
-            // .layer(axum::middleware::from_fn(middleware::request_logging_middleware))
+            // Security headers middleware
+            .layer(axum::middleware::from_fn(middleware::security_headers_middleware))
+            // Conditional request logging middleware (respects runtime settings)
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::conditional_request_logging_middleware
+            ))
             // Shared state
             .with_state(state)
     }
@@ -287,6 +307,7 @@ impl WebServer {
                     .delete(api::delete_logo_asset),
             )
             .route("/logos/{id}/info", get(api::get_logo_asset_with_formats))
+            .route("/logos/{id}/image", put(api::replace_logo_asset_image))
             .route(
                 "/logos/{id}/formats/{format}",
                 get(api::get_logo_asset_format),

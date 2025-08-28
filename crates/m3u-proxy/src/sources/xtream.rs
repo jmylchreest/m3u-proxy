@@ -37,9 +37,10 @@ pub struct XtreamSourceHandler {
 impl XtreamSourceHandler {
     /// Create a new Xtream source handler
     pub fn new() -> Self {
-        let http_client = StandardHttpClient::with_timeout(Duration::from_secs(30));
+        // Use connection timeout only - let data transfer take as long as needed
+        let http_client = StandardHttpClient::new(); // Uses connection timeout only
         let raw_client = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
             .user_agent("Xtream-Proxy/1.0")
             .build()
             .unwrap_or_else(|_| Client::new());
@@ -175,6 +176,11 @@ impl XtreamSourceHandler {
             stream_url,
             created_at: now,
             updated_at: now,
+            video_codec: None,
+            audio_codec: None,
+            resolution: None,
+            probe_method: None,
+            last_probed_at: None,
         }
     }
 

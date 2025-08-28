@@ -4,56 +4,147 @@
 //! including auto-linking with EPG sources for Xtream providers.
 
 use anyhow::Result;
-use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::database::Database;
 use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceUpdateRequest};
-use crate::services::EpgSourceService;
-use crate::repositories::{ChannelRepository, UrlLinkingRepository, StreamSourceRepository, Repository};
+use crate::database::repositories::{
+    channel::ChannelSeaOrmRepository,
+    stream_source::StreamSourceSeaOrmRepository,
+    epg_source::EpgSourceSeaOrmRepository,
+};
+use crate::services::UrlLinkingService;
 
 /// Service for managing stream sources with business logic
 pub struct StreamSourceService {
-    database: Database,
-    stream_source_repo: StreamSourceRepository,
-    channel_repo: ChannelRepository,
-    
-    // TODO: Remove - not used, EPG integration handled at higher levels
+    stream_source_repo: StreamSourceSeaOrmRepository,
+    channel_repo: ChannelSeaOrmRepository,
+    epg_source_repo: EpgSourceSeaOrmRepository,
+    url_linking_service: UrlLinkingService,
     cache_invalidation_tx: broadcast::Sender<()>,
 }
 
 impl StreamSourceService {
-    /// Create a new stream source service
+    /// Create a new stream source service with dependency injection
     pub fn new(
-        database: Database,
-        _epg_service: Arc<EpgSourceService>, // TODO: Remove - not used
+        stream_source_repo: StreamSourceSeaOrmRepository,
+        channel_repo: ChannelSeaOrmRepository,
+        epg_source_repo: EpgSourceSeaOrmRepository,
+        url_linking_service: UrlLinkingService,
         cache_invalidation_tx: broadcast::Sender<()>,
     ) -> Self {
-        let stream_source_repo = StreamSourceRepository::new(database.pool());
-        let channel_repo = ChannelRepository::new(database.pool());
         Self {
-            database,
             stream_source_repo,
             channel_repo,
-            // TODO: Remove - not used
+            epg_source_repo,
+            url_linking_service,
             cache_invalidation_tx,
+        }
+    }
+
+    /// Legacy constructor for backward compatibility (deprecated)
+    /// TODO: Remove once all callers are updated to use dependency injection
+    #[deprecated(note = "Use dependency injection constructor instead")]
+    pub fn new_legacy(
+        database: Database,
+        cache_invalidation_tx: broadcast::Sender<()>,
+    ) -> Self {
+        let stream_source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
+        let channel_repo = ChannelSeaOrmRepository::new(database.connection().clone());
+        let epg_source_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());
+        let url_linking_service = UrlLinkingService::new(
+            stream_source_repo.clone(),
+            epg_source_repo.clone(),
+        );
+        Self::new(stream_source_repo, channel_repo, epg_source_repo, url_linking_service, cache_invalidation_tx)
+    }
+
+    /// Normalize URL to ensure it has a proper scheme (http:// or https://)
+    /// Uses smart detection based on port numbers for common HTTPS ports
+    fn smart_normalize_url(url: String) -> String {
+        // If URL already has a scheme, return as-is
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return url;
+        }
+        
+        // Check for common HTTPS ports to determine scheme
+        // Common HTTPS ports: 443, 8443, 9443, 2087, 2083, 8883, etc.
+        if url.contains(":443") || 
+           url.contains(":8443") || 
+           url.contains(":9443") || 
+           url.contains(":2087") || 
+           url.contains(":2083") || 
+           url.contains(":8883") {
+            format!("https://{}", url)
+        } else {
+            // Default to http:// for all other cases
+            format!("http://{}", url)
         }
     }
 
     /// Create a stream source with automatic EPG linking for Xtream sources
     pub async fn create_with_auto_epg(
         &self,
-        request: StreamSourceCreateRequest,
+        mut request: StreamSourceCreateRequest,
     ) -> Result<StreamSource> {
         info!("Creating stream source: {}", request.name);
+        
+        // Normalize the URL to ensure it has a proper scheme
+        request.url = Self::smart_normalize_url(request.url);
+        debug!("Normalized URL: {}", request.url);
 
         // Create the stream source
         let source = self.stream_source_repo.create(request).await
             .map_err(|e| anyhow::anyhow!("Failed to create stream source: {}", e))?;
 
-        // Auto-linking for Xtream sources is now handled automatically by URL linking
-        // No explicit action needed - credentials will be auto-populated as needed
+        // For Xtream sources, check if EPG is available and auto-create EPG source
+        if source.source_type == crate::models::StreamSourceType::Xtream {
+            if let (Some(username), Some(password)) = (&source.username, &source.password) {
+                debug!("Checking EPG availability for Xtream source: {}", source.name);
+                
+                match self.check_epg_availability(&source.url, username, password).await {
+                    Ok(true) => {
+                        info!("EPG available for Xtream source '{}', creating linked EPG source", source.name);
+                        
+                        // Create EPG source with same credentials
+                        let epg_create_request = crate::models::EpgSourceCreateRequest {
+                            name: source.name.clone(),
+                            source_type: crate::models::EpgSourceType::Xtream,
+                            url: source.url.clone(),
+                            update_cron: source.update_cron.clone(),
+                            username: Some(username.clone()),
+                            password: Some(password.clone()),
+                            timezone: None,
+                            time_offset: Some("+00:00".to_string()),
+                        };
+
+                        match self.epg_source_repo.create(epg_create_request).await {
+                            Ok(epg_source) => {
+                                info!(
+                                    "Successfully created linked EPG source: {} ({}) for stream source: {}",
+                                    epg_source.name, epg_source.id, source.name
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to create linked EPG source for '{}': {} - stream source created without EPG",
+                                    source.name, e
+                                );
+                            }
+                        }
+                    }
+                    Ok(false) => {
+                        info!("No EPG available for Xtream source '{}'", source.name);
+                    }
+                    Err(e) => {
+                        warn!("Failed to check EPG availability for '{}': {}", source.name, e);
+                    }
+                }
+            } else {
+                debug!("Xtream source '{}' missing credentials, skipping EPG auto-creation", source.name);
+            }
+        }
 
         // Invalidate cache since we added a new source
         let _ = self.cache_invalidation_tx.send(());
@@ -70,14 +161,17 @@ impl StreamSourceService {
     pub async fn update_with_validation(
         &self,
         id: uuid::Uuid,
-        request: StreamSourceUpdateRequest,
+        mut request: StreamSourceUpdateRequest,
     ) -> Result<StreamSource> {
         info!("Updating stream source: {}", id);
+        
+        // Normalize the URL to ensure it has a proper scheme
+        request.url = Self::smart_normalize_url(request.url);
+        debug!("Normalized URL for update: {}", request.url);
 
         // Update linked sources first if requested
         if request.update_linked {
-            let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
-            match url_linking_repo.update_linked_sources(
+            match self.url_linking_service.update_linked_sources(
                 id,
                 "stream",
                 Some(&request.url),
@@ -98,7 +192,7 @@ impl StreamSourceService {
         }
 
         // Update the stream source
-        let source = self.stream_source_repo.update(id, request).await
+        let source = self.stream_source_repo.update(&id, request).await
             .map_err(|e| anyhow::anyhow!("Failed to update stream source: {}", e))?;
 
         // Invalidate cache
@@ -117,7 +211,7 @@ impl StreamSourceService {
         info!("Deleting stream source: {}", id);
 
         // Delete the stream source (this will cascade to linked sources)
-        self.stream_source_repo.delete(id).await
+        self.stream_source_repo.delete(&id).await
             .map_err(|e| anyhow::anyhow!("Failed to delete stream source: {}", e))?;
 
         // Invalidate cache
@@ -148,16 +242,15 @@ impl StreamSourceService {
 
     /// Get a stream source with detailed information
     pub async fn get_with_details(&self, id: uuid::Uuid) -> Result<StreamSourceWithDetails> {
-        let source = self.stream_source_repo.find_by_id(id).await
+        let source = self.stream_source_repo.find_by_id(&id).await
             .map_err(|e| anyhow::anyhow!("Failed to get stream source: {}", e))?
             .ok_or_else(|| anyhow::anyhow!("Stream source not found"))?;
 
-        let channel_count = self.stream_source_repo.get_channel_count(id).await
+        let channel_count = self.stream_source_repo.get_channel_count_for_source(&id).await
             .map_err(|e| anyhow::anyhow!("Failed to get channel count: {}", e))? as u64;
         
-        // Use repository pattern for URL linking
-        let url_linking_repo = UrlLinkingRepository::new(self.database.pool());
-        let linked_epgs = url_linking_repo.find_linked_epg_sources(&source).await.unwrap_or_default();
+        // Use service pattern for URL linking
+        let linked_epgs = self.url_linking_service.find_linked_epg_sources(&source).await.unwrap_or_default();
         let linked_epg = linked_epgs.into_iter().next();
 
         // Calculate next scheduled update from cron expression
@@ -179,21 +272,20 @@ impl StreamSourceService {
 
     /// Get stream source by ID
     pub async fn get(&self, id: uuid::Uuid) -> Result<StreamSource> {
-        self.stream_source_repo.find_by_id(id).await
+        self.stream_source_repo.find_by_id(&id).await
             .map_err(|e| anyhow::anyhow!("Failed to get stream source: {}", e))?
             .ok_or_else(|| anyhow::anyhow!("Stream source not found"))
     }
 
     /// List all stream sources
     pub async fn list(&self) -> Result<Vec<StreamSource>> {
-        use crate::repositories::stream_source::StreamSourceQuery;
-        self.stream_source_repo.find_all(StreamSourceQuery::new()).await
+        self.stream_source_repo.find_all().await
             .map_err(|e| anyhow::anyhow!("Failed to list stream sources: {}", e))
     }
 
     /// Check if a stream source exists
     pub async fn exists(&self, id: uuid::Uuid) -> Result<bool> {
-        Ok(self.stream_source_repo.find_by_id(id).await
+        Ok(self.stream_source_repo.find_by_id(&id).await
             .map_err(|e| anyhow::anyhow!("Failed to check stream source existence: {}", e))?
             .is_some())
     }
@@ -203,14 +295,17 @@ impl StreamSourceService {
         &self,
         request: &StreamSourceCreateRequest,
     ) -> Result<TestConnectionResult> {
+        // Normalize the URL before testing
+        let normalized_url = Self::smart_normalize_url(request.url.clone());
+        
         // This would test the connection without creating the source
         // Implementation would depend on source type
         match request.source_type {
             crate::models::StreamSourceType::Xtream => {
-                self.test_xtream_connection(&request.url, &request.username, &request.password)
+                self.test_xtream_connection(&normalized_url, &request.username, &request.password)
                     .await
             }
-            crate::models::StreamSourceType::M3u => self.test_m3u_connection(&request.url).await,
+            crate::models::StreamSourceType::M3u => self.test_m3u_connection(&normalized_url).await,
         }
     }
 
@@ -299,9 +394,8 @@ impl StreamSourceService {
         password: &str,
     ) -> Result<bool> {
         let client = reqwest::Client::new();
-        let epg_url = format!(
-            "{url}xmltv.php?username={username}&password={password}"
-        );
+        let epg_url = crate::utils::UrlUtils::build_xtream_xmltv_url(url, username, password)
+            .map_err(|e| anyhow::anyhow!("Invalid URL for Xtream EPG check: {}", e))?;
 
         match client.head(&epg_url).send().await {
             Ok(response) if response.status().is_success() => Ok(true),
@@ -322,14 +416,15 @@ impl StreamSourceService {
         debug!("Saving {} channels to database using ChannelRepository", channels.len());
         
         // Use ChannelRepository to replace channels for this source
-        let channels_saved = self.channel_repo
+        let channels_count = channels.len();
+        self.channel_repo
             .update_source_channels(source_id, &channels)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to update source channels: {}", e))?;
         
-        debug!("Successfully saved {} channels using ChannelRepository", channels_saved);
+        debug!("Successfully saved {} channels using ChannelRepository", channels_count);
         
-        Ok(channels_saved)
+        Ok(channels_count)
     }
     
     /// Refresh stream source using ProgressStageUpdater (new API)
@@ -392,7 +487,7 @@ impl StreamSourceService {
         }
         
         // Update the source's last_ingested_at timestamp
-        if let Err(e) = self.stream_source_repo.update_last_ingested(source.id).await {
+        if let Err(e) = self.stream_source_repo.update_last_ingested_at(&source.id).await {
             warn!("Failed to update last_ingested_at for stream source '{}': {}", source.name, e);
         } else {
             info!("Updated last_ingested_at for stream source '{}'", source.name);

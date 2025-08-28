@@ -630,6 +630,18 @@ class ApiClient {
     })
   }
 
+  async replaceLogoImage(id: string, file: File, name?: string, description?: string): Promise<LogoAsset> {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (name) formData.append('name', name)
+    if (description) formData.append('description', description)
+    
+    return this.request(`${API_CONFIG.endpoints.logos}/${id}/image`, {
+      method: 'PUT',
+      body: formData
+    })
+  }
+
   async uploadLogo(data: LogoUploadRequest): Promise<LogoAsset> {
     const formData = new FormData()
     formData.append('file', data.file)

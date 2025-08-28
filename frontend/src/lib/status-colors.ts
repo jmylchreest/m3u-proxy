@@ -1,16 +1,16 @@
-// Status color utility that uses theme-aware colors
+// Status colour utility that uses theme-aware colours
 // This ensures consistent styling across all components
 
 export type StatusType = 'success' | 'warning' | 'error' | 'info' | 'neutral'
 
-export interface StatusColorConfig {
+export interface StatusColourConfig {
   bg: string
   text: string
   border: string
 }
 
-// Theme-aware status color mappings
-export const statusColors: Record<StatusType, StatusColorConfig> = {
+// Theme-aware status colour mappings
+export const statusColors: Record<StatusType, StatusColourConfig> = {
   success: {
     bg: 'bg-green-50 dark:bg-green-950/20',
     text: 'text-green-700 dark:text-green-300',
@@ -38,7 +38,7 @@ export const statusColors: Record<StatusType, StatusColorConfig> = {
   }
 }
 
-// Utility function to get status colors based on status string
+// Utility function to get status colours based on status string
 export function getStatusType(status: string | undefined | null): StatusType {
   if (!status || typeof status !== 'string') {
     return 'neutral'
@@ -68,9 +68,9 @@ export function getStatusType(status: string | undefined | null): StatusType {
 // Get status badge classes
 export function getStatusBadgeClasses(status: string | undefined | null): string {
   const statusType = getStatusType(status)
-  const colors = statusColors[statusType]
+  const colours = statusColors[statusType]
   
-  return `${colors.bg} ${colors.text} ${colors.border} border`
+  return `${colours.bg} ${colours.text} ${colours.border} border`
 }
 
 // Get status indicator (dot) classes  
@@ -91,7 +91,7 @@ export function getStatusIndicatorClasses(status: string | undefined | null): st
   }
 }
 
-// Operator-specific colors for filter expressions
+// Operator-specific colours for filter expressions
 export function getOperatorBadgeClasses(operator: string | undefined | null): string {
   if (!operator || typeof operator !== 'string') {
     return statusColors.neutral.bg + ' ' + statusColors.neutral.text + ' ' + statusColors.neutral.border + ' border'

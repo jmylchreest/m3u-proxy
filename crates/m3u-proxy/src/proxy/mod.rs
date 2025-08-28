@@ -85,7 +85,7 @@ impl ProxyService {
         
         // Create factory with all dependencies
         let factory = PipelineOrchestratorFactory::new(
-            params.database.pool(),
+            params.database.clone(),
             std::sync::Arc::new(params.logo_service.clone()),
             params.app_config.clone(),
             self.pipeline_file_manager.clone(),

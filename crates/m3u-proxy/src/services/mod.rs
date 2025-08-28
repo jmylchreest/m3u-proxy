@@ -53,6 +53,7 @@ pub mod stream_proxy;
 pub mod stream_prober;
 pub mod stream_source_service;
 pub mod traits;
+pub mod url_linking_service;
 
 // Re-export main traits and services
 pub use cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient, CyclicBufferStats};
@@ -71,3 +72,4 @@ pub use stream_prober::{StreamProber, ProbeResult, StreamMappingStrategy};
 pub use stream_proxy::{StreamProxyService, StreamProxyServiceBuilder};
 pub use stream_source_service::StreamSourceService as StreamSourceBusinessService;
 pub use traits::*;
+pub use url_linking_service::UrlLinkingService;

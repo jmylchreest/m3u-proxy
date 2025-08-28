@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.0.11"
+version = "0.1.1"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"
@@ -47,13 +47,20 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.141"
 toml = "0.9"
 figment = { version = "0.10", features = ["toml", "env"] }
-sqlx = { version = "0.8", features = [
+# SeaORM for database abstraction
+sea-orm = { version = "1.1", features = [
+    "sqlx-sqlite",
+    "sqlx-postgres", 
+    "sqlx-mysql",
     "runtime-tokio-rustls",
-    "sqlite",
-    "chrono",
-    "uuid",
     "macros",
+    "with-chrono",
+    "with-uuid",
+    "mock",
 ] }
+sea-orm-migration = "1.1"
+strum = { version = "0.26", features = ["derive"] }
+
 thiserror = "2.0"
 tokio = { version = "1.46", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process", "net", "io-util", "signal"] }
 tokio-util = "0.7.15"
@@ -97,6 +104,9 @@ axum-test = "15.0"
 test-log = "0.2"
 env_logger = "0.11"
 tracing-test = "0.2"
+
+# SeaORM CLI for entity generation
+sea-orm-cli = "1.1"
 
 [[bench]]
 name = "repository_benchmarks"

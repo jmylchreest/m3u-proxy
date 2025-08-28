@@ -4,8 +4,6 @@
 //! associated sources (stream or EPG) are updated. It uses pure in-memory state
 //! with Tokio timers for delayed execution and deduplication.
 
-// Serde imports removed - no longer needed after cleaning up legacy structs
-use sqlx::{SqlitePool, Row};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -13,7 +11,8 @@ use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::config::Config;
-use crate::repositories::stream_proxy::StreamProxyRepository;
+use crate::database::Database;
+use crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository;
 use crate::services::progress_service::{ProgressManager, ProgressService, OperationType};
 use crate::ingestor::IngestionStateManager;
 
@@ -50,8 +49,8 @@ impl Default for RegenerationConfig {
 /// Service for managing proxy regeneration with priority queue system
 #[derive(Clone)]
 pub struct ProxyRegenerationService {
-    pool: SqlitePool,
-    proxy_repository: StreamProxyRepository,
+    database: Database,
+    proxy_repository: StreamProxySeaOrmRepository,
     config: RegenerationConfig,
     app_config: Config,
     /// Active delayed regeneration timers
@@ -76,7 +75,8 @@ pub struct ProxyRegenerationService {
 
 impl ProxyRegenerationService {
     pub fn new(
-        pool: SqlitePool,
+        database: Database,
+        proxy_repository: StreamProxySeaOrmRepository,
         app_config: Config,
         config: Option<RegenerationConfig>,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
@@ -89,8 +89,8 @@ impl ProxyRegenerationService {
         let (auto_queue_sender, auto_queue_receiver) = mpsc::unbounded_channel::<RegenerationRequest>();
         
         let service = Self {
-            pool: pool.clone(),
-            proxy_repository: StreamProxyRepository::new(pool.clone()),
+            database: database.clone(),
+            proxy_repository,
             config: config.unwrap_or_default(),
             app_config,
             pending_regenerations: Arc::new(Mutex::new(HashMap::new())),
@@ -109,7 +109,7 @@ impl ProxyRegenerationService {
         service.start_priority_queue_processor(
             manual_queue_receiver, 
             auto_queue_receiver, 
-            pool, 
+            database, 
             temp_file_manager, 
             ingestion_state_manager
         );
@@ -148,7 +148,7 @@ impl ProxyRegenerationService {
         &self,
         mut manual_queue_receiver: mpsc::UnboundedReceiver<RegenerationRequest>,
         mut auto_queue_receiver: mpsc::UnboundedReceiver<RegenerationRequest>,
-        pool: SqlitePool,
+        database: Database,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
         ingestion_state_manager: Arc<IngestionStateManager>,
     ) {
@@ -164,7 +164,7 @@ impl ProxyRegenerationService {
                 if let Ok(manual_request) = manual_queue_receiver.try_recv() {
                     Self::process_regeneration_request(
                         manual_request,
-                        &pool,
+                        &database,
                         &temp_file_manager,
                         &ingestion_state_manager,
                         &active_regenerations,
@@ -179,7 +179,7 @@ impl ProxyRegenerationService {
                     Ok(auto_request) => {
                         Self::process_regeneration_request(
                             auto_request,
-                            &pool,
+                            &database,
                             &temp_file_manager,
                             &ingestion_state_manager,
                             &active_regenerations,
@@ -206,7 +206,7 @@ impl ProxyRegenerationService {
     /// Process a single regeneration request with all safety checks
     async fn process_regeneration_request(
         request: RegenerationRequest,
-        pool: &SqlitePool,
+        database: &Database,
         temp_file_manager: &sandboxed_file_manager::SandboxedManager,
         ingestion_state_manager: &Arc<IngestionStateManager>,
         active_regenerations: &Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
@@ -247,7 +247,7 @@ impl ProxyRegenerationService {
         
         // Execute the regeneration
         match Self::execute_single_proxy_regeneration(
-            pool.clone(),
+            database.clone(),
             temp_file_manager.clone(),
             proxy_id,
             request.progress_manager.clone(),
@@ -292,7 +292,7 @@ impl ProxyRegenerationService {
 
         // Start progress tracking using ProgressManager
         let operation_name = Self::create_human_readable_operation_name(
-            &self.pool, proxy_id, trigger_source_type, trigger_source_id
+            &self.database, proxy_id, trigger_source_type, trigger_source_id
         ).await;
         let trigger_source_type_owned = trigger_source_type.to_string();
         
@@ -330,7 +330,7 @@ impl ProxyRegenerationService {
         };
 
         // Create delayed regeneration task
-        let _pool = self.pool.clone();
+        let _database = self.database.clone();
         let _temp_file_manager = self.temp_file_manager.clone();
         let delay_seconds = self.config.delay_seconds;
         let _pending_clone = self.pending_regenerations.clone();
@@ -427,7 +427,7 @@ impl ProxyRegenerationService {
         }
 
         // Create progress manager for this manual regeneration
-        let operation_name = Self::create_human_readable_manual_operation_name(&self.pool, proxy_id).await;
+        let operation_name = Self::create_human_readable_manual_operation_name(&self.database, proxy_id).await;
         let progress_manager = match self.progress_service.create_staged_progress_manager(
             proxy_id,
             "proxy".to_string(),
@@ -483,7 +483,7 @@ impl ProxyRegenerationService {
     
     /// Execute a single proxy regeneration (used by the queue processor)
     async fn execute_single_proxy_regeneration(
-        pool: SqlitePool,
+        database: Database,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
         proxy_id: Uuid,
         progress_manager: Option<Arc<ProgressManager>>,
@@ -497,7 +497,7 @@ impl ProxyRegenerationService {
             // Create a new service instance for this regeneration
             // We can't use self here since this is a static method called from the queue processor
             match Self::regenerate_single_proxy_internal(
-                pool,
+                database,
                 temp_file_manager,
                 proxy_id,
                 progress_manager,
@@ -531,7 +531,7 @@ impl ProxyRegenerationService {
     
     /// Internal static method for regenerating a single proxy (used by queue processor)
     async fn regenerate_single_proxy_internal(
-        pool: SqlitePool,
+        database: Database,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
         proxy_id: Uuid,
         progress_manager: Option<Arc<ProgressManager>>,
@@ -541,9 +541,12 @@ impl ProxyRegenerationService {
         
         let storage_config = app_config.storage.clone();
 
+        // Clone database connection before moving it to factory
+        let database_connection = database.connection().clone();
+
         // Create factory and orchestrator
         let factory = PipelineOrchestratorFactory::from_components(
-            pool.clone(),
+            database,
             app_config.clone(),
             storage_config,
             temp_file_manager,
@@ -568,7 +571,7 @@ impl ProxyRegenerationService {
                         factory.unregister_orchestrator(proxy_id).await;
                         
                         // CRITICAL FIX: Update the proxy's last_generated_at timestamp
-                        let stream_proxy_repo = crate::repositories::StreamProxyRepository::new(pool.clone());
+                        let stream_proxy_repo = crate::database::repositories::StreamProxySeaOrmRepository::new(database_connection.clone());
                         let update_time = chrono::Utc::now();
                         if let Err(e) = stream_proxy_repo.update_last_generated(proxy_id).await {
                             warn!("Failed to update last_generated_at for proxy {}: {}", proxy_id, e);
@@ -617,64 +620,54 @@ impl ProxyRegenerationService {
 
 
     /// Find proxies that are outdated by a specific source (only returns proxies that actually need regeneration)
+    /// Find proxies affected by source changes - rationalized to clean SeaORM
     pub async fn find_affected_proxies(
         &self,
         source_id: Uuid,
         source_type: &str,
-    ) -> Result<Vec<Uuid>, sqlx::Error> {
-        let pool = &self.pool;
+    ) -> Result<Vec<Uuid>, anyhow::Error> {
+        let database = &self.database;
         
-        let query = match source_type {
+        // Rationalized from complex SQL to clean SeaORM queries following SOLID principles
+        let proxy_ids = match source_type {
             "stream" => {
-                r#"
-                SELECT DISTINCT p.id as proxy_id
-                FROM stream_sources ss
-                JOIN proxy_sources ps ON ps.source_id = ss.id
-                JOIN stream_proxies p ON p.id = ps.proxy_id
-                WHERE ss.id = ?
-                AND ss.is_active = 1 
-                AND p.is_active = 1
-                AND ss.last_ingested_at IS NOT NULL
-                AND (p.last_generated_at IS NULL OR datetime(ss.last_ingested_at) > datetime(p.last_generated_at))
-                "#
+                // Find proxies using this stream source via SeaORM
+                use crate::entities::{proxy_sources, prelude::*};
+                use sea_orm::{ColumnTrait, QueryFilter, EntityTrait};
+                
+                let proxy_relationships = ProxySources::find()
+                    .filter(proxy_sources::Column::SourceId.eq(source_id))
+                    .all(&*database.connection())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to find stream proxy relationships: {}", e))?;
+                    
+                proxy_relationships.into_iter()
+                    .map(|rel| rel.proxy_id)
+                    .collect()
             }
             "epg" => {
-                r#"
-                SELECT DISTINCT p.id as proxy_id
-                FROM epg_sources es
-                JOIN proxy_epg_sources pes ON pes.epg_source_id = es.id
-                JOIN stream_proxies p ON p.id = pes.proxy_id
-                WHERE es.id = ?
-                AND es.is_active = 1 
-                AND p.is_active = 1
-                AND es.last_ingested_at IS NOT NULL
-                AND (p.last_generated_at IS NULL OR datetime(es.last_ingested_at) > datetime(p.last_generated_at))
-                "#
+                // Find proxies using this EPG source via SeaORM
+                use crate::entities::{proxy_epg_sources, prelude::*};
+                use sea_orm::{ColumnTrait, QueryFilter, EntityTrait};
+                
+                let proxy_relationships = ProxyEpgSources::find()
+                    .filter(proxy_epg_sources::Column::EpgSourceId.eq(source_id))
+                    .all(&*database.connection())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to find EPG proxy relationships: {}", e))?;
+                    
+                proxy_relationships.into_iter()
+                    .map(|rel| rel.proxy_id)
+                    .collect()
             }
-            _ => return Err(sqlx::Error::TypeNotFound { type_name: format!("Invalid source_type: {source_type}") }),
+            _ => return Err(anyhow::anyhow!("Invalid source_type: {}", source_type)),
         };
 
-        let rows = sqlx::query(query)
-            .bind(source_id.to_string())
-            .fetch_all(pool)
-            .await?;
-
-        let proxy_ids: Result<Vec<Uuid>, _> = rows
-            .iter()
-            .map(|row| {
-                let id_str: String = row.get("proxy_id");
-                id_str.parse::<Uuid>().map_err(|_| sqlx::Error::ColumnDecode {
-                    index: "proxy_id".to_string(),
-                    source: "UUID parse error".into(),
-                })
-            })
-            .collect();
-
-        proxy_ids
+        Ok(proxy_ids)
     }
 
     /// Get all sources (stream and EPG) associated with a specific proxy
-    async fn get_proxy_sources(&self, proxy_id: Uuid) -> Result<HashSet<(Uuid, String)>, sqlx::Error> {
+    async fn get_proxy_sources(&self, proxy_id: Uuid) -> Result<HashSet<(Uuid, String)>, anyhow::Error> {
         let mut sources = HashSet::new();
         
         // Get stream sources using repository
@@ -684,8 +677,8 @@ impl ProxyRegenerationService {
                     sources.insert((source_id, "stream".to_string()));
                 }
             }
-            Err(_) => {
-                return Err(sqlx::Error::RowNotFound);
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to get stream sources: {}", e));
             }
         }
         
@@ -696,8 +689,8 @@ impl ProxyRegenerationService {
                     sources.insert((source_id, "epg".to_string()));
                 }
             }
-            Err(_) => {
-                return Err(sqlx::Error::RowNotFound);
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to get EPG sources: {}", e));
             }
         }
         
@@ -1041,32 +1034,34 @@ impl ProxyRegenerationService {
 
     /// Create human-readable operation name for progress tracking
     async fn create_human_readable_operation_name(
-        pool: &SqlitePool,
+        database: &Database,
         proxy_id: Uuid,
         trigger_source_type: &str,
         trigger_source_id: Uuid,
     ) -> String {
-        use crate::repositories::{StreamProxyRepository, StreamSourceRepository, EpgSourceRepository, traits::Repository};
 
-        // Get proxy name using repository
-        let proxy_repo = StreamProxyRepository::new(pool.clone());
-        let proxy_name = match proxy_repo.find_by_id(proxy_id).await {
+        // Get proxy name using SeaORM repository
+        use crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository;
+        let proxy_repo = StreamProxySeaOrmRepository::new(database.connection().clone());
+        let proxy_name = match proxy_repo.find_by_id(&proxy_id).await {
             Ok(Some(proxy)) => format!("'{}'", proxy.name),
             _ => proxy_id.to_string(),
         };
 
-        // Get source name based on type using repositories
+        // Get source name based on type using SeaORM repositories
         let source_name = match trigger_source_type {
             "stream" => {
-                let stream_repo = StreamSourceRepository::new(pool.clone());
-                match stream_repo.find_by_id(trigger_source_id).await {
+                use crate::database::repositories::stream_source::StreamSourceSeaOrmRepository;
+                let stream_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
+                match stream_repo.find_by_id(&trigger_source_id).await {
                     Ok(Some(source)) => format!("'{}'", source.name),
                     _ => trigger_source_id.to_string(),
                 }
             }
             "epg" => {
-                let epg_repo = EpgSourceRepository::new(pool.clone());
-                match epg_repo.find_by_id(trigger_source_id).await {
+                use crate::database::repositories::epg_source::EpgSourceSeaOrmRepository;
+                let epg_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());
+                match epg_repo.find_by_id(&trigger_source_id).await {
                     Ok(Some(source)) => format!("'{}'", source.name),
                     _ => trigger_source_id.to_string(),
                 }
@@ -1087,14 +1082,14 @@ impl ProxyRegenerationService {
 
     /// Create human-readable operation name for manual regenerations
     async fn create_human_readable_manual_operation_name(
-        pool: &SqlitePool,
+        database: &Database,
         proxy_id: Uuid,
     ) -> String {
-        use crate::repositories::{StreamProxyRepository, traits::Repository};
+        use crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository;
 
-        // Get proxy name using repository
-        let proxy_repo = StreamProxyRepository::new(pool.clone());
-        let proxy_name = match proxy_repo.find_by_id(proxy_id).await {
+        // Get proxy name using SeaORM repository - clean implementation
+        let proxy_repo = StreamProxySeaOrmRepository::new(database.connection().clone());
+        let proxy_name = match proxy_repo.find_by_id(&proxy_id).await {
             Ok(Some(proxy)) => format!("'{}'", proxy.name),
             _ => proxy_id.to_string(),
         };
@@ -1115,8 +1110,19 @@ mod tests {
         let ingestion_state_manager = Arc::new(IngestionStateManager::new());
         let progress_service = Arc::new(ProgressService::new(ingestion_state_manager.clone()));
         
+        // Create test database using SeaORM MockDatabase
+        let db_connection = sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
+            .into_connection();
+        let test_database = crate::database::Database {
+            connection: db_connection.clone(),
+            read_connection: db_connection,
+            backend: sea_orm::DatabaseBackend::Sqlite,
+            ingestion_config: crate::config::IngestionConfig::default(),
+            database_type: crate::database::DatabaseType::SQLite,
+        };
+        
         let service = ProxyRegenerationService::new(
-            sqlx::SqlitePool::connect(":memory:").await.unwrap(),
+            test_database,
             Config::default(),
             Some(RegenerationConfig { delay_seconds: 10, max_concurrent: 1 }),
             sandboxed_file_manager::SandboxedManager::builder()
@@ -1150,8 +1156,19 @@ mod tests {
         let ingestion_state_manager = Arc::new(IngestionStateManager::new());
         let progress_service = Arc::new(ProgressService::new(ingestion_state_manager.clone()));
         
+        // Create test database using SeaORM MockDatabase
+        let db_connection = sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
+            .into_connection();
+        let test_database = crate::database::Database {
+            connection: db_connection.clone(),
+            read_connection: db_connection,
+            backend: sea_orm::DatabaseBackend::Sqlite,
+            ingestion_config: crate::config::IngestionConfig::default(),
+            database_type: crate::database::DatabaseType::SQLite,
+        };
+        
         let service = ProxyRegenerationService::new(
-            sqlx::SqlitePool::connect(":memory:").await.unwrap(),
+            test_database,
             Config::default(),
             None,
             sandboxed_file_manager::SandboxedManager::builder()

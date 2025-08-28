@@ -1,5 +1,5 @@
 use crate::models::*;
-use crate::repositories::{ChannelRepository, traits::RepositoryHelpers};
+use crate::database::repositories::{ChannelSeaOrmRepository, StreamSourceSeaOrmRepository, EpgSourceSeaOrmRepository};
 use crate::services::ProgressService;
 use crate::sources::SourceHandlerFactory;
 use anyhow::Result;
@@ -22,11 +22,11 @@ pub trait SourceIngestor {
 /// Generic orchestrator service for source ingestion using new source handlers
 pub struct IngestorService {
     progress_service: Arc<ProgressService>,
-    channel_repo: ChannelRepository,
+    channel_repo: ChannelSeaOrmRepository,
 }
 
 impl IngestorService {
-    pub fn new(progress_service: Arc<ProgressService>, channel_repo: ChannelRepository) -> Self {
+    pub fn new(progress_service: Arc<ProgressService>, channel_repo: ChannelSeaOrmRepository) -> Self {
         Self { 
             progress_service,
             channel_repo,
@@ -69,7 +69,7 @@ impl IngestorService {
                 anyhow::anyhow!("Failed to create source handler: {}", e)
             })?;
         
-        info!("Created {} source handler for '{}'", source.source_type, source.name);
+        info!("Created {:?} source handler for '{}'", source.source_type, source.name);
         
         // Create one operation and pass its callback to the handler
         let _progress_callback = match self.progress_service
@@ -114,9 +114,10 @@ impl IngestorService {
 
         info!("Successfully saved {} channels to database for Stream source '{}'", channel_count, source_name);
 
-        // Update last ingested timestamp using generic helper
+        // Update last ingested timestamp using clean SeaORM repository
         info!("Updating last_ingested_at timestamp for Stream source '{}'", source_name);
-        if let Err(e) = RepositoryHelpers::update_last_ingested(&database.pool(), "stream_sources", source_id).await {
+        let stream_source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
+        if let Err(e) = stream_source_repo.update_last_ingested_at(&source_id).await {
             error!("Failed to update last_ingested_at for stream source '{}': {}", source_name, e);
         } else {
             info!("Updated timestamp for Stream source '{}'", source_name);
@@ -212,9 +213,10 @@ impl IngestorService {
             }
         };
         
-        // Always update timestamp, even if some data operations failed - using generic helper
+        // Always update timestamp, even if some data operations failed - using clean SeaORM repository
         info!("Updating last_ingested_at timestamp for EPG source '{}'", source_name);
-        if let Err(e) = RepositoryHelpers::update_last_ingested(&database.pool(), "epg_sources", source_id).await {
+        let epg_source_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());
+        if let Err(e) = epg_source_repo.update_last_ingested_at(&source_id).await {
             warn!("Failed to update last_ingested_at for EPG source '{}': {}", source_name, e);
         } else {
             info!("Updated timestamp for EPG source '{}'", source_name);
@@ -247,50 +249,54 @@ impl IngestorService {
         
         debug!("Saving {} EPG programs to database", programs.len());
         
-        // Start a transaction for atomicity
-        let mut tx = database.pool().begin().await?;
+        // Use SeaORM transaction for atomicity
+        use sea_orm::TransactionTrait;
+        let db = database.connection();
+        let txn = db.begin().await?;
         
         // First, delete existing programs for this source to avoid duplicates
-        sqlx::query("DELETE FROM epg_programs WHERE source_id = ?")
-            .bind(source_id.to_string())
-            .execute(&mut *tx)
+        use crate::entities::{prelude::EpgPrograms, epg_programs};
+        use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
+        
+        EpgPrograms::delete_many()
+            .filter(epg_programs::Column::SourceId.eq(source_id))
+            .exec(&txn)
             .await?;
         
-        let mut programs_saved = 0;
+        // Use SeaORM batch insert for efficiency and clean architecture
+        use sea_orm::Set;
         
-        for program in programs {
-            sqlx::query(
-                "INSERT INTO epg_programs (
-                    id, source_id, channel_id, channel_name, program_title, program_description, program_category,
-                    start_time, end_time, episode_num, season_num, rating, language, subtitles, aspect_ratio, program_icon,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(program.id.to_string())
-            .bind(program.source_id.to_string())
-            .bind(&program.channel_id)
-            .bind(&program.channel_name)
-            .bind(&program.program_title)
-            .bind(&program.program_description)
-            .bind(&program.program_category)
-            .bind(program.start_time)
-            .bind(program.end_time)
-            .bind(&program.episode_num)
-            .bind(&program.season_num)
-            .bind(&program.rating)
-            .bind(&program.language)
-            .bind(&program.subtitles)
-            .bind(&program.aspect_ratio)
-            .bind(&program.program_icon)
-            .bind(program.created_at)
-            .bind(program.updated_at)
-            .execute(&mut *tx)
+        let active_models: Vec<epg_programs::ActiveModel> = programs.into_iter().map(|program| {
+            epg_programs::ActiveModel {
+                id: Set(program.id),
+                source_id: Set(program.source_id),
+                channel_id: Set(program.channel_id),
+                channel_name: Set(program.channel_name),
+                program_title: Set(program.program_title),
+                program_description: Set(program.program_description),
+                program_category: Set(program.program_category),
+                start_time: Set(program.start_time),
+                end_time: Set(program.end_time),
+                episode_num: Set(program.episode_num),
+                season_num: Set(program.season_num),
+                rating: Set(program.rating),
+                language: Set(program.language),
+                subtitles: Set(program.subtitles),
+                aspect_ratio: Set(program.aspect_ratio),
+                program_icon: Set(program.program_icon),
+                created_at: Set(program.created_at),
+                updated_at: Set(program.updated_at),
+            }
+        }).collect();
+        
+        let programs_saved = active_models.len();
+        
+        // Batch insert for efficiency - follows SeaORM best practices
+        EpgPrograms::insert_many(active_models)
+            .exec(&txn)
             .await?;
-            
-            programs_saved += 1;
-        }
         
-        tx.commit().await?;
+        txn.commit().await?;
         debug!("Successfully saved {} EPG programs", programs_saved);
         
         Ok(programs_saved)

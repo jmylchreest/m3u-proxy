@@ -13,9 +13,9 @@ use thiserror::Error;
 /// proper error chaining.
 #[derive(Error, Debug)]
 pub enum AppError {
-    /// Database-related errors
+    /// Database-related errors (SeaORM)
     #[error("Database error: {0}")]
-    Database(#[from] sqlx::Error),
+    Database(#[from] sea_orm::DbErr),
     
     /// Repository layer errors
     #[error("Repository error: {0}")]
@@ -73,9 +73,9 @@ pub enum RepositoryError {
     #[error("Query failed: {query} - {message}")]
     QueryFailed { query: String, message: String },
     
-    /// Database errors from sqlx
+    /// Database errors from SeaORM
     #[error("Database error: {0}")]
-    Database(#[from] sqlx::Error),
+    Database(#[from] sea_orm::DbErr),
     
     /// UUID parsing errors
     #[error("UUID parsing error: {0}")]
@@ -100,6 +100,10 @@ pub enum RepositoryError {
     /// Record not found
     #[error("Record not found: {table} with {field} = {value}")]
     RecordNotFound { table: String, field: String, value: String },
+    
+    /// Generic not found (for compatibility)
+    #[error("Not found: {resource} with id {id}")]
+    NotFound { resource: String, id: String },
     
     /// Migration failures
     #[error("Migration failed: {version} - {message}")]

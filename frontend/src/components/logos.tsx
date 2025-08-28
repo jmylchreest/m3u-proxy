@@ -369,6 +369,8 @@ function EditLogoSheet({
     name: "",
     description: ""
   })
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
   // Reset form data when logo changes
   useEffect(() => {
@@ -377,20 +379,63 @@ function EditLogoSheet({
         name: logo.name,
         description: logo.description || ""
       })
+      setSelectedFile(null)
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl)
+      }
+      setPreviewUrl(null)
     }
-  }, [logo])
+  }, [logo, previewUrl])
+
+  // Cleanup preview URL when component unmounts
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl)
+      }
+    }
+  }, [previewUrl])
+
+  // Handle file selection
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      // Clean up previous preview URL
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl)
+      }
+      setSelectedFile(file)
+      const url = URL.createObjectURL(file)
+      setPreviewUrl(url)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!logo) return
     
-    await onUpdateLogo(logo.id, {
-      name: formData.name,
-      description: formData.description || undefined
-    })
-    
-    if (!error) {
-      onOpenChange(false)
+    try {
+      if (selectedFile) {
+        // Replace image and update metadata
+        await apiClient.replaceLogoImage(
+          logo.id, 
+          selectedFile, 
+          formData.name, 
+          formData.description || undefined
+        )
+      } else {
+        // Just update metadata
+        await onUpdateLogo(logo.id, {
+          name: formData.name,
+          description: formData.description || undefined
+        })
+      }
+      
+      if (!error) {
+        onOpenChange(false)
+      }
+    } catch (err) {
+      console.error('Failed to update logo:', err)
     }
   }
 
@@ -438,12 +483,29 @@ function EditLogoSheet({
             />
           </div>
 
+          {/* File replacement */}
+          <div className="space-y-2">
+            <Label htmlFor="replace-image">Replace Image (optional)</Label>
+            <Input
+              id="replace-image"
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              disabled={loading}
+            />
+            {selectedFile && (
+              <p className="text-sm text-muted-foreground">
+                Selected: {selectedFile.name} ({formatFileSize(selectedFile.size)})
+              </p>
+            )}
+          </div>
+
           {/* Logo preview */}
           <div className="space-y-2">
             <Label>Preview</Label>
             <div className="aspect-square bg-muted rounded-md flex items-center justify-center overflow-hidden max-w-32">
               <img
-                src={logo.url.startsWith('http') ? logo.url : `${API_CONFIG.baseUrl}${logo.url}`}
+                src={previewUrl || (logo.url.startsWith('http') ? logo.url : `${API_CONFIG.baseUrl}${logo.url}`)}
                 alt={logo.name}
                 className="w-full h-full object-contain"
                 onError={(e) => {
@@ -459,7 +521,15 @@ function EditLogoSheet({
               </div>
             </div>
             <div className="text-sm text-muted-foreground">
-              {logo.file_name} ({formatFileSize(logo.file_size)})
+              {selectedFile ? (
+                <>
+                  New: {selectedFile.name} ({formatFileSize(selectedFile.size)})
+                </>
+              ) : (
+                <>
+                  Current: {logo.file_name} ({formatFileSize(logo.file_size)})
+                </>
+              )}
             </div>
           </div>
         </form>
@@ -470,7 +540,7 @@ function EditLogoSheet({
           </Button>
           <Button form="edit-logo-form" type="submit" disabled={loading}>
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Update Logo
+            {selectedFile ? 'Replace Image' : 'Update Logo'}
           </Button>
         </SheetFooter>
       </SheetContent>

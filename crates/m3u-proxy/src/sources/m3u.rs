@@ -225,6 +225,11 @@ impl M3uSourceHandler {
             stream_url: partial.url,
             created_at: now,
             updated_at: now,
+            video_codec: None,
+            audio_codec: None,
+            resolution: None,
+            probe_method: None,
+            last_probed_at: None,
         })
     }
 
@@ -255,6 +260,11 @@ impl M3uSourceHandler {
             stream_url: url.to_string(),
             created_at: now,
             updated_at: now,
+            video_codec: None,
+            audio_codec: None,
+            resolution: None,
+            probe_method: None,
+            last_probed_at: None,
         })
     }
 

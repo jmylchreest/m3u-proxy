@@ -179,6 +179,7 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::upload_logo_asset,
         crate::web::api::get_logo_asset_image,
         crate::web::api::update_logo_asset,
+        crate::web::api::replace_logo_asset_image,
         crate::web::api::delete_logo_asset,
         crate::web::api::search_logo_assets,
         crate::web::api::get_logo_cache_stats,

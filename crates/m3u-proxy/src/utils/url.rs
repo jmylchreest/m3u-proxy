@@ -77,6 +77,36 @@ impl UrlUtils {
         Ok(joined.to_string())
     }
 
+    /// Build Xtream XMLTV URL with proper path joining and authentication
+    ///
+    /// This function creates the XMLTV endpoint URL for Xtream Codes APIs,
+    /// ensuring proper URL construction and avoiding common mistakes like
+    /// missing slashes between base URL and endpoint path.
+    ///
+    /// # Arguments
+    ///
+    /// * `base_url` - The base Xtream URL (e.g., "http://example.com:8080")
+    /// * `username` - The username for authentication
+    /// * `password` - The password for authentication
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - Successfully built XMLTV URL
+    /// * `Err(url::ParseError)` - Parse error if base URL is invalid
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use m3u_proxy::utils::url::UrlUtils;
+    ///
+    /// let url = UrlUtils::build_xtream_xmltv_url("http://example.com", "user", "pass").unwrap();
+    /// assert_eq!(url, "http://example.com/xmltv.php?username=user&password=pass");
+    /// ```
+    pub fn build_xtream_xmltv_url(base_url: &str, username: &str, password: &str) -> Result<String, url::ParseError> {
+        let xmltv_path_with_params = format!("xmltv.php?username={}&password={}", username, password);
+        Self::join(base_url, &xmltv_path_with_params)
+    }
+
     /// Extract the domain from a URL
     ///
     /// # Arguments
@@ -246,6 +276,33 @@ mod tests {
         assert_eq!(
             UrlUtils::join("https://example.com/", "api/v1").unwrap(),
             "https://example.com/api/v1"
+        );
+    }
+
+    #[test]
+    fn test_build_xtream_xmltv_url() {
+        // Test basic URL construction
+        assert_eq!(
+            UrlUtils::build_xtream_xmltv_url("http://example.com", "user", "pass").unwrap(),
+            "http://example.com/xmltv.php?username=user&password=pass"
+        );
+
+        // Test URL with trailing slash
+        assert_eq!(
+            UrlUtils::build_xtream_xmltv_url("http://example.com/", "user", "pass").unwrap(),
+            "http://example.com/xmltv.php?username=user&password=pass"
+        );
+
+        // Test URL with port
+        assert_eq!(
+            UrlUtils::build_xtream_xmltv_url("http://example.com:8080", "user", "pass").unwrap(),
+            "http://example.com:8080/xmltv.php?username=user&password=pass"
+        );
+
+        // Test HTTPS
+        assert_eq!(
+            UrlUtils::build_xtream_xmltv_url("https://secure.example.com", "user", "pass").unwrap(),
+            "https://secure.example.com/xmltv.php?username=user&password=pass"
         );
     }
 

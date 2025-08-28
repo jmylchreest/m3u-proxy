@@ -1035,7 +1035,7 @@ pub enum RelayError {
     ProcessFailed(String),
     
     #[error("Database error: {0}")]
-    Database(#[from] sqlx::Error),
+    Database(#[from] sea_orm::DbErr),
     
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),

@@ -1,17 +1,18 @@
 "use client";
 
-import React, { useEffect, useRef, useState, useCallback, ErrorInfo, Component } from 'react';
+import React, { useEffect, useRef, useState, useCallback, ErrorInfo, Component, useMemo } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { X, Maximize2, Minimize2, Volume2, VolumeX, Settings, Copy, ExternalLink, Check } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Debug } from '@/utils/debug';
+import mpegts from 'mpegts.js';
 
-// Import mpegts.js types
+// Make mpegts available globally for compatibility
 declare global {
   interface Window {
-    mpegts: any;
+    mpegts: typeof mpegts;
   }
 }
 
@@ -78,8 +79,8 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
   const errorCountRef = useRef<number>(0);
   const lastErrorTimeRef = useRef<number>(0);
   
-  // Create debug logger for this component
-  const debug = Debug.createLogger('VideoPlayer');
+  // Create debug logger for this component - use useMemo to avoid recreating on every render
+  const debug = useMemo(() => Debug.createLogger('VideoPlayer'), []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -223,31 +224,22 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
       });
     };
 
-    const loadMpegtsJs = async () => {
+    const initMpegtsJs = () => {
       try {
-        // Load mpegts.js script
-        if (!window.mpegts) {
-          const script = document.createElement('script');
-          script.src = 'https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js';
-          script.onload = () => {
-            setMpegtsLoaded(true);
-          };
-          script.onerror = () => {
-            throw new Error('Failed to load mpegts.js');
-          };
-          document.head.appendChild(script);
-        } else {
+        // mpegts.js is now imported directly, so just make it available globally
+        if (typeof window !== 'undefined' && mpegts) {
+          window.mpegts = mpegts;
           setMpegtsLoaded(true);
         }
       } catch (err) {
-        debug.error('Failed to load mpegts.js:', err);
-        setError('Failed to load video player');
+        console.error('Failed to initialize mpegts.js:', err);
+        setError('Failed to initialize video player');
       }
     };
 
     detectHEVCSupport();
-    loadMpegtsJs();
-  }, []);
+    initMpegtsJs();
+  }, []); // Remove debug from dependencies to avoid infinite loops
 
   // Initialize player when modal opens
   useEffect(() => {
@@ -289,10 +281,19 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
         if (videoRef.current) {
           videoRef.current.className = 'w-full h-full';
           videoRef.current.controls = true;
-          videoRef.current.preload = 'metadata';
+          videoRef.current.preload = 'auto'; // Changed from 'metadata' for better buffering
           videoRef.current.playsInline = true;
           // Disable picture-in-picture to avoid duplicate controls
           (videoRef.current as any).disablePictureInPicture = true;
+          
+          // Enhanced buffering attributes
+          videoRef.current.setAttribute('buffered', 'true');
+          videoRef.current.setAttribute('crossorigin', 'anonymous');
+          
+          // Set buffer size hints if supported
+          if ('setBufferSize' in videoRef.current) {
+            (videoRef.current as any).setBufferSize(1024 * 1024 * 5); // 5MB buffer
+          }
         }
 
         // Check if mpegts.js is supported
@@ -314,20 +315,45 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
         const config = {
           enableWorker: false,
           enableStashBuffer: true,
-          stashInitialSize: 64, // Reduced from 128 to prevent memory issues
-          stashBufferThreshold: 30, // Seconds to keep in buffer
+          stashInitialSize: 128, // Increased for better buffering
+          stashBufferThreshold: 60, // Increased buffer size for smoother playback
+          
+          // Live streaming optimizations
           liveBufferLatencyChasing: true,
-          liveBufferLatencyMaxLatency: 2, // Reduced from 3 for better stability
-          liveBufferLatencyMinRemain: 0.5, // Reduced from 0.8
+          liveBufferLatencyMaxLatency: 5, // Increased to allow more buffering
+          liveBufferLatencyMinRemain: 1.5, // Increased minimum buffer
+          
+          // Buffer management
           autoCleanupSourceBuffer: true,
-          autoCleanupMaxBackwardDuration: 15, // Reduced from 30 to prevent memory buildup
-          autoCleanupMinBackwardDuration: 5, // Reduced from 10
-          // Disable seekable range tracking to reduce memory usage
+          autoCleanupMaxBackwardDuration: 30,
+          autoCleanupMinBackwardDuration: 10,
+          
+          // Additional buffering settings
           enableSeekableRanges: false,
+          lazyLoad: true,
+          lazyLoadMaxDuration: 180, // 3 minutes of content
+          lazyLoadRecoverDuration: 30,
+          
+          // Network and buffering tweaks
+          reuseRedirectedURL: true,
+          
+          // Advanced buffering configuration
+          initialLiveManifestSize: 3, // Start with more segments
+          liveBufferLatencyChaseUpToTolerance: true,
+          
+          // Performance optimizations
+          enableStatisticsInfo: true, // Enable buffer statistics
+          fixAudioTimestampGap: true,
+          
+          // Segment loading optimizations  
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
         };
 
         const player = window.mpegts.createPlayer(mediaDataSource, config);
-        player.attachMediaElement(videoRef.current);
+        player.attachMediaElement(videoRef.current!);
 
         // Set up event listeners
         player.on(window.mpegts.Events.LOADING_COMPLETE, () => {
@@ -565,34 +591,73 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
         player.load();
         playerRef.current = player;
         
-        // Set up buffer monitoring if available
+        // Set up enhanced buffer monitoring with adaptive management
         bufferUpdateIntervalRef.current = setInterval(() => {
           if (playerRef.current && videoRef.current) {
             try {
-              // Try to get buffer information from mpegts.js
+              // Get comprehensive buffer information from mpegts.js
               const statistics = playerRef.current.statisticsInfo;
               if (statistics) {
                 setBufferInfo({
                   bufferLength: statistics.bufferLength,
                   backBufferLength: statistics.backBufferLength,
                 });
+                
+                // Adaptive buffer management based on buffer health
+                const bufferHealth = statistics.bufferLength || 0;
+                
+                // If buffer is running low, try to help by reducing playback rate slightly
+                if (bufferHealth < 2 && !videoRef.current.paused) {
+                  debug.log('Low buffer detected, applying adaptive measures');
+                  // Slightly slow down playback to allow buffering
+                  if (videoRef.current.playbackRate > 0.98) {
+                    videoRef.current.playbackRate = 0.98;
+                  }
+                } else if (bufferHealth > 5 && videoRef.current.playbackRate < 1.0) {
+                  // Buffer is healthy, restore normal playback rate
+                  debug.log('Buffer recovered, restoring normal playback rate');
+                  videoRef.current.playbackRate = 1.0;
+                }
               } else {
-                // Fallback to video element buffered ranges
+                // Enhanced fallback using video element buffered ranges
                 const buffered = videoRef.current.buffered;
                 if (buffered.length > 0) {
                   const currentTime = videoRef.current.currentTime;
-                  const bufferEnd = buffered.end(buffered.length - 1);
-                  const bufferLength = Math.max(0, bufferEnd - currentTime);
+                  let totalBuffered = 0;
+                  let bufferAhead = 0;
+                  
+                  // Calculate total buffered content and content ahead of current time
+                  for (let i = 0; i < buffered.length; i++) {
+                    const start = buffered.start(i);
+                    const end = buffered.end(i);
+                    totalBuffered += (end - start);
+                    
+                    if (end > currentTime) {
+                      bufferAhead += Math.max(0, end - Math.max(start, currentTime));
+                    }
+                  }
+                  
                   setBufferInfo({
-                    bufferLength: bufferLength,
+                    bufferLength: bufferAhead,
+                    backBufferLength: totalBuffered - bufferAhead,
                   });
+                  
+                  // Apply adaptive buffering for HTML5 fallback too
+                  if (bufferAhead < 2 && !videoRef.current.paused) {
+                    if (videoRef.current.playbackRate > 0.98) {
+                      videoRef.current.playbackRate = 0.98;
+                    }
+                  } else if (bufferAhead > 5 && videoRef.current.playbackRate < 1.0) {
+                    videoRef.current.playbackRate = 1.0;
+                  }
                 }
               }
             } catch (e) {
               // Silently ignore buffer info errors
+              debug.warn('Buffer monitoring error:', e);
             }
           }
-        }, 1000); // Update every second
+        }, 500); // Update more frequently (every 500ms) for better responsiveness
 
       } catch (err) {
         debug.error('Player initialization error:', err);
@@ -756,7 +821,13 @@ ${absoluteUrl}`;
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="max-w-4xl w-full p-0 bg-black [&>button]:hidden" aria-describedby="video-player-description">
+      <DialogContent 
+        className="max-w-5xl w-[90vw] p-0 bg-black [&>button]:hidden" 
+        aria-describedby="video-player-description"
+        onMouseMove={handleMouseMove}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={hideControlsImmediately}
+      >
         <div className="relative">
           {/* Header */}
           <DialogHeader className={`absolute top-0 left-0 right-0 z-10 bg-gradient-to-b from-black/80 to-transparent p-4 transition-opacity ${showControls ? 'duration-200 opacity-100' : 'duration-500 opacity-0'}`}>
@@ -804,10 +875,22 @@ ${absoluteUrl}`;
                       {streamCodecs.audio}
                     </Badge>
                   )}
-                  {/* Buffer information */}
+                  {/* Enhanced Buffer information */}
                   {bufferInfo.bufferLength !== undefined && (
-                    <Badge variant="outline" className="text-xs bg-black/50 backdrop-blur-sm border-cyan-500 text-cyan-300">
+                    <Badge 
+                      variant="outline" 
+                      className={`text-xs bg-black/50 backdrop-blur-sm ${
+                        bufferInfo.bufferLength < 2 ? 'border-red-500 text-red-300' :
+                        bufferInfo.bufferLength < 5 ? 'border-yellow-500 text-yellow-300' :
+                        'border-green-500 text-green-300'
+                      }`}
+                    >
                       Buffer: {bufferInfo.bufferLength.toFixed(1)}s
+                      {bufferInfo.backBufferLength !== undefined && (
+                        <span className="ml-1 opacity-70">
+                          (+{bufferInfo.backBufferLength.toFixed(1)}s)
+                        </span>
+                      )}
                     </Badge>
                   )}
                 </div>
@@ -848,10 +931,7 @@ ${absoluteUrl}`;
 
           {/* Video Player */}
           <div 
-            className="relative bg-black min-h-[400px] flex items-center justify-center group" 
-            onMouseMove={handleMouseMove}
-            onMouseEnter={handleMouseEnter}
-            onMouseLeave={handleMouseLeave}
+            className="relative bg-black aspect-video flex items-center justify-center group"
           >
             {error ? (
               <div className="m-4 text-center text-white max-w-2xl mx-auto">
@@ -993,8 +1073,6 @@ ${absoluteUrl}`;
                     preload="metadata"
                     controlsList="nodownload"
                     disablePictureInPicture
-                    onMouseMove={handleMouseMove}
-                    onMouseEnter={handleMouseEnter}
                   />
                 </VideoPlayerErrorBoundary>
                 

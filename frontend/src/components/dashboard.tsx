@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
+import { usePageLoading } from "@/hooks/usePageLoading"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -209,6 +210,9 @@ export function Dashboard() {
   const [relayHealthError, setRelayHealthError] = useState<string | null>(null)
   const [isLoadingRelays, setIsLoadingRelays] = useState(false)
   const [systemHealth, setSystemHealth] = useState<HealthData | null>(null)
+
+  // Integrate with page loading spinner
+  usePageLoading(isLoadingRelays)
   const [relayHistoricalData, setRelayHistoricalData] = useState<RelayHistoricalData>({})
   
   // Keep max 60 data points per relay process (adjust based on needs)

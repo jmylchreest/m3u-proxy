@@ -23,12 +23,12 @@ use std::marker::PhantomData;
 /// use m3u_proxy::repositories::traits::Repository;
 /// use m3u_proxy::utils::database_retry::RetryConfig;
 /// use uuid::Uuid;
-/// use sqlx::{Pool, Sqlite};
+/// use sea_orm::DatabaseConnection;
 /// # use std::error::Error;
 /// 
 /// async fn example() -> Result<(), Box<dyn Error>> {
-/// #   let pool: Pool<Sqlite> = todo!();
-///     let base_repo = StreamSourceRepository::new(pool.clone());
+/// #   let db: DatabaseConnection = todo!();
+///     let base_repo = StreamSourceRepository::new(db.clone());
 ///     let retry_repo = RetryWrapper::new(base_repo, RetryConfig::for_writes());
 ///     
 ///     // All operations now have retry logic

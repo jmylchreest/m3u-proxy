@@ -15,11 +15,10 @@ import {
   Radio,
   ArrowUpDown,
   Tv,
-  Calendar
+  Calendar,
+  Paintbrush
 } from "lucide-react"
-import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { cn } from "@/lib/utils"
 import {
   Sidebar,
   SidebarHeader,
@@ -107,6 +106,11 @@ const navigation = [
         icon: Bug,
       },
       {
+        title: "Loading Test",
+        url: "/test-loading",
+        icon: Play,
+      },
+      {
         title: "Settings",
         url: "/settings",
         icon: Settings,
@@ -122,16 +126,35 @@ const navigation = [
         icon: FileText,
       },
       {
-        title: "Color Palette",
+        title: "Colour Palette",
         url: "/color-palette",
-        icon: Palette,
+        icon: Paintbrush,
       },
     ],
   },
 ]
 
+function getOperationTypeForPath(pathname: string): string | undefined {
+  // Remove trailing slash for consistent matching
+  const normalizedPathname = pathname.endsWith('/') && pathname !== '/' ? pathname.slice(0, -1) : pathname
+  
+  switch (normalizedPathname) {
+    case "/sources/stream":
+      return "stream_ingestion"
+    case "/sources/epg":
+      return "epg_ingestion"
+    case "/proxies":
+      return "proxy_regeneration"
+    case "/events":
+      return undefined // Show all operation types
+    default:
+      return undefined
+  }
+}
+
 export function AppSidebar() {
   const pathname = usePathname()
+  const operationType = getOperationTypeForPath(pathname)
 
   return (
     <Sidebar variant="inset" collapsible="icon">
@@ -157,10 +180,10 @@ export function AppSidebar() {
                       isActive={pathname === item.url}
                       tooltip={item.title}
                     >
-                      <Link href={item.url}>
+                      <a href={item.url}>
                         <item.icon />
                         <span>{item.title}</span>
-                      </Link>
+                      </a>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}

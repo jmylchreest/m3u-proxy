@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
 use tracing::info;
 use uuid::Uuid;
 use anyhow::Result;
@@ -21,16 +20,16 @@ pub struct StreamAccessSession {
 /// Minimal metrics logger service
 #[derive(Clone)]
 pub struct MetricsLogger {
-    db: SqlitePool,
+    db: std::sync::Arc<sea_orm::DatabaseConnection>,
 }
 
 impl MetricsLogger {
-    pub fn new(db: SqlitePool) -> Self {
+    pub fn new(db: std::sync::Arc<sea_orm::DatabaseConnection>) -> Self {
         Self { db }
     }
     
-    /// Get database pool for relay logging
-    pub fn pool(&self) -> &SqlitePool {
+    /// Get database connection for relay logging
+    pub fn connection(&self) -> &std::sync::Arc<sea_orm::DatabaseConnection> {
         &self.db
     }
     

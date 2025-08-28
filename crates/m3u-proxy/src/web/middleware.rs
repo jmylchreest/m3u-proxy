@@ -68,30 +68,16 @@ pub async fn request_logging_middleware(
 
 /// Error handling middleware
 ///
-/// Catches panics and converts them to proper HTTP error responses
+/// Provides graceful error handling for HTTP requests
+/// Note: Panic catching in async middleware is complex and potentially problematic.
+/// This middleware focuses on proper async error handling without blocking operations.
 pub async fn error_handling_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    // Catch any panics that occur in handlers
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-                next.run(request).await
-            })
-        })
-    }));
-
-    match result {
-        Ok(response) => response,
-        Err(_panic) => {
-            error!("Handler panicked");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()>::error("Internal server error".to_string())),
-            ).into_response()
-        }
-    }
+    // Simply run the handler - Axum and Tokio handle most error cases gracefully
+    // Panics will be caught by the Tokio runtime and logged appropriately
+    next.run(request).await
 }
 
 
@@ -171,7 +157,7 @@ pub async fn security_headers_middleware(
     headers.insert("X-Frame-Options", "DENY".parse().unwrap());
     headers.insert("X-XSS-Protection", "1; mode=block".parse().unwrap());
     headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().unwrap());
-    headers.insert("Content-Security-Policy", "default-src 'self'".parse().unwrap());
+    headers.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self' *; media-src * blob:".parse().unwrap());
 
     response
 }
@@ -239,6 +225,27 @@ pub async fn health_check_bypass_middleware(
 
     // Continue with normal middleware chain
     next.run(request).await
+}
+
+/// Conditional request logging middleware that checks runtime settings
+///
+/// Only logs requests if request logging is enabled in runtime settings
+pub async fn conditional_request_logging_middleware(
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    axum::extract::State(state): axum::extract::State<crate::web::AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let flags = state.runtime_settings_store.get_flags().await;
+    
+    if flags.request_logging_enabled {
+        // Call the normal request logging middleware
+        request_logging_middleware(method, uri, request, next).await
+    } else {
+        // Skip logging and just run the request
+        next.run(request).await
+    }
 }
 
 /// Middleware stack builder

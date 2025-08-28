@@ -6,79 +6,79 @@ import { Button } from "@/components/ui/button"
 import { Palette, Copy, Check, Type } from "lucide-react"
 import { useState, useEffect } from "react"
 
-interface ColorSwatch {
+interface ColourSwatch {
   name: string
   cssVar: string
   description: string
   category: string
 }
 
-const colorSwatches: ColorSwatch[] = [
+const colourSwatches: ColourSwatch[] = [
   // Base Theme Colors
-  { name: "Background", cssVar: "--background", description: "Main background color", category: "Base" },
-  { name: "Foreground", cssVar: "--foreground", description: "Main text color", category: "Base" },
+  { name: "Background", cssVar: "--background", description: "Main background colour", category: "Base" },
+  { name: "Foreground", cssVar: "--foreground", description: "Main text colour", category: "Base" },
   
   // Primary Colors
-  { name: "Primary", cssVar: "--primary", description: "Primary brand color", category: "Primary" },
+  { name: "Primary", cssVar: "--primary", description: "Primary brand colour", category: "Primary" },
   { name: "Primary Foreground", cssVar: "--primary-foreground", description: "Text on primary background", category: "Primary" },
   
   // Secondary Colors
-  { name: "Secondary", cssVar: "--secondary", description: "Secondary brand color", category: "Secondary" },
+  { name: "Secondary", cssVar: "--secondary", description: "Secondary brand colour", category: "Secondary" },
   { name: "Secondary Foreground", cssVar: "--secondary-foreground", description: "Text on secondary background", category: "Secondary" },
   
   // Accent Colors
-  { name: "Accent", cssVar: "--accent", description: "Accent/highlight color", category: "Accent" },
+  { name: "Accent", cssVar: "--accent", description: "Accent/highlight colour", category: "Accent" },
   { name: "Accent Foreground", cssVar: "--accent-foreground", description: "Text on accent background", category: "Accent" },
   
   // Muted Colors
-  { name: "Muted", cssVar: "--muted", description: "Muted background color", category: "Muted" },
-  { name: "Muted Foreground", cssVar: "--muted-foreground", description: "Muted text color", category: "Muted" },
+  { name: "Muted", cssVar: "--muted", description: "Muted background colour", category: "Muted" },
+  { name: "Muted Foreground", cssVar: "--muted-foreground", description: "Muted text colour", category: "Muted" },
   
   // Card Colors
-  { name: "Card", cssVar: "--card", description: "Card background color", category: "Card" },
+  { name: "Card", cssVar: "--card", description: "Card background colour", category: "Card" },
   { name: "Card Foreground", cssVar: "--card-foreground", description: "Text on card background", category: "Card" },
   
   // Popover Colors
-  { name: "Popover", cssVar: "--popover", description: "Popover background color", category: "Popover" },
+  { name: "Popover", cssVar: "--popover", description: "Popover background colour", category: "Popover" },
   { name: "Popover Foreground", cssVar: "--popover-foreground", description: "Text on popover background", category: "Popover" },
   
   // Border & Input
-  { name: "Border", cssVar: "--border", description: "Border color", category: "Border" },
-  { name: "Input", cssVar: "--input", description: "Input background color", category: "Border" },
-  { name: "Ring", cssVar: "--ring", description: "Focus ring color", category: "Border" },
+  { name: "Border", cssVar: "--border", description: "Border colour", category: "Border" },
+  { name: "Input", cssVar: "--input", description: "Input background colour", category: "Border" },
+  { name: "Ring", cssVar: "--ring", description: "Focus ring colour", category: "Border" },
   
   // Destructive
-  { name: "Destructive", cssVar: "--destructive", description: "Destructive/error color", category: "Destructive" },
+  { name: "Destructive", cssVar: "--destructive", description: "Destructive/error colour", category: "Destructive" },
   { name: "Destructive Foreground", cssVar: "--destructive-foreground", description: "Text on destructive background", category: "Destructive" },
   
   // Chart Colors
-  { name: "Chart 1", cssVar: "--chart-1", description: "Chart color 1", category: "Chart" },
-  { name: "Chart 2", cssVar: "--chart-2", description: "Chart color 2", category: "Chart" },
-  { name: "Chart 3", cssVar: "--chart-3", description: "Chart color 3", category: "Chart" },
-  { name: "Chart 4", cssVar: "--chart-4", description: "Chart color 4", category: "Chart" },
-  { name: "Chart 5", cssVar: "--chart-5", description: "Chart color 5", category: "Chart" },
+  { name: "Chart 1", cssVar: "--chart-1", description: "Chart colour 1", category: "Chart" },
+  { name: "Chart 2", cssVar: "--chart-2", description: "Chart colour 2", category: "Chart" },
+  { name: "Chart 3", cssVar: "--chart-3", description: "Chart colour 3", category: "Chart" },
+  { name: "Chart 4", cssVar: "--chart-4", description: "Chart colour 4", category: "Chart" },
+  { name: "Chart 5", cssVar: "--chart-5", description: "Chart colour 5", category: "Chart" },
   
   // Sidebar Colors
-  { name: "Sidebar Background", cssVar: "--sidebar-background", description: "Sidebar background color", category: "Sidebar" },
-  { name: "Sidebar Foreground", cssVar: "--sidebar-foreground", description: "Sidebar text color", category: "Sidebar" },
-  { name: "Sidebar Primary", cssVar: "--sidebar-primary", description: "Sidebar primary color", category: "Sidebar" },
+  { name: "Sidebar Background", cssVar: "--sidebar-background", description: "Sidebar background colour", category: "Sidebar" },
+  { name: "Sidebar Foreground", cssVar: "--sidebar-foreground", description: "Sidebar text colour", category: "Sidebar" },
+  { name: "Sidebar Primary", cssVar: "--sidebar-primary", description: "Sidebar primary colour", category: "Sidebar" },
   { name: "Sidebar Primary Foreground", cssVar: "--sidebar-primary-foreground", description: "Text on sidebar primary", category: "Sidebar" },
-  { name: "Sidebar Accent", cssVar: "--sidebar-accent", description: "Sidebar accent color", category: "Sidebar" },
+  { name: "Sidebar Accent", cssVar: "--sidebar-accent", description: "Sidebar accent colour", category: "Sidebar" },
   { name: "Sidebar Accent Foreground", cssVar: "--sidebar-accent-foreground", description: "Text on sidebar accent", category: "Sidebar" },
-  { name: "Sidebar Border", cssVar: "--sidebar-border", description: "Sidebar border color", category: "Sidebar" },
-  { name: "Sidebar Ring", cssVar: "--sidebar-ring", description: "Sidebar focus ring color", category: "Sidebar" },
+  { name: "Sidebar Border", cssVar: "--sidebar-border", description: "Sidebar border colour", category: "Sidebar" },
+  { name: "Sidebar Ring", cssVar: "--sidebar-ring", description: "Sidebar focus ring colour", category: "Sidebar" },
 ]
 
-// Group colors by category
-const colorCategories = colorSwatches.reduce((acc, color) => {
-  if (!acc[color.category]) {
-    acc[color.category] = []
+// Group colours by category
+const colourCategories = colourSwatches.reduce((acc, colour) => {
+  if (!acc[colour.category]) {
+    acc[colour.category] = []
   }
-  acc[color.category].push(color)
+  acc[colour.category].push(colour)
   return acc
-}, {} as Record<string, ColorSwatch[]>)
+}, {} as Record<string, ColourSwatch[]>)
 
-function ColorSwatch({ color }: { color: ColorSwatch }) {
+function ColourSwatch({ colour }: { colour: ColourSwatch }) {
   const [copied, setCopied] = useState(false)
   
   const copyToClipboard = async (text: string) => {
@@ -93,28 +93,28 @@ function ColorSwatch({ color }: { color: ColorSwatch }) {
 
   return (
     <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors">
-      {/* Color Preview */}
+      {/* Colour Preview */}
       <div 
         className="w-12 h-12 rounded-lg border-2 shadow-sm flex-shrink-0"
-        style={{ backgroundColor: `var(${color.cssVar})` }}
+        style={{ backgroundColor: `var(${colour.cssVar})` }}
       />
       
-      {/* Color Info */}
+      {/* Colour Info */}
       <div className="flex-grow min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <h4 className="font-medium text-sm">{color.name}</h4>
+          <h4 className="font-medium text-sm">{colour.name}</h4>
           <Badge variant="outline" className="text-xs">
-            {color.cssVar}
+            {colour.cssVar}
           </Badge>
         </div>
-        <p className="text-xs text-muted-foreground">{color.description}</p>
+        <p className="text-xs text-muted-foreground">{colour.description}</p>
       </div>
       
       {/* Copy Button */}
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => copyToClipboard(color.cssVar)}
+        onClick={() => copyToClipboard(colour.cssVar)}
         className="flex-shrink-0"
       >
         {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
@@ -135,7 +135,7 @@ function TailwindClassExamples() {
     { class: "text-muted-foreground", description: "Muted foreground text" },
     { class: "bg-card", description: "Card background" },
     { class: "text-card-foreground", description: "Card foreground text" },
-    { class: "border-border", description: "Border color" },
+    { class: "border-border", description: "Border colour" },
     { class: "bg-destructive", description: "Destructive background" },
     { class: "text-destructive-foreground", description: "Destructive foreground text" },
   ]
@@ -145,7 +145,7 @@ function TailwindClassExamples() {
       <CardHeader>
         <CardTitle>Tailwind CSS Classes</CardTitle>
         <CardDescription>
-          Common Tailwind CSS classes using theme colors
+          Common Tailwind CSS classes using theme colours
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -314,42 +314,42 @@ function FontInformation() {
   )
 }
 
-export function ColorPalette() {
+export function ColourPalette() {
   return (
     <div className="space-y-6">
       {/* Page Description */}
       <div className="mb-6">
         <p className="text-muted-foreground">
-          Complete overview of all theme colors and CSS variables
+          Complete overview of all theme colours and CSS variables
         </p>
       </div>
 
-      {/* Color Categories */}
-      {Object.entries(colorCategories).map(([category, colors]) => (
+      {/* Colour Categories */}
+      {Object.entries(colourCategories).map(([category, colours]) => (
         <Card key={category}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              {category} Colors
-              <Badge variant="secondary">{colors.length}</Badge>
+              {category} Colours
+              <Badge variant="secondary">{colours.length}</Badge>
             </CardTitle>
             <CardDescription>
-              {category === "Base" && "Fundamental background and text colors"}
-              {category === "Primary" && "Main brand colors for buttons and key UI elements"}
-              {category === "Secondary" && "Secondary brand colors for alternative styling"}
-              {category === "Accent" && "Accent colors for highlights and emphasis"}
-              {category === "Muted" && "Subdued colors for less prominent elements"}
-              {category === "Card" && "Colors specifically for card components"}
-              {category === "Popover" && "Colors for popover and dropdown components"}
-              {category === "Border" && "Border, input, and focus ring colors"}
-              {category === "Destructive" && "Colors for errors and destructive actions"}
-              {category === "Chart" && "Data visualization and chart colors"}
-              {category === "Sidebar" && "Sidebar-specific color variations"}
+              {category === "Base" && "Fundamental background and text colours"}
+              {category === "Primary" && "Main brand colours for buttons and key UI elements"}
+              {category === "Secondary" && "Secondary brand colours for alternative styling"}
+              {category === "Accent" && "Accent colours for highlights and emphasis"}
+              {category === "Muted" && "Subdued colours for less prominent elements"}
+              {category === "Card" && "Colours specifically for card components"}
+              {category === "Popover" && "Colours for popover and dropdown components"}
+              {category === "Border" && "Border, input, and focus ring colours"}
+              {category === "Destructive" && "Colours for errors and destructive actions"}
+              {category === "Chart" && "Data visualization and chart colours"}
+              {category === "Sidebar" && "Sidebar-specific colour variations"}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {colors.map((color) => (
-                <ColorSwatch key={color.cssVar} color={color} />
+              {colours.map((colour) => (
+                <ColourSwatch key={colour.cssVar} colour={colour} />
               ))}
             </div>
           </CardContent>
@@ -367,7 +367,7 @@ export function ColorPalette() {
         <CardHeader>
           <CardTitle>Usage Instructions</CardTitle>
           <CardDescription>
-            How to use these colors in your components
+            How to use these colours in your components
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

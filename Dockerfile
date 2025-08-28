@@ -7,9 +7,11 @@ ARG LINUXSERVER_FFMPEG_VERSION=latest
 FROM node:${NODE_VERSION}-alpine AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm ci --only=production --silent
+# Install ALL dependencies (including devDependencies) for building
+RUN npm ci --silent
 COPY frontend/ ./
-RUN npm run build
+# Build the frontend
+RUN npm run build && ls -la out/
 
 # Backend build stage
 FROM rust:${RUST_VERSION} AS backend-builder
@@ -23,14 +25,11 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /usr/src/m3u-proxy
 COPY Cargo.toml Cargo.lock justfile ./
 COPY crates/ ./crates/
-COPY .sqlx/ ./.sqlx/
-
 # Copy frontend assets
 RUN mkdir -p crates/m3u-proxy/static
 COPY --from=frontend-builder /app/frontend/out/ ./crates/m3u-proxy/static/
 
 # Build binary
-ENV SQLX_OFFLINE=true
 RUN cargo build --release --bin m3u-proxy
 
 # Prepare entrypoint script

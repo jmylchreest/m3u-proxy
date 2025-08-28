@@ -22,7 +22,6 @@ pub mod memory_stats;
 pub mod pressure_monitor;
 pub mod regex_preprocessor;
 pub mod sandbox_health;
-pub mod sqlite;
 pub mod system_manager;
 pub mod time;
 pub mod url;
@@ -45,4 +44,5 @@ pub use memory_cleanup::{
 // but not exposed to prevent accidental usage
 pub use regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
 pub use system_manager::SystemManager;
+pub use url::UrlUtils;
 pub use uuid_parser::{resolve_proxy_id, uuid_to_base64, uuid_to_hex32, deserialize_optional_uuid};

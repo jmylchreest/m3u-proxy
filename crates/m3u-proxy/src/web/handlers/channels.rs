@@ -10,11 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{
-    repositories::{
-        ChannelRepository,
-        channel::{ChannelQuery},
-        traits::{Repository, PaginatedRepository},
-    },
+    database::repositories::{LastKnownCodecSeaOrmRepository, ChannelSeaOrmRepository},
     web::{AppState, responses::handle_result},
     utils::uuid_parser::parse_uuid_flexible,
     errors::{AppResult, AppError},
@@ -74,6 +70,7 @@ pub struct ChannelsListResponse {
     pub page: u32,
     pub limit: u32,
     pub has_more: bool,
+    pub total_pages: u32,
 }
 
 /// Get all channels with filtering and pagination
@@ -94,86 +91,96 @@ pub async fn list_channels(
         let page = params.page.unwrap_or(1).max(1); // Pages are 1-based
         let limit = params.limit.unwrap_or(50).min(500); // Cap at 500 items per page
 
-        // Use read pool for read-only operations
-        let channel_repo = ChannelRepository::new(state.database.read_pool());
+        // Use SeaORM connection for read operations
+        let channel_repo = ChannelSeaOrmRepository::new(state.database.connection().clone());
         
-        // Build query from request parameters
-        let mut query = ChannelQuery::new();
+        // Simple implementation using SeaORM repository
+        let all_channels = channel_repo.find_all().await.map_err(|e| AppError::Validation { message: e.to_string() })?;
         
-        if let Some(search) = params.search {
-            query.base.search = Some(search);
+        // Apply basic filtering (client-side for now)
+        let mut filtered_channels = all_channels;
+        
+        if let Some(search) = &params.search {
+            if !search.trim().is_empty() {
+                let search_lower = search.trim().to_lowercase();
+                filtered_channels.retain(|ch| ch.channel_name.to_lowercase().contains(&search_lower));
+            }
         }
         
-        if let Some(group) = params.group {
-            query = query.group_title(group);
+        // Apply group title filtering
+        if let Some(group) = &params.group {
+            if !group.trim().is_empty() {
+                filtered_channels.retain(|ch| {
+                    ch.group_title.as_ref().map(|g| g.eq_ignore_ascii_case(group.trim())).unwrap_or(false)
+                });
+            }
         }
         
-        // Support filtering by source_id (new) or proxy_id (deprecated)
+        // Parse and apply source ID filtering (support both source_id and legacy proxy_id)
+        let mut source_ids = Vec::new();
         if let Some(source_id_str) = &params.source_id {
-            if !source_id_str.is_empty() {
-                // Split comma-separated values
-                let source_id_parts: Vec<&str> = source_id_str.split(',').map(|s| s.trim()).collect();
-                
-                if source_id_parts.len() == 1 {
-                    // Single source ID
-                    if let Ok(source_uuid) = parse_uuid_flexible(source_id_parts[0]) {
-                        query = query.source_id(source_uuid);
-                    }
-                } else {
-                    // Multiple source IDs
-                    let mut source_uuids = Vec::new();
-                    for source_id_part in source_id_parts {
-                        if let Ok(source_uuid) = parse_uuid_flexible(source_id_part) {
-                            source_uuids.push(source_uuid);
-                        }
-                    }
-                    if !source_uuids.is_empty() {
-                        query = query.source_ids(source_uuids);
-                    }
+            for id_str in source_id_str.split(',') {
+                if let Ok(uuid) = parse_uuid_flexible(id_str.trim()) {
+                    source_ids.push(uuid);
                 }
             }
-        } else if let Some(proxy_id_str) = &params.proxy_id {
-            // Support legacy proxy_id parameter
-            if let Ok(proxy_uuid) = parse_uuid_flexible(proxy_id_str) {
-                query = query.source_id(proxy_uuid);
+        }
+        if let Some(proxy_id_str) = &params.proxy_id {
+            for id_str in proxy_id_str.split(',') {
+                if let Ok(uuid) = parse_uuid_flexible(id_str.trim()) {
+                    source_ids.push(uuid);
+                }
             }
         }
-
-        // Get channels with codec information using the new method
-        let channels_with_codecs = channel_repo
-            .find_channels_with_codecs(query)
-            .await?;
+        
+        if !source_ids.is_empty() {
+            filtered_channels.retain(|ch| source_ids.contains(&ch.source_id));
+        }
 
         // Calculate pagination info
-        let total_count = channels_with_codecs.len() as u64;
+        let total_count = filtered_channels.len() as u64;
         let offset = ((page - 1) * limit) as usize;
-        let end = std::cmp::min(offset + limit as usize, channels_with_codecs.len());
+        let end = std::cmp::min(offset + limit as usize, filtered_channels.len());
         
-        let paginated_channels = if offset < channels_with_codecs.len() {
-            &channels_with_codecs[offset..end]
+        let paginated_channels = if offset < filtered_channels.len() {
+            &filtered_channels[offset..end]
         } else {
             &[]
         };
 
-        // Get source names in bulk to avoid N+1 queries
+        // Get source names and codec info in bulk to avoid N+1 queries
         let source_ids: Vec<uuid::Uuid> = paginated_channels
             .iter()
             .filter(|c| c.source_id != uuid::Uuid::nil())
             .map(|c| c.source_id)
             .collect();
         
+        
         let source_names = if !source_ids.is_empty() {
-            // Use repository to get source names
-            match crate::repositories::StreamSourceRepository::new(state.database.read_pool())
-                .get_source_names(&source_ids)
-                .await
-            {
-                Ok(names) => names,
-                Err(_) => std::collections::HashMap::new(),
+            // Use SeaORM repository to get source names
+            let stream_source_repo = crate::database::repositories::StreamSourceSeaOrmRepository::new(state.database.connection().clone());
+            let mut names = std::collections::HashMap::new();
+            
+            // Get source names by fetching sources by ID
+            for source_id in &source_ids {
+                if let Ok(Some(source)) = stream_source_repo.find_by_id(source_id).await {
+                    names.insert(*source_id, source.name);
+                }
             }
+            
+            names
         } else {
             std::collections::HashMap::new()
         };
+        
+        // Get codec information for all channels by stream URL
+        let codec_repo = LastKnownCodecSeaOrmRepository::new(state.database.connection().clone());
+        let mut codec_info = std::collections::HashMap::new();
+        for channel in paginated_channels.iter() {
+            if let Ok(Some(codec)) = codec_repo.get_latest_codec_info(&channel.stream_url).await {
+                codec_info.insert(channel.id, codec);
+            }
+        }
         
         let mut channel_responses: Vec<ChannelResponse> = Vec::new();
         for channel in paginated_channels {
@@ -185,6 +192,8 @@ pub async fn list_channels(
                 // No source_id - this is a database channel
                 (channel.stream_url.clone(), None, "database".to_string(), None)
             };
+            
+            let codec = codec_info.get(&channel.id);
             
             channel_responses.push(ChannelResponse {
                 id: channel.id.to_string(),
@@ -200,16 +209,18 @@ pub async fn list_channels(
                 tvg_name: channel.tvg_name.clone(),
                 tvg_chno: channel.tvg_chno.clone(),
                 tvg_shift: channel.tvg_shift.clone(),
-                // Codec information
-                video_codec: channel.video_codec.clone(),
-                audio_codec: channel.audio_codec.clone(),
-                resolution: channel.resolution.clone(),
-                last_probed_at: channel.last_probed_at.map(|dt| dt.to_rfc3339()),
-                probe_method: channel.probe_method.as_ref().map(|pm| pm.to_string()),
+                // Codec information from last_known_codecs table
+                video_codec: codec.as_ref().and_then(|c| c.video_codec.clone()),
+                audio_codec: codec.as_ref().and_then(|c| c.audio_codec.clone()),
+                resolution: codec.as_ref().and_then(|c| c.resolution.clone()),
+                last_probed_at: codec.as_ref().map(|c| c.detected_at.to_rfc3339()),
+                probe_method: codec.as_ref().map(|c| format!("{:?}", c.probe_method)),
             });
         }
 
-        let has_more = end < channels_with_codecs.len();
+        let has_more = end < filtered_channels.len();
+        
+        let total_pages = (total_count as f64 / limit as f64).ceil() as u32;
         
         let response = ChannelsListResponse {
             channels: channel_responses,
@@ -217,6 +228,7 @@ pub async fn list_channels(
             page,
             limit,
             has_more,
+            total_pages,
         };
 
         Ok(response)
@@ -250,63 +262,77 @@ pub async fn get_proxy_channels(
         let page = params.page.unwrap_or(1).max(1);
         let limit = params.limit.unwrap_or(50).min(500);
 
-        // Use read pool for read-only operations
-        let channel_repo = ChannelRepository::new(state.database.read_pool());
+        // Use SeaORM connection for read operations
+        let channel_repo = ChannelSeaOrmRepository::new(state.database.connection().clone());
         
-        // Get channels for the specific source (which represents the M3U proxy)
-        let mut query = ChannelQuery::new().source_id(proxy_id);
+        // Get channels for the specific source using SeaORM repository
+        let source_channels = channel_repo.find_by_source_id(&proxy_id).await.map_err(|e| AppError::Validation { message: e.to_string() })?;
         
-        if let Some(search) = params.search {
-            query.base.search = Some(search);
+        // Apply filtering
+        let mut filtered_channels = source_channels;
+        
+        if let Some(search) = &params.search {
+            if !search.trim().is_empty() {
+                let search_lower = search.trim().to_lowercase();
+                filtered_channels.retain(|ch| ch.channel_name.to_lowercase().contains(&search_lower));
+            }
         }
         
-        if let Some(group) = params.group {
-            query = query.group_title(group);
+        if let Some(group) = &params.group {
+            if !group.trim().is_empty() {
+                filtered_channels.retain(|ch| {
+                    ch.group_title.as_ref().map(|g| g.eq_ignore_ascii_case(group.trim())).unwrap_or(false)
+                });
+            }
         }
 
-        let paginated_result = channel_repo
-            .find_paginated(query, page, limit)
-            .await?;
+        // Apply pagination 
+        let total = filtered_channels.len() as u32;
+        let total_pages = (total as f64 / limit as f64).ceil() as u32;
+        let start = ((page - 1) * limit) as usize;
+        let end = (start + limit as usize).min(filtered_channels.len());
+        
+        let paginated_channels = if start < filtered_channels.len() {
+            filtered_channels[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
 
-        let channel_responses: Vec<ChannelResponse> = paginated_result
-            .items
+        // Convert Channel models to ChannelResponse
+        let channel_responses: Vec<ChannelResponse> = paginated_channels
             .into_iter()
-            .map(|channel| {
-                // For proxy channels, always generate the relay streaming URL
-                let relay_url = format!("/stream/{}/{}", proxy_id, channel.id);
-                
-                ChannelResponse {
-                    id: channel.id.to_string(),
-                    name: channel.channel_name,
-                    logo_url: channel.tvg_logo,
-                    group: channel.group_title,
-                    stream_url: relay_url,
-                    proxy_id: Some(proxy_id.to_string()),
-                    source_type: "proxy".to_string(),
-                    source_name: None, // TODO: Get proxy name instead of source name for proxy channels
-                    // M3U specific fields from database
-                    tvg_id: channel.tvg_id,
-                    tvg_name: channel.tvg_name,
-                    tvg_chno: channel.tvg_chno,
-                    tvg_shift: channel.tvg_shift,
-                    // Codec information (not available for legacy proxy endpoint)
-                    video_codec: None,
-                    audio_codec: None,
-                    resolution: None,
-                    last_probed_at: None,
-                    probe_method: None,
-                }
+            .map(|channel| ChannelResponse {
+                id: channel.id.to_string(),
+                name: channel.channel_name,
+                logo_url: channel.tvg_logo,
+                group: channel.group_title,
+                stream_url: channel.stream_url,
+                proxy_id: None,
+                source_type: "source".to_string(),
+                source_name: None,
+                tvg_id: channel.tvg_id,
+                tvg_name: channel.tvg_name,
+                tvg_chno: channel.tvg_chno,
+                tvg_shift: channel.tvg_shift,
+                video_codec: channel.video_codec,
+                audio_codec: channel.audio_codec,
+                resolution: channel.resolution,
+                last_probed_at: channel.last_probed_at.map(|dt| dt.to_rfc3339()),
+                probe_method: channel.probe_method,
             })
             .collect();
+        
+        let has_more = end < filtered_channels.len();
 
         let response = ChannelsListResponse {
             channels: channel_responses,
-            total: paginated_result.total_count,
-            page: paginated_result.page,
-            limit: paginated_result.limit,
-            has_more: paginated_result.has_next,
+            total: total as u64,
+            page,
+            limit,
+            has_more,
+            total_pages,
         };
-
+        
         Ok(response)
     }
     
@@ -334,11 +360,11 @@ pub async fn get_channel_stream(
         // For database channels
         if let Ok(channel_uuid) = parse_uuid_flexible(&channel_id) {
             // Use read pool for read-only operations
-            let channel_repo = ChannelRepository::new(state.database.read_pool());
+            let channel_repo = ChannelSeaOrmRepository::new(state.database.connection().clone());
             
             let channel = channel_repo
-                .find_by_id(channel_uuid)
-                .await?
+                .find_by_id(&channel_uuid)
+                .await.map_err(|e| AppError::Validation { message: e.to_string() })?
                 .ok_or_else(|| AppError::NotFound { 
                     resource: "Channel".to_string(), 
                     id: channel_id.clone() 
@@ -407,11 +433,11 @@ pub async fn probe_channel_codecs(
             .map_err(|e| AppError::Validation { message: format!("Invalid channel ID format: {}", e) })?;
         
         // Use read pool to get channel information
-        let channel_repo = ChannelRepository::new(state.database.read_pool());
+        let channel_repo = ChannelSeaOrmRepository::new(state.database.connection().clone());
         
         let channel = channel_repo
-            .find_by_id(channel_uuid)
-            .await?
+            .find_by_id(&channel_uuid)
+            .await.map_err(|e| AppError::Validation { message: e.to_string() })?
             .ok_or_else(|| AppError::NotFound { 
                 resource: "Channel".to_string(), 
                 id: channel_id.clone() 
@@ -432,6 +458,29 @@ pub async fn probe_channel_codecs(
         let probe_result = match stream_prober.probe_input(&stream_url).await {
             Ok(probe_info) => probe_info,
             Err(e) => {
+                // Store failed probe attempt in database
+                let codec_repo = LastKnownCodecSeaOrmRepository::new(state.database.connection().clone());
+                let failed_codec_request = crate::models::last_known_codec::CreateLastKnownCodecRequest {
+                    video_codec: None,
+                    audio_codec: None,
+                    container_format: None,
+                    resolution: None,
+                    framerate: None,
+                    bitrate: None,
+                    video_bitrate: None,
+                    audio_bitrate: None,
+                    audio_channels: None,
+                    audio_sample_rate: None,
+                    probe_method: crate::models::last_known_codec::ProbeMethod::FfprobeManual,
+                    probe_source: Some(format!("admin_failed: {}", e)),
+                };
+                
+                // Store the failed probe attempt (ignore errors from this operation, with timeout)
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    codec_repo.upsert_codec_info(&stream_url, failed_codec_request)
+                ).await;
+
                 return Ok(std::collections::HashMap::from([
                     ("success".to_string(), "false".to_string()),
                     ("error".to_string(), format!("Failed to probe stream: {}", e)),
@@ -455,11 +504,10 @@ pub async fn probe_channel_codecs(
                 }
             });
 
-        // Store codec information using write pool
-        let write_channel_repo = ChannelRepository::new(state.database.pool());
+        // Store codec information using SeaORM connection
+        let codec_repo = LastKnownCodecSeaOrmRepository::new(state.database.connection().clone());
         
         let codec_request = crate::models::last_known_codec::CreateLastKnownCodecRequest {
-            channel_id: channel_uuid,
             video_codec: video_codec.clone(),
             audio_codec: audio_codec.clone(),
             container_format: probe_result.format_name.clone(),
@@ -480,7 +528,7 @@ pub async fn probe_channel_codecs(
         };
 
         // Store the codec information
-        if let Err(e) = write_channel_repo.upsert_codec_info(channel_uuid, codec_request).await {
+        if let Err(e) = codec_repo.upsert_codec_info(&stream_url, codec_request).await {
             return Ok(std::collections::HashMap::from([
                 ("success".to_string(), "false".to_string()),
                 ("error".to_string(), format!("Failed to store codec information: {}", e)),
@@ -506,4 +554,226 @@ pub async fn probe_channel_codecs(
     }
     
     handle_result(inner(state, channel_id).await)
+}
+
+/// Proxy a channel stream directly (solves CORS issues)
+#[utoipa::path(
+    get,
+    path = "/channel/{channel_id}/stream",
+    params(
+        ("channel_id" = String, Path, description = "Channel ID (UUID) or EPG Channel ID (tvg_id)")
+    ),
+    responses(
+        (status = 200, description = "Stream content proxied successfully", content_type = "video/mp2t"),
+        (status = 404, description = "Channel not found"),
+        (status = 502, description = "Stream source unavailable"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn proxy_channel_stream(
+    State(state): State<AppState>,
+    Path(channel_id): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use tracing::{debug, error, info, warn};
+
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .or_else(|| headers.get("x-real-ip"))
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    let referer = headers
+        .get("referer")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    debug!(
+        "Direct channel stream request: channel_id={}, client_ip={}, user_agent={}",
+        channel_id,
+        client_ip,
+        user_agent.as_deref().unwrap_or("unknown")
+    );
+
+    // Smart channel resolution: try UUID first, then tvg_id
+    let channel_repo = ChannelSeaOrmRepository::new(state.database.connection().clone());
+    
+    let channel = if let Ok(channel_uuid) = parse_uuid_flexible(&channel_id) {
+        // Try direct UUID lookup first
+        match channel_repo.find_by_id(&channel_uuid).await {
+            Ok(Some(channel)) => channel,
+            Ok(None) => {
+                debug!("Channel not found by UUID {}, trying tvg_id lookup", channel_id);
+                // Fallback to tvg_id lookup
+                match channel_repo.find_by_tvg_id(&channel_id).await {
+                    Ok(Some(channel)) => channel,
+                    Ok(None) => {
+                        warn!("Channel {} not found by UUID or tvg_id", channel_id);
+                        return (StatusCode::NOT_FOUND, "Channel not found".to_string()).into_response();
+                    }
+                    Err(e) => {
+                        error!("Failed to lookup channel by tvg_id {}: {}", channel_id, e);
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string()).into_response();
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to lookup channel by UUID {}: {}", channel_id, e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string()).into_response();
+            }
+        }
+    } else {
+        // Not a valid UUID, try tvg_id lookup directly
+        debug!("Invalid UUID format for {}, trying tvg_id lookup", channel_id);
+        match channel_repo.find_by_tvg_id(&channel_id).await {
+            Ok(Some(channel)) => channel,
+            Ok(None) => {
+                warn!("Channel {} not found by tvg_id", channel_id);
+                return (StatusCode::NOT_FOUND, "Channel not found".to_string()).into_response();
+            }
+            Err(e) => {
+                error!("Failed to lookup channel by tvg_id {}: {}", channel_id, e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string()).into_response();
+            }
+        }
+    };
+
+    info!(
+        "Proxying direct channel stream: '{}' from URL: {}",
+        channel.channel_name, channel.stream_url
+    );
+
+    // Create simplified session tracking for direct channel access
+    let session_id = format!("direct_{}_{}", channel.id, uuid::Uuid::new_v4());
+    
+    // Create session stats for the proxy function
+    let client_info = crate::proxy::session_tracker::ClientInfo {
+        ip: client_ip.clone(),
+        user_agent: user_agent.clone(),
+        referer: referer.clone(),
+    };
+
+    let session_stats = crate::proxy::session_tracker::SessionStats::new(
+        session_id.clone(),
+        client_info,
+        "direct_channel".to_string(),
+        "direct_channel".to_string(),
+        channel.id.to_string(),
+        channel.channel_name.clone(),
+        channel.stream_url.clone(),
+    );
+
+    // Start session tracking
+    state.session_tracker.start_session(session_stats.clone()).await;
+
+    // Use the existing proven proxy implementation from proxies.rs
+    proxy_http_stream_for_channel(
+        channel.stream_url.clone(),
+        headers,
+        state.session_tracker.clone(),
+        session_stats,
+    ).await
+}
+
+/// HTTP stream proxy implementation for channel streams (reuses proxy logic)
+async fn proxy_http_stream_for_channel(
+    stream_url: String,
+    _headers: axum::http::HeaderMap,
+    session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
+    session_stats: crate::proxy::session_tracker::SessionStats,
+) -> axum::response::Response<axum::body::Body> {
+    use axum::response::Response;
+    use axum::body::Body;
+    use axum::http::{header, StatusCode};
+    use tracing::{error, info};
+    
+    info!("Proxying HTTP channel stream from: {}", stream_url);
+    
+    // Create HTTP client for proxying
+    let client = reqwest::Client::builder()
+        .user_agent("m3u-proxy/channel-stream")
+        .timeout(std::time::Duration::from_secs(30))
+        .build();
+    
+    let client = match client {
+        Ok(client) => client,
+        Err(e) => {
+            error!("Failed to create HTTP client: {}", e);
+            session_tracker.end_session(&session_stats.session_id).await;
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create HTTP client").into_response();
+        }
+    };
+    
+    // Make request to source stream
+    let response = match client.get(&stream_url).send().await {
+        Ok(response) => response,
+        Err(e) => {
+            error!("Failed to connect to stream URL {}: {}", stream_url, e);
+            session_tracker.end_session(&session_stats.session_id).await;
+            return (StatusCode::BAD_GATEWAY, format!("Failed to connect to stream: {}", e)).into_response();
+        }
+    };
+    
+    // Check if source responded successfully
+    if !response.status().is_success() {
+        error!("Stream source returned error: {}", response.status());
+        session_tracker.end_session(&session_stats.session_id).await;
+        return (StatusCode::BAD_GATEWAY, format!("Stream source error: {}", response.status())).into_response();
+    }
+    
+    // Extract content type from source
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|ct| ct.to_str().ok())
+        .unwrap_or("video/mp2t") // Default to MPEG-TS for streams
+        .to_string();
+    
+    // Extract content length if available
+    let content_length: Option<u64> = response
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|cl| cl.to_str().ok())
+        .and_then(|cl| cl.parse().ok());
+    
+    info!("Proxying stream: content_type={}, content_length={:?}", content_type, content_length);
+    
+    // Get response body as stream
+    let stream_body = response.bytes_stream();
+    
+    // Convert reqwest stream to axum body
+    let body = Body::from_stream(stream_body);
+    
+    // Create response with proper headers
+    let mut response_builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, OPTIONS")
+        .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type, Range");
+    
+    // Add content length if we have it
+    if let Some(length) = content_length {
+        response_builder = response_builder.header(header::CONTENT_LENGTH, length);
+    }
+    
+    let response = match response_builder.body(body) {
+        Ok(response) => response,
+        Err(e) => {
+            error!("Failed to build response: {}", e);
+            session_tracker.end_session(&session_stats.session_id).await;
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response();
+        }
+    };
+    
+    info!("Successfully started proxying channel stream");
+    response
 }

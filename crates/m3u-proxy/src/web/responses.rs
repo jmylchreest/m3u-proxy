@@ -367,6 +367,53 @@ pub struct AcceleratorSupport {
     pub av1: bool,
 }
 
+/// Dashboard-compatible relay health response structure
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RelayHealthApiResponse {
+    pub status: String,
+    pub healthy_processes: String,
+    pub unhealthy_processes: String,
+    pub total_processes: String,
+    pub last_check: String,
+    pub processes: Vec<RelayProcess>,
+    pub ffmpeg_available: bool,
+    pub ffmpeg_version: Option<String>,
+    pub ffprobe_available: bool,
+    pub ffprobe_version: Option<String>,
+    pub hwaccel_available: bool,
+    pub hwaccel_capabilities: DetailedHwAccelCapabilities,
+}
+
+/// Individual relay process information for dashboard
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RelayProcess {
+    pub config_id: String,
+    pub profile_id: String,
+    pub profile_name: String,
+    pub proxy_id: Option<String>,
+    pub channel_name: Option<String>,
+    pub source_url: String,
+    pub status: String, // "healthy", "unhealthy", "starting", "stopping", "failed"
+    pub pid: Option<String>,
+    pub uptime_seconds: String,
+    pub memory_usage_mb: String,
+    pub cpu_usage_percent: String,
+    pub bytes_received_upstream: String,
+    pub bytes_delivered_downstream: String,
+    pub connected_clients: Vec<RelayConnectedClient>,
+}
+
+/// Connected client information for relay process
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RelayConnectedClient {
+    pub id: String,
+    pub ip: String,
+    pub user_agent: Option<String>,
+    pub connected_at: String,
+    pub bytes_served: String,
+    pub last_activity: String,
+}
+
 /// Comprehensive memory breakdown information
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MemoryBreakdown {

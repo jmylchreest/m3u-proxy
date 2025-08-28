@@ -36,15 +36,26 @@ pub struct StandardHttpClient {
 }
 
 impl StandardHttpClient {
-    /// Create new HTTP client with default timeout
+    /// Create new HTTP client with connection timeout only
     pub fn new() -> Self {
-        Self::with_timeout(Duration::from_secs(30))
+        Self::with_connection_timeout(Duration::from_secs(10))
     }
     
-    /// Create new HTTP client with custom timeout
+    /// Create new HTTP client with custom timeout (legacy, prefer connection_timeout)
     pub fn with_timeout(timeout: Duration) -> Self {
         let client = Client::builder()
             .timeout(timeout)
+            .build()
+            .expect("Failed to create HTTP client");
+            
+        Self { client }
+    }
+    
+    /// Create new HTTP client with only connection timeout (no total request timeout)
+    /// This respects cancellation tokens and allows long data transfers
+    pub fn with_connection_timeout(connect_timeout: Duration) -> Self {
+        let client = Client::builder()
+            .connect_timeout(connect_timeout)
             .build()
             .expect("Failed to create HTTP client");
             

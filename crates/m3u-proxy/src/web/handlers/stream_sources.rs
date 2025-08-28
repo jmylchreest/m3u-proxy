@@ -16,7 +16,6 @@ use uuid::Uuid;
 use crate::{
     models::{StreamSource, StreamSourceType},
     sources::SourceHandlerFactory,
-    repositories::traits::Repository,
 };
 
 use crate::web::{
@@ -587,8 +586,8 @@ pub async fn refresh_stream_source(
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    let stream_source_repo = crate::repositories::StreamSourceRepository::new(state.database.read_pool());
-    match stream_source_repo.find_by_id(uuid).await {
+    let stream_source_repo = crate::database::repositories::StreamSourceSeaOrmRepository::new(state.database.connection().clone());
+    match stream_source_repo.find_by_id(&uuid).await {
         Ok(Some(source)) => {
             // Create progress manager for manual refresh operation
             let progress_manager = match state.progress_service.create_staged_progress_manager(
@@ -622,7 +621,9 @@ pub async fn refresh_stream_source(
                     state.proxy_regeneration_service.queue_affected_proxies_coordinated(uuid, "stream").await;
                     
                     // Emit scheduler event for manual refresh trigger
-                    state.database.emit_scheduler_event(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(uuid));
+                    if let Some(ref scheduler_tx) = state.scheduler_event_tx {
+                        let _ = scheduler_tx.send(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(uuid));
+                    }
                     
                     ok(serde_json::json!({
                         "message": "Stream source refresh started",

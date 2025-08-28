@@ -5,9 +5,23 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Search, Calendar, Clock, Filter, Play, Grid, List, Table as TableIcon } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Calendar as CalendarComponent } from '@/components/ui/calendar';
+import { Search, Calendar, Clock, Filter, Play, Grid, List, Table as TableIcon, CalendarIcon, Star, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 import { VideoPlayerModal } from '@/components/video-player-modal';
 
 interface EpgProgram {
@@ -23,6 +37,7 @@ interface EpgProgram {
   rating?: string;
   source_id?: string;
   metadata?: Record<string, string>;
+  is_streamable: boolean;
 }
 
 interface EpgSource {
@@ -73,10 +88,17 @@ export default function EpgPage() {
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
-  const [timeRange, setTimeRange] = useState<'today' | 'tomorrow' | 'week'>('today');
+  const [timeRange, setTimeRange] = useState<'today' | 'tomorrow' | 'week' | 'custom'>('today');
+  const [customDate, setCustomDate] = useState<Date | undefined>(undefined);
   const [selectedProgram, setSelectedProgram] = useState<EpgProgram | null>(null);
   const [isPlayerOpen, setIsPlayerOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('table');
+  const [hidePastPrograms, setHidePastPrograms] = useState(true);
+  const [favoriteChannels, setFavoriteChannels] = useState<Set<string>>(new Set());
+  const [channelFilter, setChannelFilter] = useState('');
+  const [showOnlyLive, setShowOnlyLive] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [guideTimeRange, setGuideTimeRange] = useState<'3h' | '6h' | '12h'>('6h');
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
   const getTimeRangeParams = useCallback(() => {
@@ -86,16 +108,38 @@ export default function EpgPage() {
 
     switch (timeRange) {
       case 'today':
-        startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        endTime = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
+        // If hiding past programs, start from current time, otherwise start from beginning of day
+        startTime = hidePastPrograms 
+          ? now 
+          : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endTime = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         break;
       case 'tomorrow':
         startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         endTime = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
         break;
       case 'week':
-        startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        // If hiding past programs, start from current time, otherwise start from beginning of today
+        startTime = hidePastPrograms 
+          ? now 
+          : new Date(now.getFullYear(), now.getMonth(), now.getDate());
         endTime = new Date(startTime.getTime() + 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'custom':
+        if (customDate) {
+          // For custom date, check if it's today and apply hidePastPrograms logic
+          const isToday = customDate.toDateString() === now.toDateString();
+          startTime = isToday && hidePastPrograms 
+            ? now 
+            : new Date(customDate.getFullYear(), customDate.getMonth(), customDate.getDate());
+          endTime = new Date(customDate.getFullYear(), customDate.getMonth(), customDate.getDate() + 1);
+        } else {
+          // Fallback to today if no custom date is set
+          startTime = hidePastPrograms 
+            ? now 
+            : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          endTime = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        }
         break;
     }
 
@@ -103,7 +147,7 @@ export default function EpgPage() {
       start_time: startTime.toISOString(),
       end_time: endTime.toISOString(),
     };
-  }, [timeRange]);
+  }, [timeRange, hidePastPrograms, customDate]);
 
   // Debounce search input to prevent excessive API calls and focus loss
   useEffect(() => {
@@ -113,6 +157,15 @@ export default function EpgPage() {
 
     return () => clearTimeout(timer);
   }, [search]);
+
+  // Update current time every minute for live indicators
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 60000); // Update every minute
+
+    return () => clearInterval(timer);
+  }, []);
 
   const fetchPrograms = useCallback(async (searchTerm: string = '', sourceId: string = '', category: string = '', pageNum: number = 1, append: boolean = false) => {
     try {
@@ -235,7 +288,17 @@ export default function EpgPage() {
     try {
       setLoading(true);
       
-      const params = new URLSearchParams(getTimeRangeParams());
+      // Use guide-specific time range
+      const now = new Date();
+      const hours = parseInt(guideTimeRange.replace('h', ''));
+      const startTime = now;
+      const endTime = new Date(now.getTime() + hours * 60 * 60 * 1000);
+      
+      const params = new URLSearchParams({
+        start_time: startTime.toISOString(),
+        end_time: endTime.toISOString(),
+      });
+      
       if (selectedSource) params.append('source_id', selectedSource);
 
       const response = await fetch(`/api/v1/epg/guide?${params}`);
@@ -292,7 +355,7 @@ export default function EpgPage() {
     } else {
       fetchGuideData();
     }
-  }, [selectedSource, selectedCategory, timeRange, activeTab]); // Only depend on non-search filters
+  }, [selectedSource, selectedCategory, timeRange, activeTab, hidePastPrograms, customDate, guideTimeRange]); // Include hidePastPrograms and customDate
 
   // Intersection observer for infinite scroll - only for programs tab
   useEffect(() => {
@@ -335,36 +398,66 @@ export default function EpgPage() {
     setSelectedCategory(value === 'all' ? '' : value);
   };
 
-  const handlePlayProgram = async (program: EpgProgram) => {
-    try {
-      // Try to get channel stream URL
-      const response = await fetch(`/api/v1/channels/${program.channel_id}/stream`);
-      if (!response.ok) {
-        throw new Error('Failed to get stream URL');
-      }
-      
-      const data = await response.json();
-      if (data.success && data.data.stream_url) {
-        // Convert relative URLs to absolute URLs
-        let streamUrl = data.data.stream_url;
-        if (streamUrl.startsWith('/')) {
-          streamUrl = `${window.location.origin}${streamUrl}`;
-        }
-        
-        // Update the program with the resolved stream URL for the video player
-        const updatedProgram = {
-          ...program,
-          stream_url: streamUrl
-        };
-        
-        setSelectedProgram(updatedProgram);
-        setIsPlayerOpen(true);
-      } else {
-        throw new Error('No stream URL available for this channel');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load stream');
+  // Helper function to determine button state and tooltip
+  const getPlayButtonState = (program: EpgProgram) => {
+    const now = new Date();
+    const startTime = new Date(program.start_time);
+    const endTime = new Date(program.end_time);
+    const isLive = now >= startTime && now <= endTime;
+    const isUpcoming = startTime > now;
+    const isPast = endTime < now;
+    
+    if (!program.is_streamable) {
+      return {
+        disabled: true,
+        variant: 'outline' as const,
+        tooltip: 'Channel not available for streaming'
+      };
     }
+    
+    if (isPast) {
+      return {
+        disabled: true,
+        variant: 'outline' as const,
+        tooltip: 'Program has already ended'
+      };
+    }
+    
+    if (isUpcoming) {
+      return {
+        disabled: false,
+        variant: 'secondary' as const,
+        tooltip: 'Play upcoming program (will show current live stream)'
+      };
+    }
+    
+    if (isLive) {
+      return {
+        disabled: false,
+        variant: 'default' as const,
+        tooltip: 'Play live program'
+      };
+    }
+    
+    return {
+      disabled: true,
+      variant: 'outline' as const,
+      tooltip: 'Program not available'
+    };
+  };
+
+  const handlePlayProgram = (program: EpgProgram) => {
+    // Use the new unified channel streaming endpoint (directly streams content)
+    const streamUrl = `/channel/${encodeURIComponent(program.channel_id)}/stream`;
+    
+    // Update the program with the direct streaming URL for the video player
+    const updatedProgram = {
+      ...program,
+      stream_url: streamUrl
+    };
+    
+    setSelectedProgram(updatedProgram);
+    setIsPlayerOpen(true);
   };
 
   const formatTime = (timeString: string) => {
@@ -382,12 +475,109 @@ export default function EpgPage() {
     });
   };
 
+  // Guide-specific helper functions
+  const formatGuideTime = (timeString: string) => {
+    return new Date(timeString).toLocaleTimeString([], { 
+      hour: 'numeric',
+      hour12: true
+    });
+  };
+
+  const isCurrentTimeSlot = (timeSlot: string) => {
+    const slotTime = new Date(timeSlot);
+    const now = currentTime;
+    const slotEnd = new Date(slotTime.getTime() + 60 * 60 * 1000); // Add 1 hour
+    return now >= slotTime && now < slotEnd;
+  };
+
+  const toggleFavoriteChannel = (channelId: string) => {
+    setFavoriteChannels(prev => {
+      const newFavorites = new Set(prev);
+      if (newFavorites.has(channelId)) {
+        newFavorites.delete(channelId);
+      } else {
+        newFavorites.add(channelId);
+      }
+      return newFavorites;
+    });
+  };
+
+  const getFilteredChannels = () => {
+    if (!guideData) return [];
+    
+    let channels = Object.entries(guideData.channels);
+    
+    // Filter by search term
+    if (channelFilter) {
+      channels = channels.filter(([id, channel]) => 
+        channel.name.toLowerCase().includes(channelFilter.toLowerCase()) ||
+        id.toLowerCase().includes(channelFilter.toLowerCase())
+      );
+    }
+    
+    // Filter for live programs only
+    if (showOnlyLive) {
+      const now = currentTime;
+      channels = channels.filter(([channelId]) => {
+        const channelPrograms = guideData.programs[channelId] || [];
+        return channelPrograms.some(program => {
+          const startTime = new Date(program.start_time);
+          const endTime = new Date(program.end_time);
+          return now >= startTime && now <= endTime;
+        });
+      });
+    }
+    
+    // Sort favorites first, then alphabetically
+    channels.sort(([aId, aChannel], [bId, bChannel]) => {
+      const aIsFavorite = favoriteChannels.has(aId);
+      const bIsFavorite = favoriteChannels.has(bId);
+      
+      if (aIsFavorite && !bIsFavorite) return -1;
+      if (!aIsFavorite && bIsFavorite) return 1;
+      
+      return aChannel.name.localeCompare(bChannel.name);
+    });
+    
+    return channels;
+  };
+
+  const getProgramsForTimeSlot = (channelId: string, timeSlot: string) => {
+    if (!guideData?.programs[channelId]) return [];
+    
+    const slotStart = new Date(timeSlot);
+    const slotEnd = new Date(slotStart.getTime() + 60 * 60 * 1000); // 1 hour slot
+    
+    return guideData.programs[channelId].filter(program => {
+      const programStart = new Date(program.start_time);
+      const programEnd = new Date(program.end_time);
+      
+      // Program overlaps with this time slot
+      return programStart < slotEnd && programEnd > slotStart;
+    });
+  };
+
+  // Filter programs based on hide past programs toggle
+  const filteredPrograms = useMemo(() => {
+    if (!hidePastPrograms) {
+      return programs;
+    }
+    
+    const now = new Date();
+    return programs.filter(program => {
+      const endTime = new Date(program.end_time);
+      // Keep programs that haven't ended yet (live and upcoming)
+      return endTime > now;
+    });
+  }, [programs, hidePastPrograms]);
+
   const ProgramCard = ({ program }: { program: EpgProgram }) => {
     const now = new Date();
     const startTime = new Date(program.start_time);
     const endTime = new Date(program.end_time);
     const isLive = now >= startTime && now <= endTime;
     const isUpcoming = startTime > now;
+    const buttonState = getPlayButtonState(program);
 
     return (
       <Card className={`transition-all duration-200 hover:shadow-lg ${isLive ? 'ring-2 ring-primary' : ''}`}>
@@ -446,16 +636,362 @@ export default function EpgPage() {
             <div className="text-xs text-muted-foreground">
               Channel: {program.channel_name}
             </div>
-            <Button
-              size="sm"
-              onClick={() => handlePlayProgram(program)}
-              disabled={!isLive && !isUpcoming}
-            >
-              <Play className="w-4 h-4" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  onClick={() => handlePlayProgram(program)}
+                  disabled={buttonState.disabled}
+                  variant={buttonState.variant}
+                >
+                  <Play className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{buttonState.tooltip}</p>
+              </TooltipContent>
+            </Tooltip>
           </div>
         </CardContent>
       </Card>
+    );
+  };
+
+  const ProgramTableRow = ({ program }: { program: EpgProgram }) => {
+    const now = new Date();
+    const startTime = new Date(program.start_time);
+    const endTime = new Date(program.end_time);
+    const isLive = now >= startTime && now <= endTime;
+    const isUpcoming = startTime > now;
+    const buttonState = getPlayButtonState(program);
+
+    return (
+      <TableRow className={`hover:bg-muted/50 ${isLive ? 'bg-primary/5' : ''}`}>
+        <TableCell className="w-16">
+          {program.channel_logo ? (
+            <img
+              src={program.channel_logo}
+              alt={program.channel_name}
+              className="w-8 h-8 object-contain"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = 'none';
+              }}
+            />
+          ) : (
+            <div className="w-8 h-8 bg-muted rounded flex items-center justify-center text-muted-foreground text-xs">
+              No Logo
+            </div>
+          )}
+        </TableCell>
+        <TableCell className="font-medium max-w-xs">
+          <div className="truncate" title={program.title}>
+            {program.title}
+          </div>
+        </TableCell>
+        <TableCell className="text-sm">
+          {program.channel_name}
+        </TableCell>
+        <TableCell className="text-sm">
+          <div className="flex items-center">
+            <Clock className="w-3 h-3 mr-1" />
+            {formatTime(program.start_time)} - {formatTime(program.end_time)}
+          </div>
+        </TableCell>
+        <TableCell className="text-sm">
+          {formatDate(program.start_time)}
+        </TableCell>
+        <TableCell>
+          <Badge variant={isLive ? 'default' : isUpcoming ? 'secondary' : 'outline'} className="text-xs">
+            {isLive ? 'LIVE' : isUpcoming ? 'UPCOMING' : 'PAST'}
+          </Badge>
+        </TableCell>
+        <TableCell>
+          {program.category ? (
+            <Badge variant="outline" className="text-xs">
+              {program.category}
+            </Badge>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          )}
+        </TableCell>
+        <TableCell className="text-sm max-w-md">
+          {program.description ? (
+            <div className="truncate" title={program.description}>
+              {program.description}
+            </div>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          )}
+        </TableCell>
+        <TableCell className="w-24">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="sm"
+                onClick={() => handlePlayProgram(program)}
+                disabled={buttonState.disabled}
+                className="h-8 px-2"
+                variant={buttonState.variant}
+              >
+                <Play className="w-3 h-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>{buttonState.tooltip}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TableCell>
+      </TableRow>
+    );
+  };
+
+  const ProgramListItem = ({ program }: { program: EpgProgram }) => {
+    const now = new Date();
+    const startTime = new Date(program.start_time);
+    const endTime = new Date(program.end_time);
+    const isLive = now >= startTime && now <= endTime;
+    const isUpcoming = startTime > now;
+    const buttonState = getPlayButtonState(program);
+
+    return (
+      <Card className={`transition-all duration-200 hover:shadow-md ${isLive ? 'ring-1 ring-primary' : ''}`}>
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              {program.channel_logo && (
+                <img
+                  src={program.channel_logo}
+                  alt={program.channel_name}
+                  className="w-10 h-10 object-contain"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              )}
+              <div>
+                <h3 className="font-medium">{program.title}</h3>
+                <div className="flex items-center space-x-2 text-sm text-muted-foreground">
+                  <span>{program.channel_name}</span>
+                  <span>•</span>
+                  <div className="flex items-center">
+                    <Clock className="w-3 h-3 mr-1" />
+                    {formatTime(program.start_time)} - {formatTime(program.end_time)}
+                  </div>
+                  <span>•</span>
+                  <span>{formatDate(program.start_time)}</span>
+                  <Badge variant={isLive ? 'default' : isUpcoming ? 'secondary' : 'outline'} className="text-xs">
+                    {isLive ? 'LIVE' : isUpcoming ? 'UPCOMING' : 'PAST'}
+                  </Badge>
+                  {program.category && (
+                    <>
+                      <span>•</span>
+                      <Badge variant="outline" className="text-xs">
+                        {program.category}
+                      </Badge>
+                    </>
+                  )}
+                </div>
+                {program.description && (
+                  <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                    {program.description}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    onClick={() => handlePlayProgram(program)}
+                    disabled={buttonState.disabled}
+                    variant={buttonState.variant}
+                  >
+                    <Play className="w-4 h-4 mr-2" />
+                    Play
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{buttonState.tooltip}</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  // TV Guide Components
+  const GuideTimeSlotHeader = () => {
+    if (!guideData?.time_slots) return null;
+    
+    return (
+      <div className="flex bg-background border-b sticky top-0 z-10">
+        <div className="w-48 flex-shrink-0 p-3 border-r bg-muted/50">
+          <span className="text-sm font-medium">Channels</span>
+        </div>
+        <ScrollArea className="flex-1">
+          <div className="flex">
+            {guideData.time_slots.map((timeSlot) => (
+              <div 
+                key={timeSlot}
+                className={`min-w-[120px] p-3 border-r text-center ${
+                  isCurrentTimeSlot(timeSlot) ? 'bg-primary text-primary-foreground' : 'bg-muted/30'
+                }`}
+              >
+                <Badge variant={isCurrentTimeSlot(timeSlot) ? "secondary" : "outline"} className="text-xs">
+                  {formatGuideTime(timeSlot)}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+      </div>
+    );
+  };
+
+  const GuideChannelRow = ({ channelId, channel }: { channelId: string; channel: { id: string; name: string; logo?: string } }) => {
+    if (!guideData?.time_slots) return null;
+    
+    return (
+      <div className="flex border-b hover:bg-muted/50">
+        {/* Channel Info */}
+        <div className="w-48 flex-shrink-0 p-3 border-r bg-background">
+          <div className="flex items-center space-x-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => toggleFavoriteChannel(channelId)}
+              className="p-1 h-auto"
+            >
+              <Star 
+                className={`w-4 h-4 ${favoriteChannels.has(channelId) ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground'}`} 
+              />
+            </Button>
+            {channel.logo && (
+              <img
+                src={channel.logo}
+                alt={channel.name}
+                className="w-8 h-8 object-contain"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">{channel.name || channelId}</p>
+              <p className="text-xs text-muted-foreground">{channelId}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Program Cells */}
+        <div className="flex-1">
+          <div className="flex">
+            {guideData.time_slots.map((timeSlot) => {
+              const programs = getProgramsForTimeSlot(channelId, timeSlot);
+              const program = programs[0]; // Take first program in this slot
+              
+              return (
+                <div key={timeSlot} className="min-w-[120px] border-r h-16 relative">
+                  {program ? (
+                    <GuideProgramCell program={program} timeSlot={timeSlot} />
+                  ) : (
+                    <div className="h-full bg-muted/10 flex items-center justify-center">
+                      <span className="text-xs text-muted-foreground">No Program</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const GuideProgramCell = ({ program, timeSlot }: { program: EpgProgram; timeSlot: string }) => {
+    const now = currentTime;
+    const startTime = new Date(program.start_time);
+    const endTime = new Date(program.end_time);
+    const isLive = now >= startTime && now <= endTime;
+    const buttonState = getPlayButtonState(program);
+    
+    // Calculate program span across time slots
+    const slotStart = new Date(timeSlot);
+    const slotDuration = 60 * 60 * 1000; // 1 hour in ms
+    const programDuration = endTime.getTime() - startTime.getTime();
+    const slotsSpanned = Math.ceil(programDuration / slotDuration);
+    
+    return (
+      <div 
+        className={`h-full p-1 ${isLive ? 'bg-red-100 border-l-2 border-red-500' : 'bg-background'} hover:bg-muted/80 transition-colors cursor-pointer group`}
+        style={{ minWidth: `${slotsSpanned * 120}px` }}
+      >
+        <div className="flex justify-between items-start h-full">
+          <div className="flex-1 min-w-0">
+            <h4 className="text-xs font-medium mb-1 overflow-hidden" style={{ 
+              display: '-webkit-box', 
+              WebkitLineClamp: 2, 
+              WebkitBoxOrient: 'vertical' 
+            }}>
+              {program.title}
+            </h4>
+            <p className="text-xs text-muted-foreground">
+              {formatTime(program.start_time)} - {formatTime(program.end_time)}
+            </p>
+          </div>
+          <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  variant={buttonState.variant}
+                  disabled={buttonState.disabled}
+                  onClick={() => handlePlayProgram(program)}
+                  className="h-6 w-6 p-0"
+                >
+                  <Play className="w-3 h-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{buttonState.tooltip}</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+        {isLive && (
+          <div className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+        )}
+      </div>
+    );
+  };
+
+  const CurrentTimeIndicator = () => {
+    if (!guideData?.time_slots) return null;
+    
+    const now = currentTime;
+    const guideStart = new Date(guideData.start_time);
+    const totalDuration = new Date(guideData.end_time).getTime() - guideStart.getTime();
+    const currentOffset = now.getTime() - guideStart.getTime();
+    const percentage = Math.max(0, Math.min(100, (currentOffset / totalDuration) * 100));
+    
+    if (percentage <= 0 || percentage >= 100) return null;
+    
+    return (
+      <div 
+        className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none"
+        style={{ left: `calc(192px + ${percentage}%)` }}
+      >
+        <div className="absolute -top-2 -left-2 w-4 h-4 bg-red-500 rounded-full"></div>
+        <Badge 
+          variant="destructive" 
+          className="absolute -top-8 -left-8 text-xs px-1 py-0.5"
+        >
+          LIVE
+        </Badge>
+      </div>
     );
   };
 
@@ -473,12 +1009,13 @@ export default function EpgPage() {
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6">
-        <p className="text-muted-foreground">
-          Browse electronic program guide and schedule information
-        </p>
-      </div>
+    <TooltipProvider>
+      <div className="container mx-auto p-6">
+        <div className="mb-6">
+          <p className="text-muted-foreground">
+            Browse electronic program guide and schedule information
+          </p>
+        </div>
 
       <Tabs value={activeTab} onValueChange={(v: string) => setActiveTab(v as 'programs' | 'guide')} className="space-y-6">
         <TabsList className="grid w-full grid-cols-2 max-w-sm">
@@ -496,17 +1033,42 @@ export default function EpgPage() {
         <Card className="space-y-4">
           <CardContent className="p-6">
             <div className="flex flex-col sm:flex-row gap-4">
-            <Select value={timeRange} onValueChange={(v) => setTimeRange(v as 'today' | 'tomorrow' | 'week')}>
-              <SelectTrigger className="w-full sm:w-48">
-                <Calendar className="w-4 h-4 mr-2" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="today">Today</SelectItem>
-                <SelectItem value="tomorrow">Tomorrow</SelectItem>
-                <SelectItem value="week">This Week</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex gap-2">
+              <Select value={timeRange} onValueChange={(v) => setTimeRange(v as 'today' | 'tomorrow' | 'week' | 'custom')}>
+                <SelectTrigger className="w-full sm:w-40">
+                  <Calendar className="w-4 h-4 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="today">Today</SelectItem>
+                  <SelectItem value="tomorrow">Tomorrow</SelectItem>
+                  <SelectItem value="week">This Week</SelectItem>
+                  <SelectItem value="custom">Custom Date</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              {timeRange === 'custom' && (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={`w-full sm:w-64 justify-start text-left font-normal ${!customDate && "text-muted-foreground"}`}
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {customDate ? customDate.toLocaleDateString() : "Pick a date"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <CalendarComponent
+                      mode="single"
+                      selected={customDate}
+                      onSelect={setCustomDate}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              )}
+            </div>
 
             <Select value={selectedSource || 'all'} onValueChange={handleSourceFilter}>
               <SelectTrigger className="w-full sm:w-48">
@@ -524,31 +1086,49 @@ export default function EpgPage() {
             </Select>
 
             {/* Layout Chooser */}
-            <div className="flex rounded-md border">
-              <Button
-                size="sm"
-                variant={viewMode === 'table' ? 'default' : 'ghost'}
-                className="rounded-r-none border-r"
-                onClick={() => setViewMode('table')}
-              >
-                <TableIcon className="w-4 h-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant={viewMode === 'grid' ? 'default' : 'ghost'}
-                className="rounded-none border-r"
-                onClick={() => setViewMode('grid')}
-              >
-                <Grid className="w-4 h-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant={viewMode === 'list' ? 'default' : 'ghost'}
-                className="rounded-l-none"
-                onClick={() => setViewMode('list')}
-              >
-                <List className="w-4 h-4" />
-              </Button>
+            <div className="flex bg-muted rounded-lg p-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={viewMode === 'table' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => setViewMode('table')}
+                  >
+                    <TableIcon className="w-4 h-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Table view</p>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => setViewMode('grid')}
+                  >
+                    <Grid className="w-4 h-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Grid view</p>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={viewMode === 'list' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => setViewMode('list')}
+                  >
+                    <List className="w-4 h-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Compact list view</p>
+                </TooltipContent>
+              </Tooltip>
             </div>
             </div>
           </CardContent>
@@ -556,31 +1136,48 @@ export default function EpgPage() {
 
         <TabsContent value="programs" className="space-y-6">
           {/* Programs Search and Filters */}
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-              <Input
-                placeholder="Search programs..."
-                value={search}
-                onChange={(e) => handleSearch(e.target.value)}
-                className="pl-10"
-              />
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                <Input
+                  placeholder="Search programs..."
+                  value={search}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+              
+              <Select value={selectedCategory || 'all'} onValueChange={handleCategoryFilter}>
+                <SelectTrigger className="w-full sm:w-48">
+                  <Filter className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="Filter by category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Categories</SelectItem>
+                  {categories.map((category) => (
+                    <SelectItem key={category} value={category}>
+                      {category}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            
-            <Select value={selectedCategory || 'all'} onValueChange={handleCategoryFilter}>
-              <SelectTrigger className="w-full sm:w-48">
-                <Filter className="w-4 h-4 mr-2" />
-                <SelectValue placeholder="Filter by category" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Categories</SelectItem>
-                {categories.map((category) => (
-                  <SelectItem key={category} value={category}>
-                    {category}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+
+            {/* Hide Past Programs Toggle */}
+            <div className="flex items-center space-x-2">
+              <Switch
+                id="hide-past-programs"
+                checked={hidePastPrograms}
+                onCheckedChange={setHidePastPrograms}
+              />
+              <label
+                htmlFor="hide-past-programs"
+                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+              >
+                Hide past programs (keep live and upcoming only)
+              </label>
+            </div>
           </div>
 
           {/* Error Display */}
@@ -603,7 +1200,10 @@ export default function EpgPage() {
           {/* Results Summary */}
           {programs.length > 0 && (
             <div className="text-sm text-muted-foreground">
-              Showing {programs.length} of {total} programs
+              Showing {filteredPrograms.length} of {programs.length} programs
+              {hidePastPrograms && filteredPrograms.length !== programs.length && (
+                <span className="ml-2 text-primary">• {programs.length - filteredPrograms.length} past programs hidden</span>
+              )}
               {hasMore && !loading && (
                 <span className="ml-2 text-primary">• {Math.ceil((total - programs.length) / 50)} more pages available</span>
               )}
@@ -611,24 +1211,43 @@ export default function EpgPage() {
           )}
 
           {/* Programs Display */}
-          {programs.length > 0 ? (
+          {filteredPrograms.length > 0 ? (
             <>
               {viewMode === 'table' ? (
-                <div className="space-y-2">
-                  {programs.map((program) => (
-                    <ProgramCard key={program.id} program={program} />
-                  ))}
-                </div>
+                <Card className="mb-6">
+                  <CardContent className="p-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-16">Logo</TableHead>
+                          <TableHead>Program Title</TableHead>
+                          <TableHead>Channel</TableHead>
+                          <TableHead>Time</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Category</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead className="w-24">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredPrograms.map((program) => (
+                          <ProgramTableRow key={program.id} program={program} />
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
               ) : viewMode === 'grid' ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {programs.map((program) => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
+                  {filteredPrograms.map((program) => (
                     <ProgramCard key={program.id} program={program} />
                   ))}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {programs.map((program) => (
-                    <ProgramCard key={program.id} program={program} />
+                <div className="space-y-3 mb-6">
+                  {filteredPrograms.map((program) => (
+                    <ProgramListItem key={program.id} program={program} />
                   ))}
                 </div>
               )}
@@ -663,6 +1282,21 @@ export default function EpgPage() {
                 </div>
               )}
             </>
+          ) : programs.length > 0 && filteredPrograms.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <p className="text-muted-foreground">
+                  All programs are hidden by current filters
+                </p>
+                <Button
+                  variant="outline"
+                  onClick={() => setHidePastPrograms(false)}
+                  className="mt-4"
+                >
+                  Show Past Programs
+                </Button>
+              </CardContent>
+            </Card>
           ) : !loading && (
             <Card>
               <CardContent className="p-8 text-center">
@@ -685,29 +1319,103 @@ export default function EpgPage() {
         </TabsContent>
 
         <TabsContent value="guide" className="space-y-6">
+          {/* Guide Controls */}
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex flex-col sm:flex-row gap-4 items-center">
+                <div className="relative flex-1 max-w-sm">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                  <Input
+                    placeholder="Search channels..."
+                    value={channelFilter}
+                    onChange={(e) => setChannelFilter(e.target.value)}
+                    className="pl-10"
+                  />
+                </div>
+                
+                <Select value={guideTimeRange} onValueChange={(v) => setGuideTimeRange(v as '3h' | '6h' | '12h')}>
+                  <SelectTrigger className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="3h">Next 3 Hours</SelectItem>
+                    <SelectItem value="6h">Next 6 Hours</SelectItem>
+                    <SelectItem value="12h">Next 12 Hours</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="show-only-live"
+                    checked={showOnlyLive}
+                    onCheckedChange={setShowOnlyLive}
+                  />
+                  <label
+                    htmlFor="show-only-live"
+                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                  >
+                    Live Only
+                  </label>
+                </div>
+
+                <Badge variant="outline" className="flex items-center gap-1">
+                  <Star className="w-3 h-3" />
+                  {favoriteChannels.size} Favorites
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* TV Guide Grid */}
           {guideData ? (
+            <Card className="overflow-hidden">
+              <div className="relative">
+                <GuideTimeSlotHeader />
+                
+                <ScrollArea className="h-[600px] w-full">
+                  <div className="relative">
+                    {getFilteredChannels().map(([channelId, channel]) => (
+                      <GuideChannelRow 
+                        key={channelId} 
+                        channelId={channelId} 
+                        channel={channel} 
+                      />
+                    ))}
+                  </div>
+                </ScrollArea>
+
+                <CurrentTimeIndicator />
+              </div>
+
+              {/* Guide Footer */}
+              <div className="border-t bg-muted/50 p-3">
+                <div className="flex justify-between items-center text-sm text-muted-foreground">
+                  <span>
+                    Showing {getFilteredChannels().length} of {Object.keys(guideData.channels).length} channels
+                  </span>
+                  <span>
+                    Updated: {new Date().toLocaleTimeString()}
+                  </span>
+                </div>
+              </div>
+            </Card>
+          ) : loading ? (
             <Card>
-              <CardHeader>
-                <CardTitle>TV Guide Grid</CardTitle>
-                <CardDescription>
-                  Program schedule grid view
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="text-center text-muted-foreground py-8">
-                  <Grid className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                  <p>TV Guide grid view coming soon</p>
-                  <p className="text-sm mt-2">
-                    Found {Object.keys(guideData.channels).length} channels with programs
-                  </p>
+              <CardContent className="p-8">
+                <div className="flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mr-4"></div>
+                  <span>Loading TV guide...</span>
                 </div>
               </CardContent>
             </Card>
-          ) : !loading && (
+          ) : (
             <Card>
               <CardContent className="p-8 text-center">
-                <p className="text-muted-foreground">No guide data available</p>
+                <Grid className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <p className="text-muted-foreground mb-4">No guide data available</p>
+                <Button onClick={fetchGuideData} variant="outline">
+                  Retry Loading Guide
+                </Button>
               </CardContent>
             </Card>
           )}
@@ -725,6 +1433,7 @@ export default function EpgPage() {
           program={selectedProgram}
         />
       )}
-    </div>
+      </div>
+    </TooltipProvider>
   );
 }

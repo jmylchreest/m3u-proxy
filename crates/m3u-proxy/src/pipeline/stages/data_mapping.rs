@@ -10,14 +10,12 @@ use crate::pipeline::services::helper_traits;
 use tracing::{info, error, debug, trace, warn};
 use crate::pipeline::engines::{DataMappingEngine, ChannelDataMappingEngine, StreamRuleProcessor, EpgProgram, EngineResult};
 use crate::pipeline::engines::rule_processor::RegexEvaluator;
-use crate::utils::datetime::DateTimeParser;
-use crate::utils::uuid_parser::parse_uuid_flexible;
 use crate::utils::human_format::format_duration_precise;
 use crate::utils::regex_preprocessor::RegexPreprocessor;
 use sandboxed_file_manager::SandboxedManager;
 use serde_json;
-use sqlx::{SqlitePool, Row};
-use futures::StreamExt;
+use sea_orm::{EntityTrait, QueryFilter, ColumnTrait, QueryOrder, PaginatorTrait};
+use crate::entities::{stream_sources, channels, data_mapping_rules, epg_programs, prelude::*};
 use std::sync::Arc;
 use std::time::Instant;
 use std::collections::HashMap;
@@ -29,7 +27,7 @@ const EPG_PROGRESS_LOG_INTERVAL: usize = 10000;    // Log EPG progress every N p
 const CHANNEL_PROGRESS_INTERVAL: usize = 1000;     // Report progress every N channels
 
 pub struct DataMappingStage {
-    db_pool: SqlitePool,
+    db_connection: std::sync::Arc<sea_orm::DatabaseConnection>,
     file_manager: SandboxedManager,
     pipeline_execution_prefix: String,
     regex_preprocessor: RegexPreprocessor,
@@ -39,7 +37,7 @@ pub struct DataMappingStage {
 
 impl DataMappingStage {
     pub async fn new(
-        db_pool: SqlitePool, 
+        db_connection: std::sync::Arc<sea_orm::DatabaseConnection>, 
         pipeline_execution_prefix: String, 
         shared_file_manager: SandboxedManager,
         progress_manager: Option<Arc<ProgressManager>>,
@@ -49,7 +47,7 @@ impl DataMappingStage {
         let regex_preprocessor = RegexPreprocessor::new(Default::default());
         
         Ok(Self {
-            db_pool,
+            db_connection,
             file_manager: shared_file_manager,
             pipeline_execution_prefix,
             regex_preprocessor,
@@ -73,18 +71,17 @@ impl DataMappingStage {
         let stage_start = Instant::now();
         info!("Starting channel processing in data mapping stage");
         
-        // Query all stream sources
-        let stream_sources = sqlx::query("SELECT id, name FROM stream_sources WHERE is_active = true")
-            .fetch_all(&self.db_pool)
+        // Query all stream sources using SeaORM
+        let stream_sources = StreamSources::find()
+            .filter(stream_sources::Column::IsActive.eq(true))
+            .all(&*self.db_connection)
             .await?;
         
         info!("Found {} active stream sources", stream_sources.len());
         
         // Debug: Log all found stream sources
         for source in &stream_sources {
-            let source_id: String = source.get("id");
-            let source_name: String = source.get("name");
-            debug!("Active stream source found: {} ({})", source_name, source_id);
+            debug!("Active stream source found: {} ({})", source.name, source.id);
         }
         
         let output_file_path = format!("{}_mapping_channels.jsonl", self.pipeline_execution_prefix);
@@ -96,43 +93,37 @@ impl DataMappingStage {
         let mut output_file_created = false; // Track if output file has been created across all sources
         
         for source in stream_sources {
-            let source_id_str: String = source.get("id");
-            let source_id = parse_uuid_flexible(&source_id_str)?;
-            let source_name: String = source.get("name");
+            let source_id = source.id;
+            let source_name = source.name.clone();
             
             info!("Processing source: {} ({})", source_name, source_id);
             
-            // Check if we have any rules for this source type
+            // Check if we have any rules for this source type using SeaORM
             info!("Querying data mapping rules for stream sources");
-            let rows = match sqlx::query(
-                "SELECT id, name, description, source_type, sort_order, is_active, expression, created_at, updated_at
-                FROM data_mapping_rules 
-                WHERE source_type = 'stream' AND is_active = true 
-                ORDER BY sort_order ASC"
-            )
-            .fetch_all(&self.db_pool)
-            .await {
-                Ok(rows) => {
-                    info!("Successfully fetched {} data mapping rule rows", rows.len());
-                    rows
-                },
-                Err(e) => {
-                    error!("Failed to fetch data mapping rules: {}", e);
-                    return Err(e.into());
-                }
-            };
+            let rule_models = match DataMappingRules::find()
+                .filter(data_mapping_rules::Column::SourceType.eq("stream"))
+                .filter(data_mapping_rules::Column::IsActive.eq(true))
+                .order_by_asc(data_mapping_rules::Column::SortOrder)
+                .all(&*self.db_connection)
+                .await {
+                    Ok(models) => {
+                        info!("Successfully fetched {} data mapping rule models", models.len());
+                        models
+                    },
+                    Err(e) => {
+                        error!("Failed to fetch data mapping rules: {}", e);
+                        return Err(e.into());
+                    }
+                };
             
             let mut rules = Vec::new();
-            for row in rows {
-                let id_str: String = row.get("id");
-                let rule_name: String = row.get("name");
-                let sort_order: i32 = row.get("sort_order");
-                info!("Processing data mapping rule id={} rule_name='{}' priority={}", id_str, rule_name, sort_order);
+            for rule_model in rule_models {
+                info!("Processing data mapping rule id={} rule_name='{}' priority={}", rule_model.id, rule_model.name, rule_model.sort_order);
                 
-                let rule = match self.create_data_mapping_rule_from_row(&row) {
+                let rule = match self.create_data_mapping_rule_from_model(&rule_model) {
                     Ok(rule) => rule,
                     Err(e) => {
-                        error!("Failed to create DataMappingRule from row: {}", e);
+                        error!("Failed to create DataMappingRule from model: {}", e);
                         return Err(anyhow::anyhow!("DataMappingRule parsing error: {}", e).into());
                     }
                 };
@@ -182,31 +173,30 @@ impl DataMappingStage {
                 None
             };
             
-            // Get total channel count for this source for progress percentage calculation
-            let total_channels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM channels WHERE source_id = ?1")
-                .bind(source_id.to_string())
-                .fetch_one(&self.db_pool)
+            // Get total channel count for this source for progress percentage calculation using SeaORM
+            let total_channels = Channels::find()
+                .filter(channels::Column::SourceId.eq(source_id.clone()))
+                .count(&*self.db_connection)
                 .await
                 .unwrap_or(0);
             
             info!("Found {} channels for source {}", total_channels, source_name);
             
-            // Stream channels and process in batches
-            let mut rows = sqlx::query("SELECT * FROM channels WHERE source_id = ?1")
-                .bind(source_id.to_string())
-                .fetch(&self.db_pool);
+            // Get all channels for this source using SeaORM (we'll process in batches)
+            let channel_models = Channels::find()
+                .filter(channels::Column::SourceId.eq(source_id))
+                .all(&*self.db_connection)
+                .await?;
             
             let mut channel_count = 0;
             let mut source_modified_count = 0;
             let mut current_batch = Vec::new();
             
-            while let Some(row_result) = rows.next().await {
-                match row_result {
-                    Ok(row) => {
-                        match self.create_channel_from_row(&row) {
-                            Ok(channel) => {
-                                channel_count += 1;
-                                current_batch.push(channel);
+            for channel_model in channel_models {
+                match self.create_channel_from_model(&channel_model) {
+                    Ok(channel) => {
+                        channel_count += 1;
+                        current_batch.push(channel);
                                 
                                 
                                 // Process batch when it reaches BATCH_SIZE
@@ -327,15 +317,9 @@ impl DataMappingStage {
                                         self.report_progress(10.0 + (completion_percentage as f64 * 0.4), &progress_message).await;
                                     }
                                 }
-                            },
-                            Err(e) => {
-                                error!("Failed to parse channel from row {}: {}", channel_count + 1, e);
-                                return Err(anyhow::anyhow!("Channel parsing error: {}", e).into());
-                            }
-                        }
                     },
                     Err(e) => {
-                        error!("Database error while fetching channel {}: {}", channel_count + 1, e);
+                        error!("Failed to create channel from model {}: {}", channel_count + 1, e);
                         return Err(e.into());
                     }
                 }
@@ -525,14 +509,13 @@ impl DataMappingStage {
         
         let output_file_path = format!("{}_mapping_programs.jsonl", self.pipeline_execution_prefix);
         
-        // Check if we have any EPG data mapping rules
-        let epg_rules = sqlx::query(
-            "SELECT id, name FROM data_mapping_rules 
-            WHERE source_type = 'epg' AND is_active = true 
-            ORDER BY sort_order ASC"
-        )
-        .fetch_all(&self.db_pool)
-        .await?;
+        // Check if we have any EPG data mapping rules using SeaORM
+        let epg_rules = DataMappingRules::find()
+            .filter(data_mapping_rules::Column::SourceType.eq("epg"))
+            .filter(data_mapping_rules::Column::IsActive.eq(true))
+            .order_by_asc(data_mapping_rules::Column::SortOrder)
+            .all(&*self.db_connection)
+            .await?;
         
         let program_count = if epg_rules.is_empty() {
             info!("No EPG data mapping rules found, processing EPG programs for helpers only");
@@ -669,26 +652,21 @@ impl DataMappingStage {
     }
     
     async fn serialize_epg_programs_from_database(&self) -> Result<Vec<EpgProgram>, Box<dyn std::error::Error>> {
-        info!("Serializing EPG programs from database using streaming approach");
+        info!("Serializing EPG programs from database using SeaORM approach");
         
-        let query = r#"
-            SELECT id, source_id, channel_id, channel_name, start_time, end_time, 
-                   program_title, program_description, program_category, episode_num, 
-                   season_num, rating, language, subtitles, aspect_ratio, program_icon, created_at, updated_at
-            FROM epg_programs 
-            ORDER BY start_time ASC
-        "#;
+        // Get all EPG programs using SeaORM (ordered by start_time)
+        let epg_models = EpgPrograms::find()
+            .order_by_asc(epg_programs::Column::StartTime)
+            .all(&*self.db_connection)
+            .await?;
         
-        // Stream programs in batches to avoid loading all into memory at once
-        let mut rows = sqlx::query(query).fetch(&self.db_pool);
         let mut all_programs = Vec::new();
         let mut batch_programs = Vec::new();
         const BATCH_SIZE: usize = EPG_PROGRAMS_BATCH_SIZE;
         let mut processed_count = 0;
         
-        while let Some(row_result) = rows.next().await {
-            let row = row_result?;
-            let program = self.create_epg_program_from_row(&row)?;
+        for epg_model in epg_models {
+            let program = self.create_epg_program_from_model(&epg_model)?;
             batch_programs.push(program);
             processed_count += 1;
             
@@ -727,23 +705,6 @@ impl DataMappingStage {
         Ok(all_programs)
     }
     
-    fn create_epg_program_from_row(&self, row: &sqlx::sqlite::SqliteRow) -> Result<EpgProgram, anyhow::Error> {
-        let id_str: String = row.get("id");
-        let _source_id_str: String = row.get("source_id");
-        
-        let program = EpgProgram {
-            id: id_str,
-            channel_id: row.get("channel_id"),
-            title: row.get("program_title"),
-            description: row.get("program_description"),
-            program_icon: row.get("program_icon"),
-            start_time: DateTimeParser::parse_flexible(&row.get::<String, _>("start_time"))?,
-            end_time: DateTimeParser::parse_flexible(&row.get::<String, _>("end_time"))?,
-        };
-        Ok(program)
-    }
-    
-    
     async fn write_programs_to_file(&self, programs: &[EpgProgram], file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut content = String::new();
         for program in programs {
@@ -755,46 +716,59 @@ impl DataMappingStage {
         self.file_manager.write(file_path, content.as_bytes()).await?;
         Ok(())
     }
-    
-    fn create_channel_from_row(&self, row: &sqlx::sqlite::SqliteRow) -> Result<Channel, anyhow::Error> {
-        let id_str: String = row.get("id");
-        let source_id_str: String = row.get("source_id");
-        
+
+    /// Create Channel from SeaORM model
+    fn create_channel_from_model(&self, model: &crate::entities::channels::Model) -> Result<Channel, anyhow::Error> {
         let channel = Channel {
-            id: parse_uuid_flexible(&id_str)?,
-            source_id: parse_uuid_flexible(&source_id_str)?,
-            tvg_id: row.get("tvg_id"),
-            tvg_name: row.get("tvg_name"),
-            tvg_chno: row.get("tvg_chno"),
-            tvg_logo: row.get("tvg_logo"),
-            tvg_shift: row.get("tvg_shift"),
-            group_title: row.get("group_title"),
-            channel_name: row.get("channel_name"),
-            stream_url: row.get("stream_url"),
-            created_at: DateTimeParser::parse_flexible(&row.get::<String, _>("created_at"))?,
-            updated_at: DateTimeParser::parse_flexible(&row.get::<String, _>("updated_at"))?,
+            id: model.id,
+            source_id: model.source_id,
+            tvg_id: model.tvg_id.clone(),
+            tvg_name: model.tvg_name.clone(),
+            tvg_chno: model.tvg_chno.clone(),
+            tvg_logo: model.tvg_logo.clone(),
+            tvg_shift: model.tvg_shift.clone(),
+            group_title: model.group_title.clone(),
+            channel_name: model.channel_name.clone(),
+            stream_url: model.stream_url.clone(),
+            created_at: model.created_at,
+            updated_at: model.updated_at,
+            video_codec: None,
+            audio_codec: None,
+            resolution: None,
+            probe_method: None,
+            last_probed_at: None,
         };
         Ok(channel)
     }
 
-    fn create_data_mapping_rule_from_row(&self, row: &sqlx::sqlite::SqliteRow) -> Result<DataMappingRule, anyhow::Error> {
-        let id_str: String = row.get("id");
+    /// Create DataMappingRule from SeaORM model
+    fn create_data_mapping_rule_from_model(&self, model: &crate::entities::data_mapping_rules::Model) -> Result<DataMappingRule, anyhow::Error> {
         let rule = DataMappingRule {
-            id: parse_uuid_flexible(&id_str)?,
-            name: row.get("name"),
-            description: row.get("description"),
-            source_type: match row.get::<String, _>("source_type").as_str() {
-                "stream" => crate::models::data_mapping::DataMappingSourceType::Stream,
-                "epg" => crate::models::data_mapping::DataMappingSourceType::Epg,
-                other => return Err(anyhow::anyhow!("Invalid source_type: {}", other)),
-            },
-            sort_order: row.get("sort_order"),
-            is_active: row.get("is_active"),
-            expression: row.get("expression"),
-            created_at: DateTimeParser::parse_flexible(&row.get::<String, _>("created_at"))?,
-            updated_at: DateTimeParser::parse_flexible(&row.get::<String, _>("updated_at"))?,
+            id: model.id,
+            name: model.name.clone(),
+            description: model.description.clone(),
+            source_type: model.source_type.clone(),
+            sort_order: model.sort_order,
+            is_active: model.is_active,
+            expression: model.expression.clone(),
+            created_at: model.created_at,
+            updated_at: model.updated_at,
         };
         Ok(rule)
+    }
+
+    /// Create EpgProgram from SeaORM model
+    fn create_epg_program_from_model(&self, model: &crate::entities::epg_programs::Model) -> Result<EpgProgram, anyhow::Error> {
+        let program = EpgProgram {
+            id: model.id.to_string(),
+            channel_id: model.channel_id.clone(),
+            title: model.program_title.clone(),
+            description: model.program_description.clone(),
+            program_icon: model.program_icon.clone(),
+            start_time: model.start_time,
+            end_time: model.end_time,
+        };
+        Ok(program)
     }
 
     fn log_rule_results<T>(&self, result: &EngineResult<T>, processed_count: usize) {

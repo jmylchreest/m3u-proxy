@@ -1,5 +1,9 @@
 use crate::logo_assets::storage::LogoAssetStorage;
-use crate::models::logo_asset::*;
+use crate::entities::{logo_assets, prelude::LogoAssets};
+use crate::models::logo_asset::{
+    LogoAssetType, LogoFormatType, LogoAsset, LogoAssetListRequest, LogoAssetListResponse,
+    LogoAssetWithUrl, LogoAssetSearchRequest, LogoAssetSearchResult, LogoCacheStats
+};
 
 use anyhow;
 use chrono::Utc;
@@ -7,19 +11,19 @@ use image::ImageFormat;
 use reqwest::Client;
 use sandboxed_file_manager::SandboxedManager;
 use sha2::{Digest, Sha256};
-use sqlx::{Pool, Row, Sqlite};
+use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, QueryOrder};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use std::path::PathBuf;
 use tokio::fs;
-use tracing::{debug, error, trace};
+use tracing::{debug, trace};
 use url::Url;
 use uuid::Uuid;
-use crate::utils::uuid_parser::parse_uuid_flexible;
 
 #[derive(Debug, Clone)]
 pub struct LogoAssetService {
-    pool: Pool<Sqlite>,
+    connection: Arc<DatabaseConnection>,
     pub storage: LogoAssetStorage,
     http_client: Client,
     logo_file_manager: Option<SandboxedManager>,
@@ -42,14 +46,15 @@ pub struct CreateAssetWithIdParams {
     pub height: Option<i32>,
 }
 impl LogoAssetService {
-    pub fn new(pool: Pool<Sqlite>, storage: LogoAssetStorage) -> Self {
+    pub fn new(connection: Arc<DatabaseConnection>, storage: LogoAssetStorage) -> Self {
         Self {
-            pool,
+            connection,
             storage,
             http_client: Client::new(),
             logo_file_manager: None,
         }
     }
+
 
     /// Update the service with a file manager
     pub fn with_file_manager(mut self, file_manager: SandboxedManager) -> Self {
@@ -69,132 +74,64 @@ impl LogoAssetService {
     pub async fn create_asset_with_id(
         &self,
         params: CreateAssetWithIdParams,
-    ) -> Result<LogoAsset, sqlx::Error> {
-        let asset_type_str = match params.asset_type {
-            LogoAssetType::Uploaded => "uploaded",
-            LogoAssetType::Cached => "cached",
-        };
-
-        let asset_id_str = params.asset_id.to_string();
-
-        let created_at = Utc::now().to_rfc3339();
+    ) -> Result<logo_assets::Model, anyhow::Error> {
+        use sea_orm::{ActiveModelTrait, Set};
+        
+        let created_at = Utc::now();
         let updated_at = created_at.clone();
 
-        sqlx::query(
-            r#"
-            INSERT INTO logo_assets (id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'original', ?, ?)
-            "#
-        )
-        .bind(&asset_id_str)
-        .bind(&params.name)
-        .bind(&params.description)
-        .bind(&params.file_name)
-        .bind(&params.file_path)
-        .bind(params.file_size)
-        .bind(&params.mime_type)
-        .bind(asset_type_str)
-        .bind(&params.source_url)
-        .bind(params.width)
-        .bind(params.height)
-        .bind(&updated_at)
-        .execute(&self.pool)
-        .await?;
+        // Create using SeaORM ActiveModel - clean database-agnostic approach
+        let active_model = crate::entities::logo_assets::ActiveModel {
+            id: Set(params.asset_id),
+            name: Set(params.name.clone()),
+            description: Set(params.description.clone()),
+            file_name: Set(params.file_name.clone()),
+            file_path: Set(params.file_path.clone()),
+            file_size: Set(params.file_size as i32),
+            mime_type: Set(params.mime_type.clone()),
+            asset_type: Set(params.asset_type.to_string()),
+            source_url: Set(params.source_url.clone()),
+            width: Set(params.width.map(|w| w as i32)),
+            height: Set(params.height.map(|h| h as i32)),
+            parent_asset_id: Set(None),
+            format_type: Set("original".to_string()),
+            created_at: Set(created_at),
+            updated_at: Set(updated_at),
+        };
 
-        Ok(LogoAsset {
-            id: params.asset_id.to_string(),
-            name: params.name,
-            description: params.description,
-            file_name: params.file_name,
-            file_path: params.file_path,
-            file_size: params.file_size,
-            mime_type: params.mime_type,
-            asset_type: params.asset_type,
-            source_url: params.source_url,
-            width: params.width,
-            height: params.height,
-            parent_asset_id: None,
-            format_type: LogoFormatType::Original,
-            created_at: crate::utils::datetime::DateTimeParser::parse_flexible(&created_at)
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-            updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(&updated_at)
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-        })
+        active_model.insert(&*self.connection).await?;
+
+        // Return the created entity directly - clean SeaORM approach
+        LogoAssets::find_by_id(params.asset_id)
+            .one(&*self.connection)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Failed to retrieve created asset"))
     }
 
-    pub async fn get_asset(&self, asset_id: Uuid) -> Result<LogoAsset, sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at
-            FROM logo_assets
-            WHERE id = ?
-            "#
-        )
-        .bind(asset_id.to_string())
-        .fetch_one(&self.pool)
-        .await?;
-
-        let asset_type = match row.get::<String, _>("asset_type").as_str() {
-            "uploaded" => LogoAssetType::Uploaded,
-            "cached" => LogoAssetType::Cached,
-            _ => LogoAssetType::Uploaded,
-        };
-
-        let parent_asset_id = row
-            .get::<Option<String>, _>("parent_asset_id")
-            .and_then(|s| s.parse().ok());
-
-        let format_type = match row.get::<String, _>("format_type").as_str() {
-            "png_conversion" => LogoFormatType::PngConversion,
-            _ => LogoFormatType::Original,
-        };
-
-        Ok(LogoAsset {
-            id: asset_id.to_string(),
-            name: row.get("name"),
-            description: row.get("description"),
-            file_name: row.get("file_name"),
-            file_path: row.get("file_path"),
-            file_size: row.get("file_size"),
-            mime_type: row.get("mime_type"),
-            asset_type,
-            source_url: row.get("source_url"),
-            width: row.get("width"),
-            height: row.get("height"),
-            parent_asset_id,
-            format_type,
-            created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
-                &row.get::<String, _>("created_at"),
-            )
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-            updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
-                &row.get::<String, _>("updated_at"),
-            )
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-        })
+    pub async fn get_asset(&self, asset_id: Uuid) -> Result<logo_assets::Model, anyhow::Error> {
+        LogoAssets::find_by_id(asset_id)
+            .one(&*self.connection)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Logo asset not found: {}", asset_id))
     }
 
     pub async fn list_assets(
         &self,
         request: LogoAssetListRequest,
         base_url: &str,
-    ) -> Result<LogoAssetListResponse, sqlx::Error> {
+    ) -> Result<LogoAssetListResponse, anyhow::Error> {
+        use sea_orm::{QueryFilter, QueryOrder, QuerySelect, ColumnTrait, PaginatorTrait};
+        
         let limit = request.limit.unwrap_or(20);
         let page = request.page.unwrap_or(1);
         let offset = (page - 1) * limit;
 
-        let mut query = String::from(
-            "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original'",
-        );
-
-        let mut count_query = String::from(
-            "SELECT COUNT(*) as count FROM logo_assets WHERE format_type = 'original'",
-        );
+        // Build SeaORM query with filters
+        let mut find_query = LogoAssets::find()
+            .filter(logo_assets::Column::FormatType.eq("original"));
 
         if let Some(search) = &request.search {
-            let search_clause = format!(" AND name LIKE '%{search}%'");
-            query.push_str(&search_clause);
-            count_query.push_str(&search_clause);
+            find_query = find_query.filter(logo_assets::Column::Name.contains(search));
         }
 
         if let Some(asset_type) = &request.asset_type {
@@ -202,77 +139,69 @@ impl LogoAssetService {
                 LogoAssetType::Uploaded => "uploaded",
                 LogoAssetType::Cached => "cached",
             };
-            let type_clause = format!(" AND asset_type = '{type_str}'");
-            query.push_str(&type_clause);
-            count_query.push_str(&type_clause);
+            find_query = find_query.filter(logo_assets::Column::AssetType.eq(type_str));
         }
 
-        query.push_str(&format!(
-            " ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
-        ));
+        // Get total count for pagination
+        let total_count = find_query.clone().count(&*self.connection).await? as u32;
 
-        let rows = sqlx::query(&query).fetch_all(&self.pool).await?;
-        let count_row = sqlx::query(&count_query).fetch_one(&self.pool).await?;
-        let total_count: i64 = count_row.get("count");
+        // Get paginated results
+        let models = find_query
+            .order_by_desc(logo_assets::Column::CreatedAt)
+            .offset(offset as u64)
+            .limit(limit as u64)
+            .all(&*self.connection)
+            .await?;
 
-        let mut assets = Vec::new();
-
-        for row in rows {
-            let asset_type = match row.get::<String, _>("asset_type").as_str() {
+        // Convert SeaORM models to response format
+        let mut converted_assets = Vec::new();
+        for model in models {
+            // Convert SeaORM entity to domain model for response compatibility
+            let asset_type = match model.asset_type.as_str() {
                 "uploaded" => LogoAssetType::Uploaded,
                 "cached" => LogoAssetType::Cached,
                 _ => LogoAssetType::Uploaded,
             };
 
-            let parent_asset_id = row
-                .get::<Option<String>, _>("parent_asset_id")
-                .and_then(|s| s.parse().ok());
-
-            let format_type = match row.get::<String, _>("format_type").as_str() {
+            let format_type = match model.format_type.as_str() {
                 "png_conversion" => LogoFormatType::PngConversion,
                 _ => LogoFormatType::Original,
             };
 
-            let asset = LogoAsset {
-                id: row.get::<String, _>("id"),
-                name: row.get("name"),
-                description: row.get("description"),
-                file_name: row.get("file_name"),
-                file_path: row.get("file_path"),
-                file_size: row.get("file_size"),
-                mime_type: row.get("mime_type"),
+            // Temporary: Create a compatible struct for the response
+            // TODO: Rationalize response structures to use SeaORM entities directly
+            use crate::models::logo_asset::LogoAsset;
+            let domain_asset = LogoAsset {
+                id: model.id.to_string(),
+                name: model.name.clone(),
+                description: model.description.clone(),
+                file_name: model.file_name.clone(),
+                file_path: model.file_path.clone(),
+                file_size: model.file_size as i64,
+                mime_type: model.mime_type.clone(),
                 asset_type,
-                source_url: row.get("source_url"),
-                width: row.get("width"),
-                height: row.get("height"),
-                parent_asset_id,
+                source_url: model.source_url.clone(),
+                width: model.width,
+                height: model.height,
+                parent_asset_id: model.parent_asset_id.map(|uuid| uuid.to_string()),
                 format_type,
-                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
-                    &row.get::<String, _>("created_at"),
-                )
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
-                    &row.get::<String, _>("updated_at"),
-                )
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+                created_at: model.created_at,
+                updated_at: model.updated_at,
             };
 
-            assets.push(asset);
+            let url = format!("{}/api/v1/logos/{}", base_url.trim_end_matches('/'), model.id);
+            converted_assets.push(LogoAssetWithUrl { 
+                asset: domain_asset,
+                url 
+            });
         }
+        let assets_with_urls = converted_assets;
 
         let total_pages = ((total_count as f64) / (limit as f64)).ceil() as u32;
 
-        let assets_with_urls: Vec<LogoAssetWithUrl> = assets
-            .into_iter()
-            .map(|asset| {
-                let url = format!("{}/api/v1/logos/{}", base_url.trim_end_matches('/'), asset.id);
-                LogoAssetWithUrl { asset, url }
-            })
-            .collect();
-
         Ok(LogoAssetListResponse {
             assets: assets_with_urls,
-            total_count,
+            total_count: total_count as i64,
             page,
             limit,
             total_pages,
@@ -284,28 +213,71 @@ impl LogoAssetService {
         asset_id: Uuid,
         name: String,
         description: Option<String>,
-    ) -> Result<LogoAsset, sqlx::Error> {
-        let asset_id_str = asset_id.to_string();
-        let updated_at = Utc::now().to_rfc3339();
+    ) -> Result<logo_assets::Model, anyhow::Error> {
+        use sea_orm::{EntityTrait, ActiveModelTrait, Set};
+        
+        let updated_at = Utc::now();
 
-        sqlx::query(
-            r#"
-            UPDATE logo_assets
-            SET name = ?, description = ?, updated_at = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(&name)
-        .bind(&description)
-        .bind(&updated_at)
-        .bind(&asset_id_str)
-        .execute(&self.pool)
-        .await?;
+        // Find the existing asset and update it using SeaORM ActiveModel
+        let existing_asset = LogoAssets::find_by_id(asset_id)
+            .one(&*self.connection)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Logo asset not found: {}", asset_id))?;
 
-        self.get_asset(asset_id).await
+        let mut active_model: logo_assets::ActiveModel = existing_asset.into();
+        active_model.name = Set(name);
+        active_model.description = Set(description);
+        active_model.updated_at = Set(updated_at);
+
+        active_model.update(&*self.connection).await.map_err(Into::into)
     }
 
-    pub async fn delete_asset(&self, asset_id: Uuid) -> Result<(), sqlx::Error> {
+    pub async fn replace_asset_image(
+        &self,
+        asset_id: Uuid,
+        file_name: String,
+        file_path: String,
+        file_size: i64,
+        mime_type: String,
+        width: Option<i32>,
+        height: Option<i32>,
+        name: Option<String>,
+        description: Option<String>,
+    ) -> Result<logo_assets::Model, anyhow::Error> {
+        use sea_orm::{EntityTrait, ActiveModelTrait, Set};
+
+        // Find the existing asset
+        let existing_asset = LogoAssets::find_by_id(asset_id)
+            .one(&*self.connection)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Logo asset not found: {}", asset_id))?;
+
+        // Update the database record
+        let updated_at = Utc::now();
+        let mut active_model: logo_assets::ActiveModel = existing_asset.into();
+        
+        active_model.file_name = Set(file_name);
+        active_model.file_path = Set(file_path);
+        active_model.file_size = Set(file_size as i32);
+        active_model.mime_type = Set(mime_type);
+        active_model.width = Set(width);
+        active_model.height = Set(height);
+        active_model.updated_at = Set(updated_at);
+        
+        // Update name and description if provided
+        if let Some(new_name) = name {
+            active_model.name = Set(new_name);
+        }
+        if let Some(new_description) = description {
+            active_model.description = Set(Some(new_description));
+        }
+
+        active_model.update(&*self.connection).await.map_err(Into::into)
+    }
+
+    pub async fn delete_asset(&self, asset_id: Uuid) -> Result<(), anyhow::Error> {
+        use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
+                
         // Get asset info first to delete the file
         let asset = self.get_asset(asset_id).await?;
 
@@ -319,31 +291,30 @@ impl LogoAssetService {
             }
             processed.insert(current_id);
 
-            // Find linked assets for current asset
-            let linked_assets = sqlx::query("SELECT id FROM logo_assets WHERE parent_asset_id = ?")
-                .bind(current_id.to_string())
-                .fetch_all(&self.pool)
+            // Find linked assets for current asset using SeaORM
+            let linked_models = LogoAssets::find()
+                .filter(logo_assets::Column::ParentAssetId.eq(current_id))
+                .all(&*self.connection)
                 .await?;
 
-            for linked_row in linked_assets {
-                let linked_id = parse_uuid_flexible(&linked_row.get::<String, _>("id")).unwrap();
+            for linked_model in linked_models {
+                let linked_id = linked_model.id;
                 if !processed.contains(&linked_id) {
                     assets_to_delete.push(linked_id);
                 }
             }
         }
 
-        // Delete all assets from database
+        // Delete all assets from database using SeaORM batch delete
         for asset_id_to_delete in &processed {
-            sqlx::query("DELETE FROM logo_assets WHERE id = ?")
-                .bind(asset_id_to_delete.to_string())
-                .execute(&self.pool)
+            LogoAssets::delete_by_id(*asset_id_to_delete)
+                .exec(&*self.connection)
                 .await?;
         }
 
         // Delete file from storage
         if let Err(e) = self.storage.delete_file(&asset.file_path).await {
-            error!("Failed to delete file for asset {}: {}", asset_id, e);
+            tracing::error!("Failed to delete file for asset {}: {}", asset_id, e);
         }
 
         Ok(())
@@ -353,65 +324,63 @@ impl LogoAssetService {
         &self,
         request: LogoAssetSearchRequest,
         base_url: &str,
-    ) -> Result<LogoAssetSearchResult, sqlx::Error> {
+    ) -> Result<LogoAssetSearchResult, anyhow::Error> {
+        use sea_orm::{QueryFilter, QueryOrder, QuerySelect, ColumnTrait};
+        
         let limit = request.limit.unwrap_or(20);
         let search_query = request.query.unwrap_or_default();
 
-        // First get uploaded logos from database
-        let query = format!(
-            "SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at FROM logo_assets WHERE format_type = 'original' AND asset_type = 'uploaded' AND name LIKE '%{search_query}%' ORDER BY name LIMIT {limit}"
-        );
+        // Search uploaded logos using clean SeaORM queries
+        let models = LogoAssets::find()
+            .filter(logo_assets::Column::FormatType.eq("original"))
+            .filter(logo_assets::Column::AssetType.eq("uploaded"))
+            .filter(logo_assets::Column::Name.contains(&search_query))
+            .order_by_asc(logo_assets::Column::Name)
+            .limit(limit as u64)
+            .all(&*self.connection)
+            .await?;
 
-        let rows = sqlx::query(&query).fetch_all(&self.pool).await?;
-
+        // Convert SeaORM models to response format - clean entity-based approach
         let mut assets = Vec::new();
-
-        for row in rows {
-            let asset_type = match row.get::<String, _>("asset_type").as_str() {
+        for model in models {
+            // Convert SeaORM entity to domain model for response compatibility
+            let asset_type = match model.asset_type.as_str() {
                 "uploaded" => LogoAssetType::Uploaded,
                 "cached" => LogoAssetType::Cached,
                 _ => LogoAssetType::Uploaded,
             };
 
-            let parent_asset_id = row
-                .get::<Option<String>, _>("parent_asset_id")
-                .and_then(|s| s.parse().ok());
-
-            let format_type = match row.get::<String, _>("format_type").as_str() {
+            let format_type = match model.format_type.as_str() {
                 "png_conversion" => LogoFormatType::PngConversion,
                 _ => LogoFormatType::Original,
             };
 
-            let asset = LogoAsset {
-                id: row.get::<String, _>("id"),
-                name: row.get("name"),
-                description: row.get("description"),
-                file_name: row.get("file_name"),
-                file_path: row.get("file_path"),
-                file_size: row.get("file_size"),
-                mime_type: row.get("mime_type"),
+            // Create domain model for response compatibility
+            use crate::models::logo_asset::LogoAsset;
+            let domain_asset = LogoAsset {
+                id: model.id.to_string(),
+                name: model.name.clone(),
+                description: model.description.clone(),
+                file_name: model.file_name.clone(),
+                file_path: model.file_path.clone(),
+                file_size: model.file_size as i64,
+                mime_type: model.mime_type.clone(),
                 asset_type,
-                source_url: row.get("source_url"),
-                width: row.get("width"),
-                height: row.get("height"),
-                parent_asset_id,
+                source_url: model.source_url.clone(),
+                width: model.width,
+                height: model.height,
+                parent_asset_id: model.parent_asset_id.map(|uuid| uuid.to_string()),
                 format_type,
-                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
-                    &row.get::<String, _>("created_at"),
-                )
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
-                    &row.get::<String, _>("updated_at"),
-                )
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+                created_at: model.created_at,
+                updated_at: model.updated_at,
             };
 
             let url = format!(
                 "{}/api/v1/logos/{}",
                 base_url.trim_end_matches('/'),
-                asset.id
+                model.id
             );
-            assets.push(LogoAssetWithUrl { asset, url });
+            assets.push(LogoAssetWithUrl { asset: domain_asset, url });
         }
 
         Ok(LogoAssetSearchResult {
@@ -505,29 +474,35 @@ impl LogoAssetService {
         })
     }
 
-    pub async fn get_cache_stats(&self) -> Result<LogoCacheStats, sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            SELECT
-                SUM(CASE WHEN asset_type = 'cached' AND format_type = 'original' THEN 1 ELSE 0 END) as total_cached_logos,
-                SUM(CASE WHEN asset_type = 'uploaded' AND format_type = 'original' THEN 1 ELSE 0 END) as total_uploaded_logos,
-                SUM(file_size) as total_storage_used,
-                SUM(CASE WHEN format_type = 'png_conversion' THEN 1 ELSE 0 END) as total_linked_assets
-            FROM logo_assets
-            "#
-        )
-        .fetch_one(&self.pool)
-        .await?;
+    pub async fn get_cache_stats(&self) -> Result<LogoCacheStats, anyhow::Error> {
+        // Get all logo assets to calculate statistics
+        let all_assets = LogoAssets::find()
+            .all(&*self.connection)
+            .await?;
+
+        let mut total_cached_logos = 0i64;
+        let mut total_uploaded_logos = 0i64;
+        let mut total_storage_used = 0i64;
+        let mut total_linked_assets = 0i64;
+
+        for asset in all_assets {
+            // Count by asset type and format type
+            match (asset.asset_type.as_str(), asset.format_type.as_str()) {
+                ("cached", "original") => total_cached_logos += 1,
+                ("uploaded", "original") => total_uploaded_logos += 1,
+                (_, "png_conversion") => total_linked_assets += 1,
+                _ => {}
+            }
+            
+            // Sum file sizes
+            total_storage_used += asset.file_size as i64;
+        }
 
         Ok(LogoCacheStats {
-            total_cached_logos: row.get::<Option<i64>, _>("total_cached_logos").unwrap_or(0),
-            total_uploaded_logos: row
-                .get::<Option<i64>, _>("total_uploaded_logos")
-                .unwrap_or(0),
-            total_storage_used: row.get::<Option<i64>, _>("total_storage_used").unwrap_or(0),
-            total_linked_assets: row
-                .get::<Option<i64>, _>("total_linked_assets")
-                .unwrap_or(0),
+            total_cached_logos,
+            total_uploaded_logos,
+            total_storage_used,
+            total_linked_assets,
             cache_hit_rate: None,
             filesystem_cached_logos: 0, // Will be updated by caller with scanner data
             filesystem_cached_storage: 0, // Will be updated by caller with scanner data
@@ -1030,59 +1005,46 @@ impl LogoAssetService {
         self.storage.get_cached_logo_path(cache_id)
     }
 
-    pub async fn get_linked_assets(&self, asset_id: Uuid) -> Result<Vec<LogoAsset>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, name, description, file_name, file_path, file_size, mime_type, asset_type, source_url, width, height, parent_asset_id, format_type, created_at, updated_at
-            FROM logo_assets
-            WHERE parent_asset_id = ?
-            ORDER BY format_type
-            "#
-        )
-        .bind(asset_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+    pub async fn get_linked_assets(&self, asset_id: Uuid) -> Result<Vec<LogoAsset>, anyhow::Error> {
+        let models = LogoAssets::find()
+            .filter(logo_assets::Column::ParentAssetId.eq(asset_id))
+            .order_by_asc(logo_assets::Column::FormatType)
+            .all(&*self.connection)
+            .await?;
 
         let mut assets = Vec::new();
 
-        for row in rows {
-            let asset_type = match row.get::<String, _>("asset_type").as_str() {
+        for model in models {
+            let asset_type = match model.asset_type.as_str() {
                 "uploaded" => LogoAssetType::Uploaded,
                 "cached" => LogoAssetType::Cached,
                 _ => LogoAssetType::Uploaded,
             };
 
-            let parent_asset_id = row
-                .get::<Option<String>, _>("parent_asset_id")
-                .and_then(|s| s.parse().ok());
+            let parent_asset_id = model.parent_asset_id
+                .map(|uuid| uuid.to_string());
 
-            let format_type = match row.get::<String, _>("format_type").as_str() {
+            let format_type = match model.format_type.as_str() {
                 "png_conversion" => LogoFormatType::PngConversion,
                 _ => LogoFormatType::Original,
             };
 
             let asset = LogoAsset {
-                id: row.get::<String, _>("id"),
-                name: row.get("name"),
-                description: row.get("description"),
-                file_name: row.get("file_name"),
-                file_path: row.get("file_path"),
-                file_size: row.get("file_size"),
-                mime_type: row.get("mime_type"),
+                id: model.id.to_string(),
+                name: model.name,
+                description: model.description,
+                file_name: model.file_name,
+                file_path: model.file_path,
+                file_size: model.file_size as i64,
+                mime_type: model.mime_type,
                 asset_type,
-                source_url: row.get("source_url"),
-                width: row.get("width"),
-                height: row.get("height"),
+                source_url: model.source_url,
+                width: model.width,
+                height: model.height,
                 parent_asset_id,
                 format_type,
-                created_at: crate::utils::datetime::DateTimeParser::parse_flexible(
-                    &row.get::<String, _>("created_at"),
-                )
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                updated_at: crate::utils::datetime::DateTimeParser::parse_flexible(
-                    &row.get::<String, _>("updated_at"),
-                )
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+                created_at: model.created_at,
+                updated_at: model.updated_at,
             };
 
             assets.push(asset);

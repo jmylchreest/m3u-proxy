@@ -48,7 +48,7 @@ impl PipelineOrchestrator {
         proxy_output_file_manager: SandboxedManager,
         logo_service: Arc<crate::logo_assets::service::LogoAssetService>,
         logo_config: crate::pipeline::stages::logo_caching::LogoCachingConfig,
-        db_pool: sqlx::SqlitePool,
+        database: crate::database::Database,
     ) -> Self {
         let execution = PipelineExecution::new(proxy_config.id);
         let mut orchestrator = Self {
@@ -60,7 +60,7 @@ impl PipelineOrchestrator {
         };
         
         // Create and add all pipeline stages in order
-        orchestrator.create_and_add_all_stages(proxy_config, logo_service, logo_config, db_pool);
+        orchestrator.create_and_add_all_stages(proxy_config, logo_service, logo_config, database);
         
         orchestrator
     }
@@ -76,7 +76,7 @@ impl PipelineOrchestrator {
         proxy_config: crate::models::StreamProxy,
         logo_service: Arc<crate::logo_assets::service::LogoAssetService>,
         logo_config: crate::pipeline::stages::logo_caching::LogoCachingConfig,
-        db_pool: sqlx::SqlitePool,
+        database: crate::database::Database,
     ) {
         info!("Creating pipeline stages for proxy: {}", proxy_config.id);
         
@@ -86,7 +86,7 @@ impl PipelineOrchestrator {
         if let Ok(data_mapping_stage) = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 crate::pipeline::stages::data_mapping::DataMappingStage::new(
-                    db_pool.clone(),
+                    database.connection().clone(),
                     self.execution.execution_prefix.clone(),
                     self.file_manager.clone(),
                     self.progress_manager.clone(),
@@ -102,7 +102,7 @@ impl PipelineOrchestrator {
         if let Ok(filtering_stage) = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 crate::pipeline::stages::filtering::FilteringStage::new(
-                    db_pool.clone(),
+                    database.connection().clone(),
                     self.file_manager.clone(),
                     self.execution.execution_prefix.clone(),
                     Some(proxy_config.id),
@@ -155,7 +155,7 @@ impl PipelineOrchestrator {
         if let Ok(generation_stage) = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 crate::pipeline::stages::generation::GenerationStage::new(
-                    db_pool.clone(),
+                    database.connection().clone(),
                     self.file_manager.clone(),
                     self.execution.execution_prefix.clone(),
                     proxy_config.id,

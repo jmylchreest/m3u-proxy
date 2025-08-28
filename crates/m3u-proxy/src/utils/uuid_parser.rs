@@ -81,6 +81,23 @@ pub fn parse_uuid_flexible(input: &str) -> Result<Uuid> {
     }
 }
 
+/// Parse UUID flexibly from either string or Uuid
+///
+/// This method handles both string parsing (legacy) and direct Uuid passthrough (modern entities).
+/// It's designed to work with both old string-based entity fields and new proper Uuid fields.
+///
+/// # Arguments
+///
+/// * `input` - An already-parsed Uuid
+///
+/// # Returns
+///
+/// * `Ok(Uuid)` - Successfully passed-through uuid
+pub fn parse_uuid_flexible_uuid(input: &Uuid) -> Result<Uuid> {
+    // For Uuid input, just return a copy
+    Ok(*input)
+}
+
 /// Parse UUID from any supported source type (String, &str, or Uuid)
 /// This is the recommended function to use for maximum flexibility
 pub fn parse_uuid_from_any<T: FlexibleUuidSource>(input: T) -> Result<Uuid> {

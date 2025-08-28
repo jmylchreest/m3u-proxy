@@ -73,18 +73,25 @@ export function NotificationBell({
     }
   }, [events, operationType])
 
+  // Mark visible events as read when popup is open and events change
+  useEffect(() => {
+    if (isOpen && filteredEvents.length > 0) {
+      const unreadEventIds = filteredEvents
+        .filter(e => !e.hasBeenVisible)
+        .map(e => e.id)
+      
+      if (unreadEventIds.length > 0) {
+        context.markAsVisible(unreadEventIds)
+      }
+    }
+  }, [isOpen, filteredEvents, context])
+
   // Handle bell click
   const handleBellClick = () => {
     if (showPopup) {
       setIsOpen(!isOpen)
-      
-      // Mark visible events as read when popup opens
-      if (!isOpen && filteredEvents.length > 0) {
-        const visibleEventIds = filteredEvents.map(e => e.id)
-        context.markAsVisible(visibleEventIds)
-      }
     } else {
-      // Just mark all unread events as read
+      // Just mark all unread events as read (no popup mode)
       const unreadEventIds = filteredEvents
         .filter(e => !e.hasBeenVisible)
         .map(e => e.id)
@@ -129,10 +136,11 @@ export function NotificationBell({
       .join(' ')
   }
 
-  // Resize handlers
+  // Resize handlers - inverted for top handle
   const handleMouseMove = useCallback((e: MouseEvent) => {
     const deltaY = e.clientY - startYRef.current
-    const newHeight = Math.max(200, Math.min(600, startHeightRef.current + deltaY))
+    // Invert the delta since we're dragging from the top
+    const newHeight = Math.max(200, Math.min(600, startHeightRef.current - deltaY))
     setHeight(newHeight)
   }, [])
 
@@ -314,7 +322,7 @@ export function NotificationBell({
             )}
           </div>
           
-          {/* Resize handle */}
+          {/* Resize handle at bottom */}
           <div 
             ref={resizeRef}
             className="flex items-center justify-center h-4 bg-muted/50 hover:bg-muted border-t cursor-ns-resize group"

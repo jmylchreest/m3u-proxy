@@ -159,6 +159,24 @@ impl DateTimeParser {
         })
     }
 
+    /// Parse datetime flexibly from either string or DateTime<Utc>
+    ///
+    /// This method handles both string parsing (legacy) and direct DateTime<Utc> passthrough (modern entities).
+    /// It's designed to work with both old string-based entity fields and new proper DateTime<Utc> fields.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Either a string to parse or an already-parsed DateTime<Utc>
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(DateTime<Utc>)` - Successfully parsed or passed-through datetime
+    /// * `Err(DateTimeError)` - Parse error (only possible with string input)
+    pub fn parse_flexible_datetime(input: &DateTime<Utc>) -> Result<DateTime<Utc>, DateTimeError> {
+        // For DateTime<Utc> input, just return a copy
+        Ok(*input)
+    }
+
     /// Parse datetime specifically for SQLite format
     ///
     /// This is a specialized version for SQLite's default datetime format.

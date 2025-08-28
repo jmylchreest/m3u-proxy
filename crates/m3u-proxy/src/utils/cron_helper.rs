@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn test_valid_cron_expression() {
         // Test every 6 hours
-        let result = calculate_next_scheduled_time("0 0 */6 * * *");
+        let result = calculate_next_scheduled_time("0 0 0 */6 * * * *");
         assert!(result.is_some());
         
         // Verify the result is in the future

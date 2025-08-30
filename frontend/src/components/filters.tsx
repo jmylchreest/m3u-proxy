@@ -44,7 +44,9 @@ import {
   ChevronUp,
   Grid,
   List,
-  Table as TableIcon
+  Table as TableIcon,
+  Copy,
+  Check
 } from "lucide-react"
 import { 
   Filter,
@@ -412,6 +414,7 @@ export function Filters() {
   const [expandedFilters, setExpandedFilters] = useState<Set<string>>(new Set())
   const [isOnline, setIsOnline] = useState(true)
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('table')
+  const [copiedItems, setCopiedItems] = useState<Set<string>>(new Set())
 
   // Helper function to recursively extract searchable text from expression tree
   const extractTreeText = useCallback((tree: any): string[] => {
@@ -503,6 +506,25 @@ export function Filters() {
       }
       return newSet
     })
+  }
+
+  // Copy filter expression to clipboard
+  const copyFilterExpression = async (filterId: string, expression: string) => {
+    try {
+      await navigator.clipboard.writeText(expression)
+      setCopiedItems(prev => new Set(prev).add(filterId))
+      
+      // Reset copied state after 2 seconds
+      setTimeout(() => {
+        setCopiedItems(prev => {
+          const newSet = new Set(prev)
+          newSet.delete(filterId)
+          return newSet
+        })
+      }, 2000)
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error)
+    }
   }
 
   // Compute filtered results locally
@@ -945,6 +967,21 @@ export function Filters() {
                               )}
                             </div>
                             <div className="flex items-center gap-2">
+                              {filter.expression && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => copyFilterExpression(filter.id, filter.expression || '')}
+                                  className="h-8 w-8 p-0"
+                                  title="Copy expression to clipboard"
+                                >
+                                  {copiedItems.has(filter.id) ? (
+                                    <Check className="h-4 w-4 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1070,6 +1107,21 @@ export function Filters() {
                                 )}
                               </Button>
                               <div className="flex items-center gap-1">
+                                {filter.expression && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => copyFilterExpression(filter.id, filter.expression || '')}
+                                    className="h-8 w-8 p-0"
+                                    title="Copy expression to clipboard"
+                                  >
+                                    {copiedItems.has(filter.id) ? (
+                                      <Check className="h-4 w-4 text-green-600" />
+                                    ) : (
+                                      <Copy className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                )}
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -1169,6 +1221,21 @@ export function Filters() {
                             </div>
                             <div className="flex items-center gap-2 ml-4">
                               <div className="flex items-center gap-1">
+                                {filter.expression && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => copyFilterExpression(filter.id, filter.expression || '')}
+                                    className="h-8 w-8 p-0"
+                                    title="Copy expression to clipboard"
+                                  >
+                                    {copiedItems.has(filter.id) ? (
+                                      <Check className="h-4 w-4 text-green-600" />
+                                    ) : (
+                                      <Copy className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                )}
                                 <Button
                                   variant="ghost"
                                   size="sm"

@@ -593,8 +593,30 @@ pub async fn get_relay_system_health_from_manager(relay_manager: &std::sync::Arc
     let healthy_processes = relay_health.healthy_processes as u32;
     let unhealthy_processes = relay_health.unhealthy_processes as u32;
     
-    // Check hardware acceleration capabilities
-    let (hwaccel_available, hwaccel_capabilities) = check_hardware_acceleration().await;
+    // Use cached hardware acceleration capabilities from RelayManager (more accurate than re-testing)
+    let hwaccel_available = relay_manager.hwaccel_available;
+    let cached_capabilities = &relay_manager.hwaccel_capabilities;
+    
+    // Convert cached RelayManager data to API response format
+    let accelerators = cached_capabilities.accelerators.iter().map(|acc| acc.name.clone()).collect();
+    let codecs = cached_capabilities.codecs.clone();
+    let support_matrix = cached_capabilities.support_matrix
+        .iter()
+        .map(|(accel_name, supported_codecs)| {
+            let accel_support = crate::web::responses::AcceleratorSupport {
+                h264: supported_codecs.contains(&"h264".to_string()),
+                hevc: supported_codecs.contains(&"hevc".to_string()),
+                av1: supported_codecs.contains(&"av1".to_string()),  // Now uses properly tested data!
+            };
+            (accel_name.clone(), accel_support)
+        })
+        .collect();
+    
+    let hwaccel_capabilities = crate::web::responses::DetailedHwAccelCapabilities {
+        accelerators,
+        codecs,
+        support_matrix,
+    };
     
     // Determine overall status based on real process health
     let status = if unhealthy_processes > 0 {
@@ -663,9 +685,9 @@ pub async fn check_ffprobe_availability() -> (bool, Option<String>) {
     }
 }
 
-/// Check hardware acceleration capabilities
+/// Check hardware acceleration capabilities using cached RelayManager data when available
 pub async fn check_hardware_acceleration() -> (bool, crate::web::responses::DetailedHwAccelCapabilities) {
-    // Basic hardware acceleration detection
+    // Basic hardware acceleration detection (fallback for when RelayManager isn't available)
     let mut accelerators = Vec::new();
     let mut codecs = Vec::new();
     let mut support_matrix = std::collections::HashMap::new();
@@ -683,11 +705,11 @@ pub async fn check_hardware_acceleration() -> (bool, crate::web::responses::Deta
                 if !accel.is_empty() && accel != "Hardware acceleration methods:" {
                     accelerators.push(accel.to_string());
                     
-                    // Basic codec support assumption
+                    // Fixed codec support mapping - check for VAAPI specifically for AV1
                     let accel_support = crate::web::responses::AcceleratorSupport {
                         h264: accel.contains("264") || accel.contains("vaapi") || accel.contains("nvenc"),
                         hevc: accel.contains("hevc") || accel.contains("265") || accel.contains("vaapi") || accel.contains("nvenc"),
-                        av1: accel.contains("av1"),
+                        av1: accel.contains("vaapi"), // Fix: VAAPI supports AV1, not just if string contains "av1"
                     };
                     
                     support_matrix.insert(accel.to_string(), accel_support);
@@ -696,6 +718,10 @@ pub async fn check_hardware_acceleration() -> (bool, crate::web::responses::Deta
                     if accel.contains("vaapi") || accel.contains("nvenc") {
                         codecs.push("h264".to_string());
                         codecs.push("hevc".to_string());
+                        // Add AV1 for VAAPI since we know it supports it
+                        if accel.contains("vaapi") {
+                            codecs.push("av1".to_string());
+                        }
                     }
                 }
             }

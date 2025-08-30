@@ -49,7 +49,7 @@ services:
       M3U_PROXY_CONFIG: "/app/config/config.toml"
       M3U_PROXY_LOG_LEVEL: "info"
       # PostgreSQL connection
-      M3U_PROXY_DATABASE_URL: "postgresql://m3u_proxy:secure_password_change_me@postgres:5432/m3u_proxy"
+      M3U_PROXY_DATABASE__URL: "postgresql://m3u_proxy:secure_password_change_me@postgres:5432/m3u_proxy"
 
       # Storage paths (these are the defaults, mounted as volumes)
       # M3U_PROXY_M3U_PATH: "/app/data/m3u"

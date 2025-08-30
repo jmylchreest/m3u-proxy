@@ -36,8 +36,6 @@ pub struct Model {
 pub enum Relation {
     #[sea_orm(has_many = "super::channels::Entity")]
     Channels,
-    #[sea_orm(has_many = "super::linked_xtream_sources::Entity")]
-    LinkedXtreamSources,
     #[sea_orm(has_many = "super::proxy_sources::Entity")]
     ProxySources,
 }
@@ -45,12 +43,6 @@ pub enum Relation {
 impl Related<super::channels::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Channels.def()
-    }
-}
-
-impl Related<super::linked_xtream_sources::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::LinkedXtreamSources.def()
     }
 }
 

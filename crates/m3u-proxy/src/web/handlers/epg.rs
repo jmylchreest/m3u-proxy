@@ -91,8 +91,9 @@ pub async fn list_epg_programs(
         let limit = params.limit.unwrap_or(50).min(200); // Cap at 200 items per page for EPG
 
         // Default time range if not specified (next 24 hours)
-        let start_time = params.start_time.unwrap_or_else(|| Utc::now());
-        let end_time = params.end_time.unwrap_or_else(|| {
+        // Note: start_time is used to find programs that END after this time (to include currently running programs)
+        let filter_start = params.start_time.unwrap_or_else(|| Utc::now());
+        let filter_end = params.end_time.unwrap_or_else(|| {
             Utc::now() + chrono::Duration::hours(24)
         });
 
@@ -107,8 +108,9 @@ pub async fn list_epg_programs(
         };
         
         // Get programs by time range (simplified query approach)
+        // This should return programs that overlap with the time range, not just those starting within it
         let mut programs = epg_program_repo
-            .find_by_time_range(source_filter.as_ref(), &start_time, &end_time)
+            .find_by_time_range(source_filter.as_ref(), &filter_start, &filter_end)
             .await.map_err(|e| AppError::Validation { message: e.to_string() })?;
         
         // Apply additional filters in memory (simplified for cleaner code)

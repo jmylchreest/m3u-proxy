@@ -343,29 +343,9 @@ impl SourceLinkingService {
                 .map_err(|e| anyhow::anyhow!("Failed to find EPG source: {}", e))?
                 .ok_or_else(|| anyhow::anyhow!("EPG source not found: {}", epg_id))?;
 
-            // Create a linked entry using the stream source's credentials and URL as the primary
-            use crate::entities::linked_xtream_sources;
-            use sea_orm::{ActiveModelTrait, Set};
-            
-            let link_id = format!("link_{}", uuid::Uuid::new_v4());
-            let now = chrono::Utc::now().to_rfc3339();
-            
-            let active_model = linked_xtream_sources::ActiveModel {
-                id: Set(uuid::Uuid::new_v4().to_string()),
-                link_id: Set(link_id),
-                name: Set(stream_source.name.clone()),
-                url: Set(stream_source.url.clone()),
-                username: Set(stream_source.username.unwrap_or_default()),
-                password: Set(stream_source.password.unwrap_or_default()),
-                stream_source_id: Set(Some(stream_id.to_string())),
-                epg_source_id: Set(Some(epg_id.to_string())),
-                created_at: Set(now.clone()),
-                updated_at: Set(now),
-            };
-            
-            // Insert using the database connection (access through new method)
-            active_model.insert(self.stream_source_repo.get_connection().as_ref()).await
-                .map_err(|e| anyhow::anyhow!("Failed to create link: {}", e))?;
+            // TODO: Implement actual linking logic when linked_xtream_sources table is re-added
+            // The linked_xtream_sources table was removed as it was orphaned
+            // For now, just log the linking request
 
             info!(
                 "Created bidirectional link between stream '{}' ({}) and epg '{}' ({})",

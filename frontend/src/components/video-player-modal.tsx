@@ -568,6 +568,12 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
 
           videoRef.current.addEventListener('canplay', () => {
             setIsLoading(false);
+            // Also try auto-play when the video element is ready to play
+            if (videoRef.current) {
+              videoRef.current.play().catch((e) => {
+                debug.warn('Auto-play failed on canplay event (browser may require user interaction):', e);
+              });
+            }
           });
 
           videoRef.current.addEventListener('volumechange', () => {

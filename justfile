@@ -1,9 +1,138 @@
 # Monorepo build automation for m3u-proxy
-# Manages both Next.js frontend and Rust backend builds
+# Manages both Next.js frontend and Rust backend builds with intelligent version management
 
 # Default recipe - show available commands
 default:
     @just --list
+
+# Version Management
+# ==================
+# Smart versioning based on git tags with semver validation
+
+# Get current version from source files (Cargo.toml)
+get-current-version:
+    @grep '^version' crates/m3u-proxy/Cargo.toml | head -1 | cut -d'"' -f2
+
+# Get the version to use for builds (tag-based release or snapshot with date)
+# - If on git tag: uses tag version (strips 'v' prefix)
+# - If not on tag: calculates next patch version with '-snapshot-YYYYMMDD' suffix
+get-version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Check if we're on a git tag
+    if git describe --exact-match --tags HEAD 2>/dev/null; then
+        # We're on a tag, use it as version (strip 'v' prefix if present)
+        TAG=$(git describe --exact-match --tags HEAD 2>/dev/null)
+        VERSION=${TAG#v}
+        echo "$VERSION"
+    else
+        # Not on a tag, calculate next version with snapshot suffix
+        CURRENT_VERSION=$(just get-current-version)
+
+        # Parse version parts (assuming semver X.Y.Z)
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+        # Increment patch version for snapshot
+        NEXT_PATCH=$((PATCH + 1))
+
+        # Get current date in YYYYMMDD format
+        DATE=$(date +%Y%m%d)
+
+        # Create snapshot version
+        SNAPSHOT_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-snapshot-${DATE}"
+        echo "$SNAPSHOT_VERSION"
+    fi
+
+# Set version in all relevant files (Cargo.toml, package.json, package-lock.json)
+# Includes semver validation and prevents downgrades unless --force is used
+# Usage: just set-version 0.1.3 [--force]
+set-version version *force="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    VERSION="{{version}}"
+    CURRENT_VERSION=$(just get-current-version)
+    FORCE="{{force}}"
+
+    # Validate version format (basic semver check)
+    if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-.*)?$'; then
+        echo "Error: Invalid version format. Expected semver (e.g., 1.0.0)"
+        exit 1
+    fi
+
+    # Function to compare semver versions (without pre-release suffixes)
+    compare_versions() {
+        local version1="$1"
+        local version2="$2"
+
+        # Strip pre-release suffixes for comparison
+        local clean_v1=$(echo "$version1" | sed 's/-.*$//')
+        local clean_v2=$(echo "$version2" | sed 's/-.*$//')
+
+        # Split into major.minor.patch
+        IFS='.' read -r v1_major v1_minor v1_patch <<< "$clean_v1"
+        IFS='.' read -r v2_major v2_minor v2_patch <<< "$clean_v2"
+
+        # Compare major
+        if [ "$v1_major" -gt "$v2_major" ]; then
+            return 0  # v1 > v2
+        elif [ "$v1_major" -lt "$v2_major" ]; then
+            return 1  # v1 < v2
+        fi
+
+        # Compare minor
+        if [ "$v1_minor" -gt "$v2_minor" ]; then
+            return 0  # v1 > v2
+        elif [ "$v1_minor" -lt "$v2_minor" ]; then
+            return 1  # v1 < v2
+        fi
+
+        # Compare patch
+        if [ "$v1_patch" -gt "$v2_patch" ]; then
+            return 0  # v1 > v2
+        elif [ "$v1_patch" -lt "$v2_patch" ]; then
+            return 1  # v1 < v2
+        fi
+
+        # Equal
+        return 2
+    }
+
+    # Check for version downgrade (only for non-snapshot versions)
+    if [ "$FORCE" != "--force" ] && ! echo "$VERSION" | grep -q "snapshot" && ! echo "$CURRENT_VERSION" | grep -q "snapshot"; then
+        if compare_versions "$CURRENT_VERSION" "$VERSION"; then
+            echo "Error: Cannot downgrade from $CURRENT_VERSION to $VERSION"
+            echo "Current version is higher than the requested version"
+            echo "Use 'just set-version $VERSION --force' to override"
+            exit 1
+        elif compare_versions "$CURRENT_VERSION" "$VERSION"; then
+            : # This is the v1 > v2 case, which we already handled above
+        else
+            # Equal versions - allow it (useful for re-setting the same version)
+            echo "Version unchanged: $VERSION"
+        fi
+    elif [ "$FORCE" = "--force" ]; then
+        echo "Force flag used - allowing version change from $CURRENT_VERSION to $VERSION"
+    fi
+
+    echo "Setting version to: $VERSION"
+
+    # Update Rust crate version
+    sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" crates/m3u-proxy/Cargo.toml
+    rm -f crates/m3u-proxy/Cargo.toml.bak
+
+    # Update frontend package.json version
+    sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package.json
+    rm -f frontend/package.json.bak
+
+    # Update frontend package-lock.json version (both root and packages section)
+    if [ -f frontend/package-lock.json ]; then
+        sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package-lock.json
+        rm -f frontend/package-lock.json.bak
+    fi
+
+    echo "Version set to: $VERSION"
 
 # Run all tests (Rust and Next.js)
 test:
@@ -74,7 +203,7 @@ install-all: install ui-setup
 dev: install
     @echo "Starting development environment..."
     @echo "Frontend will be available at http://localhost:3000"
-    @echo "Backend will be available at http://localhost:8080" 
+    @echo "Backend will be available at http://localhost:8080"
     @echo ""
     @echo "Run in separate terminals:"
     @echo "  just dev-frontend"
@@ -88,6 +217,13 @@ build-dev: build-frontend copy-frontend build-backend
 build-container:
     @echo "Building container using external script with runtime detection..."
     ./build-container.sh
+
+# Push container image to registry (supports podman, docker, nerdctl)
+push-container registry="":
+    @echo "Pushing container to registry using external script with runtime detection..."
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./push-container.sh "{{registry}}"
 
 # Format all code (Rust and frontend)
 fmt:
@@ -215,3 +351,46 @@ check-all: fmt lint audit test ui-test
 # Development workflow: build and test everything including UI
 dev-check: build-dev ui-quick
     @echo "🚀 Development check complete!"
+
+# Version-aware builds
+# ====================
+
+# Build with version management (updates versions before building)
+build-versioned:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION=$(just get-version)
+    just set-version "$VERSION"
+    just build-all
+    @echo "✅ Versioned build complete with version: $VERSION"
+
+# Build container with proper version tagging
+build-container-versioned:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Get the version to use
+    VERSION=$(just get-version)
+    echo "Building container with version: $VERSION"
+
+    # Update versions first
+    just set-version "$VERSION"
+
+    # Run the container build with version as argument
+    ./build-container.sh "$VERSION"
+
+# Push container with proper version tagging
+push-container-versioned registry="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Get the version to use
+    VERSION=$(just get-version)
+    echo "Pushing container with version: $VERSION"
+
+    # Run the container push with version and optional registry
+    if [ -z "{{registry}}" ]; then
+        ./push-container.sh --version "$VERSION"
+    else
+        ./push-container.sh --version "$VERSION" "{{registry}}"
+    fi

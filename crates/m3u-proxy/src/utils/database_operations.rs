@@ -326,20 +326,20 @@ impl DatabaseOperations {
             
             let mut values = Vec::new();
             
-            // Collect all parameters
+            // Collect all parameters - order must match INSERT statement
             for channel in chunk {
-                values.push(channel.id.into());
-                values.push(channel.source_id.into());
-                values.push(channel.tvg_id.clone().into());
-                values.push(channel.tvg_name.clone().into());
-                values.push(channel.tvg_chno.clone().into());
-                values.push(channel.channel_name.clone().into());
-                values.push(channel.tvg_logo.clone().into());
-                values.push(channel.tvg_shift.clone().into());
-                values.push(channel.group_title.clone().into());
-                values.push(channel.stream_url.clone().into());
-                values.push(channel.created_at.into());
-                values.push(channel.updated_at.into());
+                values.push(channel.id.into());                           // id
+                values.push(channel.source_id.into());                    // source_id
+                values.push(channel.tvg_id.clone().into());               // tvg_id
+                values.push(channel.tvg_name.clone().into());             // tvg_name
+                values.push(channel.tvg_chno.clone().into());             // tvg_chno
+                values.push(channel.channel_name.clone().into());         // channel_name
+                values.push(channel.tvg_logo.clone().into());             // tvg_logo
+                values.push(channel.tvg_shift.clone().into());            // tvg_shift
+                values.push(channel.group_title.clone().into());          // group_title
+                values.push(channel.stream_url.clone().into());           // stream_url
+                values.push(channel.created_at.into());                   // created_at
+                values.push(channel.updated_at.into());                   // updated_at
             }
             
             debug!("Generated SQL query: {}", query);

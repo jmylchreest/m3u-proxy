@@ -13,6 +13,7 @@ import {
 import { useProgressContext, NotificationEvent } from '@/providers/ProgressProvider'
 import { formatProgress } from '@/hooks/useProgressState'
 import { cn } from '@/lib/utils'
+import { Debug } from '@/utils/debug'
 
 interface NotificationBellProps {
   operationType?: string // Filter by operation type (undefined = all)
@@ -28,79 +29,108 @@ export function NotificationBell({
   const context = useProgressContext()
   const [events, setEvents] = useState<NotificationEvent[]>([])
   const [isOpen, setIsOpen] = useState(false)
+  const debug = Debug.createLogger('NotificationBell')
   const [height, setHeight] = useState(384) // Default h-96 = 384px
   const [isResizing, setIsResizing] = useState(false)
   const resizeRef = useRef<HTMLDivElement>(null)
   const startYRef = useRef(0)
   const startHeightRef = useRef(0)
 
-  // Subscribe to all events
+  // Subscribe to all events and always sync with context
   useEffect(() => {
     const unsubscribe = context.subscribeToAll((event) => {
-      setEvents(prev => {
-        const newEvents = new Map<string, NotificationEvent>()
-        
-        // Add existing events
-        prev.forEach(e => newEvents.set(e.id, e))
-        
-        // Add/update new event
-        newEvents.set(event.id, event)
-        
-        // Convert back to array and sort by update time
-        return Array.from(newEvents.values()).sort((a, b) => 
-          new Date(b.last_update).getTime() - new Date(a.last_update).getTime()
-        )
-      })
+      // Instead of managing state ourselves, always sync with context
+      debug.log('🔔 NotificationBell - received event update, syncing with context')
+      setEvents(context.getAllEvents())
     })
 
     // Load initial events
     setEvents(context.getAllEvents())
 
     return unsubscribe
-  }, [])
+  }, [context])
 
-  // Filter events by operation type and get unread count
-  const { filteredEvents, unreadCount } = useMemo(() => {
-    const filtered = operationType 
-      ? events.filter(e => e.operation_type === operationType)
-      : events
+  // Get unread count directly from context to avoid stale closure issues
+  const unreadCount = useMemo(() => {
+    const count = context.getUnreadCount(operationType)
+    debug.log('🔔 NotificationBell - getting unread count from context:', count, 'for operationType:', operationType)
+    return count
+  }, [context, operationType])
 
-    const unread = filtered.filter(e => !e.hasBeenVisible).length
-
-    return {
-      filteredEvents: filtered.slice(0, 20), // Show last 20 events
-      unreadCount: unread
+  // Filter events for display purposes only
+  const filteredEvents = useMemo(() => {
+    debug.log('🔔 NotificationBell - filtering events for display')
+    debug.log('🔔 Raw events:', events.map(e => ({ id: e.id, hasBeenSeen: e.hasBeenSeen, operation_type: e.operation_type })))
+    
+    let filtered = events
+    
+    // Filter by operation type if specified
+    if (operationType) {
+      filtered = filtered.filter(e => e.operation_type === operationType)
+      debug.log('🔔 After operation type filter:', filtered.map(e => ({ id: e.id, hasBeenSeen: e.hasBeenSeen })))
     }
+
+    return filtered.slice(0, 20) // Show last 20 events
   }, [events, operationType])
 
-  // Mark visible events as read when popup is open and events change
+  // Mark visible events as seen when popup is opened
   useEffect(() => {
-    if (isOpen && filteredEvents.length > 0) {
-      const unreadEventIds = filteredEvents
-        .filter(e => !e.hasBeenVisible)
+    debug.log('🔔 NotificationBell useEffect triggered:', { isOpen, operationType })
+    
+    if (isOpen) {
+      // Get all current events that match our filter and are unseen
+      const allCurrentEvents = context.getAllEvents()
+      debug.log('🔔 NotificationBell - all current events:', allCurrentEvents.map(e => ({
+        id: e.id,
+        hasBeenSeen: e.hasBeenSeen,
+        operation_type: e.operation_type,
+        state: e.state
+      })))
+      
+      let filtered = allCurrentEvents
+      
+      // Filter by operation type if specified
+      if (operationType) {
+        filtered = filtered.filter(e => e.operation_type === operationType)
+        debug.log('🔔 NotificationBell - filtered by operation type:', operationType, filtered.map(e => ({
+          id: e.id,
+          hasBeenSeen: e.hasBeenSeen,
+          operation_type: e.operation_type
+        })))
+      }
+      
+      const unseenEventIds = filtered
+        .filter(e => !e.hasBeenSeen)
         .map(e => e.id)
       
-      if (unreadEventIds.length > 0) {
-        context.markAsVisible(unreadEventIds)
+      debug.log('🔔 NotificationBell - unseen event IDs to mark:', unseenEventIds)
+      
+      if (unseenEventIds.length > 0) {
+        debug.log('🔔 NotificationBell - calling markAsSeen with:', unseenEventIds)
+        context.markAsSeen(unseenEventIds)
+      } else {
+        debug.log('🔔 NotificationBell - no unseen events to mark')
       }
     }
-  }, [isOpen, filteredEvents, context])
+  }, [isOpen, operationType])
 
   // Handle bell click
   const handleBellClick = () => {
     if (showPopup) {
       setIsOpen(!isOpen)
     } else {
-      // Just mark all unread events as read (no popup mode)
-      const unreadEventIds = filteredEvents
-        .filter(e => !e.hasBeenVisible)
+      // Just mark all unseen events as seen (no popup mode)
+      const unseenEventIds = filteredEvents
+        .filter(e => !e.hasBeenSeen)
         .map(e => e.id)
       
-      if (unreadEventIds.length > 0) {
-        context.markAsVisible(unreadEventIds)
+      if (unseenEventIds.length > 0) {
+        context.markAsSeen(unseenEventIds)
       }
     }
   }
+
+  // Dismiss functionality removed for simplicity
 
   const formatEventTime = (event: NotificationEvent) => {
     const date = new Date(event.last_update)
@@ -221,7 +251,7 @@ export function NotificationBell({
                     key={event.id}
                     className={cn(
                       "p-3 rounded-lg border mb-2 transition-colors",
-                      !event.hasBeenVisible && "bg-accent/50 border-accent"
+                      !event.hasBeenSeen && "bg-accent/50 border-accent"
                     )}
                   >
                     <div className="flex items-start justify-between mb-2">

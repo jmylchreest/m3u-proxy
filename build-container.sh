@@ -5,8 +5,20 @@ set -euo pipefail
 # Supports multiple container runtimes with auto-detection and fallback
 # Priority: podman > docker > buildah
 
-# Extract app version from Cargo.toml
-APP_VERSION=$(grep '^version' crates/m3u-proxy/Cargo.toml | head -1 | cut -d'"' -f2)
+# Get app version from argument, environment, or calculate it
+if [ $# -gt 0 ]; then
+    APP_VERSION="$1"
+    echo "Using version from argument: $APP_VERSION"
+elif [ -n "${APP_VERSION:-}" ]; then
+    echo "Using APP_VERSION from environment: $APP_VERSION"
+elif command -v just >/dev/null 2>&1; then
+    APP_VERSION=$(just get-version)
+    echo "Using version from just get-version: $APP_VERSION"
+else
+    # Fallback to Cargo.toml if just is not available
+    APP_VERSION=$(grep '^version' crates/m3u-proxy/Cargo.toml | head -1 | cut -d'"' -f2)
+    echo "Using fallback version from Cargo.toml: $APP_VERSION"
+fi
 
 # Default versions (can be overridden with environment variables)
 RUST_VERSION=${RUST_VERSION:-1.89}
@@ -73,10 +85,17 @@ echo ""
 TARGET_STAGE="runtime"
 BASE_TAG="m3u-proxy"
 IMAGE_TAG="${BASE_TAG}:${APP_VERSION}"
-IMAGE_TAG_LATEST="${BASE_TAG}:latest"
 
-echo "  Target: $TARGET_STAGE"
-echo "  Tags: $IMAGE_TAG, $IMAGE_TAG_LATEST"
+# Determine additional tag based on version type
+if echo "$APP_VERSION" | grep -q "snapshot"; then
+    IMAGE_TAG_ADDITIONAL="${BASE_TAG}:snapshot"
+    echo "  Target: $TARGET_STAGE"
+    echo "  Tags: $IMAGE_TAG, $IMAGE_TAG_ADDITIONAL (snapshot build)"
+else
+    IMAGE_TAG_ADDITIONAL="${BASE_TAG}:latest"
+    echo "  Target: $TARGET_STAGE"
+    echo "  Tags: $IMAGE_TAG, $IMAGE_TAG_ADDITIONAL (release build)"
+fi
 
 # Build command arguments
 BUILD_ARGS=(
@@ -84,8 +103,12 @@ BUILD_ARGS=(
     --build-arg "RUST_VERSION=${RUST_VERSION}"
     --build-arg "NODE_VERSION=${NODE_VERSION}"
     --build-arg "LINUXSERVER_FFMPEG_VERSION=${LINUXSERVER_FFMPEG_VERSION}"
+    --build-arg "APP_VERSION=${APP_VERSION}"
     --tag "$IMAGE_TAG"
-    --tag "$IMAGE_TAG_LATEST"
+    --tag "$IMAGE_TAG_ADDITIONAL"
+    --label "version=${APP_VERSION}"
+    --label "build-date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    --label "vcs-ref=$(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
     .
 )
 
@@ -101,22 +124,22 @@ fi
 echo ""
 
 echo "LinuxServer FFmpeg container build completed successfully!"
-echo "Built images: $BUILT_IMAGES"
+echo "Built images: $IMAGE_TAG, $IMAGE_TAG_ADDITIONAL"
 
 # Show run commands
 echo ""
 echo "Basic usage:"
-echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 -v \$(pwd)/data:/app/data -v \$(pwd)/config:/app/config ${IMAGE_TAG}"
+echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 -v \$(pwd)/data:/app/data -v \$(pwd)/config:/app/config ${IMAGE_TAG_ADDITIONAL}"
 echo ""
 echo "With GPU hardware acceleration:"
-echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 --device=/dev/dri:/dev/dri --group-add \$(getent group render | cut -d: -f3) -v \$(pwd)/data:/app/data -v \$(pwd)/config:/app/config ${IMAGE_TAG}"
+echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 --device=/dev/dri:/dev/dri --group-add \$(getent group render | cut -d: -f3) -v \$(pwd)/data:/app/data -v \$(pwd)/config:/app/config ${IMAGE_TAG_ADDITIONAL}"
 echo ""
 echo "Note: If localhost doesn't work in browser (resolves to IPv6), use:"
 echo "  Access via: http://127.0.0.1:8080"
 echo "  Or bind to both: -p 127.0.0.1:8080:8080 -p '[::1]:8080:8080'"
 echo ""
 echo "Test GPU capabilities:"
-echo "  ${CONTAINER_RUNTIME} run --rm --device=/dev/dri:/dev/dri --group-add \$(getent group render | cut -d: -f3) --entrypoint=/usr/local/bin/ffmpeg ${IMAGE_TAG} -hwaccels"
+echo "  ${CONTAINER_RUNTIME} run --rm --device=/dev/dri:/dev/dri --group-add \$(getent group render | cut -d: -f3) --entrypoint=/usr/local/bin/ffmpeg ${IMAGE_TAG_ADDITIONAL} -hwaccels"
 
 echo ""
 echo "Container image size:"

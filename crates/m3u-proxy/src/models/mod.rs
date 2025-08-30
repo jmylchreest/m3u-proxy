@@ -1212,7 +1212,6 @@ pub struct EpgSourceUpdateRequest {
 pub struct EpgSourceWithStats {
     #[serde(flatten)]
     pub source: EpgSource,
-    pub channel_count: i64,
     pub program_count: i64,
     pub next_scheduled_update: Option<DateTime<Utc>>,
 }
@@ -1309,7 +1308,6 @@ pub enum UnifiedSourceWithStats {
         original_timezone: Option<String>,
         time_offset: String,
         // EPG stats
-        channel_count: i64,
         program_count: i64,
         next_scheduled_update: Option<DateTime<Utc>>,
     },
@@ -1372,7 +1370,6 @@ impl UnifiedSourceWithStats {
                 last_ingested_at: epg_with_stats.source.last_ingested_at,
                 is_active: epg_with_stats.source.is_active,
             },
-            channel_count: epg_with_stats.channel_count,
             program_count: epg_with_stats.program_count,
             next_scheduled_update: epg_with_stats.next_scheduled_update,
         }

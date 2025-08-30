@@ -118,7 +118,6 @@ pub struct EpgSourceResponse {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub last_ingested_at: Option<chrono::DateTime<chrono::Utc>>,
     pub is_active: bool,
-    pub channel_count: u64,
     pub program_count: u64,
     pub next_scheduled_update: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -141,7 +140,6 @@ impl From<EpgSource> for EpgSourceResponse {
             updated_at: source.updated_at,
             last_ingested_at: source.last_ingested_at,
             is_active: source.is_active,
-            channel_count: 0, // Default value, should be set when creating from stats
             program_count: 0, // Default value, should be set when creating from stats
             next_scheduled_update: None, // Default value, should be set when creating from stats
         }
@@ -188,7 +186,6 @@ pub async fn list_epg_sources(
             let mut response_items = Vec::new();
             for source_with_stats in sources_with_stats {
                 let mut response = EpgSourceResponse::from(source_with_stats.source);
-                response.channel_count = source_with_stats.channel_count as u64;
                 response.program_count = source_with_stats.program_count as u64;
                 response.next_scheduled_update = source_with_stats.next_scheduled_update;
                 response_items.push(response);

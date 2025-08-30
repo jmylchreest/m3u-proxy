@@ -46,15 +46,19 @@ impl EpgProgramSeaOrmRepository {
     }
 
     /// Find EPG programs by time range (rationalized time-based querying)
+    /// Returns programs that overlap with the given time range
     pub async fn find_by_time_range(
         &self,
         source_id: Option<&Uuid>,
         start_time: &DateTime<Utc>,
         end_time: &DateTime<Utc>,
     ) -> Result<Vec<EpgProgram>> {
+        // Find programs that overlap with the time range:
+        // - Program ends after the range start (still running or will run)
+        // - AND program starts before the range end (not too far in the future)
         let mut query = EpgPrograms::find()
-            .filter(epg_programs::Column::StartTime.gte(*start_time))
-            .filter(epg_programs::Column::EndTime.lte(*end_time));
+            .filter(epg_programs::Column::EndTime.gt(*start_time))    // Program ends after range start
+            .filter(epg_programs::Column::StartTime.lt(*end_time));   // Program starts before range end
 
         if let Some(source_id) = source_id {
             query = query.filter(epg_programs::Column::SourceId.eq(*source_id));

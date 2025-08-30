@@ -44,16 +44,8 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
-    #[sea_orm(has_many = "super::channel_relay_configs::Entity")]
-    ChannelRelayConfigs,
     #[sea_orm(has_many = "super::stream_proxies::Entity")]
     StreamProxies,
-}
-
-impl Related<super::channel_relay_configs::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::ChannelRelayConfigs.def()
-    }
 }
 
 impl Related<super::stream_proxies::Entity> for Entity {

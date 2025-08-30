@@ -8,7 +8,7 @@ pub struct StaticAssets;
 
 /// Embedded database migrations
 #[derive(RustEmbed)]
-#[folder = "migrations/"]
+#[folder = "src/database/migrations/"]
 #[prefix = "migrations/"]
 pub struct MigrationAssets;
 
@@ -123,7 +123,10 @@ mod tests {
 
         // Only test for assets if they are actually embedded (development vs production build)
         // Filter out .keep files and other non-asset files
-        let real_assets: Vec<_> = assets.iter().filter(|path| !path.ends_with(".keep")).collect();
+        let real_assets: Vec<_> = assets
+            .iter()
+            .filter(|path| !path.ends_with(".keep"))
+            .collect();
         if !real_assets.is_empty() {
             // Test that core assets are embedded in production builds
             assert!(
@@ -133,7 +136,7 @@ mod tests {
             // Check for Next.js CSS files (they have dynamic names)
             let has_css = real_assets.iter().any(|path| path.contains(".css"));
             assert!(has_css, "CSS files should be embedded in production builds");
-            
+
             // Check for Next.js JS files
             let has_js = real_assets.iter().any(|path| path.contains(".js"));
             assert!(has_js, "JS files should be embedded in production builds");
@@ -165,7 +168,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_asset_content_validation() {
         // Test HTML content
@@ -182,7 +184,9 @@ mod tests {
         }
 
         // Test that we have some CSS content (Next.js CSS files have dynamic names)
-        let css_files: Vec<_> = StaticAssets::iter().filter(|f| f.contains(".css")).collect();
+        let css_files: Vec<_> = StaticAssets::iter()
+            .filter(|f| f.contains(".css"))
+            .collect();
         if !css_files.is_empty() {
             if let Some(css_file) = StaticAssets::get_asset(&css_files[0]) {
                 let content = String::from_utf8_lossy(&css_file.data);

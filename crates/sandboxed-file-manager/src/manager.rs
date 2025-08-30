@@ -379,7 +379,7 @@ impl SandboxedManager {
             });
         }
 
-        tracing::debug!(
+        tracing::trace!(
             "Path validated: '{}' -> '{}' (within '{}')",
             filepath,
             resolved_path.display(),

@@ -286,6 +286,7 @@ impl StreamRuleProcessor {
                 trace!("Evaluating condition: field='{}' operator='{:?}' value='{}' field_value='{}'", 
                        field, operator, value, field_value_str);
                 
+                
                 let (matches, captures) = match operator {
                     FilterOperator::Equals => (field_value_str.eq_ignore_ascii_case(value), None),
                     FilterOperator::NotEquals => (!field_value_str.eq_ignore_ascii_case(value), None),
@@ -365,6 +366,8 @@ impl StreamRuleProcessor {
                 
                 
                 trace!("Condition evaluation result: {}", matches);
+                
+                
                 Ok((matches, captures))
             }
             crate::models::ConditionNode::Group { operator, children } => {
@@ -610,7 +613,8 @@ impl StreamRuleProcessor {
     
     /// Get a field value from a channel record
     fn get_field_value(&self, field_name: &str, record: &crate::models::Channel) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        match field_name {
+        
+        let result = match field_name {
             "tvg_id" => Ok(record.tvg_id.clone()),
             "tvg_name" => Ok(record.tvg_name.clone()),
             "tvg_logo" => Ok(record.tvg_logo.clone()),
@@ -619,7 +623,15 @@ impl StreamRuleProcessor {
             "channel_name" => Ok(Some(record.channel_name.clone())),
             "stream_url" => Ok(Some(record.stream_url.clone())),
             _ => Err(anyhow::anyhow!("Unknown field: {}", field_name).into()),
+        };
+        
+        // Add trace logging to debug field value extraction
+        if let Ok(ref value) = result {
+            trace!("FIELD_VALUE_DEBUG: field='{}' value='{:?}' channel_name='{}'", 
+                   field_name, value, record.channel_name);
         }
+        
+        result
     }
     
     /// Set a field value on a channel record

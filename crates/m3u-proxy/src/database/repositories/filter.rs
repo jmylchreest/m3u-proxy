@@ -277,19 +277,173 @@ impl FilterSeaOrmRepository {
     /// Test a filter pattern against channels from a specific source
     pub async fn test_filter_pattern(
         &self,
-        _filter_expression: &str,
-        _source_type: crate::models::FilterSourceType,
-        _source_id: Option<Uuid>
+        pattern: &str,
+        source_type: crate::models::FilterSourceType,
+        source_id: Option<Uuid>,
     ) -> Result<crate::models::FilterTestResult> {
-        // For now, return a basic implementation
-        // TODO: Implement actual filter pattern testing logic
-        Ok(crate::models::FilterTestResult {
-            is_valid: true,
-            error: None,
-            matching_channels: vec![],
-            total_channels: 0,
-            matched_count: 0,
-            expression_tree: None,
-        })
+        use crate::models::FilterTestChannel;
+        use crate::pipeline::engines::filter_processor::{StreamFilterProcessor, FilterProcessor, RegexEvaluator};
+        use crate::utils::regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
+        
+        // Parse the expression first to check if it's valid
+        let parser = crate::expression_parser::ExpressionParser::new()
+            .with_fields(vec![
+                "tvg_id".to_string(),
+                "tvg_name".to_string(),
+                "tvg_logo".to_string(),
+                "tvg_shift".to_string(),
+                "group_title".to_string(),
+                "channel_name".to_string(),
+                "stream_url".to_string(),
+            ]);
+        
+        match parser.parse(pattern) {
+            Err(e) => {
+                Ok(crate::models::FilterTestResult {
+                    is_valid: false,
+                    error: Some(format!("Invalid filter expression: {e}")),
+                    matching_channels: Vec::new(),
+                    total_channels: 0,
+                    matched_count: 0,
+                    expression_tree: None,
+                })
+            }
+            Ok(condition_tree) => {
+                // Get channels from database for testing
+                let channels = self.get_channels_for_testing(source_type, source_id).await?;
+                let total_channels = channels.len();
+                
+                // Create regex evaluator with default config
+                let regex_preprocessor = RegexPreprocessor::new(RegexPreprocessorConfig::default());
+                let regex_evaluator = RegexEvaluator::new(regex_preprocessor);
+                
+                // Create filter processor
+                let mut filter_processor = StreamFilterProcessor::new(
+                    Uuid::new_v4().to_string(),
+                    "Test Filter".to_string(),
+                    false, // not inverse for testing
+                    pattern,
+                    regex_evaluator,
+                ).map_err(|e| anyhow::anyhow!("Failed to create filter processor: {e}"))?;
+                
+                let mut matching_channels = Vec::new();
+                
+                for channel in &channels {
+                    match filter_processor.process_record(channel) {
+                        Ok(result) => {
+                            if result.include_match {
+                                matching_channels.push(FilterTestChannel {
+                                    channel_name: channel.channel_name.clone(),
+                                    group_title: channel.group_title.clone(),
+                                    matched_text: None,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            return Ok(crate::models::FilterTestResult {
+                                is_valid: false,
+                                error: Some(format!("Filter processing error: {e}")),
+                                matching_channels: Vec::new(),
+                                total_channels,
+                                matched_count: 0,
+                                expression_tree: None,
+                            });
+                        }
+                    }
+                }
+                
+                let matched_count = matching_channels.len();
+                
+                // Convert condition tree to JSON for debugging
+                let expression_tree = serde_json::to_value(&condition_tree).ok();
+                
+                Ok(crate::models::FilterTestResult {
+                    is_valid: true,
+                    error: None,
+                    matching_channels,
+                    total_channels,
+                    matched_count,
+                    expression_tree,
+                })
+            }
+        }
+    }
+    
+    /// Get channels for filter testing with source validation (adapted for SeaORM)
+    async fn get_channels_for_testing(
+        &self,
+        source_type: crate::models::FilterSourceType,
+        source_id: Option<Uuid>,
+    ) -> Result<Vec<crate::models::Channel>> {
+        use crate::entities::{channels, prelude::Channels};
+        
+        // Validate source_id exists if provided
+        if let Some(source_id) = source_id {
+            match source_type {
+                crate::models::FilterSourceType::Stream => {
+                    use crate::entities::prelude::StreamSources;
+                    let exists = StreamSources::find_by_id(source_id)
+                        .one(&*self.connection)
+                        .await?
+                        .is_some();
+                    if !exists {
+                        return Err(anyhow::anyhow!("Stream source ID {} not found", source_id));
+                    }
+                }
+                crate::models::FilterSourceType::Epg => {
+                    use crate::entities::prelude::EpgSources;
+                    let exists = EpgSources::find_by_id(source_id)
+                        .one(&*self.connection)
+                        .await?
+                        .is_some();
+                    if !exists {
+                        return Err(anyhow::anyhow!("EPG source ID {} not found", source_id));
+                    }
+                }
+            }
+        }
+
+        // For now, only handle stream channels (EPG channel filtering would need epg_programs table)
+        match source_type {
+            crate::models::FilterSourceType::Stream => {
+                let channels_query = if let Some(source_id) = source_id {
+                    Channels::find().filter(channels::Column::SourceId.eq(source_id))
+                } else {
+                    Channels::find()
+                };
+
+                let channel_models = channels_query.all(&*self.connection).await?;
+                let mut channels = Vec::new();
+                
+                for model in channel_models {
+                    channels.push(crate::models::Channel {
+                        id: model.id,
+                        source_id: model.source_id,
+                        tvg_id: model.tvg_id,
+                        tvg_name: model.tvg_name,
+                        tvg_chno: model.tvg_chno,
+                        tvg_logo: model.tvg_logo,
+                        tvg_shift: model.tvg_shift,
+                        group_title: model.group_title,
+                        channel_name: model.channel_name,
+                        stream_url: model.stream_url,
+                        video_codec: None,
+                        audio_codec: None,
+                        resolution: None,
+                        probe_method: None,
+                        last_probed_at: None,
+                        created_at: model.created_at,
+                        updated_at: model.updated_at,
+                    });
+                }
+                
+                Ok(channels)
+            }
+            crate::models::FilterSourceType::Epg => {
+                // EPG filtering would require different logic and epg_programs table
+                // For now, return empty list
+                Ok(Vec::new())
+            }
+        }
     }
 }

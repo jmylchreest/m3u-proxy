@@ -719,6 +719,7 @@ impl DataMappingStage {
 
     /// Create Channel from SeaORM model
     fn create_channel_from_model(&self, model: &crate::entities::channels::Model) -> Result<Channel, anyhow::Error> {
+        
         let channel = Channel {
             id: model.id,
             source_id: model.source_id,
@@ -738,6 +739,8 @@ impl DataMappingStage {
             probe_method: None,
             last_probed_at: None,
         };
+        
+        
         Ok(channel)
     }
 

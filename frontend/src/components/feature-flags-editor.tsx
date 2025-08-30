@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+// Alert components now handled by parent
 import {
   Dialog,
   DialogContent,
@@ -27,17 +27,10 @@ import {
 } from "@/components/ui/table"
 import { 
   Plus, 
-  Save, 
-  RefreshCw,
   Trash2,
-  Edit,
   Flag,
-  Settings,
-  CheckCircle,
-  XCircle
+  Settings
 } from "lucide-react"
-import { apiClient } from "@/lib/api-client"
-import { useFeatureFlags, invalidateFeatureFlagsCache } from "@/hooks/useFeatureFlags"
 import { Debug } from "@/utils/debug"
 
 interface FeatureFlag {
@@ -52,92 +45,31 @@ interface FeatureConfigValue {
   type: 'string' | 'number' | 'boolean'
 }
 
-export function FeatureFlagsEditor() {
-  const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [saveSuccess, setSaveSuccess] = useState<string | null>(null)
-  const [flags, setFlags] = useState<FeatureFlag[]>([])
+interface FeatureFlagsEditorProps {
+  flags: FeatureFlag[]
+  setFlags: (flags: FeatureFlag[] | ((prev: FeatureFlag[]) => FeatureFlag[])) => void
+  loading: boolean
+  error: string | null
+  setError: (error: string | null) => void
+  onRefresh: () => Promise<void>
+}
+
+export function FeatureFlagsEditor({ 
+  flags, 
+  setFlags, 
+  loading, 
+  error, 
+  setError,
+  onRefresh 
+}: FeatureFlagsEditorProps) {
   const [showAddFlag, setShowAddFlag] = useState(false)
   const [showEditConfig, setShowEditConfig] = useState<string | null>(null)
   const [newFlagKey, setNewFlagKey] = useState("")
   const [configValues, setConfigValues] = useState<FeatureConfigValue[]>([])
 
-  const { refetch } = useFeatureFlags()
   const debug = Debug.createLogger('FeatureFlagsEditor')
 
-  const fetchFeatureFlags = async () => {
-    setLoading(true)
-    setError(null)
-    
-    try {
-      const response = await apiClient.getFeatures()
-      const featureFlags: FeatureFlag[] = []
-      
-      // Convert flags and config into unified structure
-      Object.entries(response.flags || {}).forEach(([key, enabled]) => {
-        featureFlags.push({
-          key,
-          enabled: Boolean(enabled),
-          config: response.config?.[key] || {}
-        })
-      })
-      
-      // Add any config-only features (features with config but no flag)
-      Object.keys(response.config || {}).forEach(key => {
-        if (!featureFlags.find(f => f.key === key)) {
-          featureFlags.push({
-            key,
-            enabled: false,
-            config: response.config[key] || {}
-          })
-        }
-      })
-      
-      setFlags(featureFlags.sort((a, b) => a.key.localeCompare(b.key)))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch feature flags')
-      debug.error('Failed to fetch feature flags:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const saveFeatureFlags = async () => {
-    setSaving(true)
-    setError(null)
-    setSaveSuccess(null)
-    
-    try {
-      const flagsData = flags.reduce((acc, flag) => {
-        acc[flag.key] = flag.enabled
-        return acc
-      }, {} as Record<string, boolean>)
-      
-      const configData = flags.reduce((acc, flag) => {
-        if (Object.keys(flag.config).length > 0) {
-          acc[flag.key] = flag.config
-        }
-        return acc
-      }, {} as Record<string, Record<string, any>>)
-      
-      await apiClient.updateFeatures({
-        flags: flagsData,
-        config: configData
-      })
-      
-      setSaveSuccess('Feature flags updated successfully')
-      
-      // Invalidate cache and refresh the feature flags context
-      invalidateFeatureFlagsCache()
-      await refetch()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save feature flags')
-      debug.error('Failed to save feature flags:', err)
-    } finally {
-      setSaving(false)
-    }
-  }
+  // Feature flags operations are now handled by parent component
 
   const toggleFlag = (key: string, enabled: boolean) => {
     setFlags(prev => prev.map(flag => 
@@ -293,9 +225,7 @@ export function FeatureFlagsEditor() {
     return String(value)
   }
 
-  useEffect(() => {
-    fetchFeatureFlags()
-  }, [])
+  // Initial fetch is handled by parent component
 
   return (
     <Card>
@@ -310,80 +240,50 @@ export function FeatureFlagsEditor() {
       </CardHeader>
       <CardContent>
         {/* Controls */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex gap-2">
-            <Dialog open={showAddFlag} onOpenChange={setShowAddFlag}>
-              <DialogTrigger asChild>
-                <Button size="sm">
-                  <Plus className="h-4 w-4 mr-2" />
+        <div className="flex justify-start items-center mb-6">
+          <Dialog open={showAddFlag} onOpenChange={setShowAddFlag}>
+            <DialogTrigger asChild>
+              <Button size="sm">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Flag
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add Feature Flag</DialogTitle>
+                <DialogDescription>
+                  Create a new feature flag. Use kebab-case naming (e.g., debug-frontend, advanced-player).
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="flag-key">Flag Key</Label>
+                  <Input
+                    id="flag-key"
+                    value={newFlagKey}
+                    onChange={(e) => {
+                      setNewFlagKey(e.target.value)
+                      setError(null) // Clear error on input change
+                    }}
+                    placeholder="e.g., new-feature"
+                    onKeyDown={(e) => e.key === 'Enter' && addFlag()}
+                    pattern="[a-z0-9-]+"
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowAddFlag(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={addFlag} disabled={!newFlagKey.trim()}>
                   Add Flag
                 </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Add Feature Flag</DialogTitle>
-                  <DialogDescription>
-                    Create a new feature flag. Use kebab-case naming (e.g., debug-frontend, advanced-player).
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="flag-key">Flag Key</Label>
-                    <Input
-                      id="flag-key"
-                      value={newFlagKey}
-                      onChange={(e) => {
-                        setNewFlagKey(e.target.value)
-                        setError(null) // Clear error on input change
-                      }}
-                      placeholder="e.g., new-feature"
-                      onKeyDown={(e) => e.key === 'Enter' && addFlag()}
-                      pattern="[a-z0-9-]+"
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setShowAddFlag(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={addFlag} disabled={!newFlagKey.trim()}>
-                    Add Flag
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-          </div>
-          
-          <div className="flex gap-2">
-            <Button onClick={fetchFeatureFlags} disabled={loading} size="sm" variant="outline">
-              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-            <Button onClick={saveFeatureFlags} disabled={saving} size="sm">
-              <Save className={`h-4 w-4 mr-2 ${saving ? 'animate-spin' : ''}`} />
-              Save Changes
-            </Button>
-          </div>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
 
-        {/* Status Messages */}
-        {error && (
-          <Alert variant="destructive" className="mb-4">
-            <XCircle className="h-4 w-4" />
-            <AlertDescription>
-              <span className="font-medium">Error:</span> {error}
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {saveSuccess && (
-          <Alert variant="success" className="mb-4">
-            <CheckCircle className="h-4 w-4" />
-            <AlertDescription>
-              <span className="font-medium">Success:</span> {saveSuccess}
-            </AlertDescription>
-          </Alert>
-        )}
+        {/* Status Messages - now handled by parent component */}
 
         {/* Feature Flags Table */}
         {flags.length > 0 ? (

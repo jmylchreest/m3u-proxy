@@ -167,17 +167,6 @@ impl EpgSourceSeaOrmRepository {
         Ok(now)
     }
 
-    /// Get channel count for a specific EPG source
-    pub async fn get_channel_count_for_source(&self, source_id: &Uuid) -> Result<u64> {
-        use crate::entities::{prelude::EpgChannels, epg_channels};
-        
-        let count = EpgChannels::find()
-            .filter(epg_channels::Column::SourceId.eq(*source_id))
-            .count(&*self.connection)
-            .await?;
-
-        Ok(count)
-    }
 
     /// Update an EPG source
     pub async fn update(&self, id: &Uuid, request: crate::models::EpgSourceUpdateRequest) -> Result<crate::models::EpgSource> {
@@ -222,14 +211,12 @@ impl EpgSourceSeaOrmRepository {
         Ok(())
     }
 
-    /// List EPG sources with statistics
+    /// List EPG sources with statistics (only active sources)
     pub async fn list_with_stats(&self) -> Result<Vec<crate::models::EpgSourceWithStats>> {
-        let sources = self.find_all().await?;
+        let sources = self.find_active().await?;
         let mut results = Vec::new();
         
         for source in sources {
-            let channel_count = self.get_channel_count_for_source(&source.id).await?;
-            
             // Get program count
             use crate::entities::{prelude::EpgPrograms, epg_programs};
             let program_count = EpgPrograms::find()
@@ -246,7 +233,6 @@ impl EpgSourceSeaOrmRepository {
             
             results.push(crate::models::EpgSourceWithStats {
                 source,
-                channel_count: channel_count as i64,
                 program_count: program_count as i64,
                 next_scheduled_update,
             });

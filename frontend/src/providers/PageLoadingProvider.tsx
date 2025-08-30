@@ -28,15 +28,9 @@ export function PageLoadingProvider({ children }: PageLoadingProviderProps) {
   const [isLoading, setIsLoadingState] = useState(false)
   const pathname = usePathname()
 
-  // Auto-start loading on route changes
+  // No auto-loading on route changes - components handle their own loading states
   useEffect(() => {
-    setIsLoadingState(true)
-    // Show spinner for route changes, allow pages to override
-    const timer = setTimeout(() => {
-      setIsLoadingState(false)
-    }, 500)
-
-    return () => clearTimeout(timer)
+    setIsLoadingState(false)
   }, [pathname])
 
   const setIsLoading = useCallback((loading: boolean) => {

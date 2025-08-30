@@ -2,6 +2,7 @@
 ARG RUST_VERSION=1.89
 ARG NODE_VERSION=22
 ARG LINUXSERVER_FFMPEG_VERSION=latest
+ARG APP_VERSION=development
 
 # Frontend build stage
 FROM node:${NODE_VERSION}-alpine AS frontend-builder
@@ -43,10 +44,12 @@ FROM lscr.io/linuxserver/ffmpeg:${LINUXSERVER_FFMPEG_VERSION} AS runtime
 ARG RUST_VERSION
 ARG NODE_VERSION
 ARG LINUXSERVER_FFMPEG_VERSION
+ARG APP_VERSION
 
 # Set container labels
 LABEL maintainer="John Mylchreest <jmylchreest@gmail.com>" \
     description="M3U Proxy service with LinuxServer FFmpeg + GPU acceleration" \
+    version="${APP_VERSION}" \
     rust_version="${RUST_VERSION}" \
     node_version="${NODE_VERSION}" \
     ffmpeg_base="lscr.io/linuxserver/ffmpeg:${LINUXSERVER_FFMPEG_VERSION}" \

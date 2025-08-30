@@ -281,9 +281,9 @@ impl StreamSourceSeaOrmRepository {
         Ok(())
     }
 
-    /// List stream sources with statistics 
+    /// List stream sources with statistics (only active sources)
     pub async fn list_with_stats(&self) -> Result<Vec<crate::models::StreamSourceWithStats>> {
-        let sources = self.find_all().await?;
+        let sources = self.find_active().await?;
         let mut results = Vec::new();
         
         for source in sources {

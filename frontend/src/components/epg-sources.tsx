@@ -45,7 +45,6 @@ import {
   RefreshCw, 
   Clock,
   Archive,
-  Monitor,
   Search,
   Filter,
   Grid,
@@ -67,7 +66,7 @@ import { DEFAULT_PAGE_SIZE, API_CONFIG } from "@/lib/config"
 import { RefreshButton } from "@/components/RefreshButton"
 import { useConflictHandler } from "@/hooks/useConflictHandler"
 import { ConflictNotification } from "@/components/ConflictNotification"
-import { sseClient } from "@/lib/sse-client"
+import { useProgressContext } from "@/providers/ProgressProvider"
 import { formatDate, formatRelativeTime } from "@/lib/utils"
 import { validateCronExpression, describeCronExpression, COMMON_CRON_TEMPLATES } from "@/lib/cron-validation"
 
@@ -591,6 +590,7 @@ function EditEpgSourceSheet({
 }
 
 export function EpgSources() {
+  const progressContext = useProgressContext()
   const [allSources, setAllSources] = useState<EpgSourceResponse[]>([])
   const [pagination, setPagination] = useState<Omit<PaginatedResponse<EpgSourceResponse>, 'items'> | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
@@ -703,11 +703,11 @@ export function EpgSources() {
       }
     }
 
-    sseClient.subscribe('epg_ingestion', handleGlobalEpgEvent)
+    const unsubscribe = progressContext.subscribeToType('epg_ingestion', handleGlobalEpgEvent)
 
     return () => {
       console.log('[EpgSources] Component unmounting, unsubscribing from EPG events')
-      sseClient.unsubscribe('epg_ingestion', handleGlobalEpgEvent)
+      unsubscribe()
     }
   }, [])
 
@@ -868,14 +868,10 @@ export function EpgSources() {
     }
   }
 
-  const totalChannels = allSources?.reduce((sum, source) => sum + source.channel_count, 0) || 0
   const totalPrograms = allSources?.reduce((sum, source) => sum + source.program_count, 0) || 0
   const activeSources = allSources?.filter(s => s.is_active).length || 0
   const xmltvSources = allSources?.filter(s => s.source_type === 'xmltv').length || 0
   const xtreamSources = allSources?.filter(s => s.source_type === 'xtream').length || 0
-  
-  // Only show channels column if any source has channel_count > 0
-  const showChannelsColumn = totalChannels > 0
 
   return (
     <TooltipProvider>
@@ -946,7 +942,7 @@ export function EpgSources() {
       )}
 
       {/* Statistics Cards */}
-      <div className={`grid gap-4 ${showChannelsColumn ? 'md:grid-cols-5' : 'md:grid-cols-4'}`}>
+      <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Sources</CardTitle>
@@ -960,20 +956,6 @@ export function EpgSources() {
           </CardContent>
         </Card>
 
-        {showChannelsColumn && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Channels</CardTitle>
-              <Monitor className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{totalChannels}</div>
-              <p className="text-xs text-muted-foreground">
-                With EPG data
-              </p>
-            </CardContent>
-          </Card>
-        )}
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -1155,7 +1137,6 @@ export function EpgSources() {
                     <TableHead>Name</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Status</TableHead>
-                    {showChannelsColumn && <TableHead>Channels</TableHead>}
                     <TableHead>Programs</TableHead>
                     <TableHead>Last Updated</TableHead>
                     <TableHead>Next Update</TableHead>
@@ -1183,14 +1164,6 @@ export function EpgSources() {
                           {source.is_active ? 'Active' : 'Inactive'}
                         </Badge>
                       </TableCell>
-                      {showChannelsColumn && (
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <Monitor className="h-4 w-4 text-muted-foreground" />
-                            {source.channel_count}
-                          </div>
-                        </TableCell>
-                      )}
                       <TableCell>
                         <div className="flex items-center gap-1">
                           <Archive className="h-4 w-4 text-muted-foreground" />

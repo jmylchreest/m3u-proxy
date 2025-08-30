@@ -562,6 +562,7 @@ export function Logos() {
   const [isEditSheetOpen, setIsEditSheetOpen] = useState(false)
   const [editingLogo, setEditingLogo] = useState<LogoAsset | null>(null)
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table'>('grid')
+  const [isInitialLoad, setIsInitialLoad] = useState(true) // Track initial load
   
   // Ref for infinite scroll trigger
   const loadMoreRef = useRef<HTMLDivElement>(null)
@@ -682,6 +683,11 @@ export function Logos() {
       setTotalCount(response.total_count)
       setHasMore(response.page < response.total_pages)
       setIsOnline(true)
+      
+      // Mark initial load as complete after first successful load
+      if (isInitialLoad) {
+        setIsInitialLoad(false)
+      }
     } catch (error) {
       const apiError = error as ApiError
       if (apiError.status === 0) {
@@ -696,10 +702,14 @@ export function Logos() {
           logos: `Failed to load logos: ${apiError.message}` 
         }))
       }
+      // Mark initial load as complete even on error
+      if (isInitialLoad) {
+        setIsInitialLoad(false)
+      }
     } finally {
       setLoading(prev => ({ ...prev, logos: false }))
     }
-  }, [isOnline, includeCached, debouncedSearchTerm])
+  }, [isOnline, includeCached, debouncedSearchTerm, isInitialLoad])
 
   // Load initial data
   useEffect(() => {
@@ -1037,7 +1047,106 @@ export function Logos() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {errors.logos ? (
+          {loading.logos && isInitialLoad ? (
+            <>
+              {/* Loading skeleton based on view mode */}
+              {viewMode === 'grid' && (
+                <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <Card key={i} className="animate-pulse">
+                      <CardHeader className="pb-2">
+                        <div className="flex items-center gap-2">
+                          <Skeleton className="h-5 w-16" />
+                          <Skeleton className="h-5 w-12" />
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <Skeleton className="aspect-square w-full" />
+                        <div className="space-y-2">
+                          <Skeleton className="h-4 w-3/4" />
+                          <Skeleton className="h-3 w-1/2" />
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex justify-between">
+                            <Skeleton className="h-3 w-8" />
+                            <Skeleton className="h-3 w-12" />
+                          </div>
+                          <div className="flex justify-between">
+                            <Skeleton className="h-3 w-8" />
+                            <Skeleton className="h-3 w-16" />
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              
+              {viewMode === 'list' && (
+                <div className="space-y-2">
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <Card key={i} className="animate-pulse">
+                      <CardContent className="pt-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-4 flex-1">
+                            <Skeleton className="w-16 h-16" />
+                            <div className="flex-1 space-y-2">
+                              <div className="flex items-center gap-3">
+                                <div>
+                                  <Skeleton className="h-4 w-32 mb-1" />
+                                  <Skeleton className="h-3 w-48" />
+                                </div>
+                                <div className="flex gap-2">
+                                  <Skeleton className="h-5 w-16" />
+                                  <Skeleton className="h-5 w-12" />
+                                  <Skeleton className="h-5 w-14" />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-1">
+                            <Skeleton className="h-8 w-8" />
+                            <Skeleton className="h-8 w-8" />
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              
+              {viewMode === 'table' && (
+                <div className="space-y-4">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <Card key={i} className="animate-pulse">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-start gap-4">
+                          <Skeleton className="w-24 h-24 flex-shrink-0" />
+                          <div className="space-y-2 flex-1">
+                            <div className="flex items-center gap-2">
+                              <Skeleton className="h-6 w-48" />
+                              <Skeleton className="h-5 w-16" />
+                              <Skeleton className="h-5 w-12" />
+                            </div>
+                            <Skeleton className="h-4 w-3/4" />
+                            <div className="flex gap-4">
+                              <Skeleton className="h-3 w-20" />
+                              <Skeleton className="h-3 w-24" />
+                              <Skeleton className="h-3 w-16" />
+                            </div>
+                          </div>
+                          <div className="flex gap-1">
+                            <Skeleton className="h-8 w-8" />
+                            <Skeleton className="h-8 w-8" />
+                          </div>
+                        </div>
+                      </CardHeader>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : errors.logos ? (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Failed to Load Logos</AlertTitle>

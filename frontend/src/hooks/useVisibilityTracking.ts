@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react'
 import { useProgressContext } from '@/providers/ProgressProvider'
 
 /**
- * Hook to automatically mark events as visible when they appear in the UI
+ * Hook to automatically mark events as seen when they appear in the UI
  * @param eventIds - Array of event IDs that are currently visible
  * @param enabled - Whether to track visibility (default: true)
  */
@@ -25,10 +25,10 @@ export function useVisibilityTracking(eventIds: string[], enabled: boolean = tru
       }
     }
 
-    // Mark new events as visible
+    // Mark new events as seen/acknowledged
     if (newEventIds.length > 0) {
-      console.log('[useVisibilityTracking] Marking events as visible:', newEventIds)
-      context.markAsVisible(newEventIds)
+      console.log('[useVisibilityTracking] Marking events as seen:', newEventIds)
+      context.markAsSeen(newEventIds)
     }
 
     // Update the previous set
@@ -37,17 +37,17 @@ export function useVisibilityTracking(eventIds: string[], enabled: boolean = tru
 }
 
 /**
- * Hook to mark events as visible when a component mounts/renders
+ * Hook to mark events as seen when a component mounts/renders
  * Useful for one-time marking when events are displayed
- * @param eventIds - Array of event IDs to mark as visible
+ * @param eventIds - Array of event IDs to mark as seen
  */
-export function useMarkAsVisible(eventIds: string[]) {
+export function useMarkAsSeen(eventIds: string[]) {
   const context = useProgressContext()
   
   useEffect(() => {
     if (eventIds.length > 0) {
-      console.log('[useMarkAsVisible] Marking events as visible:', eventIds)
-      context.markAsVisible(eventIds)
+      console.log('[useMarkAsSeen] Marking events as seen:', eventIds)
+      context.markAsSeen(eventIds)
     }
   }, [eventIds, context])
 }

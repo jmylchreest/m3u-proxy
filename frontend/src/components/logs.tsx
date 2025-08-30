@@ -33,8 +33,11 @@ import {
 import { LogEntry, LogStats } from "@/types/api"
 import { logsClient } from "@/lib/logs-client"
 import { getBackendUrl } from '@/lib/config'
+import { useBackendConnectivity } from '@/providers/backend-connectivity-provider'
 
 export function Logs() {
+  const { isConnected: backendConnected } = useBackendConnectivity()
+  
   // Logs state
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [pendingLogs, setPendingLogs] = useState<LogEntry[]>([])
@@ -241,6 +244,13 @@ export function Logs() {
   }
 
   useEffect(() => {
+    // Only connect to logs stream if backend is available
+    if (!backendConnected) {
+      logsClient.disconnect()
+      setLogsConnected(false)
+      return
+    }
+    
     // Auto-connect to logs stream
     logsClient.connect()
     logsClient.subscribe(handleNewLog)
@@ -252,13 +262,13 @@ export function Logs() {
     // Refresh stats every 30 seconds
     const statsInterval = setInterval(fetchLogStats, 30000)
     
-    // Cleanup on unmount
+    // Cleanup on unmount or when backend disconnects
     return () => {
       logsClient.disconnect()
       setLogsConnected(false)
       clearInterval(statsInterval)
     }
-  }, [])
+  }, [backendConnected])
 
   return (
     <div className="space-y-6">

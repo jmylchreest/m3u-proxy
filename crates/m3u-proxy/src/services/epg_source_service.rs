@@ -162,7 +162,6 @@ impl EpgSourceService {
         for source_with_stats in sources_with_stats {
             result.push(crate::models::EpgSourceWithStats {
                 source: source_with_stats.source.clone(),
-                channel_count: source_with_stats.channel_count,
                 program_count: source_with_stats.program_count,
                 next_scheduled_update: source_with_stats.next_scheduled_update,
             });
@@ -177,8 +176,6 @@ impl EpgSourceService {
             .map_err(|e| anyhow::anyhow!("Failed to get EPG source: {}", e))?
             .ok_or_else(|| anyhow::anyhow!("EPG source not found"))?;
 
-        let channel_count = self.epg_source_repo.get_channel_count_for_source(&id).await
-            .map_err(|e| anyhow::anyhow!("Failed to get channel count: {}", e))? as u64;
         
         // Find linked stream sources using URL-based matching
         let linked_stream = if source.source_type == crate::models::EpgSourceType::Xtream {
@@ -191,7 +188,6 @@ impl EpgSourceService {
 
         Ok(EpgSourceWithDetails {
             source: source.clone(),
-            channel_count,
             next_scheduled_update: None, // TODO: Implement scheduling info
             last_ingested_at: source.last_ingested_at,
             is_active: source.is_active,
@@ -338,7 +334,6 @@ impl EpgSourceService {
 #[derive(Debug, Clone)]
 pub struct EpgSourceWithStats {
     pub source: EpgSource,
-    pub channel_count: u64,
     pub program_count: u64,
     pub next_scheduled_update: Option<chrono::DateTime<chrono::Utc>>,
     pub last_ingested_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -349,7 +344,6 @@ pub struct EpgSourceWithStats {
 #[derive(Debug, Clone)]
 pub struct EpgSourceWithDetails {
     pub source: EpgSource,
-    pub channel_count: u64,
     pub next_scheduled_update: Option<chrono::DateTime<chrono::Utc>>,
     pub last_ingested_at: Option<chrono::DateTime<chrono::Utc>>,
     pub is_active: bool,

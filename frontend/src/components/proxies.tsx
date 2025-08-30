@@ -81,7 +81,7 @@ import {
 import { apiClient, ApiError } from "@/lib/api-client"
 import { DEFAULT_PAGE_SIZE, API_CONFIG } from "@/lib/config"
 import { RefreshButton } from "@/components/RefreshButton"
-import { sseClient } from "@/lib/sse-client"
+import { useProgressContext } from "@/providers/ProgressProvider"
 import { formatDate, formatRelativeTime } from "@/lib/utils"
 import { CreateProxyModal, ProxySheet, ProxyFormData } from "@/components/CreateProxyModal"
 import { useConflictHandler } from "@/hooks/useConflictHandler"
@@ -108,6 +108,7 @@ function getStatusColor(isActive: boolean): string {
 
 
 export function Proxies() {
+  const progressContext = useProgressContext()
   const [allProxies, setAllProxies] = useState<StreamProxy[]>([])
   const [pagination, setPagination] = useState<Omit<PaginatedResponse<StreamProxy>, 'items'> | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
@@ -246,11 +247,11 @@ export function Proxies() {
       }
     }
 
-    sseClient.subscribe('proxy_regeneration', handleGlobalProxyEvent)
+    const unsubscribe = progressContext.subscribeToType('proxy_regeneration', handleGlobalProxyEvent)
 
     return () => {
       console.log('[Proxies] Component unmounting, unsubscribing from proxy events')
-      sseClient.unsubscribe('proxy_regeneration', handleGlobalProxyEvent)
+      unsubscribe()
     }
   }, [])
 

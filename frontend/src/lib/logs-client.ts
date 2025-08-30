@@ -135,15 +135,19 @@ export class LogsClient {
   private handleReconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++
-      this.debug.log(`Attempting to reconnect (attempt ${this.reconnectAttempts})`)
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s (max 30s)
+      const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000)
+      this.debug.log(`Attempting to reconnect (attempt ${this.reconnectAttempts}) after ${delay}ms`)
       
       setTimeout(() => {
         if (this.eventSource?.readyState === EventSource.CLOSED) {
           this.connect()
         }
-      }, this.reconnectDelay * this.reconnectAttempts)
+      }, delay)
     } else {
       console.error('[Logs] Max reconnect attempts reached, giving up')
+      // Reset attempts so manual reconnect can work later
+      this.reconnectAttempts = 0
     }
   }
 

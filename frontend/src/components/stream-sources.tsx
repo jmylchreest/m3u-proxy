@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo } from "react"
-import { usePageLoading } from "@/hooks/usePageLoading"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -60,7 +59,7 @@ import {
 import { RefreshButton } from "@/components/RefreshButton"
 import { useConflictHandler } from "@/hooks/useConflictHandler"
 import { ConflictNotification } from "@/components/ConflictNotification"
-import { sseClient } from "@/lib/sse-client"
+import { useProgressContext } from "@/providers/ProgressProvider"
 import { 
   StreamSourceResponse, 
   CreateStreamSourceRequest,
@@ -572,6 +571,7 @@ function EditSourceSheet({
 }
 
 export function StreamSources() {
+  const progressContext = useProgressContext()
   const [allSources, setAllSources] = useState<StreamSourceResponse[]>([])
   const [pagination, setPagination] = useState<Omit<PaginatedResponse<StreamSourceResponse>, 'items'> | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
@@ -587,7 +587,6 @@ export function StreamSources() {
   })
 
   // Integrate with page loading spinner
-  usePageLoading(loading.sources)
   
   const [errors, setErrors] = useState<ErrorState>({
     sources: null,
@@ -735,11 +734,11 @@ export function StreamSources() {
       }
     }
 
-    sseClient.subscribe('stream_ingestion', handleGlobalStreamEvent)
+    const unsubscribe = progressContext.subscribeToType('stream_ingestion', handleGlobalStreamEvent)
 
     return () => {
       console.log('[StreamSources] Component unmounting, unsubscribing from stream events')
-      sseClient.unsubscribe('stream_ingestion', handleGlobalStreamEvent)
+      unsubscribe()
     }
   }, [])
 

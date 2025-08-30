@@ -12,7 +12,7 @@ use axum::{
     Json,
 };
 use std::time::Instant;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use super::{
     responses::ApiResponse,

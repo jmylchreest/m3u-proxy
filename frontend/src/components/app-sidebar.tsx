@@ -106,11 +106,6 @@ const navigation = [
         icon: Bug,
       },
       {
-        title: "Loading Test",
-        url: "/test-loading",
-        icon: Play,
-      },
-      {
         title: "Settings",
         url: "/settings",
         icon: Settings,

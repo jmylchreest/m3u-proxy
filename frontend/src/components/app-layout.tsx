@@ -8,7 +8,6 @@ import { Separator } from "@/components/ui/separator"
 import { usePathname } from "next/navigation"
 import { NotificationBell } from "@/components/NotificationBell"
 import { EnhancedThemeSelector } from "@/components/enhanced-theme-selector"
-import { PageLoadingSpinner } from "@/components/page-loading-spinner"
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -49,8 +48,6 @@ function getPageTitle(pathname: string): string {
       return "Logs"
     case "/color-palette":
       return "Colour Palette"
-    case "/test-loading":
-      return "Loading Test"
     default:
       return "M3U Proxy"
   }
@@ -146,7 +143,6 @@ export function AppLayout({ children }: AppLayoutProps) {
             {children}
           </div>
         </main>
-        <PageLoadingSpinner />
       </SidebarInset>
     </SidebarProvider>
   )

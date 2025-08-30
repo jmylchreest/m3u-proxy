@@ -16,6 +16,7 @@ class SSESingleton {
   private connected: boolean = false
   private debug = Debug.createLogger('SSESingleton')
   private setupPromise: Promise<void> | null = null
+  private reconnectAttempts: number = 0
 
   constructor() {
     // Bind methods to ensure correct 'this' context
@@ -89,21 +90,32 @@ class SSESingleton {
   private handleOpen() {
     this.debug.log('Global SSE connection established successfully')
     this.connected = true
+    this.reconnectAttempts = 0 // Reset on successful connection
   }
 
   private handleError(error: Event) {
     this.debug.log('SSE connection error:', error)
     this.connected = false
     
-    // Auto-reconnect after delay
+    // Exponential backoff for reconnection
+    const reconnectDelay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
+    this.reconnectAttempts++
+    
+    // Stop reconnecting after too many failures
+    if (this.reconnectAttempts > 10) {
+      this.debug.error('Too many reconnection attempts, stopping')
+      return
+    }
+    
+    // Auto-reconnect after delay with backoff
     setTimeout(() => {
       if (!this.connected && !this.setupPromise) {
-        this.debug.log('Attempting to reconnect SSE')
+        this.debug.log(`Attempting to reconnect SSE (attempt ${this.reconnectAttempts})`)
         this.ensureConnection().catch(err => {
           this.debug.error('Failed to reconnect:', err)
         })
       }
-    }, 2000)
+    }, reconnectDelay)
   }
 
   private handleMessage(event: MessageEvent) {
@@ -199,7 +211,7 @@ class SSESingleton {
     return this.connected
   }
 
-  // Only call this when the entire application is being closed/refreshed
+  // Only call this when the entire application is being closed/refreshed or backend is down
   destroy() {
     this.debug.log('Destroying SSE connection')
     if (this.eventSource) {
@@ -210,6 +222,7 @@ class SSESingleton {
     this.subscribers.clear()
     this.allSubscribers.clear()
     this.setupPromise = null
+    this.reconnectAttempts = 0 // Reset reconnect attempts when destroyed
   }
 }
 

@@ -32,14 +32,10 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
-    #[sea_orm(has_many = "super::channel_relay_configs::Entity")]
-    ChannelRelayConfigs,
     #[sea_orm(has_many = "super::proxy_epg_sources::Entity")]
     ProxyEpgSources,
     #[sea_orm(has_many = "super::proxy_filters::Entity")]
     ProxyFilters,
-    #[sea_orm(has_many = "super::proxy_generations::Entity")]
-    ProxyGenerations,
     #[sea_orm(has_many = "super::proxy_sources::Entity")]
     ProxySources,
     #[sea_orm(
@@ -52,12 +48,6 @@ pub enum Relation {
     RelayProfiles,
 }
 
-impl Related<super::channel_relay_configs::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::ChannelRelayConfigs.def()
-    }
-}
-
 impl Related<super::proxy_epg_sources::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::ProxyEpgSources.def()
@@ -67,12 +57,6 @@ impl Related<super::proxy_epg_sources::Entity> for Entity {
 impl Related<super::proxy_filters::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::ProxyFilters.def()
-    }
-}
-
-impl Related<super::proxy_generations::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::ProxyGenerations.def()
     }
 }
 

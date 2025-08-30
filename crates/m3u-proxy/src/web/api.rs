@@ -1976,7 +1976,7 @@ pub async fn apply_epg_source_data_mapping(
 pub async fn apply_data_mapping_rules_post(
     State(state): State<AppState>,
     Json(payload): Json<DataMappingPreviewRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<axum::Json<serde_json::Value>, StatusCode> {
     // Extract all needed values first to avoid borrow checker issues
     let source_ids = payload.source_ids;
     let source_type = payload.source_type.clone();
@@ -1987,23 +1987,11 @@ pub async fn apply_data_mapping_rules_post(
         Some(expr) => expr,
         None => {
             error!("Expression is required for data mapping preview");
-            return Ok(Json(serde_json::json!({
-                "success": false,
-                "message": "Expression is required for data mapping preview",
-                "source_type": source_type,
-                "source_info": {
-                    "source_count": 0,
-                    "source_names": [],
-                    "source_ids": []
-                },
-                "total_channels": 0,
-                "affected_channels": 0,
-                "sample_changes": []
-            })));
+            return Err(StatusCode::BAD_REQUEST);
         }
     };
 
-    preview_data_mapping_expression(state, &source_type, source_ids, &expression, limit).await
+    preview_data_mapping_expression_sync(state, source_type, source_ids, expression, limit).await
 }
 
 #[utoipa::path(
@@ -4237,113 +4225,125 @@ fn is_epg_field(field_name: &str) -> bool {
     )
 }
 
-/// Preview data mapping with a custom expression
-async fn preview_data_mapping_expression(
+/// Preview data mapping expression with optimized performance
+async fn preview_data_mapping_expression_sync(
     state: AppState,
-    source_type: &str,
+    source_type: String,
     source_ids: Vec<Uuid>,
-    expression: &str,
+    expression: String,
     limit: Option<u32>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<axum::Json<serde_json::Value>, StatusCode> {
+    use serde_json::json;
+    
     // Parse and validate the expression
     let parser = crate::expression_parser::ExpressionParser::for_data_mapping(vec![
         "channel_name".to_string(), "tvg_name".to_string(), "tvg_id".to_string(),
         "tvg_logo".to_string(), "group_title".to_string(), "tvg_chno".to_string()
     ]);
     
-    let parsed_expression = match parser.parse_extended(expression) {
+    let parsed_expression = match parser.parse_extended(&expression) {
         Ok(expr) => expr,
-        Err(e) => {
-            return Ok(Json(serde_json::json!({
-                "success": false,
-                "message": format!("Expression parse error: {}", e),
-                "expression": expression,
-                "affected_channels": 0,
-                "sample_changes": []
-            })));
+        Err(_) => {
+            return Err(StatusCode::BAD_REQUEST);
         }
     };
 
-    // Get channels from specified source(s)
-    let (channels, source_info) = match source_type {
+    let max_samples = limit.unwrap_or(10).min(50) as usize;
+    
+    // Process with optimized database queries 
+    match source_type.as_str() {
         "stream" => {
             let stream_source_repo = crate::database::repositories::StreamSourceSeaOrmRepository::new(state.database.connection().clone());
             let channel_repo = crate::database::repositories::ChannelSeaOrmRepository::new(state.database.connection().clone());
             
             let sources = if source_ids.is_empty() {
-                // Get all stream sources if no specific IDs provided
                 match stream_source_repo.find_all().await {
                     Ok(sources) => sources,
-                    Err(e) => {
-                        error!("Failed to get stream sources: {}", e);
-                        return Ok(Json(serde_json::json!({
-                            "success": false,
-                            "message": "Failed to retrieve stream sources from database",
-                            "expression": expression,
-                            "source_type": source_type,
-                            "source_info": {
-                                "source_count": 0,
-                                "source_names": [],
-                                "source_ids": []
-                            },
-                            "total_channels": 0,
-                            "affected_channels": 0,
-                            "sample_changes": []
-                        })));
-                    }
+                    Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR)
                 }
             } else {
-                // Get specific sources by IDs
                 let mut sources = Vec::new();
                 for source_id in &source_ids {
-                    match stream_source_repo.find_by_id(source_id).await {
-                        Ok(Some(source)) => sources.push(source),
-                        Ok(None) => {
-                            error!("Stream source not found: {}", source_id);
-                            // Continue with other source IDs instead of failing completely
-                        }
-                        Err(e) => {
-                            error!("Error fetching stream source {}: {}", source_id, e);
-                            // Continue with other source IDs instead of failing completely
-                        }
+                    if let Ok(Some(source)) = stream_source_repo.find_by_id(source_id).await {
+                        sources.push(source);
                     }
                 }
-                
                 if sources.is_empty() {
-                    return Ok(Json(serde_json::json!({
-                        "success": false,
-                        "message": format!("No valid stream sources found from provided IDs: {:?}", source_ids),
-                        "expression": expression,
-                        "source_info": {
-                            "source_count": 0,
-                            "source_names": [],
-                            "requested_ids": source_ids
-                        },
-                        "total_channels": 0,
-                        "affected_channels": 0,
-                        "sample_changes": []
-                    })));
+                    return Err(StatusCode::NOT_FOUND);
                 }
-                
                 sources
             };
 
-            let mut all_channels = Vec::new();
+            let mut total_channels = 0;
+            let mut affected_channels = 0;
+            let mut sample_changes = Vec::new();
+            
+            // Process each source's channels in batches
             for source in &sources {
-                match channel_repo.find_by_source_id(&source.id).await {
-                    Ok(channels) => all_channels.extend(channels),
-                    Err(e) => error!("Failed to get channels for source {}: {}", source.id, e),
+                let mut page = 1u64;
+                let page_size = 10000u64; // Optimized batch size
+                
+                loop {
+                    let (batch_channels, batch_total) = match channel_repo.get_source_channels_paginated(&source.id, Some(page), Some(page_size)).await {
+                        Ok(result) => result,
+                        Err(_) => break
+                    };
+                    
+                    if page == 1 {
+                        total_channels += batch_total as usize;
+                    }
+                    
+                    if batch_channels.is_empty() {
+                        break;
+                    }
+                    
+                    for channel in batch_channels {
+                        if sample_changes.len() >= max_samples {
+                            let mut test_channel = channel.clone();
+                            if let Ok(true) = apply_expression_to_channel(&parsed_expression, &mut test_channel) {
+                                affected_channels += 1;
+                            }
+                        } else {
+                            let mut modified_channel = channel.clone();
+                            if let Ok(true) = apply_expression_to_channel(&parsed_expression, &mut modified_channel) {
+                                affected_channels += 1;
+                                let original = serde_json::to_value(&channel).unwrap_or(serde_json::Value::Null);
+                                let modified = serde_json::to_value(&modified_channel).unwrap_or(serde_json::Value::Null);
+                                
+                                sample_changes.push(json!({
+                                    "channel_id": channel.id,
+                                    "channel_name": channel.channel_name,
+                                    "original": original,
+                                    "modified": modified,
+                                    "changes": calculate_field_changes(&original, &modified)
+                                }));
+                            }
+                        }
+                    }
+                    
+                    page += 1;
                 }
             }
 
-            (all_channels, serde_json::json!({
+            let source_info = json!({
                 "source_count": sources.len(),
                 "source_names": sources.iter().map(|s| &s.name).collect::<Vec<_>>(),
                 "source_ids": sources.iter().map(|s| s.id).collect::<Vec<_>>()
-            }))
+            });
+            
+            Ok(axum::Json(json!({
+                "success": true,
+                "message": format!("Expression applied to {} total channels", total_channels),
+                "expression": expression,
+                "source_info": source_info,
+                "source_type": source_type,
+                "total_channels": total_channels,
+                "affected_channels": affected_channels,
+                "sample_changes": sample_changes
+            })))
         },
         _ => {
-            return Ok(Json(serde_json::json!({
+            Ok(axum::Json(json!({
                 "success": false,
                 "message": format!("Unsupported source type: '{}'. Supported types: stream", source_type),
                 "expression": expression,
@@ -4356,67 +4356,9 @@ async fn preview_data_mapping_expression(
                 "total_channels": 0,
                 "affected_channels": 0,
                 "sample_changes": []
-            })));
-        }
-    };
-
-    if channels.is_empty() {
-        return Ok(Json(serde_json::json!({
-            "success": true,
-            "message": "No channels found in specified source(s)",
-            "expression": expression,
-            "source_info": source_info,
-            "affected_channels": 0,
-            "total_channels": 0,
-            "sample_changes": []
-        })));
-    }
-
-    // Apply the expression to channels and track changes
-    let mut affected_channels = 0;
-    let mut sample_changes = Vec::new();
-    let max_samples = limit.unwrap_or(10).min(50); // Limit samples for response size
-    
-    for channel in &channels {
-        // Apply the parsed expression to the channel
-        let original_metadata = serde_json::to_value(channel).unwrap_or(serde_json::Value::Null);
-        let mut modified_channel = channel.clone();
-        
-        // Apply the expression to the channel using the data mapping engine
-        let was_modified = match apply_expression_to_channel(&parsed_expression, &mut modified_channel) {
-            Ok(modified) => modified,
-            Err(e) => {
-                error!("Failed to apply expression to channel {}: {}", channel.channel_name, e);
-                false
-            }
-        };
-        
-        if was_modified {
-            affected_channels += 1;
-            
-            if sample_changes.len() < max_samples as usize {
-                let modified_metadata = serde_json::to_value(&modified_channel).unwrap_or(serde_json::Value::Null);
-                sample_changes.push(serde_json::json!({
-                    "channel_id": channel.id,
-                    "channel_name": channel.channel_name,
-                    "original": original_metadata,
-                    "modified": modified_metadata,
-                    "changes": calculate_field_changes(&original_metadata, &modified_metadata)
-                }));
-            }
+            })))
         }
     }
-
-    Ok(Json(serde_json::json!({
-        "success": true,
-        "message": format!("Expression applied to {} channels", channels.len()),
-        "expression": expression,
-        "source_info": source_info,
-        "source_type": source_type,
-        "total_channels": channels.len(),
-        "affected_channels": affected_channels,
-        "sample_changes": sample_changes
-    })))
 }
 
 /// Calculate what fields changed between original and modified channel

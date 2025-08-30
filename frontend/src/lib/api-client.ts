@@ -517,7 +517,7 @@ class ApiClient {
 
   async validateDataMappingExpression(expression: string, sourceType: string): Promise<{ valid: boolean; error?: string }> {
     return this.request<{ valid: boolean; error?: string }>(
-      `/api/v1/expressions/validate/data-mapping`,
+      '/api/v1/expressions/validate/data-mapping',
       {
         method: 'POST',
         body: JSON.stringify({ 

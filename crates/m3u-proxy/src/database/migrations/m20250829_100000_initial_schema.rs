@@ -787,6 +787,16 @@ impl Migration {
                     .to_owned(),
             )
             .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_channels_source_id_channel_name")
+                    .table(Channels::Table)
+                    .col(Channels::SourceId)
+                    .col(Channels::ChannelName)
+                    .to_owned(),
+            )
+            .await?;
 
         // EPG sources indexes
         manager

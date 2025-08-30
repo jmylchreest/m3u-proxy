@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 // Configurable batch sizes for memory optimization
 const CHANNEL_PROCESSING_BATCH_SIZE: usize = 100;  // Process channels in batches for detailed logging
-const EPG_PROGRAMS_BATCH_SIZE: usize = 1000;       // Stream EPG programs in batches to avoid loading all into memory
+const EPG_PROGRAMS_BATCH_SIZE: usize = 1000;       // Process EPG programs in batches to avoid loading all into memory
 const EPG_PROGRESS_LOG_INTERVAL: usize = 10000;    // Log EPG progress every N programs
 const CHANNEL_PROGRESS_INTERVAL: usize = 1000;     // Report progress every N channels
 
@@ -132,12 +132,12 @@ impl DataMappingStage {
             
             info!("Found {} data mapping rules for stream sources", rules.len());
             
-            // Stream channels through data mapping rules with enhanced logging
+            // Process channels through data mapping rules with enhanced logging
             let source_start = Instant::now();
-            info!("Streaming channels for source: {}", source_id);
+            info!("Processing channels for source: {}", source_id);
             debug!("Binding source_id as string: '{}'", source_id.to_string());
             
-            // Set up output file for streaming writes
+            // Set up output file for batch writes
             let output_file_path = format!("{}_mapping_channels.jsonl", self.pipeline_execution_prefix);
             let mut batch_content = String::new();
             // Use configurable batch size constants
@@ -287,7 +287,7 @@ impl DataMappingStage {
                                             batch_content.push('\n');
                                         }
                                         
-                                        // Write to file if we have content (keeping original streaming approach)
+                                        // Write to file if we have content (using batch processing approach)
                                         if !batch_content.is_empty() {
                                             if !output_file_created {
                                                 // First write - create file
@@ -701,7 +701,7 @@ impl DataMappingStage {
             all_programs.append(&mut batch_programs);
         }
         
-        info!("Serialized {} EPG programs from database using streaming approach", all_programs.len());
+        info!("Serialized {} EPG programs from database using batch processing approach", all_programs.len());
         Ok(all_programs)
     }
     

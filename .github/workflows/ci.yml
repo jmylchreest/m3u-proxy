@@ -16,8 +16,6 @@ jobs:
   check:
     name: Check and Prepare
     runs-on: ubuntu-latest
-    outputs:
-      sqlx-prepared: ${{ steps.sqlx-check.outputs.prepared }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -52,37 +50,13 @@ jobs:
             ${{ runner.os }}-cargo-target-check-
             ${{ runner.os }}-cargo-target-
 
-      - name: Install SQLx CLI
-        run: cargo install sqlx-cli --no-default-features --features sqlite,rustls
-
-      - name: Create database
+      - name: Setup test database
         run: |
           mkdir -p data
           touch data/m3u-proxy.db
 
-      - name: Run migrations
-        run: sqlx migrate run --database-url sqlite:data/m3u-proxy.db
-
-      - name: Check SQLx prepared queries
-        id: sqlx-check
-        run: |
-          if cargo sqlx prepare --database-url sqlite:data/m3u-proxy.db --check; then
-            echo "prepared=true" >> $GITHUB_OUTPUT
-          else
-            echo "prepared=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Prepare SQLx queries
-        if: steps.sqlx-check.outputs.prepared == 'false'
-        run: |
-          cargo sqlx prepare --database-url sqlite:data/m3u-proxy.db
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add .sqlx/
-          if ! git diff --cached --exit-code; then
-            git commit -m "Update SQLx prepared queries"
-            git push
-          fi
+      - name: Run SeaORM migrations
+        run: cargo run -- --database-url sqlite:data/m3u-proxy.db migrate
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -126,14 +100,11 @@ jobs:
             ${{ runner.os }}-cargo-target-test-
             ${{ runner.os }}-cargo-target-
 
-      - name: Install SQLx CLI
-        run: cargo install sqlx-cli --no-default-features --features sqlite,rustls
-
       - name: Setup test database
         run: |
           mkdir -p data
           touch data/test.db
-          sqlx migrate run --database-url sqlite:data/test.db
+          cargo run -- --database-url sqlite:data/test.db migrate
 
       - name: Run tests
         run: cargo test --all-features --verbose
@@ -211,31 +182,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Install SQLx CLI
-        run: cargo install sqlx-cli --no-default-features --features sqlite,rustls
-
       - name: Setup build database
         run: |
           mkdir -p data
           touch data/build.db
-          sqlx migrate run --database-url sqlite:data/build.db
-
-      - name: Prepare SQLx queries for build
-        run: cargo sqlx prepare --database-url sqlite:data/build.db
+          cargo run -- --database-url sqlite:data/build.db migrate
 
       - name: Build with cross (if needed)
         if: matrix.cross
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
           cross build --release --target ${{ matrix.target }}
-        env:
-          SQLX_OFFLINE: true
 
       - name: Build natively
         if: "!matrix.cross"
         run: cargo build --release --target ${{ matrix.target }}
-        env:
-          SQLX_OFFLINE: true
 
       - name: Strip binary (Linux/macOS)
         if: matrix.os != 'windows-latest'
@@ -288,6 +249,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Get version and determine tags
+        id: version
+        run: |
+          VERSION=$(just get-version)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building with version: $VERSION"
+
+          # Determine if this is a release or snapshot
+          if echo "$VERSION" | grep -q "snapshot"; then
+            echo "is_snapshot=true" >> $GITHUB_OUTPUT
+            echo "docker_tag_suffix=snapshot" >> $GITHUB_OUTPUT
+          else
+            echo "is_snapshot=false" >> $GITHUB_OUTPUT
+            echo "docker_tag_suffix=latest" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set version in source files
+        run: just set-version "${{ steps.version.outputs.version }}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -311,7 +294,8 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.docker_tag_suffix }},enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.version }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -324,7 +308,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            SQLX_OFFLINE=true
+            APP_VERSION=${{ steps.version.outputs.version }}
+            BUILDKIT_INLINE_CACHE=1
 
   security:
     name: Security Audit

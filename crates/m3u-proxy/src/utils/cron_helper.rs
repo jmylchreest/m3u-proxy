@@ -54,8 +54,8 @@ mod tests {
 
     #[test]
     fn test_valid_cron_expression() {
-        // Test every 6 hours
-        let result = calculate_next_scheduled_time("0 0 0 */6 * * * *");
+        // Test every 6 hours (7-field format: second minute hour day_of_month month day_of_week year)
+        let result = calculate_next_scheduled_time("0 0 */6 * * * *");
         assert!(result.is_some());
         
         // Verify the result is in the future
@@ -71,8 +71,8 @@ mod tests {
 
     #[test]
     fn test_validated_cron_expression() {
-        // Valid cron
-        let result = calculate_next_scheduled_time_validated("0 0 */12 * * *");
+        // Valid cron (7-field format: second minute hour day_of_month month day_of_week year)
+        let result = calculate_next_scheduled_time_validated("0 0 */12 * * * *");
         assert!(result.is_ok());
         assert!(result.unwrap().is_some());
         

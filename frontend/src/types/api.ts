@@ -472,6 +472,15 @@ export interface HealthData {
         };
       };
     };
+    circuit_breakers?: {
+      [serviceName: string]: {
+        total_calls: number;
+        successful_calls: number;
+        failed_calls: number;
+        state: 'Closed' | 'Open' | 'HalfOpen';
+        failure_rate: number;
+      };
+    };
   };
 }
 

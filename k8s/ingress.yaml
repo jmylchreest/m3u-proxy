@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: m3u-proxy
+  namespace: m3u-proxy
+  labels:
+    app: m3u-proxy
+  annotations:
+    # nginx ingress controller annotations
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    
+    # Optional: SSL/TLS
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    
+    # Optional: auth (basic auth, oauth, etc.)
+    # nginx.ingress.kubernetes.io/auth-type: basic
+    # nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    
+spec:
+  # Optional: TLS configuration
+  # tls:
+  #   - hosts:
+  #       - m3u-proxy.example.com
+  #     secretName: m3u-proxy-tls
+  
+  rules:
+    - host: m3u-proxy.local  # Change to your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: m3u-proxy
+                port:
+                  number: 8080

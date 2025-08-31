@@ -10,9 +10,10 @@ use std::error::Error;
 use sea_orm::{ConnectOptions, Database as SeaOrmDatabase, DatabaseBackend, DatabaseConnection};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn, error};
 
 use crate::config::{DatabaseConfig, IngestionConfig};
+use crate::utils::CircuitBreaker;
 // use crate::entities::prelude::*;
 
 pub mod migrations;
@@ -31,6 +32,8 @@ pub struct Database {
     pub ingestion_config: IngestionConfig,
     /// Database type for specific optimizations
     pub database_type: DatabaseType,
+    /// Circuit breaker for database health management
+    pub circuit_breaker: std::sync::Arc<crate::utils::ConcreteCircuitBreaker>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +45,7 @@ pub enum DatabaseType {
 
 impl Database {
     /// Create a new database connection with proper optimizations
-    pub async fn new(config: &DatabaseConfig, ingestion_config: &IngestionConfig) -> Result<Self> {
+    pub async fn new(config: &DatabaseConfig, ingestion_config: &IngestionConfig, app_config: &crate::config::Config) -> Result<Self> {
         let database_type = Self::detect_database_type(&config.url)?;
         let backend = match database_type {
             DatabaseType::SQLite => DatabaseBackend::Sqlite,
@@ -65,8 +68,8 @@ impl Database {
         connect_options
             .max_connections(config.max_connections.unwrap_or(10))
             .min_connections(1)
-            .connect_timeout(Duration::from_secs(30))
-            .acquire_timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(5))    // Fast fail for offline database
+            .acquire_timeout(Duration::from_secs(3))    // Fast fail for pool exhaustion
             .idle_timeout(Duration::from_secs(600))
             .max_lifetime(Duration::from_secs(1800));
 
@@ -107,12 +110,25 @@ impl Database {
 
         debug!("Database connection established successfully");
 
+        // Initialize circuit breaker from configuration
+        let circuit_breaker = crate::utils::create_circuit_breaker_for_service(
+            "database",
+            app_config,
+        ).unwrap_or_else(|e| {
+            warn!("Failed to create database circuit breaker from config: {}. Using defaults.", e);
+            crate::utils::create_circuit_breaker(
+                crate::utils::CircuitBreakerType::Simple,
+                crate::utils::CircuitBreakerConfig::default(),
+            )
+        });
+
         Ok(Self {
             connection: connection.clone(),
             read_connection: connection,
             backend,
             ingestion_config: ingestion_config.clone(),
             database_type,
+            circuit_breaker,
         })
     }
 
@@ -272,6 +288,80 @@ impl Database {
         }
     }
 
+    /// Check if the database is healthy and available (with circuit breaker)
+    pub async fn health_check(&self) -> DatabaseHealthResult {
+        use sea_orm::ConnectionTrait;
+        
+        let _start_time = std::time::Instant::now();
+        
+        // Simple connectivity check through circuit breaker
+        let health_query = match self.backend {
+            sea_orm::DatabaseBackend::Sqlite => "SELECT 1 as test",
+            sea_orm::DatabaseBackend::Postgres => "SELECT 1 as test",
+            sea_orm::DatabaseBackend::MySql => "SELECT 1 as test",
+        };
+        
+        let conn = self.connection.clone();
+        let backend = self.backend;
+        
+        let cb_result = self.circuit_breaker.execute(|| async {
+            let stmt = sea_orm::Statement::from_string(backend, health_query.to_owned());
+            conn.query_one(stmt).await
+                .map_err(|e| e.to_string())
+        }).await;
+        
+        let response_time = cb_result.execution_time;
+        
+        match cb_result.result {
+            Ok(_query_result) => {
+                debug!("Database health check successful (CB state: {:?}, took {:?})", cb_result.state, response_time);
+                DatabaseHealthResult {
+                    is_healthy: true,
+                    response_time,
+                    error: None,
+                    tables_accessible: true,
+                }
+            },
+            Err(crate::utils::circuit_breaker::CircuitBreakerError::CircuitOpen) => {
+                warn!("Database health check blocked by circuit breaker (state: {:?})", cb_result.state);
+                DatabaseHealthResult {
+                    is_healthy: false,
+                    response_time,
+                    error: Some("Circuit breaker open".to_string()),
+                    tables_accessible: false,
+                }
+            },
+            Err(crate::utils::circuit_breaker::CircuitBreakerError::ServiceError(e)) => {
+                error!("Database health check failed: {} (CB state: {:?}, took {:?})", e, cb_result.state, response_time);
+                DatabaseHealthResult {
+                    is_healthy: false,
+                    response_time,
+                    error: Some(format!("Database error: {}", e)),
+                    tables_accessible: false,
+                }
+            },
+            Err(crate::utils::circuit_breaker::CircuitBreakerError::Timeout) => {
+                error!("Database health check timed out (CB state: {:?}, took {:?})", cb_result.state, response_time);
+                DatabaseHealthResult {
+                    is_healthy: false,
+                    response_time,
+                    error: Some("Database query timeout".to_string()),
+                    tables_accessible: false,
+                }
+            },
+        }
+    }
+
+    /// Get the database circuit breaker for direct use
+    pub fn circuit_breaker(&self) -> &std::sync::Arc<crate::utils::ConcreteCircuitBreaker> {
+        &self.circuit_breaker
+    }
+
+    /// Quick check if database is available (for use by schedulers and other services)
+    pub async fn is_available(&self) -> bool {
+        self.circuit_breaker.is_available().await
+    }
+
     /// Get stream proxy by ID (convenience method)
     pub async fn get_stream_proxy(&self, id: uuid::Uuid) -> Result<Option<crate::models::StreamProxy>> {
         use crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository;
@@ -279,6 +369,14 @@ impl Database {
         let repo = StreamProxySeaOrmRepository::new(self.connection.clone());
         repo.find_by_id(&id).await
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct DatabaseHealthResult {
+    pub is_healthy: bool,
+    pub response_time: std::time::Duration,
+    pub error: Option<String>,
+    pub tables_accessible: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -13,39 +13,52 @@ default:
 get-current-version:
     @grep '^version' crates/m3u-proxy/Cargo.toml | head -1 | cut -d'"' -f2
 
-# Get the version to use for builds (tag-based release or snapshot with date)
-# - If on git tag: uses tag version (strips 'v' prefix)
-# - If not on tag: calculates next patch version with '-snapshot-YYYYMMDD' suffix
+# Get the version to use for builds (git-based versioning for CI/CD reliability)
+# - If on git tag: v0.1.3 → 0.1.3 (release)
+# - If after tag: v0.1.3-12-ga1b2c3d → 0.1.4-dev.12.ga1b2c3d (development)
+# - If no tags: 0.0.1-dev.0.g<commit> (initial development)
+# This ensures consistent versions across Cargo.toml, containers, and SBOM
 get-version:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Check if we're on a git tag
+    # Check if we're on a git tag (exact match)
     if git describe --exact-match --tags HEAD 2>/dev/null; then
-        # We're on a tag, use it as version (strip 'v' prefix if present)
+        # On a tag: v0.1.3 → 0.1.3
         TAG=$(git describe --exact-match --tags HEAD 2>/dev/null)
-        VERSION=${TAG#v}
+        VERSION=${TAG#v}  # Remove 'v' prefix if present
         echo "$VERSION"
     else
-        # Not on a tag, calculate next version with snapshot suffix
-        CURRENT_VERSION=$(just get-current-version)
-
-        # Parse version parts (assuming semver X.Y.Z)
-        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-
-        # Increment patch version for snapshot
-        NEXT_PATCH=$((PATCH + 1))
-
-        # Get current date in YYYYMMDD format
-        DATE=$(date +%Y%m%d)
-
-        # Create snapshot version
-        SNAPSHOT_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-snapshot-${DATE}"
-        echo "$SNAPSHOT_VERSION"
+        # Not on a tag - use git describe to get version with commit info
+        if git describe --tags --always --long 2>/dev/null | grep -q '^v'; then
+            # After a tag: v0.1.3-12-ga1b2c3d → 0.1.4-dev.12.ga1b2c3d
+            DESCRIBE=$(git describe --tags --always --long 2>/dev/null)
+            
+            # Parse: v0.1.3-12-ga1b2c3d
+            if [[ $DESCRIBE =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-([0-9]+)-(g[a-f0-9]+)$ ]]; then
+                MAJOR=${BASH_REMATCH[1]}
+                MINOR=${BASH_REMATCH[2]}
+                PATCH=${BASH_REMATCH[3]}
+                COMMITS=${BASH_REMATCH[4]}
+                COMMIT=${BASH_REMATCH[5]}
+                
+                # Increment patch for next development version
+                NEXT_PATCH=$((PATCH + 1))
+                
+                echo "${MAJOR}.${MINOR}.${NEXT_PATCH}-dev.${COMMITS}.${COMMIT}"
+            else
+                echo "Error: Unable to parse git describe output: $DESCRIBE" >&2
+                exit 1
+            fi
+        else
+            # No tags exist yet - use commit hash only
+            COMMIT=$(git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
+            echo "0.0.1-dev.0.g${COMMIT}"
+        fi
     fi
 
 # Set version in all relevant files (Cargo.toml, package.json, package-lock.json)
-# Includes semver validation and prevents downgrades unless --force is used
+# Supports both release versions (0.1.3) and development versions (0.1.4-dev.12.ga1b2c3d)
 # Usage: just set-version 0.1.3 [--force]
 set-version version *force="":
     #!/usr/bin/env bash
@@ -55,9 +68,12 @@ set-version version *force="":
     CURRENT_VERSION=$(just get-current-version)
     FORCE="{{force}}"
 
-    # Validate version format (basic semver check)
-    if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-.*)?$'; then
-        echo "Error: Invalid version format. Expected semver (e.g., 1.0.0)"
+    # Validate version format (semver with optional development pre-release)
+    if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-dev\.[0-9]+\.g[a-f0-9]+)?$'; then
+        echo "Error: Invalid version format."
+        echo "Expected formats:"
+        echo "  Release: 1.0.0"
+        echo "  Development: 1.0.1-dev.12.ga1b2c3d"
         exit 1
     fi
 
@@ -179,8 +195,6 @@ clean:
     rm -rf frontend/out
     rm -rf frontend/.next
     rm -rf crates/m3u-proxy/static/*
-    rm -rf tests/playwright/node_modules
-    rm -rf tests/playwright/test-results
     @echo "All build artifacts cleaned"
 
 # Complete build process (clean, install, test, build all)
@@ -195,9 +209,99 @@ install:
     cd frontend && npm install
     @echo "Dependencies installed"
 
-# Install all dependencies including UI testing
-install-all: install ui-setup
-    @echo "All dependencies (frontend + UI testing) installed"
+# Install all dependencies
+install-all: install
+    @echo "All dependencies installed"
+
+# Upgrade backend dependencies (Rust)
+# Use --aggressive to upgrade to latest compatible versions beyond Cargo.toml constraints
+# Use --yes for non-interactive mode
+upgrade-deps-backend *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Upgrading Rust dependencies..."
+    
+    # Check if aggressive upgrade requested
+    if [[ "{{args}}" == *"--aggressive"* ]]; then
+        echo "Performing aggressive upgrade..."
+        if command -v cargo-upgrade >/dev/null 2>&1; then
+            # Use cargo-edit to upgrade Cargo.toml versions
+            cargo upgrade
+            cargo update
+        else
+            echo "Error: cargo-edit not installed!"
+            echo "Install with: cargo install cargo-edit"
+            echo "Aborting aggressive upgrade..."
+            exit 1
+        fi
+    else
+        # Standard update within Cargo.toml constraints
+        cargo update
+    fi
+    
+    echo "Checking for outdated Rust crates..."
+    if command -v cargo-outdated >/dev/null 2>&1; then
+        cargo outdated
+    else
+        echo "cargo-outdated not installed - run 'cargo install cargo-outdated' to check for updates"
+    fi
+    
+    echo "Rust dependencies upgraded!"
+    echo ""
+    if [[ "{{args}}" != *"--aggressive"* ]]; then
+        echo "To upgrade to latest major versions:"
+        echo "   just upgrade-deps-backend --aggressive"
+        echo "   (requires: cargo install cargo-edit)"
+        echo "For non-interactive mode: just upgrade-deps-backend --aggressive --yes"
+    fi
+
+# Upgrade frontend dependencies (npm)
+# Use --aggressive to upgrade to latest versions beyond package.json constraints
+# Use --yes for non-interactive mode
+upgrade-deps-frontend *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Upgrading npm dependencies..."
+    
+    # Check if aggressive upgrade requested
+    if [[ "{{args}}" == *"--aggressive"* ]]; then
+        echo "Performing aggressive upgrade..."
+        if command -v npx >/dev/null 2>&1; then
+            # Use npm-check-updates to upgrade package.json versions
+            if [[ "{{args}}" == *"--yes"* ]]; then
+                # Non-interactive mode - auto-accept package installs
+                cd frontend && echo "y" | npx npm-check-updates -u && npm install
+            else
+                # Interactive mode
+                cd frontend && npx npm-check-updates -u && npm install
+            fi
+        else
+            echo "npx not available. Falling back to standard npm update..."
+            cd frontend && npm update
+        fi
+    else
+        # Standard update within package.json constraints
+        cd frontend && npm update
+    fi
+    
+    echo "Checking for outdated npm packages..."
+    cd frontend && { npm outdated || echo "All npm packages are up to date"; }
+    
+    echo "npm dependencies upgraded!"
+    echo ""
+    if [[ "{{args}}" != *"--aggressive"* ]]; then
+        echo "To upgrade to latest major versions:"
+        echo "   just upgrade-deps-frontend --aggressive"
+        echo "For non-interactive mode: just upgrade-deps-frontend --aggressive --yes"
+    fi
+
+# Upgrade all dependencies (backend + frontend)
+upgrade-deps-all *args="":
+    just upgrade-deps-backend {{args}}
+    just upgrade-deps-frontend {{args}}
+    @echo "All dependencies upgraded!"
 
 # Development setup (install deps and run dev servers)
 dev: install
@@ -271,109 +375,47 @@ check: fmt lint audit test
 perf: test bench
     @echo "Performance testing completed!"
 
-# UI Testing with Playwright
-# ===========================
+# Extended test command
+test-all: test
+    @echo "All tests (backend, frontend) completed!"
 
-# Setup Playwright for the first time
-ui-setup:
-    @echo "🎭 Setting up Playwright UI testing..."
-    @if [ ! -d "tests/playwright" ]; then echo "❌ Playwright tests not found. Please ensure tests/playwright directory exists."; exit 1; fi
-    cd tests/playwright && npm install
-    cd tests/playwright && npx playwright install
-    @echo "✅ Playwright setup complete!"
+# Quality check
+check-all: fmt lint audit test
+    @echo "All quality checks passed!"
 
-# Run UI tests (headless)
-ui-test:
-    @echo "🧪 Running UI tests..."
-    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
-    cd tests/playwright && npm test
-
-# Run UI tests with visible browser (for debugging)
-ui-test-headed:
-    @echo "🧪 Running UI tests with visible browser..."
-    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
-    cd tests/playwright && npm run test:headed
-
-# Run UI tests in debug mode (step-through)
-ui-test-debug:
-    @echo "🐛 Running UI tests in debug mode..."
-    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
-    cd tests/playwright && npm run test:debug
-
-# Run UI tests with Playwright UI (interactive)
-ui-test-ui:
-    @echo "🎮 Running UI tests with interactive UI..."
-    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
-    cd tests/playwright && npm run test:ui
-
-# Show UI test report
-ui-report:
-    @echo "📊 Opening UI test report..."
-    @if [ ! -d "tests/playwright/test-results" ]; then echo "❌ No test results found. Run 'just ui-test' first."; exit 1; fi
-    cd tests/playwright && npm run report
-
-# Run UI tests on specific browser
-ui-test-browser browser="chromium":
-    @echo "🌐 Running UI tests on {{browser}}..."
-    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
-    cd tests/playwright && npx playwright test --project={{browser}}
-
-# Run UI tests on mobile devices
-ui-test-mobile:
-    @echo "📱 Running UI tests on mobile devices..."
-    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
-    cd tests/playwright && npx playwright test --project=mobile-chrome --project=mobile-safari
-
-# Clean UI test results
-ui-clean:
-    @echo "🧹 Cleaning UI test results..."
-    rm -rf tests/playwright/test-results
-    @echo "✅ UI test results cleaned!"
-
-# Complete UI testing workflow (setup, test, report)
-ui-full: ui-setup ui-test ui-report
-    @echo "🎭 Complete UI testing workflow finished!"
-
-# Quick UI smoke test (just chromium, essential tests)
-ui-quick:
-    @echo "⚡ Running quick UI smoke test..."
-    @if [ ! -d "tests/playwright/node_modules" ]; then echo "📦 Installing Playwright dependencies first..."; just ui-setup; fi
-    cd tests/playwright && npx playwright test ui-layout.spec.ts --project=chromium
-
-# Extended test command that includes UI tests
-test-all: test ui-test
-    @echo "🧪 All tests (backend, frontend, UI) completed!"
-
-# Quality check with UI tests
-check-all: fmt lint audit test ui-test
-    @echo "✅ All quality checks (including UI tests) passed!"
-
-# Development workflow: build and test everything including UI
-dev-check: build-dev ui-quick
-    @echo "🚀 Development check complete!"
+# Development workflow: build and test
+dev-check: build-dev
+    @echo "Development check complete!"
 
 # Version-aware builds
 # ====================
 
-# Build with version management (updates versions before building)
+# Build with git-based version management (always updates Cargo.toml to match)
 build-versioned:
     #!/usr/bin/env bash
     set -euo pipefail
     VERSION=$(just get-version)
+    echo "Building with git-based version: $VERSION"
+    
+    # Always update Cargo.toml to match build version (for SBOM consistency)
+    echo "Updating Cargo.toml to version: $VERSION"
     just set-version "$VERSION"
+    
     just build-all
-    @echo "✅ Versioned build complete with version: $VERSION"
+    echo "✅ Versioned build complete with version: $VERSION"
+    echo "   Cargo.toml, containers, and SBOM will all reference: $VERSION"
 
-# Build container with proper version tagging
+# Build container with git-based version tagging
 build-container-versioned:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Get the version to use
+    # Get the git-based version
     VERSION=$(just get-version)
-    echo "Building container with version: $VERSION"
+    echo "Building container with git-based version: $VERSION"
 
-    # Update versions first
+    # Always update Cargo.toml to match (for SBOM consistency)
+    echo "Updating Cargo.toml to version: $VERSION"
     just set-version "$VERSION"
 
     # Run the container build with version as argument

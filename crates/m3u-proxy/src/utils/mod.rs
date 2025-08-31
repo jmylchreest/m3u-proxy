@@ -3,6 +3,9 @@
 //! This module contains reusable utilities that can be used
 //! across different parts of the system.
 
+pub mod circuit_breaker;
+pub mod circuit_breaker_noop;
+pub mod circuit_breaker_simple;
 pub mod cron_helper;
 pub mod database_operations;
 pub mod database_retry;
@@ -21,6 +24,7 @@ pub mod memory_stats;
 // pub mod memory_pressure_calculator; // Removed - no longer needed
 pub mod pressure_monitor;
 pub mod regex_preprocessor;
+pub mod resilient_http_client;
 pub mod sandbox_health;
 pub mod system_manager;
 pub mod time;
@@ -30,6 +34,7 @@ pub mod validation;
 pub mod xmltv_parser;
 
 // Re-export commonly used types for convenience
+pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerType, ConcreteCircuitBreaker, create_circuit_breaker, create_circuit_breaker_for_service, create_circuit_breaker_from_profile};
 pub use cron_helper::{calculate_next_scheduled_time, calculate_next_scheduled_time_validated};
 pub use database_operations::DatabaseOperations;
 pub use database_retry::{RetryConfig, with_retry};
@@ -43,6 +48,7 @@ pub use memory_cleanup::{
 // Memory monitoring modules available for future pipeline integration
 // but not exposed to prevent accidental usage
 pub use regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
+pub use resilient_http_client::ResilientHttpClient;
 pub use system_manager::SystemManager;
 pub use url::UrlUtils;
 pub use uuid_parser::{resolve_proxy_id, uuid_to_base64, uuid_to_hex32, deserialize_optional_uuid};

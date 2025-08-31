@@ -33,6 +33,8 @@
 //! }
 //! ```
 
+pub mod circuit_breaker_manager;
+pub mod circuit_breaker_pool;
 pub mod cyclic_buffer;
 pub mod connection_limiter;
 pub mod embedded_font;
@@ -56,6 +58,8 @@ pub mod traits;
 pub mod url_linking_service;
 
 // Re-export main traits and services
+pub use circuit_breaker_manager::CircuitBreakerManager;
+pub use circuit_breaker_pool::{CircuitBreakerPool, PoolStats};
 pub use cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient, CyclicBufferStats};
 pub use connection_limiter::{ConnectionLimiter, ConnectionLimitsConfig, LimitExceededError, ConnectionHandle};
 pub use embedded_font::EmbeddedFontManager;

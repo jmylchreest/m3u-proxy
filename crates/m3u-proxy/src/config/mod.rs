@@ -24,6 +24,7 @@ pub struct Config {
     pub relay: Option<RelayConfig>,
     pub security: Option<SecurityConfig>,
     pub features: Option<FeaturesConfig>,
+    pub circuitbreaker: Option<CircuitBreakerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -384,6 +385,83 @@ fn default_max_quantifier_limit() -> usize {
     100
 }
 
+/// Circuit breaker configuration with support for named profiles
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CircuitBreakerConfig {
+    /// Global circuit breaker settings that apply to all profiles unless overridden
+    #[serde(default)]
+    pub global: CircuitBreakerProfileConfig,
+    
+    /// Named circuit breaker profiles for different services
+    /// Example: rssafe, database, http_client
+    #[serde(default)]
+    pub profiles: std::collections::HashMap<String, CircuitBreakerProfileConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CircuitBreakerProfileConfig {
+    /// Circuit breaker implementation type: "rssafe" or "noop"
+    #[serde(default = "default_circuit_breaker_type")]
+    pub implementation_type: String,
+    
+    /// Number of consecutive failures before opening the circuit
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: u32,
+    
+    /// Timeout duration for individual operations (e.g., "5s", "30s")
+    #[serde(default = "default_operation_timeout")]
+    pub operation_timeout: String,
+    
+    /// How long to wait before attempting to close the circuit (e.g., "30s", "1m")
+    #[serde(default = "default_reset_timeout")]
+    pub reset_timeout: String,
+    
+    /// Number of consecutive successes needed to close circuit from half-open state
+    #[serde(default = "default_success_threshold")]
+    pub success_threshold: u32,
+}
+
+fn default_circuit_breaker_type() -> String {
+    "rssafe".to_string()
+}
+
+fn default_failure_threshold() -> u32 {
+    3
+}
+
+fn default_operation_timeout() -> String {
+    "5s".to_string()
+}
+
+fn default_reset_timeout() -> String {
+    "30s".to_string()
+}
+
+fn default_success_threshold() -> u32 {
+    2
+}
+
+impl Default for CircuitBreakerProfileConfig {
+    fn default() -> Self {
+        Self {
+            implementation_type: default_circuit_breaker_type(),
+            failure_threshold: default_failure_threshold(),
+            operation_timeout: default_operation_timeout(),
+            reset_timeout: default_reset_timeout(),
+            success_threshold: default_success_threshold(),
+        }
+    }
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            global: CircuitBreakerProfileConfig::default(),
+            profiles: std::collections::HashMap::new(),
+        }
+    }
+}
+
 
 impl DatabaseBatchConfig {
     /// SQLite variable limit (32,766 in 3.32.0+, 999 in older versions)
@@ -674,6 +752,7 @@ impl Default for Config {
                 max_quantifier_limit: default_max_quantifier_limit(),
             }),
             features: Some(FeaturesConfig::default()),
+            circuitbreaker: Some(CircuitBreakerConfig::default()),
         }
     }
 }
@@ -734,12 +813,12 @@ mod tests {
         };
 
         // Should return safe sizes within SQLite limits
-        let safe_programs = config.safe_epg_program_batch_size();
+        let safe_programs = config.safe_epg_program_batch_size(sea_orm::DatabaseBackend::Sqlite);
 
-        assert!(safe_programs * 18 <= 32766);
+        assert!(safe_programs * 12 <= 32766); // Use actual EPG_PROGRAM_FIELDS constant
 
-        // Should cap to maximum safe values
-        assert_eq!(safe_programs, 32766 / 18); // 1820
+        // Should cap to maximum safe values  
+        assert_eq!(safe_programs, 32766 / 12); // 2730 (using actual EPG_PROGRAM_FIELDS constant)
     }
 
     #[test]
@@ -750,7 +829,7 @@ mod tests {
         assert!(default_config.validate().is_ok());
 
         // Default values should be within safe limits
-        assert_eq!(default_config.epg_programs, Some(1800));
-        assert_eq!(default_config.stream_channels, Some(500));
+        assert_eq!(default_config.epg_programs, None); // Uses backend-specific defaults
+        assert_eq!(default_config.stream_channels, Some(1000));
     }
 }

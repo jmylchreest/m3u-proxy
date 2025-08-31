@@ -18,22 +18,40 @@ use std::marker::PhantomData;
 /// # Example Usage
 ///
 /// ```rust
-/// use m3u_proxy::repositories::StreamSourceRepository;
 /// use m3u_proxy::repositories::retry_wrapper::RetryWrapper;
 /// use m3u_proxy::repositories::traits::Repository;
 /// use m3u_proxy::utils::database_retry::RetryConfig;
+/// use m3u_proxy::errors::RepositoryResult;
+/// use async_trait::async_trait;
 /// use uuid::Uuid;
-/// use sea_orm::DatabaseConnection;
 /// # use std::error::Error;
+///
+/// // Example repository that implements the Repository trait
+/// struct ExampleRepository;
+///
+/// #[async_trait]
+/// impl Repository<String, Uuid> for ExampleRepository {
+///     type CreateRequest = String;
+///     type UpdateRequest = String;
+///     type Query = String;
+///
+///     async fn find_by_id(&self, _id: Uuid) -> RepositoryResult<Option<String>> {
+///         Ok(Some("example".to_string()))
+///     }
+///     async fn find_all(&self, _query: String) -> RepositoryResult<Vec<String>> { Ok(vec![]) }
+///     async fn create(&self, _req: String) -> RepositoryResult<String> { Ok("created".to_string()) }
+///     async fn update(&self, _id: Uuid, _req: String) -> RepositoryResult<String> { Ok("updated".to_string()) }
+///     async fn delete(&self, _id: Uuid) -> RepositoryResult<()> { Ok(()) }
+///     async fn count(&self, _query: String) -> RepositoryResult<u64> { Ok(0) }
+/// }
 /// 
 /// async fn example() -> Result<(), Box<dyn Error>> {
-/// #   let db: DatabaseConnection = todo!();
-///     let base_repo = StreamSourceRepository::new(db.clone());
+///     let base_repo = ExampleRepository;
 ///     let retry_repo = RetryWrapper::new(base_repo, RetryConfig::for_writes());
 ///     
 ///     // All operations now have retry logic
 ///     let id = Uuid::new_v4();
-///     let source = retry_repo.find_by_id(id).await?;
+///     let _result = retry_repo.find_by_id(id).await?;
 ///     Ok(())
 /// }
 /// ```
@@ -216,8 +234,6 @@ mod tests {
     struct MockRepository {
         fail_counter: Arc<AtomicU32>,
         fail_until_attempt: u32,
-        
-        should_fail_permanently: bool,
     }
 
     impl MockRepository {
@@ -225,7 +241,6 @@ mod tests {
             Self {
                 fail_counter: Arc::new(AtomicU32::new(0)),
                 fail_until_attempt: 0,
-                should_fail_permanently: false,
             }
         }
 
@@ -233,7 +248,6 @@ mod tests {
             Self {
                 fail_counter: Arc::new(AtomicU32::new(0)),
                 fail_until_attempt,
-                should_fail_permanently: false,
             }
         }
 
@@ -241,7 +255,6 @@ mod tests {
             Self {
                 fail_counter: Arc::new(AtomicU32::new(0)),
                 fail_until_attempt: u32::MAX,
-                should_fail_permanently: true,
             }
         }
 

@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.1.2"
+version = "0.1.4-dev.1.gb4d9229"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"
@@ -29,7 +29,7 @@ path = "src/lib.rs"
 
 [dependencies]
 sandboxed-file-manager = { path = "../sandboxed-file-manager" }
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 async-stream = "0.3"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["macros", "multipart"] }
@@ -47,8 +47,9 @@ reqwest = { version = "0.12", features = [
     "stream",
     "rustls-tls",
 ], default-features = false }
+rssafecircuit = "0.1.0"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.141"
+serde_json = "1.0.143"
 toml = "0.9"
 figment = { version = "0.10", features = ["toml", "env"] }
 # SeaORM for database abstraction
@@ -66,7 +67,7 @@ sea-orm-migration = "1.1"
 strum = { version = "0.26", features = ["derive"] }
 
 thiserror = "2.0"
-tokio = { version = "1.46", features = [
+tokio = { version = "1.47", features = [
     "rt-multi-thread",
     "macros",
     "sync",
@@ -77,18 +78,18 @@ tokio = { version = "1.46", features = [
     "io-util",
     "signal",
 ] }
-tokio-util = "0.7.15"
+tokio-util = "0.7.16"
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-uuid = { version = "1.17", features = ["v4", "serde"] }
-bytes = "1.5"
-tempfile = "3.8"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+uuid = { version = "1.18", features = ["v4", "serde"] }
+bytes = "1.10"
+tempfile = "3.21"
 futures = "0.3"
 futures-util = "0.3"
-humantime = "2.1"
+humantime = "2.2"
 image = { version = "0.24", default-features = false, features = [
     "png",
     "jpeg",
@@ -98,26 +99,26 @@ image = { version = "0.24", default-features = false, features = [
 sha2 = "0.10"
 sysinfo = "0.29"
 hex = "0.4"
-url = "2.4"
+url = "2.5"
 urlencoding = "2.1"
 axum-extra = { version = "0.10", features = ["typed-header"] }
 utoipa = { version = "5.4.0", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-axum = { version = "0.2.0" }
 utoipa-rapidoc = { version = "6.0.0", features = ["axum"] }
 infer = "0.16"
-flate2 = { version = "1.0", optional = true }
+flate2 = { version = "1.1", optional = true }
 bzip2 = { version = "0.4", optional = true }
 xz2 = { version = "0.1", optional = true }
 
 [dev-dependencies]
 # Testing framework and utilities
 tokio-test = "0.4"
-proptest = "1.4"
+proptest = "1.7"
 criterion = { version = "0.5", features = ["html_reports"] }
 rstest = "0.22"
-serial_test = "3.1"
+serial_test = "3.2"
 mockall = "0.12"
-axum-test = "15.0"
+axum-test = "15.7"
 
 # Additional test utilities
 test-log = "0.2"

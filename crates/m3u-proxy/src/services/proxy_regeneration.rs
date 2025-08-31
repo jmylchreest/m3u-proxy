@@ -1111,18 +1111,26 @@ mod tests {
         let progress_service = Arc::new(ProgressService::new(ingestion_state_manager.clone()));
         
         // Create test database using SeaORM MockDatabase
-        let db_connection = sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
-            .into_connection();
+        let db_connection = Arc::new(sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
+            .into_connection());
+        let circuit_breaker = crate::utils::create_circuit_breaker(
+            crate::utils::CircuitBreakerType::Simple,
+            crate::utils::CircuitBreakerConfig::default()
+        );
         let test_database = crate::database::Database {
-            connection: db_connection.clone(),
-            read_connection: db_connection,
+            connection: Arc::clone(&db_connection),
+            read_connection: Arc::clone(&db_connection),
             backend: sea_orm::DatabaseBackend::Sqlite,
             ingestion_config: crate::config::IngestionConfig::default(),
             database_type: crate::database::DatabaseType::SQLite,
+            circuit_breaker,
         };
+        
+        let proxy_repository = crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository::new(Arc::clone(&db_connection));
         
         let service = ProxyRegenerationService::new(
             test_database,
+            proxy_repository,
             Config::default(),
             Some(RegenerationConfig { delay_seconds: 10, max_concurrent: 1 }),
             sandboxed_file_manager::SandboxedManager::builder()
@@ -1157,18 +1165,26 @@ mod tests {
         let progress_service = Arc::new(ProgressService::new(ingestion_state_manager.clone()));
         
         // Create test database using SeaORM MockDatabase
-        let db_connection = sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
-            .into_connection();
+        let db_connection = Arc::new(sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
+            .into_connection());
+        let circuit_breaker = crate::utils::create_circuit_breaker(
+            crate::utils::CircuitBreakerType::Simple,
+            crate::utils::CircuitBreakerConfig::default()
+        );
         let test_database = crate::database::Database {
-            connection: db_connection.clone(),
-            read_connection: db_connection,
+            connection: Arc::clone(&db_connection),
+            read_connection: Arc::clone(&db_connection),
             backend: sea_orm::DatabaseBackend::Sqlite,
             ingestion_config: crate::config::IngestionConfig::default(),
             database_type: crate::database::DatabaseType::SQLite,
+            circuit_breaker,
         };
+        
+        let proxy_repository = crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository::new(Arc::clone(&db_connection));
         
         let service = ProxyRegenerationService::new(
             test_database,
+            proxy_repository,
             Config::default(),
             None,
             sandboxed_file_manager::SandboxedManager::builder()

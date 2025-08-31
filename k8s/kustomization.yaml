@@ -1,0 +1,56 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Metadata
+namespace: m3u-proxy
+namePrefix: ""
+nameSuffix: ""
+
+# Resources to include
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+
+# Optional: Include GPU device plugin
+# Uncomment if you want to deploy the GPU plugin as part of this kustomization
+# - gpu-device-plugin.yaml
+
+# Common labels applied to all resources
+commonLabels:
+  app: m3u-proxy
+  version: v0.0.9
+
+# Common annotations
+commonAnnotations:
+  deployment-tool: kustomize
+  managed-by: kubernetes
+
+# ConfigMap generator (alternative to configmap.yaml)
+# configMapGenerator:
+#   - name: m3u-proxy-config
+#     literals:
+#       - M3U_PROXY_HOST=0.0.0.0
+#       - M3U_PROXY_PORT=8080
+#       - M3U_PROXY_LOG_LEVEL=info
+#       - M3U_PROXY_DATABASE_URL=sqlite:///app/data/m3u-proxy.db
+
+# Resource transformations
+patchesStrategicMerge: []
+
+# JSON patches for fine-grained modifications
+patchesJson6902: []
+
+# Images to use (for easy version management)
+images:
+  - name: m3u-proxy
+    newTag: "latest"
+    # newName: your-registry/m3u-proxy  # Use if pushing to custom registry
+
+# Replicas (can be overridden per environment)
+replicas:
+  - name: m3u-proxy
+    count: 1

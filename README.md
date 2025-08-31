@@ -383,7 +383,7 @@ The application uses a relational database with the following main tables:
   "source_type": "m3u",
   "url": "http://example.com/playlist.m3u",
   "max_concurrent_streams": 2,
-  "update_cron": "0 */6 * * *",
+  "update_cron": "0 0 */6 * * * *",
   "field_map": {
     "group_field": "group-title",
     "logo_field": "tvg-logo",
@@ -894,8 +894,7 @@ The project uses GitHub Actions for continuous integration and deployment:
 
 - **Check and Prepare**: 
   - Validates Rust formatting and clippy lints
-  - Automatically prepares SQLx queries if needed
-  - Commits updated `.sqlx/` files back to repository
+  - Runs SeaORM entity generation and migration checks
 - **Test Suite**: 
   - Runs unit and integration tests
   - Sets up test database with migrations
@@ -943,7 +942,7 @@ docker run -p 3000:3000 -v ./data:/app/data ghcr.io/jmylchreest/m3u-proxy:latest
 ### Development Workflow
 
 1. **Fork and Clone**: Fork the repository and clone locally
-2. **SQLx Prepare**: Run `cargo sqlx prepare` if you modify database queries
+2. **Database Migrations**: Run `cargo run -- migrate` to apply any database schema changes
 3. **Testing**: Ensure all tests pass with `cargo test`
 4. **Formatting**: Format code with `cargo fmt`
 5. **Linting**: Check with `cargo clippy`
@@ -963,7 +962,7 @@ docker run -p 3000:3000 -v ./data:/app/data ghcr.io/jmylchreest/m3u-proxy:latest
 All pull requests automatically run:
 - Code formatting validation
 - Clippy linting
-- SQLx query verification
+- SeaORM migration validation
 - Test suite execution
 - Cross-platform build verification
 - Security vulnerability scanning

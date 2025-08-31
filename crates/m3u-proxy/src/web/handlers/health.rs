@@ -114,6 +114,15 @@ pub async fn health_check(
         serde_json::to_value(&relay_health).unwrap_or_default(),
     );
 
+    // Circuit breaker health - get stats from circuit breaker manager if available
+    if let Some(cb_manager) = state.circuit_breaker_manager.as_ref() {
+        let circuit_breaker_stats = cb_manager.get_all_stats().await;
+        health_details.insert(
+            "circuit_breakers".to_string(),
+            serde_json::to_value(&circuit_breaker_stats).unwrap_or_default(),
+        );
+    }
+
     // Determine overall health status
     let overall_healthy = db_health.status == "healthy" 
         && (scheduler_health.status == "running" || scheduler_health.status == "idle")

@@ -184,7 +184,7 @@ async fn main() -> Result<()> {
     info!("Using database: {}", config.database.url);
 
     // Initialize database with better error handling
-    let database = match Database::new(&config.database, &config.ingestion).await {
+    let database = match Database::new(&config.database, &config.ingestion, &config).await {
         Ok(db) => db,
         Err(e) => {
             eprintln!("Failed to initialize database at '{}': {}", config.database.url, e);
@@ -397,6 +397,16 @@ async fn main() -> Result<()> {
     let relay_config_resolver = m3u_proxy::services::RelayConfigResolver::new(relay_repository);
     info!("Relay configuration resolver initialized");
 
+    // Initialize circuit breaker manager if circuit breaker config is provided
+    let circuit_breaker_manager = if let Some(cb_config) = &config.circuitbreaker {
+        let manager = std::sync::Arc::new(m3u_proxy::services::CircuitBreakerManager::new(cb_config.clone()));
+        info!("Circuit breaker manager initialized with {} profiles", cb_config.profiles.len());
+        Some(manager)
+    } else {
+        info!("Circuit breaker manager disabled (no configuration provided)");
+        None
+    };
+
     let mut web_server = WebServer::new(
         m3u_proxy::web::WebServerBuilder {
             config,
@@ -419,6 +429,7 @@ async fn main() -> Result<()> {
             epg_source_service: epg_source_service.clone(),
             log_broadcaster,
             runtime_settings_store,
+            circuit_breaker_manager,
         },
     )
     .await?;

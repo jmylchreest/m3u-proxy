@@ -89,6 +89,7 @@ pub struct WebServerBuilder {
     pub epg_source_service: std::sync::Arc<crate::services::EpgSourceService>,
     pub log_broadcaster: broadcast::Sender<crate::web::api::log_streaming::LogEvent>,
     pub runtime_settings_store: RuntimeSettingsStore,
+    pub circuit_breaker_manager: Option<std::sync::Arc<crate::services::CircuitBreakerManager>>,
 }
 
 impl WebServerBuilder {
@@ -169,6 +170,7 @@ impl WebServer {
             log_broadcaster,
             start_time: chrono::Utc::now(),
             runtime_settings_store: builder.runtime_settings_store,
+            circuit_breaker_manager: builder.circuit_breaker_manager,
         })
         .await;
 
@@ -412,6 +414,14 @@ impl WebServer {
             .route("/epg/programs/{source_id}", get(handlers::epg::get_source_epg_programs))
             .route("/epg/sources", get(handlers::epg::list_epg_sources))
             .route("/epg/guide", get(handlers::epg::get_epg_guide))
+            // Circuit breaker management endpoints
+            .route("/circuit-breakers", get(handlers::circuit_breaker::get_circuit_breaker_stats))
+            .route("/circuit-breakers/config", 
+                get(handlers::circuit_breaker::get_circuit_breaker_config)
+                .put(handlers::circuit_breaker::update_circuit_breaker_config))
+            .route("/circuit-breakers/services", get(handlers::circuit_breaker::list_active_services))
+            .route("/circuit-breakers/services/{service_name}", put(handlers::circuit_breaker::update_service_profile))
+            .route("/circuit-breakers/services/{service_name}/force", post(handlers::circuit_breaker::force_circuit_state))
     }
 
     /// Start the web server
@@ -542,6 +552,8 @@ pub struct AppState {
     pub start_time: chrono::DateTime<chrono::Utc>,
     /// Runtime settings store for dynamic configuration changes
     pub runtime_settings_store: RuntimeSettingsStore,
+    /// Circuit breaker manager for resilience patterns
+    pub circuit_breaker_manager: Option<std::sync::Arc<crate::services::CircuitBreakerManager>>,
 }
 
 impl AppState {}

@@ -239,6 +239,11 @@ mod tests {
             group_title: None,
             channel_name: "Test Channel".to_string(),
             stream_url: "http://example.com/stream".to_string(),
+            video_codec: None,
+            audio_codec: None,
+            resolution: None,
+            probe_method: None,
+            last_probed_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -263,6 +268,11 @@ mod tests {
             group_title: None,
             channel_name: "Test Channel".to_string(),
             stream_url: "http://example.com/stream".to_string(),
+            video_codec: None,
+            audio_codec: None,
+            resolution: None,
+            probe_method: None,
+            last_probed_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

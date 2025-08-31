@@ -44,6 +44,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Get version and update source files
+        run: |
+          VERSION=$(just get-version)
+          just set-version "$VERSION"
+          echo "Building with version: $VERSION"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -74,17 +83,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Install SQLx CLI
-        run: cargo install sqlx-cli --no-default-features --features sqlite,rustls
-
       - name: Setup build database
         run: |
           mkdir -p data
           touch data/build.db
-          sqlx migrate run --database-url sqlite:data/build.db
-
-      - name: Prepare SQLx queries
-        run: cargo sqlx prepare --database-url sqlite:data/build.db
+          cargo run -- --database-url sqlite:data/build.db migrate
 
       - name: Install cross (if needed)
         if: matrix.cross
@@ -93,14 +96,10 @@ jobs:
       - name: Build with cross
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }}
-        env:
-          SQLX_OFFLINE: true
 
       - name: Build natively
-        if: '!matrix.cross'
+        if: "!matrix.cross"
         run: cargo build --release --target ${{ matrix.target }}
-        env:
-          SQLX_OFFLINE: true
 
       - name: Strip binary (Unix)
         if: matrix.os != 'windows-latest'
@@ -172,6 +171,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Get version and update source files
+        id: version
+        run: |
+          VERSION=$(just get-version)
+          just set-version "$VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building with version: $VERSION"
+
+          # Determine if this is a release or snapshot
+          if echo "$VERSION" | grep -q "snapshot"; then
+            echo "is_snapshot=true" >> $GITHUB_OUTPUT
+            echo "docker_tag_suffix=snapshot" >> $GITHUB_OUTPUT
+          else
+            echo "is_snapshot=false" >> $GITHUB_OUTPUT
+            echo "docker_tag_suffix=latest" >> $GITHUB_OUTPUT
+          fi
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -182,10 +201,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -193,7 +208,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.docker_tag_suffix }}
             ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
           labels: |
             org.opencontainers.image.title=m3u-proxy
@@ -204,7 +219,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            SQLX_OFFLINE=true
+            APP_VERSION=${{ steps.version.outputs.version }}
+            BUILDKIT_INLINE_CACHE=1
 
   create-release-notes:
     name: Update Release Notes

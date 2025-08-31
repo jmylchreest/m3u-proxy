@@ -15,14 +15,31 @@
 //! # Usage
 //!
 //! ```rust
-//! use m3u_proxy::repositories::traits::Repository;
-//! use m3u_proxy::repositories::StreamSourceRepository;
-//! use m3u_proxy::models::StreamSource;
+//! use m3u_proxy::database::repositories::StreamSourceSeaOrmRepository;
+//! use m3u_proxy::models::{StreamSource, StreamSourceCreateRequest, StreamSourceType};
+//! use sea_orm::DatabaseConnection;
+//! use std::sync::Arc;
 //! use uuid::Uuid;
 //!
-//! async fn example(repo: impl Repository<StreamSource, Uuid>) -> Result<(), Box<dyn std::error::Error>> {
-//!     let id = Uuid::new_v4();
-//!     let source = repo.find_by_id(id).await?;
+//! async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create a mock database connection for the example
+//!     # let connection = Arc::new(sea_orm::Database::connect("sqlite::memory:").await?);
+//!     let repo = StreamSourceSeaOrmRepository::new(connection);
+//!     
+//!     let create_request = StreamSourceCreateRequest {
+//!         name: "Example Source".to_string(),
+//!         source_type: StreamSourceType::M3u,
+//!         url: "http://example.com/playlist.m3u".to_string(),
+//!         max_concurrent_streams: 10,
+//!         update_cron: "0 0 */6 * * * *".to_string(),
+//!         username: None,
+//!         password: None,
+//!         field_map: None,
+//!         ignore_channel_numbers: false,
+//!     };
+//!     
+//!     let source = repo.create(create_request).await?;
+//!     let found_source = repo.find_by_id(&source.id).await?;
 //!     // ... use source
 //!     Ok(())
 //! }

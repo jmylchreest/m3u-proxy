@@ -25,7 +25,8 @@ import {
   FolderOpen,
   Zap,
   Copy,
-  Check
+  Check,
+  Shield
 } from "lucide-react"
 import { 
   AreaChart, 
@@ -952,6 +953,79 @@ export function Debug() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Circuit Breakers Component */}
+          {healthData?.components?.circuit_breakers && Object.keys(healthData.components.circuit_breakers).length > 0 && (
+            <Card className="md:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5" />
+                  Circuit Breakers
+                </CardTitle>
+                <CardDescription>
+                  Circuit breaker status and statistics for protected services
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {Object.entries(healthData.components.circuit_breakers).map(([serviceName, stats]) => (
+                  <div key={serviceName} className="bg-muted/50 rounded p-3">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <div className="font-medium">{serviceName}</div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <div className={`h-2 w-2 rounded-full ${
+                            stats.state === 'Closed' ? 'bg-green-500' : 
+                            stats.state === 'Open' ? 'bg-red-500' : 'bg-yellow-500'
+                          }`} />
+                          <Badge variant={stats.state === 'Closed' ? "default" : stats.state === 'Open' ? "destructive" : "secondary"}>
+                            {stats.state}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {formatPercentage(stats.failure_rate)} failure rate
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      <div className="space-y-1">
+                        <div className="text-muted-foreground text-xs">Total Calls</div>
+                        <div className="font-medium text-lg">{stats.total_calls}</div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-muted-foreground text-xs">Successful</div>
+                        <div className="font-medium text-lg text-green-600">{stats.successful_calls}</div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-muted-foreground text-xs">Failed</div>
+                        <div className="font-medium text-lg text-red-600">{stats.failed_calls}</div>
+                      </div>
+                    </div>
+
+                    {/* Success Rate Bar */}
+                    <div className="mt-3">
+                      <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                        <span>Success Rate</span>
+                        <span>{formatPercentage(((stats.successful_calls / (stats.total_calls || 1)) * 100))}</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
+                        <div 
+                          className="bg-gradient-to-r from-green-500 to-green-600 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${((stats.successful_calls / (stats.total_calls || 1)) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                
+                {Object.keys(healthData.components.circuit_breakers).length === 0 && (
+                  <div className="text-center py-4 text-muted-foreground">
+                    No active circuit breakers
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 

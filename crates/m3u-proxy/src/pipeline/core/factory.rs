@@ -204,7 +204,7 @@ impl PipelineOrchestratorFactory {
     /// Create a factory with default storage paths (for testing/development)
     #[cfg(test)]
     pub async fn with_defaults(
-        db_pool: SqlitePool,
+        db_connection: sea_orm::DatabaseConnection,
         app_config: Config,
         pipeline_file_manager: SandboxedManager,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -224,7 +224,21 @@ impl PipelineOrchestratorFactory {
             pipeline_cleanup_interval: "5m".to_string(),
         };
 
-        Self::from_components(db_pool, app_config, storage_config, pipeline_file_manager).await
+        // Create Database wrapper from connection for test
+        let circuit_breaker = crate::utils::create_circuit_breaker(
+            crate::utils::CircuitBreakerType::Simple,
+            crate::utils::CircuitBreakerConfig::default()
+        );
+        let test_database = crate::database::Database {
+            connection: std::sync::Arc::new(db_connection),
+            read_connection: std::sync::Arc::new(sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite).into_connection()),
+            backend: sea_orm::DatabaseBackend::Sqlite,
+            ingestion_config: crate::config::IngestionConfig::default(),
+            database_type: crate::database::DatabaseType::SQLite,
+            circuit_breaker,
+        };
+        
+        Self::from_components(test_database, app_config, storage_config, pipeline_file_manager).await
     }
 }
 
@@ -252,12 +266,12 @@ mod tests {
             ..Default::default()
         };
 
-        // Create in-memory database
-        let db_pool = SqlitePool::connect(":memory:").await.unwrap();
+        // Create in-memory database using SeaORM
+        let db_connection = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
 
         // Test factory creation
         let factory = PipelineOrchestratorFactory::with_defaults(
-            db_pool,
+            db_connection,
             app_config,
             file_manager,
         ).await;

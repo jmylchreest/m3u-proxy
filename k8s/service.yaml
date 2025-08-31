@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: m3u-proxy
+  namespace: m3u-proxy
+  labels:
+    app: m3u-proxy
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: m3u-proxy
+---
+# Optional: LoadBalancer service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: m3u-proxy-external
+  namespace: m3u-proxy
+  labels:
+    app: m3u-proxy
+    service-type: external
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 8080
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: m3u-proxy
+  # Optional: specify external IP or load balancer class
+  # loadBalancerIP: "192.168.1.100"
+  # loadBalancerClass: "metallb"

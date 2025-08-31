@@ -216,10 +216,10 @@ mod tests {
         let resolved_config = ResolvedRelayConfig::new(channel_config, profile).unwrap();
         
         // Create a dummy resolver (we won't use the repository part)
-        use sea_orm::{Database, DatabaseBackend};
+        use sea_orm::Database;
         let dummy_connection = Database::connect("sqlite::memory:")
             .await.unwrap();
-        let dummy_repo = crate::database::repositories::relay::RelaySeaOrmRepository::new(dummy_connection);
+        let dummy_repo = crate::database::repositories::relay::RelaySeaOrmRepository::new(dummy_connection.into());
         let resolver = RelayConfigResolver::new(dummy_repo);
 
         let result = resolver.validate_config(&resolved_config);
@@ -236,10 +236,10 @@ mod tests {
         let resolved_config = ResolvedRelayConfig::new(channel_config, profile).unwrap();
         
         // Create a dummy resolver (we won't use the repository part)
-        use sea_orm::{Database, DatabaseBackend};
+        use sea_orm::Database;
         let dummy_connection = Database::connect("sqlite::memory:")
             .await.unwrap();
-        let dummy_repo = crate::database::repositories::relay::RelaySeaOrmRepository::new(dummy_connection);
+        let dummy_repo = crate::database::repositories::relay::RelaySeaOrmRepository::new(dummy_connection.into());
         let resolver = RelayConfigResolver::new(dummy_repo);
 
         let result = resolver.validate_config(&resolved_config);

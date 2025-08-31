@@ -51,6 +51,102 @@ pub trait HelperProcessor: Send + Sync {
     }
 }
 
+/// Trait for logo database operations - allows for easy mocking in tests
+#[async_trait]
+pub trait LogoRepository: Send + Sync {
+    async fn logo_uuid_exists(&self, uuid: &Uuid) -> Result<bool, HelperProcessorError>;
+}
+
+/// Production implementation using SeaORM
+pub struct SeaOrmLogoRepository {
+    db_connection: DatabaseConnection,
+}
+
+impl SeaOrmLogoRepository {
+    pub fn new(db_connection: DatabaseConnection) -> Self {
+        Self { db_connection }
+    }
+}
+
+#[async_trait]
+impl LogoRepository for SeaOrmLogoRepository {
+    async fn logo_uuid_exists(&self, uuid: &Uuid) -> Result<bool, HelperProcessorError> {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_DELAY_MS: u64 = 100;
+        
+        for attempt in 1..=MAX_RETRIES {
+            match LogoAssets::find()
+                .filter(logo_assets::Column::Id.eq(*uuid))
+                .filter(logo_assets::Column::AssetType.eq("uploaded"))
+                .count(&self.db_connection)
+                .await
+            {
+                Ok(result) => {
+                    trace!("Logo UUID {} lookup succeeded on attempt {}", uuid, attempt);
+                    return Ok(result > 0);
+                }
+                Err(e) => {
+                    if attempt == MAX_RETRIES {
+                        error!("Logo UUID lookup failed after {} attempts for UUID {}: {}", 
+                            MAX_RETRIES, uuid, e);
+                        return Err(HelperProcessorError::CriticalDatabaseError(
+                            format!("Failed to check logo UUID {uuid} after {MAX_RETRIES} retries: {e}")
+                        ));
+                    } else {
+                        let delay_ms = BASE_DELAY_MS * (2_u64.pow(attempt - 1));
+                        debug!("Logo UUID lookup attempt {} failed for UUID {}: {}. Retrying in {}ms...", 
+                            attempt, uuid, e, delay_ms);
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    }
+                }
+            }
+        }
+        
+        unreachable!("Loop should always return within MAX_RETRIES attempts")
+    }
+}
+
+/// Mock implementation for testing
+#[cfg(test)]
+pub struct MockLogoRepository {
+    pub exists_responses: std::collections::HashMap<Uuid, bool>,
+    pub should_error: bool,
+}
+
+#[cfg(test)]
+impl MockLogoRepository {
+    pub fn new() -> Self {
+        Self {
+            exists_responses: std::collections::HashMap::new(),
+            should_error: false,
+        }
+    }
+    
+    pub fn with_uuid_exists(mut self, uuid: Uuid, exists: bool) -> Self {
+        self.exists_responses.insert(uuid, exists);
+        self
+    }
+    
+    pub fn with_error(mut self) -> Self {
+        self.should_error = true;
+        self
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl LogoRepository for MockLogoRepository {
+    async fn logo_uuid_exists(&self, uuid: &Uuid) -> Result<bool, HelperProcessorError> {
+        if self.should_error {
+            return Err(HelperProcessorError::CriticalDatabaseError(
+                "Mock database error".to_string()
+            ));
+        }
+        
+        Ok(self.exists_responses.get(uuid).copied().unwrap_or(false))
+    }
+}
+
 /// Field that can be processed by helpers
 #[derive(Debug, Clone)]
 pub struct HelperField {
@@ -160,64 +256,23 @@ impl HelperPostProcessor {
     }
 }
 
-/// Logo helper processor that validates UUIDs against the database
-pub struct LogoHelperProcessor {
-    db_connection: DatabaseConnection,
+/// Logo helper processor that validates UUIDs against the database (generic version)
+pub struct LogoHelperProcessor<R: LogoRepository> {
+    logo_repo: R,
     base_url: String,
 }
 
-impl LogoHelperProcessor {
-    pub fn new(db_connection: DatabaseConnection, base_url: String) -> Self {
+impl<R: LogoRepository> LogoHelperProcessor<R> {
+    pub fn new(logo_repo: R, base_url: String) -> Self {
         Self {
-            db_connection,
+            logo_repo,
             base_url,
         }
-    }
-    
-    /// Check if a logo UUID exists in the database with retry logic
-    async fn logo_uuid_exists(&self, uuid: &Uuid) -> Result<bool, HelperProcessorError> {
-        const MAX_RETRIES: u32 = 3;
-        const BASE_DELAY_MS: u64 = 100;
-        
-        for attempt in 1..=MAX_RETRIES {
-            match LogoAssets::find()
-                .filter(logo_assets::Column::Id.eq(*uuid))
-                .filter(logo_assets::Column::AssetType.eq("uploaded"))
-                .count(&self.db_connection)
-                .await
-            {
-                Ok(result) => {
-                    trace!("Logo UUID {} lookup succeeded on attempt {}", uuid, attempt);
-                    return Ok(result > 0);
-                }
-                Err(e) => {
-                    if attempt == MAX_RETRIES {
-                        // Final attempt failed - this is a critical error that should halt the pipeline
-                        error!("Logo UUID lookup failed after {} attempts for UUID {}: {}", 
-                            MAX_RETRIES, uuid, e);
-                        return Err(HelperProcessorError::CriticalDatabaseError(
-                            format!("Failed to check logo UUID {uuid} after {MAX_RETRIES} retries: {e}")
-                        ));
-                    } else {
-                        // Retry with exponential backoff
-                        let delay_ms = BASE_DELAY_MS * (2_u64.pow(attempt - 1));
-                        debug!("Logo UUID lookup attempt {} failed for UUID {}: {}. Retrying in {}ms...", 
-                            attempt, uuid, e, delay_ms);
-                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    }
-                }
-            }
-        }
-        
-        // This should never be reached due to the loop structure, but just in case
-        Err(HelperProcessorError::CriticalDatabaseError(
-            format!("Unexpected error in logo UUID lookup for {uuid}")
-        ))
     }
 }
 
 #[async_trait]
-impl HelperProcessor for LogoHelperProcessor {
+impl<R: LogoRepository + Send + Sync> HelperProcessor for LogoHelperProcessor<R> {
     fn get_supported_prefix(&self) -> &'static str {
         "@logo:"
     }
@@ -226,8 +281,8 @@ impl HelperProcessor for LogoHelperProcessor {
         if let Some(uuid_str) = field_value.strip_prefix("@logo:") {
             match uuid_str.parse::<Uuid>() {
                 Ok(uuid) => {
-                    // Check if the UUID exists in the database (with retry logic)
-                    match self.logo_uuid_exists(&uuid).await {
+                    // Check if the UUID exists in the database
+                    match self.logo_repo.logo_uuid_exists(&uuid).await {
                         Ok(exists) => {
                             if exists {
                                 // Generate uploaded logo URL
@@ -268,6 +323,14 @@ impl HelperProcessor for LogoHelperProcessor {
     }
 }
 
+// Convenience constructor for production use
+impl LogoHelperProcessor<SeaOrmLogoRepository> {
+    pub fn from_connection(db_connection: DatabaseConnection, base_url: String) -> Self {
+        let repo = SeaOrmLogoRepository::new(db_connection);
+        Self::new(repo, base_url)
+    }
+}
+
 /// Time helper processor using existing time resolution logic
 pub struct TimeHelperProcessor;
 
@@ -299,66 +362,99 @@ impl HelperProcessor for TimeHelperProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{DatabaseBackend, DatabaseConnection, MockDatabase, MockExecResult, DatabaseTransaction};
-    use crate::entities::{logo_assets, prelude::*};
-    
-    #[tokio::test]
-    async fn test_logo_helper_processor_invalid_uuid() {
-        // Create mock database that returns empty results for any query
-        let db = MockDatabase::new(DatabaseBackend::Sqlite)
-            .append_query_results(vec![
-                vec![], // Empty result for any logo lookup
-            ])
-            .into_connection();
-            
-        let processor = LogoHelperProcessor::new(db, "https://example.com".to_string());
-        
-        // Malformed UUID should result in field removal (None), not an error
-        let result = processor.resolve_helper("@logo:invalid-uuid").await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), None); // Field should be removed
-    }
     
     #[tokio::test]
     async fn test_logo_helper_processor_valid_uuid_not_found() {
-        // Create mock database that returns 0 count for any query (UUID not found)
-        let db = MockDatabase::new(DatabaseBackend::Sqlite)
-            .append_query_results(vec![
-                vec![
-                    sea_orm::MockRow::from_values(vec!["0".into()]) // Count query returns 0
-                ],
-            ])
-            .into_connection();
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        
+        // Create mock repository that returns false for this UUID
+        let mock_repo = MockLogoRepository::new()
+            .with_uuid_exists(uuid, false);
             
-        let processor = LogoHelperProcessor::new(db, "https://example.com".to_string());
+        let processor = LogoHelperProcessor::new(mock_repo, "https://example.com".to_string());
         
         // Valid UUID format but doesn't exist in database
         let result = processor.resolve_helper("@logo:550e8400-e29b-41d4-a716-446655440000").await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Expected Ok result but got error: {:?}", result.as_ref().err());
         assert_eq!(result.unwrap(), None); // Field should be removed
     }
     
     #[tokio::test]
     async fn test_logo_helper_processor_valid_uuid_found() {
-        // Create mock database that returns count > 0 for the UUID query (found scenario)
-        let db = MockDatabase::new(DatabaseBackend::Sqlite)
-            .append_query_results(vec![
-                vec![
-                    sea_orm::MockRow::from_values(vec!["1".into()]) // Count query returns 1 (found)
-                ],
-            ])
-            .into_connection();
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        
+        // Create mock repository that returns true for this UUID
+        let mock_repo = MockLogoRepository::new()
+            .with_uuid_exists(uuid, true);
             
-        let processor = LogoHelperProcessor::new(db, "https://example.com".to_string());
+        let processor = LogoHelperProcessor::new(mock_repo, "https://example.com".to_string());
         
         let test_uuid = "550e8400-e29b-41d4-a716-446655440000";
         
         // Valid UUID that exists in database
         let result = processor.resolve_helper(&format!("@logo:{test_uuid}")).await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Expected Ok result but got error: {:?}", result.as_ref().err());
         assert_eq!(
             result.unwrap(), 
             Some(format!("https://example.com/api/v1/logos/{test_uuid}"))
+        );
+    }
+    
+    #[tokio::test]
+    async fn test_logo_helper_processor_database_error() {
+        // Create mock repository that returns an error
+        let mock_repo = MockLogoRepository::new()
+            .with_error();
+            
+        let processor = LogoHelperProcessor::new(mock_repo, "https://example.com".to_string());
+        
+        // Valid UUID format but database error occurs
+        let result = processor.resolve_helper("@logo:550e8400-e29b-41d4-a716-446655440000").await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            HelperProcessorError::CriticalDatabaseError(_) => {
+                // Expected error type
+            }
+            _ => panic!("Expected CriticalDatabaseError"),
+        }
+    }
+    
+    #[tokio::test]
+    async fn test_logo_helper_processor_malformed_uuid() {
+        let mock_repo = MockLogoRepository::new();
+        let processor = LogoHelperProcessor::new(mock_repo, "https://example.com".to_string());
+        
+        // Malformed UUID should remove field, not error
+        let result = processor.resolve_helper("@logo:not-a-uuid").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None); // Field should be removed
+    }
+    
+    #[tokio::test]
+    async fn test_logo_helper_processor_non_logo_field() {
+        let mock_repo = MockLogoRepository::new();
+        let processor = LogoHelperProcessor::new(mock_repo, "https://example.com".to_string());
+        
+        // Non-logo field should pass through unchanged
+        let result = processor.resolve_helper("some other value").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some("some other value".to_string()));
+    }
+    
+    #[tokio::test]
+    async fn test_base_url_trimming() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let mock_repo = MockLogoRepository::new()
+            .with_uuid_exists(uuid, true);
+            
+        // Test with trailing slash in base URL
+        let processor = LogoHelperProcessor::new(mock_repo, "https://example.com/".to_string());
+        
+        let result = processor.resolve_helper("@logo:550e8400-e29b-41d4-a716-446655440000").await;
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(), 
+            Some("https://example.com/api/v1/logos/550e8400-e29b-41d4-a716-446655440000".to_string())
         );
     }
     

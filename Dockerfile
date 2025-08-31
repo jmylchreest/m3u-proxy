@@ -9,7 +9,7 @@ FROM node:${NODE_VERSION}-alpine AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 # Install ALL dependencies (including devDependencies) for building
-RUN npm ci --silent
+RUN npm ci
 COPY frontend/ ./
 # Build the frontend
 RUN npm run build && ls -la out/

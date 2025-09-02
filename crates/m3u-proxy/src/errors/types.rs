@@ -179,21 +179,6 @@ impl AppError {
         }
     }
     
-    /// Create a not found error for a specific resource
-    pub fn not_found<R: Into<String>, I: Into<String>>(resource: R, id: I) -> Self {
-        Self::NotFound {
-            resource: resource.into(),
-            id: id.into(),
-        }
-    }
-    
-    /// Create a permission denied error
-    pub fn permission_denied<A: Into<String>, R: Into<String>>(action: A, resource: R) -> Self {
-        Self::PermissionDenied {
-            action: action.into(),
-            resource: resource.into(),
-        }
-    }
     
     /// Create a configuration error
     pub fn configuration<S: Into<String>>(message: S) -> Self {
@@ -235,44 +220,9 @@ impl AppError {
 }
 
 impl RepositoryError {
-    /// Create a query failed error
-    pub fn query_failed<Q: Into<String>, M: Into<String>>(query: Q, message: M) -> Self {
-        Self::QueryFailed {
-            query: query.into(),
-            message: message.into(),
-        }
-    }
-    
-    /// Create a record not found error
-    pub fn record_not_found<T: Into<String>, F: Into<String>, V: Into<String>>(
-        table: T,
-        field: F,
-        value: V,
-    ) -> Self {
-        Self::RecordNotFound {
-            table: table.into(),
-            field: field.into(),
-            value: value.into(),
-        }
-    }
-    
-    /// Create a constraint violation error
-    pub fn constraint_violation<C: Into<String>, M: Into<String>>(
-        constraint: C,
-        message: M,
-    ) -> Self {
-        Self::ConstraintViolation {
-            constraint: constraint.into(),
-            message: message.into(),
-        }
-    }
 }
 
 impl SourceError {
-    /// Create a timeout error
-    pub fn timeout<U: Into<String>>(url: U) -> Self {
-        Self::Timeout { url: url.into() }
-    }
     
     /// Create an authentication failed error
     pub fn auth_failed<S: Into<String>, M: Into<String>>(source_type: S, message: M) -> Self {
@@ -282,36 +232,7 @@ impl SourceError {
         }
     }
     
-    /// Create an invalid config error
-    pub fn invalid_config<F: Into<String>, M: Into<String>>(field: F, message: M) -> Self {
-        Self::InvalidConfig {
-            field: field.into(),
-            message: message.into(),
-        }
-    }
-    
-    /// Create a parse error
-    pub fn parse_error<S: Into<String>, M: Into<String>>(source_type: S, message: M) -> Self {
-        Self::ParseError {
-            source_type: source_type.into(),
-            message: message.into(),
-        }
-    }
 }
 
 impl WebError {
-    /// Create an invalid request error
-    pub fn invalid_request<F: Into<String>, M: Into<String>>(field: F, message: M) -> Self {
-        Self::InvalidRequest {
-            field: field.into(),
-            message: message.into(),
-        }
-    }
-    
-    /// Create a missing header error
-    pub fn missing_header<H: Into<String>>(header: H) -> Self {
-        Self::MissingHeader {
-            header: header.into(),
-        }
-    }
 }

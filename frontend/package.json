@@ -1,6 +1,6 @@
 {
   "name": "m3u-proxy-frontend",
-  "version": "0.1.4-dev.6.ga273693",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",

@@ -76,13 +76,13 @@ impl Database {
         // Apply database-specific optimizations
         match database_type {
             DatabaseType::SQLite => {
-                Self::apply_sqlite_optimizations(&mut connect_options, config)?;
+                Self::apply_sqlite_optimizations(&mut connect_options)?;
             }
             DatabaseType::PostgreSQL => {
-                Self::apply_postgresql_optimizations(&mut connect_options, config)?;
+                Self::apply_postgresql_optimizations(&mut connect_options)?;
             }
             DatabaseType::MySQL => {
-                Self::apply_mysql_optimizations(&mut connect_options, config)?;
+                Self::apply_mysql_optimizations(&mut connect_options)?;
             }
         }
 
@@ -180,7 +180,6 @@ impl Database {
     /// Apply SQLite-specific optimizations
     fn apply_sqlite_optimizations(
         options: &mut ConnectOptions,
-        _config: &DatabaseConfig,
     ) -> Result<()> {
         // SeaORM and modern database configurations handle optimization automatically
         // Manual PRAGMA statements can conflict with SeaORM's built-in optimizations
@@ -195,7 +194,6 @@ impl Database {
     /// Apply PostgreSQL-specific optimizations
     fn apply_postgresql_optimizations(
         options: &mut ConnectOptions,
-        _config: &DatabaseConfig,
     ) -> Result<()> {
         // PostgreSQL-specific connection settings can be added here
         options.sqlx_logging_level(tracing::log::LevelFilter::Debug);
@@ -207,7 +205,6 @@ impl Database {
     /// Apply MySQL-specific optimizations
     fn apply_mysql_optimizations(
         options: &mut ConnectOptions,
-        _config: &DatabaseConfig,
     ) -> Result<()> {
         // MySQL-specific connection settings can be added here
         options.sqlx_logging_level(tracing::log::LevelFilter::Debug);

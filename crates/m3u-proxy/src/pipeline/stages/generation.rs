@@ -8,7 +8,6 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::logo_assets::service::LogoAssetService;
 use crate::models::{NumberedChannel, ChannelNumberAssignmentType};
 use crate::pipeline::engines::rule_processor::EpgProgram;
 use crate::pipeline::models::{PipelineArtifact, ArtifactType, ContentType, ProcessingStage};
@@ -27,8 +26,6 @@ struct ChannelInfo {
 /// Generation stage - streams to temporary files in pipeline storage
 /// Files will be atomically published by the publish_content stage
 pub struct GenerationStage {
-    
-    db_connection: Arc<DatabaseConnection>,
     pipeline_file_manager: SandboxedManager,  // Pipeline temporary storage
     pipeline_execution_prefix: String,
     proxy_id: Uuid,
@@ -39,7 +36,7 @@ pub struct GenerationStage {
 
 impl GenerationStage {
     pub async fn new(
-        db_connection: Arc<DatabaseConnection>,
+        _db_connection: Arc<DatabaseConnection>,
         pipeline_file_manager: SandboxedManager,  // Pipeline temporary storage
         pipeline_execution_prefix: String,
         proxy_id: Uuid,
@@ -47,7 +44,6 @@ impl GenerationStage {
         progress_manager: Option<Arc<ProgressManager>>,
     ) -> Result<Self> {
         Ok(Self {
-            db_connection,
             pipeline_file_manager,
             pipeline_execution_prefix,
             proxy_id,
@@ -75,8 +71,6 @@ impl GenerationStage {
         &self,
         numbered_channels: Vec<NumberedChannel>,
         epg_programs: Vec<EpgProgram>,
-        _cache_channel_logos: bool,
-        _logo_service: &LogoAssetService,
     ) -> Result<Vec<PipelineArtifact>> {
         let process_start = Instant::now();
         
@@ -514,18 +508,7 @@ impl PipelineStage for GenerationStage {
         let (numbered_channels, epg_programs) = self.load_artifacts_from_input(input).await?;
         
         // Generate the files (for now, create a dummy logo service)
-        let logo_storage = crate::logo_assets::LogoAssetStorage::new(
-            std::path::PathBuf::from("/tmp/logos_uploaded"),
-            std::path::PathBuf::from("/tmp/logos_cached")
-        );
-        // Create circuit breaker-enabled logo service for logo processing
-        let http_client_factory = crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10));
-        let logo_service = crate::logo_assets::service::LogoAssetService::new(
-            self.db_connection.clone(),
-            logo_storage,
-            &http_client_factory
-        ).await;
-        let artifacts = self.process_channels_and_programs(numbered_channels, epg_programs, false, &logo_service).await
+        let artifacts = self.process_channels_and_programs(numbered_channels, epg_programs).await
             .map_err(|e| PipelineError::stage_error("generation", format!("Generation failed: {e}")))?;
         
         self.report_progress(100.0, "Generation completed").await;

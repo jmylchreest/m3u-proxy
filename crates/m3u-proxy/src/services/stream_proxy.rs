@@ -34,11 +34,11 @@ pub struct StreamProxyService {
     preview_file_manager: SandboxedManager,
     data_mapping_service: DataMappingService,
     logo_service: LogoAssetService,
-    storage_config: StorageConfig,
+    _storage_config: StorageConfig,
     app_config: crate::config::Config,
     temp_file_manager: SandboxedManager,
     proxy_output_file_manager: SandboxedManager,
-    system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+    _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
 
@@ -81,11 +81,11 @@ impl StreamProxyService {
             preview_file_manager: builder.preview_file_manager,
             data_mapping_service: builder.data_mapping_service,
             logo_service: builder.logo_service,
-            storage_config: builder.storage_config,
+            _storage_config: builder.storage_config,
             app_config: builder.app_config,
             temp_file_manager: builder.temp_file_manager,
             proxy_output_file_manager: builder.proxy_output_file_manager,
-            system: builder.system,
+            _system: builder.system,
         }
     }
     /// Create a new stream proxy
@@ -261,10 +261,8 @@ impl StreamProxyService {
 
         // Use the native pipeline
         let proxy_service = crate::proxy::ProxyService::new(
-            self.storage_config.clone(),
             self.temp_file_manager.clone(),
             self.proxy_output_file_manager.clone(),
-            self.system.clone(),
         );
         let params = crate::proxy::GenerateProxyParams {
             config: resolved_config.clone(),

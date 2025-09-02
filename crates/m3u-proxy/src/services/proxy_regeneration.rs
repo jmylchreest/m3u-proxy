@@ -82,7 +82,6 @@ impl ProxyRegenerationService {
         app_config: Config,
         config: Option<RegenerationConfig>,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
-        _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
         progress_service: Arc<ProgressService>,
         ingestion_state_manager: Arc<IngestionStateManager>,
         http_client_factory: Arc<crate::utils::HttpClientFactory>,
@@ -1115,7 +1114,6 @@ impl ProxyRegenerationService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sysinfo::SystemExt;
 
     #[tokio::test]
     async fn test_deduplication() {
@@ -1145,7 +1143,6 @@ mod tests {
             sandboxed_file_manager::SandboxedManager::builder()
                 .base_directory(std::env::temp_dir().join("m3u_proxy_test"))
                 .build().await.unwrap(),
-            Arc::new(tokio::sync::RwLock::new(sysinfo::System::new())),
             progress_service,
             ingestion_state_manager,
             http_client_factory,
@@ -1196,7 +1193,6 @@ mod tests {
             sandboxed_file_manager::SandboxedManager::builder()
                 .base_directory(std::env::temp_dir().join("m3u_proxy_test2"))
                 .build().await.unwrap(),
-            Arc::new(tokio::sync::RwLock::new(sysinfo::System::new())),
             progress_service,
             ingestion_state_manager,
             http_client_factory,

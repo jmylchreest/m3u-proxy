@@ -359,7 +359,6 @@ async fn main() -> Result<()> {
             config.clone(),
             None,
             pipeline_file_manager.clone(),
-            system_manager.get_system(),
             progress_service.clone(), // Pass ProgressService to create ProgressManagers
             state_manager.clone(), // Pass IngestionStateManager to check for active operations
             Arc::new(http_client_factory.clone()), // Pass HttpClientFactory for circuit breaker support

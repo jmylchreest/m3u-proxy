@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::errors::AppResult;
 use crate::models::{StreamSourceType, EpgSourceType};
-use super::traits::{FullSourceHandler, EpgSourceHandler, FullEpgSourceHandler, EpgSourceHandlerSummary};
+use super::traits::{FullSourceHandler, EpgSourceHandler, FullEpgSourceHandler};
 use super::m3u::M3uSourceHandler;
 use super::xtream::XtreamSourceHandler;
 use super::xmltv_epg::XmltvEpgHandler;
@@ -73,16 +73,6 @@ impl SourceHandlerFactory {
 
 
 
-    /// Get all supported source types
-    ///
-    /// This method returns a list of all source types that have registered handlers.
-    /// Useful for UI generation and capability discovery.
-    pub fn get_supported_types() -> Vec<StreamSourceType> {
-        vec![
-            StreamSourceType::M3u,
-            StreamSourceType::Xtream,
-        ]
-    }
 
     /// Check if a source type is supported
     ///
@@ -167,46 +157,7 @@ impl SourceHandlerFactory {
         }
     }
 
-    /// Get all supported EPG source types
-    ///
-    /// This method returns a list of all EPG source types that have registered handlers.
-    /// Useful for UI generation and capability discovery.
-    pub fn get_supported_epg_types() -> Vec<EpgSourceType> {
-        vec![
-            EpgSourceType::Xmltv,
-            EpgSourceType::Xtream,
-        ]
-    }
 
-    /// Check if an EPG source type is supported
-    ///
-    /// # Arguments  
-    /// * `epg_source_type` - The EPG source type to check
-    ///
-    /// # Returns
-    /// True if the EPG source type has a registered handler, false otherwise
-    pub fn is_epg_supported(epg_source_type: &EpgSourceType) -> bool {
-        matches!(epg_source_type, EpgSourceType::Xmltv | EpgSourceType::Xtream)
-    }
-
-    /// Get EPG handler capabilities summary for an EPG source type
-    ///
-    /// This method provides information about what capabilities an EPG handler supports
-    /// without actually creating the handler instance.
-    pub fn get_epg_handler_capabilities(epg_source_type: &EpgSourceType) -> AppResult<EpgSourceHandlerSummary> {
-        match epg_source_type {
-            EpgSourceType::Xmltv => Ok(EpgSourceHandlerSummary {
-                epg_source_type: EpgSourceType::Xmltv,
-                supports_program_ingestion: true,
-                supports_authentication: false,
-            }),
-            EpgSourceType::Xtream => Ok(EpgSourceHandlerSummary {
-                epg_source_type: EpgSourceType::Xtream,
-                supports_program_ingestion: true,
-                supports_authentication: true,
-            }),
-        }
-    }
 }
 
 
@@ -250,9 +201,7 @@ mod tests {
         // Test EPG factory methods  
         let factory = HttpClientFactory::new(None, Duration::from_secs(5));
         for epg_type in [EpgSourceType::Xmltv, EpgSourceType::Xtream] {
-            assert!(SourceHandlerFactory::is_epg_supported(&epg_type));
             assert!(SourceHandlerFactory::create_epg_handler(&epg_type, &factory).await.is_ok());
-            assert!(SourceHandlerFactory::get_epg_handler_capabilities(&epg_type).is_ok());
         }
     }
 }

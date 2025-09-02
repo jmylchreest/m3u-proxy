@@ -17,9 +17,9 @@ RUN npm run build && ls -la out/
 # Backend build stage
 FROM rust:${RUST_VERSION} AS backend-builder
 
-# Install build dependencies
+# Install build dependencies including UPX for binary compression
 RUN apt-get update && apt-get install -y \
-    pkg-config libssl-dev curl ca-certificates \
+    pkg-config libssl-dev curl ca-certificates upx-ucl \
     && rm -rf /var/lib/apt/lists/*
 
 # Build Rust application
@@ -32,6 +32,9 @@ COPY --from=frontend-builder /app/frontend/out/ ./crates/m3u-proxy/static/
 
 # Build binary
 RUN cargo build --release --bin m3u-proxy
+
+# Compress binary with UPX for smaller container size
+RUN upx --best --lzma /usr/src/m3u-proxy/target/release/m3u-proxy
 
 # Prepare entrypoint script
 COPY entrypoint.sh /tmp/entrypoint.sh

@@ -373,6 +373,8 @@ build-dev: build-frontend copy-frontend build-backend
 # Build container image (supports podman, docker, buildah, nerdctl)
 build-container:
     @echo "Building container using external script with runtime detection..."
+    @echo "Ensuring npm dependencies are up to date..."
+    cd frontend && npm install && cd ..
     ./build-container.sh
 
 # Push container image to registry (supports podman, docker, nerdctl)
@@ -478,6 +480,12 @@ build-container-versioned:
     # Always update Cargo.toml to match (for SBOM consistency)
     echo "Updating Cargo.toml to version: $VERSION"
     just set-version "$VERSION"
+
+    # Ensure npm dependencies are up to date
+    echo "Ensuring npm dependencies are up to date..."
+    PROJECT_ROOT=$(pwd)
+    cd frontend && npm install
+    cd "$PROJECT_ROOT"
 
     # Run the container build with version as argument
     ./build-container.sh "$VERSION"

@@ -2,7 +2,6 @@ use anyhow::Result;
 
 use tracing::info;
 
-use crate::config::StorageConfig;
 use crate::data_mapping::DataMappingService;
 use crate::database::Database;
 use crate::logo_assets::service::LogoAssetService;
@@ -35,23 +34,8 @@ pub struct ProxyService {
 
 impl ProxyService {
     pub fn new(
-        _storage_config: StorageConfig,
         pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
         proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
-        _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
-    ) -> Self {
-        Self {
-            pipeline_file_manager,
-            proxy_output_file_manager,
-        }
-    }
-
-    pub fn with_memory_monitor(
-        _storage_config: StorageConfig,
-        pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
-        proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
-        _memory_monitor: crate::utils::pressure_monitor::SimpleMemoryMonitor,
-        _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
     ) -> Self {
         Self {
             pipeline_file_manager,

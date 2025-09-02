@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.1.4-dev.6.ga273693"
+version = "0.2.0"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"
@@ -47,7 +47,6 @@ reqwest = { version = "0.12", features = [
     "stream",
     "rustls-tls",
 ], default-features = false }
-rssafecircuit = "0.1.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"
 toml = "0.9"

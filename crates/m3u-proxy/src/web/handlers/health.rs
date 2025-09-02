@@ -5,7 +5,6 @@
 
 use axum::{extract::State, response::IntoResponse};
 use std::str::FromStr;
-use sysinfo::SystemExt;
 use utoipa;
 
 use crate::database::Database;
@@ -54,7 +53,7 @@ pub async fn health_check(
     let (system_load, cpu_info) = {
         let system = state.system.read().await;
         let cpu_count = system.cpus().len() as u32;
-        let load_avg = system.load_average();
+        let load_avg = sysinfo::System::load_average();
         
         // Calculate CPU usage percentages based on load average
         let cpu_info = serde_json::json!({
@@ -394,13 +393,12 @@ async fn check_database_health(database: &Database, db_config: &crate::config::D
 async fn get_memory_breakdown_without_relay(
     system: &std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>
 ) -> crate::web::responses::MemoryBreakdown {
-    use sysinfo::SystemExt;
-    
+        
     // Minimize write lock duration - refresh and extract data quickly
     let (total_memory, used_memory, free_memory, available_memory, swap_used, swap_total, current_pid) = {
         let mut sys = system.write().await;
         sys.refresh_memory();
-        sys.refresh_processes();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
         let total_memory = sys.total_memory() as f64 / (1024.0 * 1024.0); // Convert from bytes to MB
         let used_memory = sys.used_memory() as f64 / (1024.0 * 1024.0);
@@ -435,7 +433,6 @@ fn calculate_process_memory_without_relay(
     system: &sysinfo::System,
     main_pid: u32,
 ) -> crate::web::responses::ProcessMemoryBreakdown {
-    use sysinfo::{ProcessExt, SystemExt};
     
     let mut main_process_memory = 0.0f64;
     let mut child_processes_memory = 0.0f64;
@@ -477,7 +474,6 @@ fn calculate_process_memory_without_relay(
 
 /// Find child processes of the main process (simple version without relay manager)
 fn find_child_processes_simple(system: &sysinfo::System, parent_pid: u32) -> Vec<u32> {
-    use sysinfo::{PidExt, ProcessExt};
     
     let mut children = Vec::new();
     

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use sysinfo::{System, SystemExt};
+use sysinfo::System;
 use tokio::sync::RwLock;
 use tokio::time;
 

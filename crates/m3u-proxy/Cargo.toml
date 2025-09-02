@@ -89,14 +89,14 @@ tempfile = "3.21"
 futures = "0.3"
 futures-util = "0.3"
 humantime = "2.2"
-image = { version = "0.24", default-features = false, features = [
+image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
     "gif",
     "webp",
 ] }
 sha2 = "0.10"
-sysinfo = "0.29"
+sysinfo = "0.37"
 hex = "0.4"
 url = "2.5"
 urlencoding = "2.1"
@@ -104,20 +104,20 @@ axum-extra = { version = "0.10", features = ["typed-header"] }
 utoipa = { version = "5.4.0", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-axum = { version = "0.2.0" }
 utoipa-swagger-ui = { version = "9.0.0", features = ["axum", "vendored"] }
-infer = "0.16"
+infer = "0.19"
 flate2 = { version = "1.1", optional = true }
-bzip2 = { version = "0.4", optional = true }
+bzip2 = { version = "0.6", optional = true }
 xz2 = { version = "0.1", optional = true }
 
 [dev-dependencies]
 # Testing framework and utilities
 tokio-test = "0.4"
 proptest = "1.7"
-criterion = { version = "0.5", features = ["html_reports"] }
-rstest = "0.22"
+criterion = { version = "0.7", features = ["html_reports"] }
+rstest = "0.26"
 serial_test = "3.2"
-mockall = "0.12"
-axum-test = "15.7"
+mockall = "0.13"
+axum-test = "18.0"
 
 # Additional test utilities
 test-log = "0.2"

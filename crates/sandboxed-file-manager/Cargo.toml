@@ -12,7 +12,7 @@ categories = ["filesystem", "os"]
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-infer = "0.16"
+infer = "0.19"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 tokio = { version = "1.47", features = [

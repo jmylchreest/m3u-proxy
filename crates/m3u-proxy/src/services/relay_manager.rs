@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use sysinfo::{Pid, PidExt, ProcessExt, SystemExt};
+use sysinfo::Pid;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -373,7 +373,7 @@ impl RelayManager {
         let process_id = process_id?;
         let system = self.system_manager.get_system();
         let mut system = system.write().await;
-        system.refresh_process(Pid::from_u32(process_id));
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(process_id)]), true);
 
         system.process(Pid::from_u32(process_id)).map(|process| process.memory() as f64 / 1024.0 / 1024.0)
     }

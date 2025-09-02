@@ -4,7 +4,7 @@
 
 use crate::web::responses::{MemoryBreakdown, ProcessMemoryBreakdown};
 use std::sync::Arc;
-use sysinfo::{Pid, PidExt, ProcessExt, System, SystemExt};
+use sysinfo::{Pid, ProcessesToUpdate, System};
 use tokio::sync::RwLock;
 
 /// Collect comprehensive memory statistics
@@ -16,7 +16,7 @@ pub async fn get_memory_breakdown(
     let (total_memory, used_memory, free_memory, available_memory, swap_used, swap_total, current_pid) = {
         let mut sys = system.write().await;
         sys.refresh_memory();
-        sys.refresh_processes();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
 
         let total_memory = sys.total_memory() as f64 / (1024.0 * 1024.0); // Convert from bytes to MB
         let used_memory = sys.used_memory() as f64 / (1024.0 * 1024.0);

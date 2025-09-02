@@ -23,8 +23,8 @@ export default function RootLayout({
       <body>
         <script dangerouslySetInnerHTML={{ __html: enhancedThemeScript }} />
         <EnhancedThemeProvider defaultTheme="graphite" defaultMode="system">
-          <BackendConnectivityProvider>
-            <FeatureFlagsProvider>
+          <FeatureFlagsProvider>
+            <BackendConnectivityProvider>
               <ProgressProvider>
                 <PageLoadingProvider>
                   <AppLayout>
@@ -32,8 +32,8 @@ export default function RootLayout({
                   </AppLayout>
                 </PageLoadingProvider>
               </ProgressProvider>
-            </FeatureFlagsProvider>
-          </BackendConnectivityProvider>
+            </BackendConnectivityProvider>
+          </FeatureFlagsProvider>
         </EnhancedThemeProvider>
       </body>
     </html>

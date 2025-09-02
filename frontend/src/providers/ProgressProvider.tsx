@@ -6,6 +6,7 @@ import { sseManager, ProgressEvent as SSEProgressEvent } from '@/lib/sse-singlet
 import { ProgressEvent as APIProgressEvent, ProgressStage } from '@/types/api'
 import { Debug } from '@/utils/debug'
 import { useBackendConnectivity } from '@/providers/backend-connectivity-provider'
+import { getBackendUrl } from '@/lib/config'
 
 // Extend the API type for UI-specific functionality
 export interface ProgressEvent extends APIProgressEvent {
@@ -271,7 +272,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Don't attempt SSE connection if backend is not available
     if (!backendConnected) {
-      debug.log('ProgressProvider: Backend not connected, skipping SSE setup')
+      debug.log('ProgressProvider: Backend not connected, destroying SSE connection')
       setConnected(false)
       // Destroy any existing SSE connection when backend goes down
       sseManager.destroy()
@@ -280,9 +281,53 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
     
     debug.log('ProgressProvider: Backend connected, setting up SSE singleton')
     
-    // Ensure the singleton connection is established
-    sseManager.ensureConnection().then(() => {
-      debug.log('ProgressProvider: SSE connection established')
+    // Only reset and connect if backend is actually connected
+    // Reset the SSE singleton to allow reconnection (in case backend came back up)
+    sseManager.reset()
+    
+    // First, fetch initial state from REST endpoint
+    const fetchInitialState = async () => {
+      try {
+        const backendUrl = getBackendUrl()
+        const response = await fetch(`${backendUrl}/api/v1/progress/operations`)
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        }
+        
+        const activeOperations: NotificationEvent[] = await response.json()
+        debug.log('ProgressProvider: Fetched initial active operations:', activeOperations.length)
+        
+        // Clear localStorage and rebuild from server state
+        const NOTIFICATION_STORAGE_KEY = 'm3u-proxy-notifications'
+        localStorage.removeItem(NOTIFICATION_STORAGE_KEY)
+        
+        // Convert to NotificationEvent format and update state
+        const initialEvents = new Map<string, NotificationEvent>()
+        activeOperations.forEach(event => {
+          initialEvents.set(event.id || event.owner_id, {
+            ...event,
+            hasBeenSeen: false // New events start as unread
+          })
+        })
+        
+        setEvents(initialEvents)
+        debug.log('ProgressProvider: Initialized with', initialEvents.size, 'active operations')
+        
+      } catch (error) {
+        debug.error('ProgressProvider: Failed to fetch initial state:', error)
+        // Clear localStorage anyway to prevent stale state
+        const NOTIFICATION_STORAGE_KEY = 'm3u-proxy-notifications'
+        localStorage.removeItem(NOTIFICATION_STORAGE_KEY)
+        setEvents(new Map())
+      }
+    }
+    
+    // Fetch initial state first, then establish SSE connection
+    fetchInitialState().then(() => {
+      return sseManager.ensureConnection()
+    }).then(() => {
+      debug.log('ProgressProvider: SSE connection established for real-time updates')
     }).catch(err => {
       debug.error('ProgressProvider: Failed to establish SSE connection', err)
     })

@@ -23,6 +23,7 @@ pub struct StreamSourceService {
     epg_source_repo: EpgSourceSeaOrmRepository,
     url_linking_service: UrlLinkingService,
     cache_invalidation_tx: broadcast::Sender<()>,
+    http_client_factory: Option<crate::utils::HttpClientFactory>,
 }
 
 impl StreamSourceService {
@@ -40,6 +41,26 @@ impl StreamSourceService {
             epg_source_repo,
             url_linking_service,
             cache_invalidation_tx,
+            http_client_factory: None,
+        }
+    }
+
+    /// Create a new stream source service with HTTP client factory
+    pub fn with_http_client_factory(
+        stream_source_repo: StreamSourceSeaOrmRepository,
+        channel_repo: ChannelSeaOrmRepository,
+        epg_source_repo: EpgSourceSeaOrmRepository,
+        url_linking_service: UrlLinkingService,
+        cache_invalidation_tx: broadcast::Sender<()>,
+        http_client_factory: crate::utils::HttpClientFactory,
+    ) -> Self {
+        Self {
+            stream_source_repo,
+            channel_repo,
+            epg_source_repo,
+            url_linking_service,
+            cache_invalidation_tx,
+            http_client_factory: Some(http_client_factory),
         }
     }
 
@@ -437,8 +458,16 @@ impl StreamSourceService {
         
         info!("Starting stream source refresh with ProgressStageUpdater for source: {}", source.name);
         
-        // Create stream source handler using the factory
-        let handler = SourceHandlerFactory::create_handler(&source.source_type)
+        // Create stream source handler using the factory with HTTP client factory
+        let factory = if let Some(factory) = &self.http_client_factory {
+            factory
+        } else {
+            // Create basic factory if none provided
+            &crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10))
+        };
+        
+        let handler = SourceHandlerFactory::create_handler(&source.source_type, factory)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create stream source handler: {}", e))?;
         
         // Update progress: starting ingestion

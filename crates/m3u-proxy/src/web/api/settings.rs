@@ -18,10 +18,6 @@ use crate::web::AppState;
 pub struct RuntimeSettings {
     /// Current log level (TRACE, DEBUG, INFO, WARN, ERROR)
     pub log_level: String,
-    /// Maximum number of concurrent connections (if configurable)
-    pub max_connections: Option<u32>,
-    /// Request timeout in seconds
-    pub request_timeout_seconds: Option<u32>,
     /// Enable/disable request logging
     pub enable_request_logging: bool,
     /// Enable/disable metrics collection
@@ -33,10 +29,6 @@ pub struct RuntimeSettings {
 pub struct UpdateSettingsRequest {
     /// New log level (optional)
     pub log_level: Option<String>,
-    /// New max connections (optional)
-    pub max_connections: Option<u32>,
-    /// New request timeout (optional)
-    pub request_timeout_seconds: Option<u32>,
     /// Enable/disable request logging (optional)
     pub enable_request_logging: Option<bool>,
     /// Enable/disable metrics collection (optional)
@@ -73,8 +65,6 @@ pub async fn get_settings(
     let runtime_settings = state.runtime_settings_store.get().await;
     let settings = RuntimeSettings {
         log_level: runtime_settings.log_level,
-        max_connections: runtime_settings.max_connections,
-        request_timeout_seconds: runtime_settings.request_timeout_seconds,
         enable_request_logging: runtime_settings.enable_request_logging,
         enable_metrics: runtime_settings.enable_metrics,
     };
@@ -121,18 +111,7 @@ pub async fn update_settings(
         }
     }
 
-    // Validate other settings
-    if let Some(max_conn) = request.max_connections {
-        if max_conn == 0 || max_conn > 10000 {
-            validation_errors.push("max_connections must be between 1 and 10000".to_string());
-        }
-    }
 
-    if let Some(timeout) = request.request_timeout_seconds {
-        if timeout == 0 || timeout > 300 {
-            validation_errors.push("request_timeout_seconds must be between 1 and 300".to_string());
-        }
-    }
 
     // Return validation errors if any
     if !validation_errors.is_empty() {
@@ -147,8 +126,6 @@ pub async fn update_settings(
     // Apply changes using the runtime settings store
     let applied_changes = state.runtime_settings_store.update_multiple(
         request.log_level.as_deref(),
-        request.max_connections,
-        request.request_timeout_seconds,
         request.enable_request_logging,
         request.enable_metrics,
     ).await;
@@ -157,8 +134,6 @@ pub async fn update_settings(
     let updated_settings = state.runtime_settings_store.get().await;
     let current_settings = RuntimeSettings {
         log_level: updated_settings.log_level,
-        max_connections: updated_settings.max_connections,
-        request_timeout_seconds: updated_settings.request_timeout_seconds,
         enable_request_logging: updated_settings.enable_request_logging,
         enable_metrics: updated_settings.enable_metrics,
     };
@@ -197,22 +172,6 @@ pub async fn get_settings_info(
                 "type": "string",
                 "valid_values": VALID_LOG_LEVELS,
                 "current_value": current_settings.log_level,
-                "changeable_at_runtime": true
-            },
-            "max_connections": {
-                "description": "Maximum number of concurrent connections",
-                "type": "integer",
-                "min_value": 1,
-                "max_value": 10000,
-                "current_value": current_settings.max_connections,
-                "changeable_at_runtime": true
-            },
-            "request_timeout_seconds": {
-                "description": "Request timeout in seconds",
-                "type": "integer",
-                "min_value": 1,
-                "max_value": 300,
-                "current_value": current_settings.request_timeout_seconds,
                 "changeable_at_runtime": true
             },
             "enable_request_logging": {

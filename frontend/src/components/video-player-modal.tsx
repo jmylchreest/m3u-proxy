@@ -1128,10 +1128,10 @@ ${absoluteUrl}`;
             )}
           </div>
 
-          {/* Program Description */}
-          {program?.description && (
-            <div className="p-4 bg-gray-900 text-white">
-              <h4 className="font-medium mb-2">Description</h4>
+          {/* Program Description - hidden in fullscreen */}
+          {program?.description && !isFullscreen && (
+            <div className="p-4 bg-gray-900 text-white border-t border-gray-700">
+              <h4 className="font-medium mb-2 text-gray-200">Description</h4>
               <p className="text-sm text-gray-300 leading-relaxed">
                 {program.description}
               </p>

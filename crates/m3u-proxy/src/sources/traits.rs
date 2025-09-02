@@ -155,47 +155,6 @@ pub trait ChannelIngestor: Send + Sync {
     async fn estimate_channel_count(&self, source: &StreamSource) -> AppResult<Option<u32>>;
 }
 
-/// Health checking trait
-///
-/// Sources that support health monitoring implement this trait.
-#[async_trait]
-pub trait HealthChecker: Send + Sync {
-    /// Check if the source is currently healthy
-    async fn check_health(&self, source: &StreamSource) -> AppResult<SourceHealthStatus>;
-
-    /// Get detailed health metrics
-    async fn get_health_metrics(&self, source: &StreamSource) -> AppResult<SourceHealthMetrics>;
-}
-
-/// Source health status
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceHealthStatus {
-    /// Whether the source is healthy
-    pub is_healthy: bool,
-    /// Response time in milliseconds
-    pub response_time_ms: Option<u64>,
-    /// Last successful check timestamp
-    pub last_success: Option<chrono::DateTime<chrono::Utc>>,
-    /// Last error message if unhealthy
-    pub error_message: Option<String>,
-    /// Health check timestamp
-    pub checked_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Detailed health metrics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceHealthMetrics {
-    /// Basic health status
-    pub status: SourceHealthStatus,
-    /// Number of available channels
-    pub channel_count: Option<u32>,
-    /// Server version or identifier
-    pub server_version: Option<String>,
-    /// Uptime information
-    pub uptime: Option<String>,
-    /// Additional metrics
-    pub metrics: HashMap<String, String>,
-}
 
 /// URL generation trait
 ///
@@ -261,7 +220,6 @@ pub struct AuthenticationResult {
 pub trait FullSourceHandler: 
     SourceHandler + 
     ChannelIngestor + 
-    HealthChecker + 
     StreamUrlGenerator + 
     Send + 
     Sync 
@@ -271,7 +229,6 @@ pub trait FullSourceHandler:
         SourceHandlerSummary {
             source_type: self.source_type(),
             supports_ingestion: true,
-            supports_health_check: true,
             supports_url_generation: true,
             supports_authentication: false, // Default, can be overridden
         }
@@ -285,8 +242,6 @@ pub struct SourceHandlerSummary {
     pub source_type: StreamSourceType,
     /// Whether the handler supports channel ingestion
     pub supports_ingestion: bool,
-    /// Whether the handler supports health checking
-    pub supports_health_check: bool,
     /// Whether the handler supports URL generation
     pub supports_url_generation: bool,
     /// Whether the handler supports authentication
@@ -313,9 +268,6 @@ pub enum SourceError {
     
     #[error("URL generation failed: {0}")]
     UrlGenerationFailed(String),
-    
-    #[error("Health check failed: {0}")]
-    HealthCheckFailed(String),
 }
 
 // ============================================================================

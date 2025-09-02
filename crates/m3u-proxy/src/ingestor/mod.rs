@@ -23,6 +23,7 @@ pub trait SourceIngestor {
 pub struct IngestorService {
     progress_service: Arc<ProgressService>,
     channel_repo: ChannelSeaOrmRepository,
+    http_client_factory: Option<crate::utils::HttpClientFactory>,
 }
 
 impl IngestorService {
@@ -30,6 +31,19 @@ impl IngestorService {
         Self { 
             progress_service,
             channel_repo,
+            http_client_factory: None,
+        }
+    }
+
+    pub fn with_http_client_factory(
+        progress_service: Arc<ProgressService>, 
+        channel_repo: ChannelSeaOrmRepository,
+        http_client_factory: crate::utils::HttpClientFactory
+    ) -> Self {
+        Self { 
+            progress_service,
+            channel_repo,
+            http_client_factory: Some(http_client_factory),
         }
     }
 
@@ -62,8 +76,16 @@ impl IngestorService {
 
         info!("Starting stream source ingestion for '{}' ({})", source_name, source_id);
 
-        // Create source handler
-        let handler = SourceHandlerFactory::create_handler(&source.source_type)
+        // Create source handler using HTTP client factory
+        let factory = if let Some(factory) = &self.http_client_factory {
+            factory
+        } else {
+            // Create a basic factory without circuit breaker manager if none provided
+            &crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10))
+        };
+        
+        let handler = SourceHandlerFactory::create_handler(&source.source_type, factory)
+            .await
             .map_err(|e| {
                 tracing::error!("Failed to create source handler for '{}': {}", source.name, e);
                 anyhow::anyhow!("Failed to create source handler: {}", e)
@@ -170,7 +192,10 @@ impl IngestorService {
         }
         
         // Create EPG source handler
-        let handler = SourceHandlerFactory::create_epg_handler(&source.source_type)
+        let default_factory = crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10));
+        let http_factory = self.http_client_factory.as_ref().unwrap_or(&default_factory);
+        let handler = SourceHandlerFactory::create_epg_handler(&source.source_type, http_factory)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create EPG source handler: {}", e))?;
         
         // Create universal progress callback via ProgressService  

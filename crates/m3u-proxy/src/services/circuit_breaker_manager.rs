@@ -23,6 +23,14 @@ impl CircuitBreakerManager {
         }
     }
 
+    /// Get the configuration profile for a service
+    pub async fn get_service_profile(&self, service_name: &str) -> CircuitBreakerProfileConfig {
+        let config = self.current_config.read().await;
+        config.profiles.get(service_name)
+            .unwrap_or(&config.global)
+            .clone()
+    }
+
     /// Get or create a circuit breaker for a service
     pub async fn get_circuit_breaker(&self, service_name: &str) -> Result<Arc<ConcreteCircuitBreaker>, String> {
         // Check if we already have an active circuit breaker for this service
@@ -38,8 +46,9 @@ impl CircuitBreakerManager {
         let profile = config.profiles.get(service_name)
             .unwrap_or(&config.global);
         
+        info!("Creating circuit breaker for service '{}' with profile: {:?}", service_name, profile);
         let breaker = create_circuit_breaker_from_profile(profile)?;
-        info!("Created new circuit breaker for service '{}' with profile: {:?}", service_name, profile);
+        info!("Circuit breaker created for service '{}'", service_name);
 
         // Store the new circuit breaker
         {

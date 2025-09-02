@@ -152,6 +152,8 @@ pub struct WebConfig {
     pub max_request_size: String,
     #[serde(default = "default_enable_request_logging")]
     pub enable_request_logging: bool,
+    #[serde(default = "default_user_agent")]
+    pub user_agent: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -214,6 +216,10 @@ fn default_base_url() -> String {
 
 fn default_enable_request_logging() -> bool {
     true
+}
+
+fn default_user_agent() -> String {
+    format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
 }
 
 fn default_busy_timeout() -> String {
@@ -419,10 +425,16 @@ pub struct CircuitBreakerProfileConfig {
     /// Number of consecutive successes needed to close circuit from half-open state
     #[serde(default = "default_success_threshold")]
     pub success_threshold: u32,
+    
+    /// HTTP status codes that should NOT trigger circuit breaker failures
+    /// Supports wildcards: "2xx" matches 200-299, "404" matches exact, etc.
+    /// Default includes all 2xx responses and common expected errors
+    #[serde(default = "default_acceptable_status_codes")]
+    pub acceptable_status_codes: Vec<String>,
 }
 
 fn default_circuit_breaker_type() -> String {
-    "rssafe".to_string()
+    "simple".to_string()
 }
 
 fn default_failure_threshold() -> u32 {
@@ -441,6 +453,10 @@ fn default_success_threshold() -> u32 {
     2
 }
 
+fn default_acceptable_status_codes() -> Vec<String> {
+    vec!["2xx".to_string(), "3xx".to_string()]
+}
+
 impl Default for CircuitBreakerProfileConfig {
     fn default() -> Self {
         Self {
@@ -449,6 +465,7 @@ impl Default for CircuitBreakerProfileConfig {
             operation_timeout: default_operation_timeout(),
             reset_timeout: default_reset_timeout(),
             success_threshold: default_success_threshold(),
+            acceptable_status_codes: default_acceptable_status_codes(),
         }
     }
 }
@@ -725,6 +742,7 @@ impl Default for Config {
                 request_timeout: default_request_timeout(),
                 max_request_size: default_max_request_size(),
                 enable_request_logging: default_enable_request_logging(),
+                user_agent: default_user_agent(),
             },
             storage: StorageConfig {
                 m3u_path: PathBuf::from("./data/m3u"),

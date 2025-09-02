@@ -11,9 +11,7 @@
 //! - Connection validation and error handling
 
 use async_trait::async_trait;
-use reqwest::Client;
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::errors::{AppError, AppResult};
@@ -24,23 +22,24 @@ use crate::sources::traits::{
 };
 use crate::utils::url::UrlUtils;
 use crate::utils::human_format::format_memory;
-use crate::utils::{CompressionFormat, DecompressionService};
+use crate::utils::{StandardHttpClient, HttpClientFactory};
+use crate::utils::http_client::DecompressingHttpClient;
 
 /// Xtream Codes EPG source handler implementation
 pub struct XtreamEpgHandler {
-    client: Client,
+    http_client: StandardHttpClient,
 }
 
 impl XtreamEpgHandler {
-    /// Create a new Xtream EPG handler
-    pub fn new() -> Self {
+    /// Create a new Xtream EPG handler with circuit breaker protection
+    pub async fn new(http_client_factory: &HttpClientFactory) -> Self {
         Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(60)) // Longer timeout for Xtream
-                .build()
-                .expect("Failed to create HTTP client"),
+            http_client: http_client_factory
+                .create_client_for_service("source_xc_epg")
+                .await,
         }
     }
+    
 
     /// Build the Xtream EPG URL with authentication
     fn build_epg_url(&self, source: &EpgSource) -> AppResult<String> {
@@ -53,52 +52,10 @@ impl XtreamEpgHandler {
         let epg_url = self.build_epg_url(source)?;
         debug!("Fetching Xtream EPG content from: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&epg_url));
 
-        // Helper function to process response with decompression
-        let process_response = |response: reqwest::Response| async move {
-            if !response.status().is_success() {
-                return Err(AppError::source_error(format!(
-                    "HTTP error fetching Xtream EPG: {} {}",
-                    response.status(),
-                    response.status().canonical_reason().unwrap_or("Unknown")
-                )));
-            }
 
-            // Get raw bytes instead of text to detect compression
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|e| AppError::source_error(format!("Failed to read Xtream EPG response: {e}")))?;
-
-            debug!("Fetched {} bytes of raw Xtream EPG content", bytes.len());
-
-            // Detect compression format and decompress if needed
-            let compression_format = DecompressionService::detect_compression_format(&bytes);
-            debug!("Detected compression format: {:?}", compression_format);
-
-            let decompressed_bytes = match compression_format {
-                CompressionFormat::Uncompressed => {
-                    debug!("Content is uncompressed, using as-is");
-                    bytes.to_vec()
-                }
-                _ => {
-                    debug!("Content is compressed, decompressing...");
-                    DecompressionService::decompress(bytes)
-                        .map_err(|e| AppError::source_error(format!("Failed to decompress Xtream EPG content: {e}")))?
-                }
-            };
-
-            // Convert decompressed bytes to UTF-8 string
-            let content = String::from_utf8(decompressed_bytes)
-                .map_err(|e| AppError::source_error(format!("Failed to decode Xtream EPG content as UTF-8: {e}")))?;
-
-            debug!("Successfully processed {} of Xtream EPG content (compression: {:?})", 
-                   format_memory(content.len() as f64), compression_format);
-            Ok(content)
-        };
-
-        // Try the original URL first
-        match self.client.get(&epg_url).send().await {
-            Ok(response) => process_response(response).await,
+        // Try the original URL first - use circuit breaker-wrapped HTTP client
+        let content = match self.http_client.fetch_text(&epg_url).await {
+            Ok(content) => Ok(content),
             Err(e) => {
                 // If HTTPS failed and URL started with https://, try HTTP fallback
                 if epg_url.starts_with("https://") {
@@ -107,9 +64,8 @@ impl XtreamEpgHandler {
                     let http_url = epg_url.replace("https://", "http://");
                     debug!("Fetching Xtream EPG content from HTTP fallback: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&http_url));
                     
-                    match self.client.get(&http_url).send().await {
-                        Ok(response) => {
-                            let content = process_response(response).await?;
+                    match self.http_client.fetch_text(&http_url).await {
+                        Ok(content) => {
                             info!("Successfully fetched {} of Xtream EPG content using HTTP fallback", format_memory(content.len() as f64));
                             Ok(content)
                         }
@@ -123,7 +79,9 @@ impl XtreamEpgHandler {
                     Err(AppError::source_error(format!("Failed to fetch Xtream EPG: {e}")))
                 }
             }
-        }
+        };
+        
+        content
     }
 
     /// Fetch EPG content from Xtream API with progress updates
@@ -142,56 +100,9 @@ impl XtreamEpgHandler {
         
         debug!("Fetching Xtream EPG content from: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&epg_url));
 
-        // Helper function to process response with decompression and progress updates
-        async fn process_response_with_progress(
-            response: reqwest::Response,
-            source_name: String,
-            progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
-        ) -> AppResult<String> {
-            if !response.status().is_success() {
-                return Err(AppError::source_error(format!(
-                    "Xtream EPG API returned error status: {} for source: {}",
-                    response.status(),
-                    source_name
-                )));
-            }
 
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|e| AppError::source_error(format!("Failed to read Xtream EPG response: {e}")))?;
-
-            let byte_count = bytes.len();
-            let human_size = format_memory(byte_count as f64);
-            
-            debug!("Fetched {} bytes of raw Xtream EPG content", byte_count);
-            
-            // Update progress: Downloaded data
-            if let Some(updater) = progress_updater {
-                updater.update_progress(12.0, &format!("Downloaded {human_size}")).await;
-            }
-
-            // Detect compression format and decompress if needed
-            let compression_format = DecompressionService::detect_compression_format(&bytes);
-            debug!("Detected compression format: {:?}", compression_format);
-
-            let decompressed_bytes = match compression_format {
-                CompressionFormat::Uncompressed => bytes.to_vec(),
-                _ => {
-                    debug!("Decompressing Xtream EPG content using {:?}", compression_format);
-                    DecompressionService::decompress(bytes)
-                        .map_err(|e| AppError::source_error(format!("Failed to decompress Xtream EPG content: {e}")))?
-                }
-            };
-
-            String::from_utf8(decompressed_bytes)
-                .map_err(|e| AppError::source_error(format!("Xtream EPG content is not valid UTF-8: {e}")))
-        }
-
-        match self.client.get(&epg_url).send().await {
-            Ok(response) => {
-                process_response_with_progress(response, source_name.clone(), progress_updater).await
-            }
+        match self.http_client.fetch_text(&epg_url).await {
+            Ok(content) => Ok(content),
             Err(e) => {
                 // If HTTPS failed and URL started with https://, try HTTP fallback
                 if epg_url.starts_with("https://") {
@@ -200,9 +111,8 @@ impl XtreamEpgHandler {
                     let http_url = epg_url.replace("https://", "http://");
                     debug!("Fetching Xtream EPG content from HTTP fallback: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&http_url));
                     
-                    match self.client.get(&http_url).send().await {
-                        Ok(response) => {
-                            let content = process_response_with_progress(response, source_name, progress_updater).await?;
+                    match self.http_client.fetch_text(&http_url).await {
+                        Ok(content) => {
                             info!("Successfully fetched {} of Xtream EPG content using HTTP fallback", format_memory(content.len() as f64));
                             Ok(content)
                         }
@@ -346,7 +256,7 @@ impl XtreamEpgHandler {
             
             // Try HTTPS first, fallback to HTTP if it fails (same as stream source handler)
             
-            match self.client.get(&test_url).send().await {
+            match self.http_client.inner_client().get(&test_url).send().await {
                 Ok(response) => {
                     
                     if !response.status().is_success() {
@@ -394,7 +304,7 @@ impl XtreamEpgHandler {
                             password
                         );
                         
-                        match self.client.get(&fallback_test_url).send().await {
+                        match self.http_client.inner_client().get(&fallback_test_url).send().await {
                             Ok(response) => {
                                 
                                 if !response.status().is_success() {
@@ -446,11 +356,6 @@ impl XtreamEpgHandler {
     }
 }
 
-impl Default for XtreamEpgHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 #[async_trait]
 impl EpgSourceHandler for XtreamEpgHandler {
@@ -514,7 +419,7 @@ impl EpgSourceHandler for XtreamEpgHandler {
         // Try to fetch a small amount of EPG data to test the endpoint
         match self.build_epg_url(source) {
             Ok(epg_url) => {
-                match self.client.head(&epg_url).send().await {
+                match self.http_client.inner_client().head(&epg_url).send().await {
                     Ok(response) => Ok(response.status().is_success()),
                     Err(_) => Ok(false),
                 }

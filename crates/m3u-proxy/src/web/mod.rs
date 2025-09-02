@@ -298,6 +298,8 @@ impl WebServer {
             .route("/sources/unified", get(api::list_all_sources))
             // Progress events SSE endpoint
             .route("/progress/events", get(api::progress_events::progress_events_stream))
+            // Progress operations REST endpoint  
+            .route("/progress/operations", get(api::get_operation_progress))
             // Logo assets
             .route("/logos", get(api::list_logo_assets))
             .route("/logos/stats", get(api::get_logo_cache_stats))

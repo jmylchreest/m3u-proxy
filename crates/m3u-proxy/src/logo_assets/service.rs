@@ -4,11 +4,11 @@ use crate::models::logo_asset::{
     LogoAssetType, LogoFormatType, LogoAsset, LogoAssetListRequest, LogoAssetListResponse,
     LogoAssetWithUrl, LogoAssetSearchRequest, LogoAssetSearchResult, LogoCacheStats
 };
+use crate::utils::{StandardHttpClient, HttpClientFactory};
 
 use anyhow;
 use chrono::Utc;
 use image::ImageFormat;
-use reqwest::Client;
 use sandboxed_file_manager::SandboxedManager;
 use sha2::{Digest, Sha256};
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, QueryOrder};
@@ -21,11 +21,11 @@ use tracing::{debug, trace};
 use url::Url;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LogoAssetService {
     connection: Arc<DatabaseConnection>,
     pub storage: LogoAssetStorage,
-    http_client: Client,
+    http_client: StandardHttpClient,
     logo_file_manager: Option<SandboxedManager>,
 }
 
@@ -46,11 +46,20 @@ pub struct CreateAssetWithIdParams {
     pub height: Option<i32>,
 }
 impl LogoAssetService {
-    pub fn new(connection: Arc<DatabaseConnection>, storage: LogoAssetStorage) -> Self {
+    pub async fn new(
+        connection: Arc<DatabaseConnection>, 
+        storage: LogoAssetStorage,
+        http_client_factory: &HttpClientFactory
+    ) -> Self {
+        // Create HTTP client using the factory for consistent circuit breaker integration
+        let http_client = http_client_factory
+            .create_client_for_service("logo_fetch")
+            .await;
+
         Self {
             connection,
             storage,
-            http_client: Client::new(),
+            http_client,
             logo_file_manager: None,
         }
     }
@@ -784,22 +793,9 @@ impl LogoAssetService {
 
         debug!("Downloading logo from URL: {} -> {}", logo_url, cache_id);
 
-        // Download the image
-        let response =
-            self.http_client.get(logo_url).send().await.map_err(|e| {
-                anyhow::anyhow!("Failed to download logo from '{}': {}", logo_url, e)
-            })?;
-
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Failed to download logo from '{}': HTTP {}",
-                logo_url,
-                response.status()
-            ));
-        }
-
-        let image_bytes = response.bytes().await.map_err(|e| {
-            anyhow::anyhow!("Failed to read image bytes from '{}': {}", logo_url, e)
+        // Download the image using circuit breaker protected HTTP client
+        let image_bytes = self.http_client.fetch_logo(logo_url).await.map_err(|e| {
+            anyhow::anyhow!("Failed to download logo from '{}': {}", logo_url, e)
         })?;
         
         let raw_bytes_downloaded = image_bytes.len() as u64;

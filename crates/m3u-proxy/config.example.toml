@@ -27,6 +27,9 @@ base_url = "http://localhost:8080"
 request_timeout = "30s"
 # Environment variable: M3U_PROXY_WEB__MAX_REQUEST_SIZE
 max_request_size = "10MB"
+# Environment variable: M3U_PROXY_WEB__USER_AGENT
+# User agent string used for all HTTP requests (defaults to project-name/version)
+user_agent = "m3u-proxy/0.1.4"
 
 [storage]
 # Environment variable: M3U_PROXY_STORAGE__M3U_PATH

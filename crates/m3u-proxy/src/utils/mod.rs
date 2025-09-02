@@ -13,6 +13,7 @@ pub mod datetime;
 pub mod decompression;
 pub mod deterministic_uuid;
 pub mod http_client;
+pub mod http_client_factory;
 pub mod human_format;
 pub mod jitter;
 pub mod log_capture;
@@ -24,8 +25,8 @@ pub mod memory_stats;
 // pub mod memory_pressure_calculator; // Removed - no longer needed
 pub mod pressure_monitor;
 pub mod regex_preprocessor;
-pub mod resilient_http_client;
 pub mod sandbox_health;
+pub mod status_code_matcher;
 pub mod system_manager;
 pub mod time;
 pub mod url;
@@ -41,6 +42,7 @@ pub use database_retry::{RetryConfig, with_retry};
 pub use decompression::{CompressionFormat, DecompressionService};
 pub use deterministic_uuid::{generate_channel_uuid, generate_deterministic_uuid, generate_proxy_config_uuid, generate_relay_config_uuid};
 pub use http_client::{DecompressingHttpClient, StandardHttpClient, FallbackHttpClient};
+pub use http_client_factory::HttpClientFactory;
 pub use human_format::{format_duration, format_memory, format_memory_delta};
 pub use memory_cleanup::{
     CleanupStrategy, MemoryCleanable, MemoryCleanupCoordinator, StageTransition,
@@ -48,7 +50,7 @@ pub use memory_cleanup::{
 // Memory monitoring modules available for future pipeline integration
 // but not exposed to prevent accidental usage
 pub use regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
-pub use resilient_http_client::ResilientHttpClient;
+pub use status_code_matcher::is_status_acceptable;
 pub use system_manager::SystemManager;
 pub use url::UrlUtils;
 pub use uuid_parser::{resolve_proxy_id, uuid_to_base64, uuid_to_hex32, deserialize_optional_uuid};

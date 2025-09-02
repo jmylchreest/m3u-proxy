@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::errors::AppResult;
 use crate::models::{StreamSourceType, EpgSourceType};
-use super::traits::{SourceHandler, FullSourceHandler, EpgSourceHandler, FullEpgSourceHandler, EpgSourceHandlerSummary};
+use super::traits::{FullSourceHandler, EpgSourceHandler, FullEpgSourceHandler, EpgSourceHandlerSummary};
 use super::m3u::M3uSourceHandler;
 use super::xtream::XtreamSourceHandler;
 use super::xmltv_epg::XmltvEpgHandler;
@@ -39,45 +39,35 @@ use super::xtream_epg::XtreamEpgHandler;
 pub struct SourceHandlerFactory;
 
 impl SourceHandlerFactory {
-    /// Create a source handler for the specified source type
+    /// Create a source handler for the specified source type with HTTP client factory
     ///
     /// # Arguments
     /// * `source_type` - The type of source to create a handler for
+    /// * `http_client_factory` - Factory for creating HTTP clients with appropriate circuit breaker protection
     ///
     /// # Returns
     /// A boxed source handler that implements all relevant traits
     ///
     /// # Errors
     /// Returns an error if the source type is not supported
-    pub fn create_handler(source_type: &StreamSourceType) -> AppResult<Arc<dyn FullSourceHandler>> {
+    pub async fn create_handler(
+        source_type: &StreamSourceType,
+        http_client_factory: &crate::utils::HttpClientFactory
+    ) -> AppResult<Arc<dyn FullSourceHandler>> {
         match source_type {
             StreamSourceType::M3u => {
-                let handler = M3uSourceHandler::new();
+                let handler = M3uSourceHandler::new(http_client_factory).await;
                 Ok(Arc::new(handler))
             }
             StreamSourceType::Xtream => {
-                let handler = XtreamSourceHandler::new();
+                let handler = XtreamSourceHandler::new(http_client_factory).await;
                 Ok(Arc::new(handler))
             }
         }
     }
 
-    /// Create a basic source handler (without full functionality)
-    ///
-    /// This method creates handlers that only implement the core SourceHandler trait,
-    /// useful for validation and capability checking without full ingestion support.
-    pub fn create_basic_handler(source_type: &StreamSourceType) -> AppResult<Arc<dyn SourceHandler>> {
-        match source_type {
-            StreamSourceType::M3u => {
-                let handler = M3uSourceHandler::new();
-                Ok(Arc::new(handler))
-            }
-            StreamSourceType::Xtream => {
-                let handler = XtreamSourceHandler::new();
-                Ok(Arc::new(handler))
-            }
-        }
-    }
+
+
 
     /// Get all supported source types
     ///
@@ -110,14 +100,12 @@ impl SourceHandlerFactory {
             StreamSourceType::M3u => Ok(super::traits::SourceHandlerSummary {
                 source_type: StreamSourceType::M3u,
                 supports_ingestion: true,
-                supports_health_check: true,
                 supports_url_generation: true,
                 supports_authentication: false,
             }),
             StreamSourceType::Xtream => Ok(super::traits::SourceHandlerSummary {
                 source_type: StreamSourceType::Xtream,
                 supports_ingestion: true,
-                supports_health_check: true,
                 supports_url_generation: true,
                 supports_authentication: true,
             }),
@@ -132,20 +120,24 @@ impl SourceHandlerFactory {
     ///
     /// # Arguments
     /// * `epg_source_type` - The type of EPG source to create a handler for
+    /// * `http_client_factory` - Factory for creating HTTP clients with circuit breaker protection
     ///
     /// # Returns
     /// A boxed EPG source handler that implements all relevant EPG traits
     ///
     /// # Errors
     /// Returns an error if the EPG source type is not supported
-    pub fn create_epg_handler(epg_source_type: &EpgSourceType) -> AppResult<Arc<dyn FullEpgSourceHandler>> {
+    pub async fn create_epg_handler(
+        epg_source_type: &EpgSourceType,
+        http_client_factory: &crate::utils::HttpClientFactory
+    ) -> AppResult<Arc<dyn FullEpgSourceHandler>> {
         match epg_source_type {
             EpgSourceType::Xmltv => {
-                let handler = XmltvEpgHandler::new();
+                let handler = XmltvEpgHandler::new(http_client_factory).await;
                 Ok(Arc::new(handler))
             }
             EpgSourceType::Xtream => {
-                let handler = XtreamEpgHandler::new();
+                let handler = XtreamEpgHandler::new(http_client_factory).await;
                 Ok(Arc::new(handler))
             }
         }
@@ -155,14 +147,17 @@ impl SourceHandlerFactory {
     ///
     /// This method creates EPG handlers that only implement the core EpgSourceHandler trait,
     /// useful for validation and capability checking without full ingestion support.
-    pub fn create_basic_epg_handler(epg_source_type: &EpgSourceType) -> AppResult<Arc<dyn EpgSourceHandler>> {
+    pub async fn create_basic_epg_handler(
+        epg_source_type: &EpgSourceType,
+        http_client_factory: &crate::utils::HttpClientFactory
+    ) -> AppResult<Arc<dyn EpgSourceHandler>> {
         match epg_source_type {
             EpgSourceType::Xmltv => {
-                let handler = XmltvEpgHandler::new();
+                let handler = XmltvEpgHandler::new(http_client_factory).await;
                 Ok(Arc::new(handler))
             }
             EpgSourceType::Xtream => {
-                let handler = XtreamEpgHandler::new();
+                let handler = XtreamEpgHandler::new(http_client_factory).await;
                 Ok(Arc::new(handler))
             }
         }
@@ -215,32 +210,41 @@ impl SourceHandlerFactory {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_factory_supports_all_types() {
+    #[tokio::test]
+    async fn test_factory_supports_all_types() {
+        use crate::utils::HttpClientFactory;
+        use std::time::Duration;
+        
+        let factory = HttpClientFactory::new(None, Duration::from_secs(5));
+        
         for source_type in [StreamSourceType::M3u, StreamSourceType::Xtream] {
             assert!(SourceHandlerFactory::is_supported(&source_type));
-            assert!(SourceHandlerFactory::create_handler(&source_type).is_ok());
+            assert!(SourceHandlerFactory::create_handler(&source_type, &factory).await.is_ok());
         }
     }
 
-    #[test]
-    fn test_factory_basic_functionality() {
+    #[tokio::test]
+    async fn test_factory_basic_functionality() {
+        use crate::utils::HttpClientFactory;
+        use std::time::Duration;
+        
+        let factory = HttpClientFactory::new(None, Duration::from_secs(5));
+        
         // Test that factory can create handlers for all supported types
         for source_type in [StreamSourceType::M3u, StreamSourceType::Xtream] {
             assert!(SourceHandlerFactory::is_supported(&source_type));
-            assert!(SourceHandlerFactory::create_handler(&source_type).is_ok());
-            assert!(SourceHandlerFactory::create_basic_handler(&source_type).is_ok());
+            assert!(SourceHandlerFactory::create_handler(&source_type, &factory).await.is_ok());
             assert!(SourceHandlerFactory::get_handler_capabilities(&source_type).is_ok());
         }
     }
 
-    #[test]
-    fn test_epg_factory_functionality() {
-        // Test EPG factory methods
+    #[tokio::test]
+    async fn test_epg_factory_functionality() {
+        // Test EPG factory methods  
+        let factory = HttpClientFactory::new(None, Duration::from_secs(5));
         for epg_type in [EpgSourceType::Xmltv, EpgSourceType::Xtream] {
             assert!(SourceHandlerFactory::is_epg_supported(&epg_type));
-            assert!(SourceHandlerFactory::create_epg_handler(&epg_type).is_ok());
-            assert!(SourceHandlerFactory::create_basic_epg_handler(&epg_type).is_ok());
+            assert!(SourceHandlerFactory::create_epg_handler(&epg_type, &factory).await.is_ok());
             assert!(SourceHandlerFactory::get_epg_handler_capabilities(&epg_type).is_ok());
         }
     }

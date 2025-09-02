@@ -1,8 +1,7 @@
 "use client"
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { getBackendUrl } from '@/lib/config'
-import { Debug } from '@/utils/debug'
 
 export interface BackendConnectivityState {
   isConnected: boolean
@@ -31,22 +30,33 @@ export function BackendConnectivityProvider({
   children,
 }: BackendConnectivityProviderProps) {
   const [isConnected, setIsConnected] = useState(false)
-  const [isChecking, setIsChecking] = useState(true)
+  const [isChecking, setIsChecking] = useState(false)
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
   
   const backendUrl = getBackendUrl()
-  const debug = Debug.createLogger('BackendConnectivity')
+  
+  // Track ongoing request to prevent overlaps
+  const activeRequestRef = useRef<AbortController | null>(null)
+  const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const checkConnection = useCallback(async () => {
+    // Cancel any ongoing request first
+    if (activeRequestRef.current) {
+      activeRequestRef.current.abort()
+      activeRequestRef.current = null
+    }
+    
     setIsChecking(true)
     setError(null)
     
     try {
-      debug.log('Checking connectivity to:', backendUrl)
+      // Simple logging without feature flag dependency to prevent circular dependency
+      console.log('[BackendConnectivity] Checking connectivity to:', backendUrl)
       
       // Use the /live endpoint as it's a simple health check
       const controller = new AbortController()
+      activeRequestRef.current = controller
       const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout
       
       const response = await fetch(`${backendUrl}/live`, {
@@ -58,22 +68,29 @@ export function BackendConnectivityProvider({
       })
       
       clearTimeout(timeoutId)
+      activeRequestRef.current = null
       
       if (response.ok) {
-        debug.log('Connection successful')
+        console.log('[BackendConnectivity] Connection successful')
         setIsConnected(true)
         setError(null)
       } else {
         throw new Error(`Backend returned ${response.status}: ${response.statusText}`)
       }
     } catch (err) {
+      activeRequestRef.current = null
+      
+      // Don't log aborted requests as errors - they're intentional cancellations
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.log('[BackendConnectivity] Connection check aborted')
+        return // Don't update state for aborted requests
+      }
+      
       console.error('[Backend] Connection failed:', err) // Keep as console.error - critical for production
       setIsConnected(false)
       
       if (err instanceof Error) {
-        if (err.name === 'AbortError') {
-          setError('Connection timeout - backend did not respond within 10 seconds')
-        } else if (err.message.includes('fetch')) {
+        if (err.message.includes('fetch')) {
           setError('Network error - unable to reach backend service')
         } else {
           setError(err.message)
@@ -87,34 +104,66 @@ export function BackendConnectivityProvider({
     }
   }, [backendUrl])
 
-  // Initial connection check
+  // Start monitoring ONLY after initial check is done and we're connected
+  const startMonitoring = useCallback(() => {
+    // Clear any existing interval
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    
+    // Only start monitoring if we're connected
+    if (isConnected && !isChecking) {
+      console.log('[BackendConnectivity] Starting periodic health checks (60s interval)')
+      intervalRef.current = setInterval(() => {
+        console.log('[BackendConnectivity] Performing periodic health check')
+        checkConnection()
+      }, 60000) // 60 seconds
+    }
+  }, [isConnected, isChecking]) // Remove checkConnection dependency to prevent circular loop
+
+  // Stop monitoring
+  const stopMonitoring = useCallback(() => {
+    if (intervalRef.current) {
+      console.log('[BackendConnectivity] Stopping periodic health checks')
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+  }, [])
+
+  // Initial connection check - run once on mount
   useEffect(() => {
+    console.log('[BackendConnectivity] Running initial connection check')
     checkConnection()
-  }, [checkConnection])
+  }, []) // Empty dependency array to run only once on mount
 
-  // Periodic health checks every 60 seconds when connected
+  // Start/stop monitoring based on connection state
   useEffect(() => {
-    if (!isConnected) return
+    if (isConnected && !isChecking) {
+      startMonitoring()
+    } else {
+      stopMonitoring()
+    }
+    
+    return () => {
+      stopMonitoring()
+    }
+  }, [isConnected, isChecking, startMonitoring, stopMonitoring]) // Include functions now that they're stable
 
-    const interval = setInterval(() => {
-      debug.log('Performing periodic health check')
-      checkConnection()
-    }, 60000) // 60 seconds
-
-    return () => clearInterval(interval)
-  }, [isConnected, checkConnection])
-
-  // Retry logic when disconnected - check every 30 seconds
+  // Cleanup active requests on unmount
   useEffect(() => {
-    if (isConnected || isChecking) return
-
-    const retryInterval = setInterval(() => {
-      debug.log('Retrying connection...')
-      checkConnection()
-    }, 30000) // 30 seconds
-
-    return () => clearInterval(retryInterval)
-  }, [isConnected, isChecking, checkConnection])
+    return () => {
+      console.log('[BackendConnectivity] Cleaning up on unmount')
+      if (activeRequestRef.current) {
+        activeRequestRef.current.abort()
+        activeRequestRef.current = null
+      }
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+  }, [])
 
   const contextValue: BackendConnectivityState = {
     isConnected,

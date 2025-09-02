@@ -22,6 +22,8 @@ pub mod progress_events;
 
 use crate::data_mapping::DataMappingService;
 use crate::models::*;
+use crate::services::progress_service::{OperationType, UniversalState};
+use crate::web::api::progress_events::{ProgressEvent, ProgressStageEvent};
 
 #[derive(Debug, Deserialize)]
 pub struct ChannelQueryParams {
@@ -49,6 +51,38 @@ pub struct FilterQueryParams {
     pub order: Option<String>,
 }
 
+/// Convert operation type enum to lowercase string
+fn operation_type_to_string(op_type: &OperationType) -> String {
+    match op_type {
+        OperationType::StreamIngestion => "stream_ingestion".to_string(),
+        OperationType::EpgIngestion => "epg_ingestion".to_string(),
+        OperationType::ProxyRegeneration => "proxy_regeneration".to_string(),
+        OperationType::Pipeline => "pipeline".to_string(),
+        OperationType::DataMapping => "data_mapping".to_string(),
+        OperationType::LogoCaching => "logo_caching".to_string(),
+        OperationType::Filtering => "filtering".to_string(),
+        OperationType::Maintenance => "maintenance".to_string(),
+        OperationType::Database => "database".to_string(),
+        OperationType::Custom(name) => name.to_lowercase(),
+    }
+}
+
+/// Convert universal state enum to lowercase string
+fn universal_state_to_string(state: &UniversalState) -> String {
+    match state {
+        UniversalState::Idle => "idle".to_string(),
+        UniversalState::Preparing => "preparing".to_string(),
+        UniversalState::Connecting => "connecting".to_string(),
+        UniversalState::Downloading => "downloading".to_string(),
+        UniversalState::Processing => "processing".to_string(),
+        UniversalState::Saving => "saving".to_string(),
+        UniversalState::Cleanup => "cleanup".to_string(),
+        UniversalState::Completed => "completed".to_string(),
+        UniversalState::Error => "error".to_string(),
+        UniversalState::Cancelled => "cancelled".to_string(),
+    }
+}
+
 
 
 
@@ -63,40 +97,61 @@ pub struct FilterQueryParams {
     get,
     path = "/progress/operations",
     tag = "progress",
-    summary = "Get active operation progress",
-    description = "Retrieve progress information for currently active operations only",
+    summary = "Get active operation progress",  
+    description = "Retrieve progress information for currently active operations only, returns same format as SSE events",
     responses(
-        (status = 200, description = "Active operation progress retrieved"),
+        (status = 200, description = "Active operation progress retrieved", body = Vec<ProgressEvent>),
         (status = 500, description = "Internal server error")
     )
 )]
 pub async fn get_operation_progress(
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let all_progress = state.state_manager.get_all_progress().await;
+) -> Result<Json<Vec<ProgressEvent>>, StatusCode> {
+    // Get all progress from the new progress service (not the legacy state manager)
+    let all_progress = state.progress_service.get_all_progress().await;
 
-    // Filter to show only active operations (not completed or failed)
-    let active_operations: std::collections::HashMap<Uuid, IngestionProgress> = all_progress
+    // Filter to show only active operations and convert to ProgressEvent format
+    let active_operations: Vec<ProgressEvent> = all_progress
         .into_iter()
-        .filter(|(_, progress)| {
-            // Include active operations
-            matches!(
+        .filter(|progress| {
+            // Include active operations (not completed, failed, or cancelled)
+            !matches!(
                 progress.state,
-                crate::models::IngestionState::Connecting
-                    | crate::models::IngestionState::Downloading
-                    | crate::models::IngestionState::Parsing
+                UniversalState::Completed | UniversalState::Error | UniversalState::Cancelled
             )
+        })
+        .map(|progress| {
+            // Convert stages from UniversalProgress to ProgressStageEvent
+            let stages: Vec<ProgressStageEvent> = progress.stages.iter().map(|stage| {
+                ProgressStageEvent {
+                    id: stage.id.clone(),
+                    name: stage.name.clone(),
+                    percentage: stage.percentage,
+                    state: universal_state_to_string(&stage.state),
+                    stage_step: stage.stage_step.clone(),
+                }
+            }).collect();
+
+            // Convert UniversalProgress to ProgressEvent (same format as SSE)
+            ProgressEvent {
+                id: Some(progress.id.to_string()),
+                owner_id: progress.owner_id.to_string(),
+                owner_type: progress.owner_type,
+                operation_type: operation_type_to_string(&progress.operation_type),
+                operation_name: progress.operation_name,
+                state: universal_state_to_string(&progress.state),
+                current_stage: progress.current_stage,
+                overall_percentage: progress.overall_percentage,
+                stages,
+                started_at: progress.started_at.to_rfc3339(),
+                last_update: progress.last_update.to_rfc3339(),
+                completed_at: progress.completed_at.map(|dt| dt.to_rfc3339()),
+                error: progress.error_message,
+            }
         })
         .collect();
 
-    let result = serde_json::json!({
-        "success": true,
-        "message": "Active operation progress retrieved",
-        "progress": active_operations,
-        "total_operations": active_operations.len()
-    });
-
-    Ok(Json(result))
+    Ok(Json(active_operations))
 }
 
 /// Get EPG source progress by ID

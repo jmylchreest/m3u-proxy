@@ -518,10 +518,13 @@ impl PipelineStage for GenerationStage {
             std::path::PathBuf::from("/tmp/logos_uploaded"),
             std::path::PathBuf::from("/tmp/logos_cached")
         );
+        // Create circuit breaker-enabled logo service for logo processing
+        let http_client_factory = crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10));
         let logo_service = crate::logo_assets::service::LogoAssetService::new(
             self.db_connection.clone(),
-            logo_storage
-        );
+            logo_storage,
+            &http_client_factory
+        ).await;
         let artifacts = self.process_channels_and_programs(numbered_channels, epg_programs, false, &logo_service).await
             .map_err(|e| PipelineError::stage_error("generation", format!("Generation failed: {e}")))?;
         

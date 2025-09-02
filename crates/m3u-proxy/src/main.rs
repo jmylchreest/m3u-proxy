@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use serde_json::Value;
@@ -183,8 +183,40 @@ async fn main() -> Result<()> {
 
     info!("Using database: {}", config.database.url);
 
+    // Initialize circuit breaker manager (always enabled with defaults if not configured)
+    let circuit_breaker_manager = {
+        let mut cb_config = config.circuitbreaker.clone().unwrap_or_default();
+        
+        // Override profile defaults for logo fetching service to be very lenient
+        if !cb_config.profiles.contains_key("logo_fetch") {
+            let logo_profile = m3u_proxy::config::CircuitBreakerProfileConfig {
+                implementation_type: "simple".to_string(),
+                failure_threshold: 10,  // Very high threshold - lots of 404s are expected
+                operation_timeout: "10s".to_string(), // Longer timeout for logo downloads
+                reset_timeout: "1m".to_string(), // Reasonable reset time for logos
+                success_threshold: 3, // Need more successes to close circuit
+                acceptable_status_codes: vec!["2xx".to_string(), "3xx".to_string(), "404".to_string()], // 404s are acceptable for logos
+            };
+            cb_config.profiles.insert("logo_fetch".to_string(), logo_profile);
+            info!("Added default logo_fetch circuit breaker profile (lenient configuration with 404 acceptable)");
+        }
+        
+        let manager = std::sync::Arc::new(m3u_proxy::services::CircuitBreakerManager::new(cb_config.clone()));
+        info!("Circuit breaker manager initialized with {} profiles (using {} global settings)", 
+              cb_config.profiles.len(),
+              if config.circuitbreaker.is_some() { "configured" } else { "default" });
+        manager
+    };
+
+    // Create HTTP client factory for consistent circuit breaker integration
+    let http_client_factory = m3u_proxy::utils::HttpClientFactory::new(
+        Some(circuit_breaker_manager.clone()),
+        Duration::from_secs(5), // Default connect timeout
+    );
+    info!("HTTP client factory initialized with circuit breaker support");
+
     // Initialize database with better error handling
-    let database = match Database::new(&config.database, &config.ingestion, &config).await {
+    let database = match Database::new(&config.database, &config.ingestion).await {
         Ok(db) => db,
         Err(e) => {
             eprintln!("Failed to initialize database at '{}': {}", config.database.url, e);
@@ -224,7 +256,7 @@ async fn main() -> Result<()> {
         config.storage.uploaded_logo_path.clone(),
         config.storage.cached_logo_path.clone(),
     );
-    let mut logo_asset_service = LogoAssetService::new(database.connection().clone(), logo_asset_storage.clone());
+    let mut logo_asset_service = LogoAssetService::new(database.connection().clone(), logo_asset_storage.clone(), &http_client_factory).await;
 
     // Create cache invalidation channel for scheduler
     let (cache_invalidation_tx, cache_invalidation_rx) = create_cache_invalidation_channel();
@@ -330,6 +362,7 @@ async fn main() -> Result<()> {
             system_manager.get_system(),
             progress_service.clone(), // Pass ProgressService to create ProgressManagers
             state_manager.clone(), // Pass IngestionStateManager to check for active operations
+            Arc::new(http_client_factory.clone()), // Pass HttpClientFactory for circuit breaker support
         )
     };
     info!("Proxy regeneration service initialized with in-memory state");
@@ -346,6 +379,7 @@ async fn main() -> Result<()> {
             epg_source_repo,
             url_linking_service,
             cache_invalidation_tx.clone(),
+            http_client_factory.clone(),
         ))
     };
 
@@ -357,17 +391,18 @@ async fn main() -> Result<()> {
         let epg_source_repo_for_service = epg_source_repo_for_url.clone();
         let url_linking_service = UrlLinkingService::new(stream_source_repo_for_url, epg_source_repo_for_url);
         
-        std::sync::Arc::new(StreamSourceBusinessService::new(
+        std::sync::Arc::new(StreamSourceBusinessService::with_http_client_factory(
             stream_source_repo,
             channel_repo,
             epg_source_repo_for_service,
             url_linking_service,
             cache_invalidation_tx.clone(),
+            http_client_factory.clone(),
         ))
     };
 
     // Create scheduler service now that proxy regeneration service exists
-    let scheduler = SchedulerService::new(
+    let scheduler = SchedulerService::with_http_client_factory(
         progress_service.clone(),
         database.clone(),
         stream_source_service.clone(),
@@ -375,6 +410,7 @@ async fn main() -> Result<()> {
         config.ingestion.run_missed_immediately,
         Some(cache_invalidation_rx),
         Some(proxy_regeneration_service.clone()),
+        http_client_factory.clone(),
     );
     info!("Scheduler service initialized");
 
@@ -397,15 +433,6 @@ async fn main() -> Result<()> {
     let relay_config_resolver = m3u_proxy::services::RelayConfigResolver::new(relay_repository);
     info!("Relay configuration resolver initialized");
 
-    // Initialize circuit breaker manager if circuit breaker config is provided
-    let circuit_breaker_manager = if let Some(cb_config) = &config.circuitbreaker {
-        let manager = std::sync::Arc::new(m3u_proxy::services::CircuitBreakerManager::new(cb_config.clone()));
-        info!("Circuit breaker manager initialized with {} profiles", cb_config.profiles.len());
-        Some(manager)
-    } else {
-        info!("Circuit breaker manager disabled (no configuration provided)");
-        None
-    };
 
     let mut web_server = WebServer::new(
         m3u_proxy::web::WebServerBuilder {
@@ -429,7 +456,7 @@ async fn main() -> Result<()> {
             epg_source_service: epg_source_service.clone(),
             log_broadcaster,
             runtime_settings_store,
-            circuit_breaker_manager,
+            circuit_breaker_manager: Some(circuit_breaker_manager.clone()),
         },
     )
     .await?;

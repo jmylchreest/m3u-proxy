@@ -21,6 +21,7 @@ pub struct EpgSourceService {
     epg_source_repo: EpgSourceSeaOrmRepository,
     url_linking_service: UrlLinkingService,
     cache_invalidation_tx: broadcast::Sender<()>,
+    http_client_factory: crate::utils::HttpClientFactory,
 }
 
 impl EpgSourceService {
@@ -30,12 +31,14 @@ impl EpgSourceService {
         epg_source_repo: EpgSourceSeaOrmRepository,
         url_linking_service: UrlLinkingService,
         cache_invalidation_tx: broadcast::Sender<()>,
+        http_client_factory: crate::utils::HttpClientFactory,
     ) -> Self {
         Self {
             database,
             epg_source_repo,
             url_linking_service,
             cache_invalidation_tx,
+            http_client_factory,
         }
     }
 
@@ -49,7 +52,11 @@ impl EpgSourceService {
             stream_source_repo,
             epg_source_repo.clone(),
         );
-        Self::new(database, epg_source_repo, url_linking_service, cache_invalidation_tx)
+        let http_client_factory = crate::utils::HttpClientFactory::new(
+            None, 
+            std::time::Duration::from_secs(10)
+        );
+        Self::new(database, epg_source_repo, url_linking_service, cache_invalidation_tx, http_client_factory)
     }
 
     /// Create an EPG source with automatic stream linking for Xtream sources
@@ -536,7 +543,8 @@ impl EpgSourceService {
         // Wrap the entire operation in error handling to ensure progress completion
         let result = async {
             // Create EPG source handler using the factory
-            let handler = SourceHandlerFactory::create_epg_handler(&source.source_type)
+            let handler = SourceHandlerFactory::create_epg_handler(&source.source_type, &self.http_client_factory)
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to create EPG source handler: {}", e))?;
                 
             // Use the new ProgressStageUpdater API

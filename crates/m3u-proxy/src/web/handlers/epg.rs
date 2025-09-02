@@ -427,8 +427,7 @@ pub async fn get_epg_guide(
             }
         }
         
-        // Limit results for grid view (in-memory approach)
-        programs.truncate(1000);
+        // No truncation - return all matching programs for comprehensive EPG display
 
         // Group programs by channel for grid display
         let mut grid_data = HashMap::new();

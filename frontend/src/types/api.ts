@@ -644,16 +644,12 @@ export interface RuntimeSettings {
   log_level: string;
   enable_request_logging: boolean;
   enable_metrics: boolean;
-  max_connections?: number;
-  request_timeout_seconds?: number;
 }
 
 export interface UpdateSettingsRequest {
   log_level?: string;
   enable_request_logging?: boolean;
   enable_metrics?: boolean;
-  max_connections?: number;
-  request_timeout_seconds?: number;
 }
 
 export interface SettingsResponse {

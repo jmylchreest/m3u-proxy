@@ -12,9 +12,7 @@
 //! - Channel and program validation
 
 use async_trait::async_trait;
-use reqwest::Client;
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::errors::{AppError, AppResult};
@@ -25,21 +23,21 @@ use crate::sources::traits::{
 };
 use crate::utils::time::{detect_timezone_from_xmltv, log_timezone_detection};
 use crate::utils::url::UrlUtils;
-use crate::utils::{CompressionFormat, DecompressionService};
+use crate::utils::{CompressionFormat, DecompressionService, StandardHttpClient, HttpClientFactory};
+use crate::utils::http_client::DecompressingHttpClient;
 
 /// XMLTV EPG source handler implementation
 pub struct XmltvEpgHandler {
-    client: Client,
+    http_client: StandardHttpClient,
 }
 
 impl XmltvEpgHandler {
-    /// Create a new XMLTV EPG handler
-    pub fn new() -> Self {
+    /// Create a new XMLTV EPG handler with circuit breaker protection
+    pub async fn new(http_client_factory: &HttpClientFactory) -> Self {
         Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("Failed to create HTTP client"),
+            http_client: http_client_factory
+                .create_client_for_service("source_xmltv")
+                .await,
         }
     }
 
@@ -47,26 +45,9 @@ impl XmltvEpgHandler {
     async fn fetch_xmltv_content(&self, url: &str) -> AppResult<String> {
         debug!("Fetching XMLTV content from: {}", url);
         
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
+        // Use circuit breaker-wrapped HTTP client to fetch bytes
+        let bytes = self.http_client.fetch_bytes(url).await
             .map_err(|e| AppError::source_error(format!("Failed to fetch XMLTV: {e}")))?;
-
-        if !response.status().is_success() {
-            return Err(AppError::source_error(format!(
-                "HTTP error fetching XMLTV: {} {}",
-                response.status(),
-                response.status().canonical_reason().unwrap_or("Unknown")
-            )));
-        }
-
-        // Get raw bytes instead of text to detect compression
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| AppError::source_error(format!("Failed to read XMLTV response: {e}")))?;
 
         debug!("Fetched {} bytes of raw XMLTV content", bytes.len());
 
@@ -81,7 +62,7 @@ impl XmltvEpgHandler {
             }
             _ => {
                 debug!("Content is compressed, decompressing...");
-                DecompressionService::decompress(bytes)
+                DecompressionService::decompress(bytes.into())
                     .map_err(|e| AppError::source_error(format!("Failed to decompress XMLTV content: {e}")))?
             }
         };
@@ -202,11 +183,6 @@ impl XmltvEpgHandler {
     }
 }
 
-impl Default for XmltvEpgHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 #[async_trait]
 impl EpgSourceHandler for XmltvEpgHandler {
@@ -254,7 +230,7 @@ impl EpgSourceHandler for XmltvEpgHandler {
     }
 
     async fn test_epg_connectivity(&self, source: &EpgSource) -> AppResult<bool> {
-        match self.client.head(&source.url).send().await {
+        match self.http_client.inner_client().head(&source.url).send().await {
             Ok(response) => Ok(response.status().is_success()),
             Err(_) => Ok(false),
         }
@@ -266,7 +242,7 @@ impl EpgSourceHandler for XmltvEpgHandler {
         info.insert("url".to_string(), source.url.clone());
         
         // Try to get some basic info from the source
-        if let Ok(response) = self.client.head(&source.url).send().await {
+        if let Ok(response) = self.http_client.inner_client().head(&source.url).send().await {
             if let Some(content_type) = response.headers().get("content-type") {
                 if let Ok(ct_str) = content_type.to_str() {
                     info.insert("content_type".to_string(), ct_str.to_string());

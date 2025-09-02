@@ -59,6 +59,7 @@ impl PipelineOrchestratorFactory {
         app_config: Config,
         storage_config: StorageConfig,
         pipeline_file_manager: SandboxedManager,
+        http_client_factory: &crate::utils::HttpClientFactory,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Create logo storage from configuration
         let logo_storage = LogoAssetStorage::new(
@@ -66,8 +67,8 @@ impl PipelineOrchestratorFactory {
             storage_config.cached_logo_path.clone(),
         );
 
-        // Create shared logo service
-        let logo_service = Arc::new(LogoAssetService::new(database.connection().clone(), logo_storage));
+        // Create logo service with circuit breaker protection via factory
+        let logo_service = Arc::new(LogoAssetService::new(database.connection().clone(), logo_storage, http_client_factory).await);
 
         // Create proxy output file manager for final M3U/XMLTV files
         let proxy_output_file_manager = SandboxedManager::builder()
@@ -225,20 +226,17 @@ impl PipelineOrchestratorFactory {
         };
 
         // Create Database wrapper from connection for test
-        let circuit_breaker = crate::utils::create_circuit_breaker(
-            crate::utils::CircuitBreakerType::Simple,
-            crate::utils::CircuitBreakerConfig::default()
-        );
         let test_database = crate::database::Database {
             connection: std::sync::Arc::new(db_connection),
             read_connection: std::sync::Arc::new(sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite).into_connection()),
             backend: sea_orm::DatabaseBackend::Sqlite,
             ingestion_config: crate::config::IngestionConfig::default(),
             database_type: crate::database::DatabaseType::SQLite,
-            circuit_breaker,
         };
         
-        Self::from_components(test_database, app_config, storage_config, pipeline_file_manager).await
+        // Create HTTP client factory for testing
+        let http_client_factory = crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10));
+        Self::from_components(test_database, app_config, storage_config, pipeline_file_manager, &http_client_factory).await
     }
 }
 

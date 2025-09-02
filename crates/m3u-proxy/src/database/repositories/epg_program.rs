@@ -160,17 +160,12 @@ mod tests {
         )).await?;
         
         // Create a minimal database wrapper for testing
-        let circuit_breaker = crate::utils::create_circuit_breaker(
-            crate::utils::CircuitBreakerType::Simple,
-            crate::utils::CircuitBreakerConfig::default()
-        );
         let db = crate::database::Database {
             connection: arc_connection.clone(),
             read_connection: arc_connection,
             database_type: crate::database::DatabaseType::SQLite,
             backend: DatabaseBackend::Sqlite,
             ingestion_config: IngestionConfig::default(),
-            circuit_breaker,
         };
         
         Ok(db)

@@ -6,9 +6,6 @@ use anyhow::Result;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, ColumnTrait, QueryFilter};
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::utils::ConcreteCircuitBreaker;
-#[cfg(test)]
-use crate::utils::CircuitBreaker;
 
 use crate::entities::{prelude::StreamSources, stream_sources};
 use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceType};
@@ -17,33 +14,17 @@ use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceType};
 #[derive(Clone)]
 pub struct StreamSourceSeaOrmRepository {
     connection: Arc<DatabaseConnection>,
-    circuit_breaker: Arc<ConcreteCircuitBreaker>,
 }
 
 impl StreamSourceSeaOrmRepository {
-    /// Create a new repository instance (backward compatibility)
+    /// Create a new repository instance
     pub fn new(connection: Arc<DatabaseConnection>) -> Self {
-        // Create a default circuit breaker for backward compatibility
-        let circuit_breaker = crate::utils::create_circuit_breaker(
-            crate::utils::CircuitBreakerType::Simple,
-            crate::utils::CircuitBreakerConfig::default()
-        );
-        Self { connection, circuit_breaker }
-    }
-
-    /// Create a new repository instance with explicit circuit breaker
-    pub fn new_with_circuit_breaker(connection: Arc<DatabaseConnection>, circuit_breaker: Arc<ConcreteCircuitBreaker>) -> Self {
-        Self { connection, circuit_breaker }
+        Self { connection }
     }
 
     /// Get database connection for direct operations
     pub fn get_connection(&self) -> &Arc<DatabaseConnection> {
         &self.connection
-    }
-
-    /// Get circuit breaker for manual operation wrapping if needed
-    pub fn circuit_breaker(&self) -> &Arc<ConcreteCircuitBreaker> {
-        &self.circuit_breaker
     }
 
     /// Create a new stream source
@@ -408,17 +389,12 @@ mod tests {
         )).await?;
         
         // Create a minimal database wrapper for testing
-        let circuit_breaker = crate::utils::create_circuit_breaker(
-            crate::utils::CircuitBreakerType::Simple,
-            crate::utils::CircuitBreakerConfig::default()
-        );
         let db = crate::database::Database {
             connection: arc_connection.clone(),
             read_connection: arc_connection,
             database_type: crate::database::DatabaseType::SQLite,
             backend: DatabaseBackend::Sqlite,
             ingestion_config: IngestionConfig::default(),
-            circuit_breaker,
         };
         
         Ok(db)
@@ -466,25 +442,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_circuit_breaker_integration() -> Result<()> {
-        let db = create_test_db().await?;
-        let repo = StreamSourceSeaOrmRepository::new(db.connection().clone());
-
-        // Test that circuit breaker is available and in closed state initially
-        let cb = repo.circuit_breaker();
-        let initial_state = cb.as_ref().state().await;
-        assert_eq!(initial_state, crate::utils::circuit_breaker::CircuitBreakerState::Closed);
-
-        // Test that circuit breaker is available for operations
-        assert!(cb.as_ref().is_available().await);
-
-        // Test circuit breaker stats
-        let stats = cb.as_ref().stats().await;
-        assert_eq!(stats.total_calls, 0); // No calls yet
-        assert_eq!(stats.state, crate::utils::circuit_breaker::CircuitBreakerState::Closed);
-
-        Ok(())
-    }
+    // Circuit breaker integration test removed - repositories no longer have direct circuit breakers
+    // Circuit breakers are now managed at the service level through HttpClientFactory
 }
 

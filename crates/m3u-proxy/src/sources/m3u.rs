@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{StreamSource, StreamSourceType, Channel};
-use crate::utils::{DecompressingHttpClient, StandardHttpClient, generate_channel_uuid};
+use crate::utils::{DecompressingHttpClient, StandardHttpClient, generate_channel_uuid, HttpClientFactory};
 use super::traits::*;
 
 /// M3U source handler
@@ -33,12 +33,11 @@ pub struct M3uSourceHandler {
 }
 
 impl M3uSourceHandler {
-    /// Create a new M3U source handler
-    pub fn new() -> Self {
-        let http_client = StandardHttpClient::with_timeout(Duration::from_secs(30));
+    /// Create a new M3U source handler with HTTP client factory
+    pub async fn new(factory: &HttpClientFactory) -> Self {
+        let http_client = factory.create_client_for_service("source_m3u").await;
         let raw_client = Client::builder()
             .timeout(Duration::from_secs(30))
-            .user_agent("M3U-Proxy/1.0")
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -311,41 +310,6 @@ impl M3uSourceHandler {
 
         Ok(result)
     }
-
-    /// Estimate channel count by doing a partial download and analysis
-    async fn estimate_channels(&self, source: &StreamSource) -> AppResult<Option<u32>> {
-        // Download first 64KB to estimate channel count with automatic decompression
-        let partial_content = self.http_client.fetch_text_with_headers(&source.url, &[("Range", "bytes=0-65535")]).await
-            .map_err(|e| {
-                debug!("Failed to fetch partial M3U content for estimation: {}", e);
-                e
-            });
-
-        let partial_content = match partial_content {
-            Ok(content) => content,
-            Err(_) => return Ok(None), // If partial download fails, return None instead of error
-        };
-
-        // Count EXTINF lines as rough estimate
-        let extinf_count = partial_content.lines()
-            .filter(|line| line.starts_with("#EXTINF"))
-            .count();
-
-        // If we have a meaningful sample, extrapolate
-        if extinf_count > 10 {
-            // Rough extrapolation based on content size
-            let sample_size = partial_content.len() as f64;
-            let extinf_density = extinf_count as f64 / sample_size;
-            
-            // Estimate total file size (this is very rough)
-            let estimated_total = sample_size * 4.0; // Assume sample is 1/4 of total
-            let estimated_channels = (estimated_total * extinf_density) as u32;
-            
-            Ok(Some(estimated_channels.max(extinf_count as u32)))
-        } else {
-            Ok(Some(extinf_count as u32))
-        }
-    }
 }
 
 /// Partial channel structure used during parsing
@@ -446,72 +410,14 @@ impl ChannelIngestor for M3uSourceHandler {
     }
 
 
-    async fn estimate_channel_count(&self, source: &StreamSource) -> AppResult<Option<u32>> {
-        self.estimate_channels(source).await
+    async fn estimate_channel_count(&self, _source: &StreamSource) -> AppResult<Option<u32>> {
+        // Channel counts should come from actual ingestion results, not HTTP estimation calls
+        Ok(None)
     }
 
 
 }
 
-#[async_trait]
-impl HealthChecker for M3uSourceHandler {
-    async fn check_health(&self, source: &StreamSource) -> AppResult<SourceHealthStatus> {
-        let start_time = std::time::Instant::now();
-        let checked_at = Utc::now();
-
-        match self.raw_client.head(&source.url).send().await {
-            Ok(response) => {
-                let response_time_ms = start_time.elapsed().as_millis() as u64;
-                let is_healthy = response.status().is_success();
-
-                Ok(SourceHealthStatus {
-                    is_healthy,
-                    response_time_ms: Some(response_time_ms),
-                    last_success: if is_healthy { Some(checked_at) } else { None },
-                    error_message: if !is_healthy { 
-                        Some(format!("HTTP error: {}", response.status())) 
-                    } else { 
-                        None 
-                    },
-                    checked_at,
-                })
-            }
-            Err(e) => {
-                Ok(SourceHealthStatus {
-                    is_healthy: false,
-                    response_time_ms: Some(start_time.elapsed().as_millis() as u64),
-                    last_success: None,
-                    error_message: Some(e.to_string()),
-                    checked_at,
-                })
-            }
-        }
-    }
-
-    async fn get_health_metrics(&self, source: &StreamSource) -> AppResult<SourceHealthMetrics> {
-        let status = self.check_health(source).await?;
-        let mut metrics = HashMap::new();
-
-        // Try to get additional metrics
-        if let Ok(Some(count)) = self.estimate_channel_count(source).await {
-            metrics.insert("estimated_channels".to_string(), count.to_string());
-        }
-
-        if let Ok(source_info) = self.get_source_info(source).await {
-            for (key, value) in source_info {
-                metrics.insert(key, value);
-            }
-        }
-
-        Ok(SourceHealthMetrics {
-            status,
-            channel_count: None, // Would require full ingestion to get accurate count
-            server_version: metrics.get("server").cloned(),
-            uptime: None,
-            metrics,
-        })
-    }
-}
 
 #[async_trait]
 impl StreamUrlGenerator for M3uSourceHandler {
@@ -554,8 +460,3 @@ impl StreamUrlGenerator for M3uSourceHandler {
 
 impl FullSourceHandler for M3uSourceHandler {}
 
-impl Default for M3uSourceHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}

@@ -20,12 +20,15 @@ import {
   Settings as SettingsIcon,
   CheckCircle,
   AlertCircle,
-  XCircle
+  XCircle,
+  Shield,
+  Activity
 } from "lucide-react"
 import { RuntimeSettings, UpdateSettingsRequest, SettingsResponse } from "@/types/api"
 import { apiClient } from "@/lib/api-client"
 import { FeatureFlagsEditor } from "@/components/feature-flags-editor"
 import { useFeatureFlags, invalidateFeatureFlagsCache } from "@/hooks/useFeatureFlags"
+import { getBackendUrl } from "@/lib/config"
 
 // Feature flag interface (should match the one in FeatureFlagsEditor)
 interface FeatureFlag {
@@ -63,6 +66,12 @@ export function Settings() {
   const [flags, setFlags] = useState<FeatureFlag[]>([])
   const [flagsLoaded, setFlagsLoaded] = useState(false)
   const { refetch } = useFeatureFlags()
+
+  // Circuit breaker state
+  const [circuitBreakerConfig, setCircuitBreakerConfig] = useState<any>(null)
+  const [editedCbConfig, setEditedCbConfig] = useState<any>({})
+  const [cbLoading, setCbLoading] = useState(false)
+  const [cbSaving, setCbSaving] = useState(false)
 
   const fetchSettings = async () => {
     setLoading(true)
@@ -116,13 +125,33 @@ export function Settings() {
     }
   }
 
+  const fetchCircuitBreakerData = async () => {
+    setCbLoading(true)
+    try {
+      const backendUrl = getBackendUrl()
+      const configResponse = await fetch(`${backendUrl}/api/v1/circuit-breakers/config`)
+
+      if (configResponse.ok) {
+        const configData = await configResponse.json()
+        const config = configData.data?.config || null
+        setCircuitBreakerConfig(config)
+        setEditedCbConfig({}) // Reset edited changes when fetching fresh data
+      }
+    } catch (err) {
+      console.warn('Circuit breaker config endpoint not available:', err)
+      // Don't set error since circuit breakers might not be configured
+    } finally {
+      setCbLoading(false)
+    }
+  }
+
   const fetchAll = async () => {
     setLoading(true)
     setError(null)
     setSaveSuccess(null)
     
     try {
-      await Promise.all([fetchSettings(), fetchFeatureFlags()])
+      await Promise.all([fetchSettings(), fetchFeatureFlags(), fetchCircuitBreakerData()])
     } catch (err) {
       // Error handling is done in individual functions
     } finally {
@@ -181,6 +210,50 @@ export function Settings() {
     }
   }
 
+  const saveCircuitBreakerConfig = async (): Promise<string> => {
+    if (!circuitBreakerConfig || Object.keys(editedCbConfig).length === 0) {
+      return 'No circuit breaker changes to save'
+    }
+
+    try {
+      // Build the updated config by merging original with edited changes
+      const updatedConfig = {
+        global: {
+          ...circuitBreakerConfig.global,
+          ...editedCbConfig.global
+        },
+        profiles: {
+          ...circuitBreakerConfig.profiles,
+          ...editedCbConfig.profiles
+        }
+      }
+
+      const backendUrl = getBackendUrl()
+      const response = await fetch(`${backendUrl}/api/v1/circuit-breakers/config`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ config: updatedConfig })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to update circuit breaker configuration')
+      }
+
+      const result = await response.json()
+      
+      // Update local state with the new config
+      setCircuitBreakerConfig(updatedConfig)
+      setEditedCbConfig({})
+      
+      return `Circuit breaker configuration updated successfully. Updated ${result.data.updated_count} services.`
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : 'Failed to save circuit breaker configuration')
+    }
+  }
+
   const saveAll = async () => {
     setSaving(true)
     setError(null)
@@ -188,8 +261,9 @@ export function Settings() {
     
     const settingsHasChanges = settings && Object.keys(editedSettings).length > 0
     const featureFlagsChanged = flagsLoaded // Assume flags might have changed if loaded
+    const circuitBreakerChanged = circuitBreakerConfig && Object.keys(editedCbConfig).length > 0
     
-    if (!settingsHasChanges && !featureFlagsChanged) {
+    if (!settingsHasChanges && !featureFlagsChanged && !circuitBreakerChanged) {
       return
     }
     
@@ -204,6 +278,11 @@ export function Settings() {
       if (featureFlagsChanged) {
         const flagsResult = await saveFeatureFlags()
         results.push(flagsResult)
+      }
+
+      if (circuitBreakerChanged) {
+        const cbResult = await saveCircuitBreakerConfig()
+        results.push(cbResult)
       }
       
       setSaveSuccess(results.join('. '))
@@ -239,8 +318,50 @@ export function Settings() {
     return editedSettings.hasOwnProperty(key) && settings && editedSettings[key] !== settings[key]
   }
 
+  // Circuit breaker change helpers
+  const handleCbGlobalChange = (key: string, value: any) => {
+    setEditedCbConfig((prev: any) => ({
+      ...prev,
+      global: {
+        ...prev.global,
+        [key]: value
+      }
+    }))
+  }
+
+  const handleCbProfileChange = (serviceName: string, key: string, value: any) => {
+    setEditedCbConfig((prev: any) => ({
+      ...prev,
+      profiles: {
+        ...prev.profiles,
+        [serviceName]: {
+          ...circuitBreakerConfig?.profiles?.[serviceName],
+          ...prev.profiles?.[serviceName],
+          [key]: value
+        }
+      }
+    }))
+  }
+
+  const getCbGlobalValue = (key: string) => {
+    return editedCbConfig.global?.[key] ?? circuitBreakerConfig?.global?.[key]
+  }
+
+  const getCbProfileValue = (serviceName: string, key: string) => {
+    return editedCbConfig.profiles?.[serviceName]?.[key] ?? circuitBreakerConfig?.profiles?.[serviceName]?.[key]
+  }
+
+  const isCbGlobalModified = (key: string) => {
+    return editedCbConfig.global?.[key] !== undefined
+  }
+
+  const isCbProfileModified = (serviceName: string, key: string) => {
+    return editedCbConfig.profiles?.[serviceName]?.[key] !== undefined
+  }
+
   const hasSettingsChanges = Object.keys(editedSettings).length > 0
-  const hasAnyChanges = hasSettingsChanges || flagsLoaded // Simplified - assume flags might have changes if loaded
+  const hasCbChanges = Object.keys(editedCbConfig).length > 0
+  const hasAnyChanges = hasSettingsChanges || flagsLoaded || hasCbChanges // Simplified - assume flags might have changes if loaded
 
   useEffect(() => {
     fetchAll()
@@ -302,6 +423,236 @@ export function Settings() {
         setError={setError}
         onRefresh={fetchFeatureFlags}
       />
+
+      {/* Circuit Breaker Configuration */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Shield className="h-5 w-5" />
+            Circuit Breaker Configuration
+          </CardTitle>
+          <CardDescription>
+            Runtime circuit breaker settings that can be modified without restart
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {cbLoading ? (
+            <div className="flex items-center gap-2">
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              <span>Loading circuit breaker configuration...</span>
+            </div>
+          ) : circuitBreakerConfig ? (
+            <div className="space-y-6">
+              {/* Global Configuration - Editable */}
+              {circuitBreakerConfig?.global && (
+                <div className="space-y-4">
+                  <h4 className="font-medium flex items-center gap-2">
+                    <SettingsIcon className="h-4 w-4" />
+                    Global Default Settings
+                  </h4>
+                  <div className="grid grid-cols-1 gap-4">
+                    {/* Implementation Type - Read Only */}
+                    <div className="flex items-center justify-between py-4 border-b">
+                      <div className="space-y-1">
+                        <div className="font-medium">Implementation Type</div>
+                        <div className="text-sm text-muted-foreground">Circuit breaker implementation strategy</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-medium capitalize">{getCbGlobalValue('implementation_type')}</div>
+                      </div>
+                    </div>
+                    
+                    {/* Failure Threshold - Editable */}
+                    <div className="flex items-center justify-between py-4 border-b">
+                      <div className="space-y-1">
+                        <div className="font-medium">Failure Threshold</div>
+                        <div className="text-sm text-muted-foreground">Number of failures before opening circuit</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isCbGlobalModified('failure_threshold') && (
+                          <Badge variant="secondary">Modified</Badge>
+                        )}
+                        <Input
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={getCbGlobalValue('failure_threshold') || ''}
+                          onChange={(e) => handleCbGlobalChange('failure_threshold', parseInt(e.target.value))}
+                          className="w-20 text-right"
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* Operation Timeout - Editable */}
+                    <div className="flex items-center justify-between py-4 border-b">
+                      <div className="space-y-1">
+                        <div className="font-medium">Operation Timeout</div>
+                        <div className="text-sm text-muted-foreground">Maximum time to wait for operation completion</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isCbGlobalModified('operation_timeout') && (
+                          <Badge variant="secondary">Modified</Badge>
+                        )}
+                        <Input
+                          type="text"
+                          value={getCbGlobalValue('operation_timeout') || ''}
+                          onChange={(e) => handleCbGlobalChange('operation_timeout', e.target.value)}
+                          placeholder="e.g., 5s, 30s"
+                          className="w-24 text-right"
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* Reset Timeout - Editable */}
+                    <div className="flex items-center justify-between py-4 border-b">
+                      <div className="space-y-1">
+                        <div className="font-medium">Reset Timeout</div>
+                        <div className="text-sm text-muted-foreground">Time to wait before attempting to close circuit</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isCbGlobalModified('reset_timeout') && (
+                          <Badge variant="secondary">Modified</Badge>
+                        )}
+                        <Input
+                          type="text"
+                          value={getCbGlobalValue('reset_timeout') || ''}
+                          onChange={(e) => handleCbGlobalChange('reset_timeout', e.target.value)}
+                          placeholder="e.g., 30s, 1m"
+                          className="w-24 text-right"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Success Threshold - Editable */}
+                    <div className="flex items-center justify-between py-4">
+                      <div className="space-y-1">
+                        <div className="font-medium">Success Threshold</div>
+                        <div className="text-sm text-muted-foreground">Number of successes needed to close circuit from half-open</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isCbGlobalModified('success_threshold') && (
+                          <Badge variant="secondary">Modified</Badge>
+                        )}
+                        <Input
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={getCbGlobalValue('success_threshold') || ''}
+                          onChange={(e) => handleCbGlobalChange('success_threshold', parseInt(e.target.value))}
+                          className="w-20 text-right"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Service-Specific Profiles - Editable */}
+              {circuitBreakerConfig?.profiles && Object.keys(circuitBreakerConfig.profiles).length > 0 && (
+                <div className="space-y-4">
+                  <h4 className="font-medium flex items-center gap-2">
+                    <Activity className="h-4 w-4" />
+                    Service-Specific Profiles
+                  </h4>
+                  <div className="space-y-4">
+                    {Object.entries(circuitBreakerConfig.profiles).map(([serviceName, profile]: [string, any]) => (
+                      <div key={serviceName} className="border rounded-lg p-4">
+                        <div className="font-medium mb-4">{serviceName}</div>
+                        <div className="grid grid-cols-1 gap-4 text-sm">
+                          {/* Implementation Type - Read Only */}
+                          <div className="flex items-center justify-between py-2 border-b">
+                            <span className="text-muted-foreground">Implementation Type:</span>
+                            <span className="font-medium capitalize">{getCbProfileValue(serviceName, 'implementation_type')}</span>
+                          </div>
+                          
+                          {/* Failure Threshold - Editable */}
+                          <div className="flex items-center justify-between py-2 border-b">
+                            <span className="text-muted-foreground">Failure Threshold:</span>
+                            <div className="flex items-center gap-2">
+                              {isCbProfileModified(serviceName, 'failure_threshold') && (
+                                <Badge variant="secondary" className="text-xs">Modified</Badge>
+                              )}
+                              <Input
+                                type="number"
+                                min="1"
+                                max="100"
+                                value={getCbProfileValue(serviceName, 'failure_threshold') || ''}
+                                onChange={(e) => handleCbProfileChange(serviceName, 'failure_threshold', parseInt(e.target.value))}
+                                className="w-16 text-right text-sm"
+                              />
+                            </div>
+                          </div>
+                          
+                          {/* Operation Timeout - Editable */}
+                          <div className="flex items-center justify-between py-2 border-b">
+                            <span className="text-muted-foreground">Operation Timeout:</span>
+                            <div className="flex items-center gap-2">
+                              {isCbProfileModified(serviceName, 'operation_timeout') && (
+                                <Badge variant="secondary" className="text-xs">Modified</Badge>
+                              )}
+                              <Input
+                                type="text"
+                                value={getCbProfileValue(serviceName, 'operation_timeout') || ''}
+                                onChange={(e) => handleCbProfileChange(serviceName, 'operation_timeout', e.target.value)}
+                                className="w-20 text-right text-sm"
+                              />
+                            </div>
+                          </div>
+                          
+                          {/* Reset Timeout - Editable */}
+                          <div className="flex items-center justify-between py-2 border-b">
+                            <span className="text-muted-foreground">Reset Timeout:</span>
+                            <div className="flex items-center gap-2">
+                              {isCbProfileModified(serviceName, 'reset_timeout') && (
+                                <Badge variant="secondary" className="text-xs">Modified</Badge>
+                              )}
+                              <Input
+                                type="text"
+                                value={getCbProfileValue(serviceName, 'reset_timeout') || ''}
+                                onChange={(e) => handleCbProfileChange(serviceName, 'reset_timeout', e.target.value)}
+                                className="w-20 text-right text-sm"
+                              />
+                            </div>
+                          </div>
+                          
+                          {/* Success Threshold - Editable */}
+                          <div className="flex items-center justify-between py-2">
+                            <span className="text-muted-foreground">Success Threshold:</span>
+                            <div className="flex items-center gap-2">
+                              {isCbProfileModified(serviceName, 'success_threshold') && (
+                                <Badge variant="secondary" className="text-xs">Modified</Badge>
+                              )}
+                              <Input
+                                type="number"
+                                min="1"
+                                max="100"
+                                value={getCbProfileValue(serviceName, 'success_threshold') || ''}
+                                onChange={(e) => handleCbProfileChange(serviceName, 'success_threshold', parseInt(e.target.value))}
+                                className="w-16 text-right text-sm"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="text-sm text-muted-foreground p-3 bg-muted/50 rounded">
+                Circuit breaker configuration can be modified in real-time and takes effect immediately. 
+                Changes are persisted to the configuration file. Check the debug page for real-time statistics and monitoring.
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              <Shield className="h-12 w-12 mx-auto mb-3 opacity-50" />
+              <p>Circuit breaker functionality is not configured</p>
+              <p className="text-sm mt-1">Configure circuit breakers in your application config to see them here</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Settings Table */}
       {settings && (
@@ -373,7 +724,7 @@ export function Settings() {
               </div>
 
               {/* Metrics Collection */}
-              <div className="flex items-center justify-between py-4 border-b">
+              <div className="flex items-center justify-between py-4">
                 <div className="space-y-1">
                   <div className="font-medium">Metrics Collection</div>
                   <div className="text-sm text-muted-foreground">
@@ -390,52 +741,6 @@ export function Settings() {
                     checked={Boolean(getCurrentValue('enable_metrics')) || false}
                     onChange={(e) => handleInputChange('enable_metrics', e.target.checked)}
                     className="rounded border-gray-300"
-                  />
-                </div>
-              </div>
-
-              {/* Max Connections */}
-              <div className="flex items-center justify-between py-4 border-b">
-                <div className="space-y-1">
-                  <div className="font-medium">Max Connections</div>
-                  <div className="text-sm text-muted-foreground">
-                    Maximum number of concurrent connections (optional)
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {isModified('max_connections') && (
-                    <Badge variant="secondary">Modified</Badge>
-                  )}
-                  <Input
-                    type="number"
-                    value={String(getCurrentValue('max_connections') || '')}
-                    onChange={(e) => handleInputChange('max_connections', e.target.value ? parseInt(e.target.value) : undefined)}
-                    className="w-32"
-                    placeholder="1000"
-                    min="0"
-                  />
-                </div>
-              </div>
-
-              {/* Request Timeout */}
-              <div className="flex items-center justify-between py-4">
-                <div className="space-y-1">
-                  <div className="font-medium">Request Timeout</div>
-                  <div className="text-sm text-muted-foreground">
-                    Request timeout in seconds (optional)
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {isModified('request_timeout_seconds') && (
-                    <Badge variant="secondary">Modified</Badge>
-                  )}
-                  <Input
-                    type="number"
-                    value={String(getCurrentValue('request_timeout_seconds') || '')}
-                    onChange={(e) => handleInputChange('request_timeout_seconds', e.target.value ? parseInt(e.target.value) : undefined)}
-                    className="w-32"
-                    placeholder="30"
-                    min="0"
                   />
                 </div>
               </div>

@@ -71,6 +71,8 @@ pub struct ProxyRegenerationService {
     /// Ingestion state manager to check for active/pending operations
     ingestion_state_manager: Arc<IngestionStateManager>,
     temp_file_manager: sandboxed_file_manager::SandboxedManager,
+    /// HTTP client factory for circuit breaker-enabled clients
+    http_client_factory: Arc<crate::utils::HttpClientFactory>,
 }
 
 impl ProxyRegenerationService {
@@ -83,6 +85,7 @@ impl ProxyRegenerationService {
         _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
         progress_service: Arc<ProgressService>,
         ingestion_state_manager: Arc<IngestionStateManager>,
+        http_client_factory: Arc<crate::utils::HttpClientFactory>,
     ) -> Self {
         // Create priority queues: manual gets processed before automatic
         let (manual_queue_sender, manual_queue_receiver) = mpsc::unbounded_channel::<RegenerationRequest>();
@@ -103,6 +106,7 @@ impl ProxyRegenerationService {
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ingestion_state_manager: ingestion_state_manager.clone(),
             temp_file_manager: temp_file_manager.clone(),
+            http_client_factory,
         };
         
         // Start the priority queue processor in the background
@@ -155,6 +159,7 @@ impl ProxyRegenerationService {
         let active_regenerations = self.active_regenerations.clone();
         let queued_proxies = self.queued_proxies.clone();
         let app_config = self.app_config.clone();
+        let http_client_factory = self.http_client_factory.clone();
         
         tokio::spawn(async move {
             info!("Starting sequential proxy regeneration processor (manual priority)");
@@ -170,6 +175,7 @@ impl ProxyRegenerationService {
                         &active_regenerations,
                         &queued_proxies,
                         &app_config,
+                        &http_client_factory,
                     ).await;
                     continue; // Immediately check for more work
                 }
@@ -185,6 +191,7 @@ impl ProxyRegenerationService {
                             &active_regenerations,
                             &queued_proxies,
                             &app_config,
+                            &http_client_factory,
                         ).await;
                         continue; // Immediately check for more work
                     }
@@ -212,6 +219,7 @@ impl ProxyRegenerationService {
         active_regenerations: &Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
         queued_proxies: &Arc<Mutex<HashSet<Uuid>>>,
         app_config: &Config,
+        http_client_factory: &Arc<crate::utils::HttpClientFactory>,
     ) {
         let proxy_id = request.proxy_id;
         
@@ -253,6 +261,7 @@ impl ProxyRegenerationService {
             request.progress_manager.clone(),
             active_regenerations.clone(),
             app_config.clone(),
+            http_client_factory.clone(),
         ).await {
             Ok(()) => {
                 debug!("Successfully completed regeneration for proxy {}", proxy_id);
@@ -489,6 +498,7 @@ impl ProxyRegenerationService {
         progress_manager: Option<Arc<ProgressManager>>,
         active_regenerations: Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
         app_config: Config,
+        http_client_factory: Arc<crate::utils::HttpClientFactory>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Create and track the regeneration task
         let handle = tokio::spawn(async move {
@@ -502,6 +512,7 @@ impl ProxyRegenerationService {
                 proxy_id,
                 progress_manager,
                 app_config,
+                &http_client_factory,
             ).await {
                 Ok(()) => {
                     debug!("Successfully completed regeneration for proxy {}", proxy_id);
@@ -536,6 +547,7 @@ impl ProxyRegenerationService {
         proxy_id: Uuid,
         progress_manager: Option<Arc<ProgressManager>>,
         app_config: Config,
+        http_client_factory: &crate::utils::HttpClientFactory,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use crate::pipeline::PipelineOrchestratorFactory;
         
@@ -550,6 +562,7 @@ impl ProxyRegenerationService {
             app_config.clone(),
             storage_config,
             temp_file_manager,
+            http_client_factory,
         ).await?;
 
         debug!("Regenerating proxy {} using pipeline factory (sequential queue)", proxy_id);
@@ -1113,21 +1126,17 @@ mod tests {
         // Create test database using SeaORM MockDatabase
         let db_connection = Arc::new(sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
             .into_connection());
-        let circuit_breaker = crate::utils::create_circuit_breaker(
-            crate::utils::CircuitBreakerType::Simple,
-            crate::utils::CircuitBreakerConfig::default()
-        );
         let test_database = crate::database::Database {
             connection: Arc::clone(&db_connection),
             read_connection: Arc::clone(&db_connection),
             backend: sea_orm::DatabaseBackend::Sqlite,
             ingestion_config: crate::config::IngestionConfig::default(),
             database_type: crate::database::DatabaseType::SQLite,
-            circuit_breaker,
         };
         
         let proxy_repository = crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository::new(Arc::clone(&db_connection));
         
+        let http_client_factory = Arc::new(crate::utils::HttpClientFactory::new(None, Duration::from_secs(10)));
         let service = ProxyRegenerationService::new(
             test_database,
             proxy_repository,
@@ -1139,6 +1148,7 @@ mod tests {
             Arc::new(tokio::sync::RwLock::new(sysinfo::System::new())),
             progress_service,
             ingestion_state_manager,
+            http_client_factory,
         );
 
         let proxy_id = Uuid::new_v4();
@@ -1167,21 +1177,17 @@ mod tests {
         // Create test database using SeaORM MockDatabase
         let db_connection = Arc::new(sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
             .into_connection());
-        let circuit_breaker = crate::utils::create_circuit_breaker(
-            crate::utils::CircuitBreakerType::Simple,
-            crate::utils::CircuitBreakerConfig::default()
-        );
         let test_database = crate::database::Database {
             connection: Arc::clone(&db_connection),
             read_connection: Arc::clone(&db_connection),
             backend: sea_orm::DatabaseBackend::Sqlite,
             ingestion_config: crate::config::IngestionConfig::default(),
             database_type: crate::database::DatabaseType::SQLite,
-            circuit_breaker,
         };
         
         let proxy_repository = crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository::new(Arc::clone(&db_connection));
         
+        let http_client_factory = Arc::new(crate::utils::HttpClientFactory::new(None, Duration::from_secs(10)));
         let service = ProxyRegenerationService::new(
             test_database,
             proxy_repository,
@@ -1193,6 +1199,7 @@ mod tests {
             Arc::new(tokio::sync::RwLock::new(sysinfo::System::new())),
             progress_service,
             ingestion_state_manager,
+            http_client_factory,
         );
 
         let proxy_id = Uuid::new_v4();

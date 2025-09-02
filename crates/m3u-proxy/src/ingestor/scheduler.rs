@@ -113,6 +113,49 @@ impl SchedulerService {
     ) -> Self {
         let channel_repo = ChannelSeaOrmRepository::new(database.connection().clone());
         let ingestor = IngestorService::new(progress_service, channel_repo);
+        Self::from_ingestor(
+            ingestor,
+            database,
+            stream_source_service,
+            epg_source_service,
+            run_missed_immediately,
+            cache_invalidation_rx,
+            proxy_regeneration_service,
+        )
+    }
+
+    pub fn with_http_client_factory(
+        progress_service: Arc<crate::services::progress_service::ProgressService>,
+        database: Database,
+        stream_source_service: Arc<StreamSourceBusinessService>,
+        epg_source_service: Arc<EpgSourceService>,
+        run_missed_immediately: bool,
+        cache_invalidation_rx: Option<CacheInvalidationReceiver>,
+        proxy_regeneration_service: Option<ProxyRegenerationService>,
+        http_client_factory: crate::utils::HttpClientFactory,
+    ) -> Self {
+        let channel_repo = ChannelSeaOrmRepository::new(database.connection().clone());
+        let ingestor = IngestorService::with_http_client_factory(progress_service, channel_repo, http_client_factory);
+        Self::from_ingestor(
+            ingestor,
+            database,
+            stream_source_service,
+            epg_source_service,
+            run_missed_immediately,
+            cache_invalidation_rx,
+            proxy_regeneration_service,
+        )
+    }
+
+    fn from_ingestor(
+        ingestor: IngestorService,
+        database: Database,
+        stream_source_service: Arc<StreamSourceBusinessService>,
+        epg_source_service: Arc<EpgSourceService>,
+        run_missed_immediately: bool,
+        cache_invalidation_rx: Option<CacheInvalidationReceiver>,
+        proxy_regeneration_service: Option<ProxyRegenerationService>,
+    ) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let stream_source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
         let epg_source_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());

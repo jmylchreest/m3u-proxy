@@ -58,7 +58,7 @@ pub struct SimpleCircuitBreaker {
 impl SimpleCircuitBreaker {
     /// Create a new simple circuit breaker
     pub fn new(config: CircuitBreakerConfig) -> Self {
-        info!("Creating SimpleCircuitBreaker with config: {:?}", config);
+        debug!("SimpleCircuitBreaker initialized with config: {:?}", config);
         Self {
             config,
             state: Arc::new(RwLock::new(SimpleCircuitBreakerState::default())),

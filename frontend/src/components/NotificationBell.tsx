@@ -251,7 +251,7 @@ export function NotificationBell({
                     key={event.id}
                     className={cn(
                       "p-3 rounded-lg border mb-2 transition-colors",
-                      !event.hasBeenSeen && "bg-accent/50 border-accent"
+                      !event.hasBeenSeen && "bg-accent/30 border-accent/50"
                     )}
                   >
                     <div className="flex items-start justify-between mb-2">
@@ -342,8 +342,8 @@ export function NotificationBell({
                     )}
                     
                     {event.error && (
-                      <div className="text-xs text-destructive mt-2 p-2 bg-red-50 rounded">
-                        {event.error}
+                      <div className="text-xs mt-2 p-2 bg-accent/20 border border-accent/30 rounded text-accent-foreground">
+                        <span className="text-destructive font-medium">Error:</span> {event.error}
                       </div>
                     )}
                   </div>

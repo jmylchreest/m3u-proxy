@@ -61,10 +61,6 @@ pub struct ProgressEventQuery {
     pub owner_id: Option<String>,
     /// Filter by state (e.g., "processing", "completed", "error")  
     pub state: Option<String>,
-    /// Include completed operations (default: true)
-    pub include_completed: Option<bool>,
-    /// Include failed operations (default: true)
-    pub include_failed: Option<bool>,
     /// Only return active operations (default: false)
     pub active_only: Option<bool>,
 }
@@ -116,13 +112,16 @@ pub struct ProgressEvent {
     pub error: Option<String>,
 }
 
-/// Stream real-time progress events via SSE
+/// Stream real-time progress events via SSE  
+/// 
+/// This endpoint provides real-time progress updates only. Use GET /progress/operations
+/// to fetch initial state, then subscribe to this SSE stream for live updates.
 #[utoipa::path(
     get,
     path = "/progress/events",
     params(ProgressEventQuery),
     responses(
-        (status = 200, description = "Progress events stream (SSE)", content_type = "text/event-stream"),
+        (status = 200, description = "Real-time progress events stream (SSE)", content_type = "text/event-stream"),
         (status = 500, description = "Internal server error")
     ),
     tag = "Progress"
@@ -142,84 +141,6 @@ pub async fn progress_events_stream(
         yield Ok::<Event, axum::Error>(Event::default()
             .event("heartbeat")
             .data("connected"));
-            
-        // Only query database for historical events if explicitly requested
-        // Send historical completed operations if include_completed is true (default)
-        let send_historical_completed = query.include_completed.unwrap_or(true);
-        let send_historical_failed = query.include_failed.unwrap_or(true);
-        
-        // Send historical events if requested
-        if send_historical_completed || send_historical_failed {
-            let all_progress = progress_service.get_all_progress().await;
-            for progress in all_progress {
-                let should_send = match progress.state {
-                    crate::services::progress_service::UniversalState::Completed => send_historical_completed,
-                    crate::services::progress_service::UniversalState::Error => send_historical_failed,
-                    _ => false, // Don't send other historical states
-                };
-                
-                if should_send {
-                    // Apply other filters before sending historical event
-                    let passes_filters = {
-                        let op_type_match = query.operation_type.as_ref()
-                            .map(|t| operation_type_to_string(&progress.operation_type) == t.to_lowercase())
-                            .unwrap_or(true);
-                        let state_match = query.state.as_ref()
-                            .map(|s| universal_state_to_string(&progress.state) == s.to_lowercase())
-                            .unwrap_or(true);
-                        let resource_match = query.resource_id.as_ref()
-                            .map(|r| progress.owner_id.to_string() == *r)
-                            .unwrap_or(true);
-                        let owner_match = query.owner_id.as_ref()
-                            .map(|o| progress.owner_id.to_string() == *o)
-                            .unwrap_or(true);
-                        
-                        op_type_match && state_match && resource_match && owner_match
-                    };
-                    
-                    if passes_filters {
-                        // Convert and send historical event
-                        let stages: Vec<ProgressStageEvent> = progress.stages.iter().map(|stage| {
-                            ProgressStageEvent {
-                                id: stage.id.clone(),
-                                name: stage.name.clone(),
-                                percentage: stage.percentage,
-                                state: universal_state_to_string(&stage.state),
-                                stage_step: stage.stage_step.clone(),
-                            }
-                        }).collect();
-
-                        let event = ProgressEvent {
-                            id: Some(progress.id.to_string()),
-                            owner_id: progress.owner_id.to_string(),
-                            owner_type: progress.owner_type,
-                            operation_type: operation_type_to_string(&progress.operation_type),
-                            operation_name: progress.operation_name,
-                            state: universal_state_to_string(&progress.state),
-                            current_stage: progress.current_stage,
-                            overall_percentage: progress.overall_percentage,
-                            stages,
-                            started_at: progress.started_at.to_rfc3339(),
-                            last_update: progress.last_update.to_rfc3339(),
-                            completed_at: progress.completed_at.map(|dt| dt.to_rfc3339()),
-                            error: progress.error_message,
-                        };
-
-                        match serde_json::to_string(&event) {
-                            Ok(json) => {
-                                yield Ok::<Event, axum::Error>(Event::default()
-                                    .event("progress")
-                                    .id(progress.id.to_string())
-                                    .data(json));
-                            }
-                            Err(e) => {
-                                error!("Failed to serialize historical progress event: {}", e);
-                            }
-                        }
-                    }
-                }
-            }
-        }
             
         // Listen for real-time updates
         loop {
@@ -275,21 +196,6 @@ pub async fn progress_events_stream(
                         }
                     }
                     
-                    // Filter real-time completion/failure events based on client preferences
-                    // Always send events for operations that transition to completed/failed during the session
-                    if let Some(include_completed) = query.include_completed {
-                        if !include_completed && progress.state == crate::services::progress_service::UniversalState::Completed {
-                            debug!("SSE filtering out real-time completion event per client request: {}", progress.id);
-                            continue;
-                        }
-                    }
-                    
-                    if let Some(include_failed) = query.include_failed {
-                        if !include_failed && progress.state == crate::services::progress_service::UniversalState::Error {
-                            debug!("SSE filtering out real-time failure event per client request: {}", progress.id);
-                            continue;
-                        }
-                    }
 
                     // Convert stages from UniversalProgress to ProgressStageEvent
                     let stages: Vec<ProgressStageEvent> = progress.stages.iter().map(|stage| {

@@ -13,7 +13,7 @@ use tracing::{debug, info};
 
 use crate::errors::{AppError, AppResult, SourceError};
 use crate::models::{StreamSource, StreamSourceType, Channel};
-use crate::utils::{DecompressingHttpClient, StandardHttpClient, generate_channel_uuid};
+use crate::utils::{DecompressingHttpClient, StandardHttpClient, generate_channel_uuid, HttpClientFactory};
 use super::traits::*;
 
 /// Xtream source handler
@@ -35,13 +35,11 @@ pub struct XtreamSourceHandler {
 }
 
 impl XtreamSourceHandler {
-    /// Create a new Xtream source handler
-    pub fn new() -> Self {
-        // Use connection timeout only - let data transfer take as long as needed
-        let http_client = StandardHttpClient::new(); // Uses connection timeout only
+    /// Create a new Xtream source handler with HTTP client factory
+    pub async fn new(factory: &HttpClientFactory) -> Self {
+        let http_client = factory.create_client_for_service("source_xc_stream").await;
         let raw_client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .user_agent("Xtream-Proxy/1.0")
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -540,10 +538,7 @@ impl ChannelIngestor for XtreamSourceHandler {
         // Directly ingest channels without progress callbacks
         info!("Starting Xtream channel ingestion for source: {}", source.name);
         
-        // Test authentication first
-        let _server_info = self.test_authentication(source).await?;
-        
-        // Get live channels
+        // Get live channels (authentication errors will be handled by this call)
         let xtream_channels = self.get_live_channels(source).await?;
         
         // Convert to internal format
@@ -556,81 +551,14 @@ impl ChannelIngestor for XtreamSourceHandler {
     }
 
 
-    async fn estimate_channel_count(&self, source: &StreamSource) -> AppResult<Option<u32>> {
-        // For Xtream, we need to actually fetch the channel list to get the count
-        // This is less efficient than M3U but more accurate
-        match self.get_live_channels(source).await {
-            Ok(channels) => Ok(Some(channels.len() as u32)),
-            Err(_) => Ok(None),
-        }
+    async fn estimate_channel_count(&self, _source: &StreamSource) -> AppResult<Option<u32>> {
+        // Channel counts should come from actual ingestion results, not HTTP estimation calls
+        Ok(None)
     }
 
 
 }
 
-#[async_trait]
-impl HealthChecker for XtreamSourceHandler {
-    async fn check_health(&self, source: &StreamSource) -> AppResult<SourceHealthStatus> {
-        let start_time = std::time::Instant::now();
-        let checked_at = Utc::now();
-
-        match self.test_authentication(source).await {
-            Ok(server_info) => {
-                let response_time_ms = start_time.elapsed().as_millis() as u64;
-                let is_healthy = server_info.user_info
-                    .map(|u| u.status == "Active")
-                    .unwrap_or(false);
-
-                Ok(SourceHealthStatus {
-                    is_healthy,
-                    response_time_ms: Some(response_time_ms),
-                    last_success: if is_healthy { Some(checked_at) } else { None },
-                    error_message: if !is_healthy { 
-                        Some("User account is not active".to_string()) 
-                    } else { 
-                        None 
-                    },
-                    checked_at,
-                })
-            }
-            Err(e) => {
-                Ok(SourceHealthStatus {
-                    is_healthy: false,
-                    response_time_ms: Some(start_time.elapsed().as_millis() as u64),
-                    last_success: None,
-                    error_message: Some(e.to_string()),
-                    checked_at,
-                })
-            }
-        }
-    }
-
-    async fn get_health_metrics(&self, source: &StreamSource) -> AppResult<SourceHealthMetrics> {
-        let status = self.check_health(source).await?;
-        let mut metrics = HashMap::new();
-
-        if let Ok(source_info) = self.get_source_info(source).await {
-            for (key, value) in source_info {
-                metrics.insert(key, value);
-            }
-        }
-
-        // Try to get channel count
-        let channel_count = if status.is_healthy {
-            self.estimate_channel_count(source).await.unwrap_or(None)
-        } else {
-            None
-        };
-
-        Ok(SourceHealthMetrics {
-            status,
-            channel_count,
-            server_version: None, // Xtream doesn't typically provide version info
-            uptime: None,
-            metrics,
-        })
-    }
-}
 
 #[async_trait]
 impl StreamUrlGenerator for XtreamSourceHandler {
@@ -745,15 +673,9 @@ impl FullSourceHandler for XtreamSourceHandler {
         SourceHandlerSummary {
             source_type: StreamSourceType::Xtream,
             supports_ingestion: true,
-            supports_health_check: true,
             supports_url_generation: true,
             supports_authentication: true,
         }
     }
 }
 
-impl Default for XtreamSourceHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}

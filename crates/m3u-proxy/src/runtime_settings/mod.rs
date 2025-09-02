@@ -15,10 +15,6 @@ use tracing_subscriber::reload::Handle;
 pub struct RuntimeSettings {
     /// Current log level (TRACE, DEBUG, INFO, WARN, ERROR)
     pub log_level: String,
-    /// Maximum number of concurrent connections (if configurable)
-    pub max_connections: Option<u32>,
-    /// Request timeout in seconds
-    pub request_timeout_seconds: Option<u32>,
     /// Enable/disable request logging
     pub enable_request_logging: bool,
     /// Enable/disable metrics collection
@@ -29,8 +25,6 @@ impl Default for RuntimeSettings {
     fn default() -> Self {
         Self {
             log_level: "INFO".to_string(),
-            max_connections: Some(1000),
-            request_timeout_seconds: Some(30),
             enable_request_logging: true,
             enable_metrics: true,
         }
@@ -54,10 +48,6 @@ pub struct RuntimeFlags {
     pub request_logging_enabled: bool,
     /// Whether metrics collection is currently enabled  
     pub metrics_enabled: bool,
-    /// Current request timeout in seconds
-    pub request_timeout_seconds: u32,
-    /// Current max connections limit
-    pub max_connections: u32,
     /// Runtime feature flags
     pub feature_flags: HashMap<String, bool>,
     /// Runtime feature configuration
@@ -69,8 +59,6 @@ impl Default for RuntimeFlags {
         Self {
             request_logging_enabled: true,
             metrics_enabled: true,
-            request_timeout_seconds: 30,
-            max_connections: 1000,
             feature_flags: HashMap::new(),
             feature_config: HashMap::new(),
         }
@@ -159,43 +147,6 @@ impl RuntimeSettingsStore {
         }
     }
 
-    /// Update max connections setting (temporary, not persisted)
-    pub async fn update_max_connections(&self, max_connections: u32) -> bool {
-        if max_connections == 0 || max_connections > 10000 {
-            error!("Invalid max_connections value: {} (must be 1-10000)", max_connections);
-            return false;
-        }
-
-        let mut settings = self.settings.write().await;
-        settings.max_connections = Some(max_connections);
-        
-        // Apply to runtime flags immediately (temporary application)
-        let mut flags = self.runtime_flags.write().await;
-        flags.max_connections = max_connections;
-        
-        info!("Max connections setting updated to: {} (temporary - resets on restart)", max_connections);
-        
-        true
-    }
-
-    /// Update request timeout setting (temporary, not persisted)
-    pub async fn update_request_timeout(&self, timeout_seconds: u32) -> bool {
-        if timeout_seconds == 0 || timeout_seconds > 300 {
-            error!("Invalid request_timeout_seconds value: {} (must be 1-300)", timeout_seconds);
-            return false;
-        }
-
-        let mut settings = self.settings.write().await;
-        settings.request_timeout_seconds = Some(timeout_seconds);
-        
-        // Apply to runtime flags immediately (temporary application)
-        let mut flags = self.runtime_flags.write().await;
-        flags.request_timeout_seconds = timeout_seconds;
-        
-        info!("Request timeout updated to: {} seconds (temporary - resets on restart)", timeout_seconds);
-        
-        true
-    }
 
     /// Update request logging setting (temporary, not persisted)
     pub async fn update_request_logging(&self, enable: bool) {
@@ -223,12 +174,11 @@ impl RuntimeSettingsStore {
               if enable { "enabled" } else { "disabled" });
     }
 
+
     /// Bulk update multiple settings
     pub async fn update_multiple(
         &self,
         log_level: Option<&str>,
-        max_connections: Option<u32>,
-        request_timeout_seconds: Option<u32>,
         enable_request_logging: Option<bool>,
         enable_metrics: Option<bool>,
     ) -> Vec<String> {
@@ -241,19 +191,6 @@ impl RuntimeSettingsStore {
             }
         }
 
-        // Update max connections if provided
-        if let Some(max_conn) = max_connections {
-            if self.update_max_connections(max_conn).await {
-                applied_changes.push(format!("Max connections changed to {max_conn}"));
-            }
-        }
-
-        // Update request timeout if provided
-        if let Some(timeout) = request_timeout_seconds {
-            if self.update_request_timeout(timeout).await {
-                applied_changes.push(format!("Request timeout changed to {timeout} seconds"));
-            }
-        }
 
         // Update request logging if provided
         if let Some(enable_logging) = enable_request_logging {

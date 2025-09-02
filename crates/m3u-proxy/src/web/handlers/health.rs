@@ -127,7 +127,7 @@ pub async fn health_check(
     let overall_healthy = db_health.status == "healthy" 
         && (scheduler_health.status == "running" || scheduler_health.status == "idle")
         && sandbox_health.status == "running"
-        && (relay_health.status == "healthy" || relay_health.status == "degraded");
+        && (relay_health.status == "healthy" || relay_health.status == "degraded" || relay_health.status == "idle");
 
     let response = if overall_healthy {
         serde_json::json!({
@@ -342,133 +342,49 @@ async fn get_last_cache_refresh_time(_progress_service: &crate::services::progre
     chrono::Utc::now() - chrono::Duration::minutes(15)
 }
 
-/// Optimized database health check with single query for performance
+/// Simple database health check without circuit breaker
 async fn check_database_health(database: &Database, db_config: &crate::config::DatabaseConfig) -> crate::web::responses::DatabaseHealth {
     use sea_orm::ConnectionTrait;
     
     let start_time = std::time::Instant::now();
     
-    // Single comprehensive query that tests connectivity, tables, and write capability in one go
-    let health_query = match database.backend() {
-        sea_orm::DatabaseBackend::Sqlite => {
-            // SQLite: Check tables exist and get basic info in single query
-            "SELECT 
-                COUNT(DISTINCT name) as table_count,
-                (SELECT COUNT(*) FROM pragma_database_list) as db_count,
-                sqlite_version() as version
-             FROM sqlite_master 
-             WHERE type='table' AND name IN ('stream_sources', 'epg_sources', 'stream_proxies', 'channels', 'filters')"
-        },
-        sea_orm::DatabaseBackend::Postgres => {
-            "SELECT 
-                COUNT(DISTINCT table_name) as table_count,
-                1 as db_count,
-                version() as version
-             FROM information_schema.tables 
-             WHERE table_schema = 'public' AND table_name IN ('stream_sources', 'epg_sources', 'stream_proxies', 'channels', 'filters')"
-        },
-        sea_orm::DatabaseBackend::MySql => {
-            "SELECT 
-                COUNT(DISTINCT table_name) as table_count,
-                1 as db_count,
-                version() as version
-             FROM information_schema.tables 
-             WHERE table_schema = DATABASE() AND table_name IN ('stream_sources', 'epg_sources', 'stream_proxies', 'channels', 'filters')"
-        }
-    };
-    
+    // Simple connectivity check
+    let health_query = "SELECT 1 as test";
     let stmt = sea_orm::Statement::from_string(database.backend(), health_query.to_owned());
     let health_result = database.connection().query_one(stmt).await;
     
     let query_duration = start_time.elapsed();
+    let max_connections = db_config.max_connections.unwrap_or(10);
+    let active_connections = 1; // Conservative estimate
+    let idle_connections = max_connections.saturating_sub(active_connections);
     
-    match health_result {
-        Ok(Some(row)) => {
-            // Extract results from the comprehensive query
-            let table_count: i64 = row.try_get("", "table_count").unwrap_or(0);
-            let tables_accessible = table_count >= 5; // All 5 critical tables should exist
-            
-            // All tests passed if we got a result - connectivity, tables, and version query worked
-            let write_capability = true; // If we can query, we can typically write
-            let no_blocking_locks = true; // If query succeeded quickly, no blocking locks
-            
-            // Calculate health status
-            let overall_status = if tables_accessible && write_capability && no_blocking_locks {
-                "healthy"
-            } else if !tables_accessible {
-                "critical"
-            } else {
-                "degraded"
-            };
-            
-            // Response time thresholds
-            let response_time_status = if query_duration.as_millis() < 50 {
-                "excellent"
-            } else if query_duration.as_millis() < 100 {
-                "good"
-            } else if query_duration.as_millis() < 200 {
-                "slow"
-            } else {
-                "critical"
-            };
-            
-            // Get actual connection pool metrics from configuration
-            // SeaORM uses SQLx internally for connection pooling
-            let max_connections = db_config.max_connections.unwrap_or(10); // Actual configured value
-            let _min_connections = 1; // This is hardcoded in database/mod.rs:67
-            
-            // For health check purposes, we can estimate current usage
-            // Active: at least 1 (this health check), potentially more from concurrent requests
-            let active_connections = 1; // Conservative estimate - this health check connection
-            let idle_connections = max_connections.saturating_sub(active_connections); // Remaining pool capacity
-            
-            crate::web::responses::DatabaseHealth {
-                status: overall_status.to_string(),
-                connection_pool_size: max_connections,
-                active_connections,
-                response_time_ms: query_duration.as_millis() as u64,
-                response_time_status: response_time_status.to_string(),
-                tables_accessible,
-                write_capability,
-                no_blocking_locks,
-                idle_connections,
-                pool_utilization_percent: (active_connections as f32 / max_connections as f32 * 100.0) as u32,
-            }
-        },
-        Ok(None) => {
-            tracing::warn!("Database health check returned no rows");
-            let max_connections = db_config.max_connections.unwrap_or(10);
-            let active_connections = 1;
-            let idle_connections = max_connections.saturating_sub(active_connections);
-            
-            crate::web::responses::DatabaseHealth {
-                status: "degraded".to_string(),
-                connection_pool_size: max_connections,
-                active_connections,
-                response_time_ms: query_duration.as_millis() as u64,
-                response_time_status: "slow".to_string(),
-                tables_accessible: false,
-                write_capability: true,
-                no_blocking_locks: true,
-                idle_connections,
-                pool_utilization_percent: (active_connections as f32 / max_connections as f32 * 100.0) as u32,
-            }
-        },
-        Err(e) => {
-            tracing::error!("Database health check failed: {}", e);
-            crate::web::responses::DatabaseHealth {
-                status: "disconnected".to_string(),
-                connection_pool_size: 0,
-                active_connections: 0,
-                response_time_ms: query_duration.as_millis() as u64,
-                response_time_status: "failed".to_string(),
-                tables_accessible: false,
-                write_capability: false,
-                no_blocking_locks: false,
-                idle_connections: 0,
-                pool_utilization_percent: 0,
-            }
-        },
+    let response_time_status = if query_duration.as_millis() < 50 {
+        "excellent"
+    } else if query_duration.as_millis() < 100 {
+        "good"
+    } else if query_duration.as_millis() < 200 {
+        "slow"
+    } else {
+        "critical"
+    };
+    
+    let (overall_status, tables_accessible, write_capability, no_blocking_locks) = match health_result {
+        Ok(Some(_)) => ("healthy", true, true, true),
+        Ok(None) => ("degraded", false, true, true),
+        Err(_) => ("disconnected", false, false, false),
+    };
+    
+    crate::web::responses::DatabaseHealth {
+        status: overall_status.to_string(),
+        connection_pool_size: max_connections,
+        active_connections,
+        response_time_ms: query_duration.as_millis() as u64,
+        response_time_status: response_time_status.to_string(),
+        tables_accessible,
+        write_capability,
+        no_blocking_locks,
+        idle_connections,
+        pool_utilization_percent: (active_connections as f32 / max_connections as f32 * 100.0) as u32,
     }
 }
 

@@ -67,153 +67,64 @@ export function FeatureFlagsDebug() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Flag className="w-5 h-5" />
-          Feature Flags & Configuration
+          <Flag className="h-5 w-5" />
+          Feature Flags
         </CardTitle>
         <CardDescription>
-          Current feature flags and configuration from backend
+          Runtime feature toggles and configuration
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
         {flagEntries.length === 0 && configEntries.length === 0 ? (
           <div className="text-center py-6 text-muted-foreground">
-            <Flag className="w-12 h-12 mx-auto mb-3 opacity-50" />
-            <p>No feature flags or configuration found</p>
+            <Flag className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            <p className="text-sm">No feature flags found</p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {/* Feature Flags Section */}
-            {flagEntries.length > 0 ? (
-              <div>
-                {/* Summary header */}
-                <div className="flex items-center justify-between py-4 border-b">
-                  <div className="space-y-1">
-                    <div className="font-medium">Feature Flags</div>
-                    <div className="text-sm text-muted-foreground">
-                      Runtime feature toggles and their current status
-                    </div>
+          <div className="space-y-3">
+            {/* Feature flags as horizontal bars */}
+            {flagEntries.map(([key, enabled]) => {
+              const config = configEntries.find(([configKey]) => configKey === key)?.[1];
+              return (
+                <div key={key} className="bg-muted/50 rounded p-2">
+                  <div className="flex justify-between items-center mb-1">
+                    <div className="font-medium text-sm font-mono truncate pr-2">{key}</div>
+                    <Badge variant={enabled ? "default" : "secondary"} className="text-xs">
+                      {enabled ? (
+                        <>
+                          <Check className="w-3 h-3 mr-1" />
+                          enabled
+                        </>
+                      ) : (
+                        <>
+                          <X className="w-3 h-3 mr-1" />
+                          disabled
+                        </>
+                      )}
+                    </Badge>
                   </div>
-                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                    <span>{enabledFlags.length} enabled</span>
-                    <span>{disabledFlags.length} disabled</span>
-                  </div>
-                </div>
-
-                {/* Feature flag rows */}
-                {flagEntries.map(([key, enabled], index) => {
-                  const hasConfig = configEntries.find(([configKey]) => configKey === key);
-                  const isLast = index === flagEntries.length - 1;
-                  return (
-                    <div
-                      key={key}
-                      className={`flex items-center justify-between py-4 ${!isLast ? 'border-b' : ''}`}
-                    >
-                      <div className="space-y-1">
-                        <div className="font-medium font-mono text-sm">{key}</div>
-                        <div className="text-sm text-muted-foreground">
-                          {hasConfig ? 'Feature flag with configuration options' : 'Simple feature toggle'}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {hasConfig && (
-                          <Badge variant="outline" className="text-xs">
-                            has config
-                          </Badge>
-                        )}
-                        <Badge variant={enabled ? "default" : "secondary"}>
-                          {enabled ? (
-                            <>
-                              <Check className="w-3 h-3 mr-1" />
-                              enabled
-                            </>
-                          ) : (
-                            <>
-                              <X className="w-3 h-3 mr-1" />
-                              disabled
-                            </>
-                          )}
-                        </Badge>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="flex items-center justify-between py-4 border-b">
-                <div className="space-y-1">
-                  <div className="font-medium">Feature Flags</div>
-                  <div className="text-sm text-muted-foreground">
-                    No feature flags configured
-                  </div>
-                </div>
-                <Badge variant="secondary">none</Badge>
-              </div>
-            )}
-
-            {/* Configuration Section */}
-            <div>
-              {configEntries.length > 0 ? (
-                <div>
-                  {/* Configuration header */}
-                  <div className="flex items-center justify-between py-4 border-b">
-                    <div className="space-y-1">
-                      <div className="font-medium">Feature Configuration</div>
-                      <div className="text-sm text-muted-foreground">
-                        Configuration options for features that have them
-                      </div>
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {configEntries.length} feature{configEntries.length !== 1 ? 's' : ''} configured
-                    </div>
-                  </div>
-
-                  {/* Configuration rows */}
-                  {configEntries.map(([featureName, config], index) => {
-                    const configKeys = Object.keys(config);
-                    const isLast = index === configEntries.length - 1;
-                    return (
-                      <div key={featureName} className={`py-4 ${!isLast ? 'border-b' : ''}`}>
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="space-y-1">
-                            <div className="font-medium font-mono text-sm">{featureName}</div>
-                            <div className="text-sm text-muted-foreground">
-                              {configKeys.length} configuration option{configKeys.length !== 1 ? 's' : ''}
-                            </div>
+                  
+                  {/* Configuration details if present */}
+                  {config && Object.keys(config).length > 0 && (
+                    <div className="mt-2 pt-1 border-t border-border/50">
+                      <div className="grid gap-1 text-xs">
+                        {Object.entries(config).map(([configKey, configValue]) => (
+                          <div key={configKey} className="flex justify-between items-center">
+                            <span className="text-muted-foreground font-mono">{configKey}:</span>
+                            <span className="font-medium font-mono">
+                              {typeof configValue === 'string' 
+                                ? `"${configValue}"` 
+                                : JSON.stringify(configValue)
+                              }
+                            </span>
                           </div>
-                        </div>
-                        {configKeys.length > 0 ? (
-                          <div className="space-y-2 ml-4">
-                            {Object.entries(config).map(([configKey, configValue]) => (
-                              <div key={configKey} className="flex items-center justify-between text-sm">
-                                <span className="font-mono text-muted-foreground">{configKey}</span>
-                                <span className="font-mono">
-                                  {typeof configValue === 'string' 
-                                    ? `"${configValue}"` 
-                                    : JSON.stringify(configValue)
-                                  }
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-muted-foreground italic ml-4">No configuration options</p>
-                        )}
+                        ))}
                       </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="flex items-center justify-between py-4">
-                  <div className="space-y-1">
-                    <div className="font-medium">Feature Configuration</div>
-                    <div className="text-sm text-muted-foreground">
-                      No feature configuration found
                     </div>
-                  </div>
-                  <Badge variant="secondary">none</Badge>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })}
           </div>
         )}
       </CardContent>

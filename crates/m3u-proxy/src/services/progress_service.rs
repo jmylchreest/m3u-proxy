@@ -668,7 +668,12 @@ impl ProgressManager {
     
     /// Get current progress state
     pub async fn get_progress(&self) -> UniversalProgress {
-        // Ensure state is up-to-date with current stage configuration
+        self.progress.read().await.clone()
+    }
+    
+    /// Get current progress state with forced recalculation and broadcast
+    /// Only use this when you need to ensure SSE clients receive an update
+    pub async fn get_progress_and_broadcast(&self) -> UniversalProgress {
         self.recalculate_and_broadcast().await;
         self.progress.read().await.clone()
     }

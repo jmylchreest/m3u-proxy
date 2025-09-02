@@ -17,6 +17,8 @@ class SSESingleton {
   private debug = Debug.createLogger('SSESingleton')
   private setupPromise: Promise<void> | null = null
   private reconnectAttempts: number = 0
+  private destroyed: boolean = false
+  private reconnectTimeoutId: NodeJS.Timeout | null = null
 
   constructor() {
     // Bind methods to ensure correct 'this' context
@@ -26,6 +28,12 @@ class SSESingleton {
   }
 
   async ensureConnection(): Promise<void> {
+    // Don't try to connect if we've been destroyed
+    if (this.destroyed) {
+      this.debug.log('SSE singleton has been destroyed, not connecting')
+      return Promise.reject(new Error('SSE singleton destroyed'))
+    }
+
     if (this.eventSource && this.eventSource.readyState === EventSource.OPEN) {
       this.debug.log('SSE connection already established')
       return
@@ -38,10 +46,10 @@ class SSESingleton {
 
     this.debug.log('Creating new SSE connection')
     
-    this.setupPromise = new Promise((resolve, reject) => {
+    this.setupPromise = new Promise(async (resolve, reject) => {
       try {
         const backendUrl = getBackendUrl()
-        const sseUrl = `${backendUrl}/api/v1/progress/events?include_completed=true`
+        const sseUrl = `${backendUrl}/api/v1/progress/events`
         
         this.debug.log('Establishing SSE connection to:', sseUrl)
         this.eventSource = new EventSource(sseUrl)
@@ -87,6 +95,7 @@ class SSESingleton {
     return this.setupPromise
   }
 
+
   private handleOpen() {
     this.debug.log('Global SSE connection established successfully')
     this.connected = true
@@ -96,6 +105,18 @@ class SSESingleton {
   private handleError(error: Event) {
     this.debug.log('SSE connection error:', error)
     this.connected = false
+    
+    // Don't try to reconnect if we've been destroyed
+    if (this.destroyed) {
+      this.debug.log('SSE singleton destroyed, not attempting reconnection')
+      return
+    }
+    
+    // Clear any existing reconnect timeout
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId)
+      this.reconnectTimeoutId = null
+    }
     
     // Exponential backoff for reconnection
     const reconnectDelay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
@@ -108,8 +129,9 @@ class SSESingleton {
     }
     
     // Auto-reconnect after delay with backoff
-    setTimeout(() => {
-      if (!this.connected && !this.setupPromise) {
+    this.reconnectTimeoutId = setTimeout(() => {
+      this.reconnectTimeoutId = null
+      if (!this.destroyed && !this.connected && !this.setupPromise) {
         this.debug.log(`Attempting to reconnect SSE (attempt ${this.reconnectAttempts})`)
         this.ensureConnection().catch(err => {
           this.debug.error('Failed to reconnect:', err)
@@ -214,6 +236,14 @@ class SSESingleton {
   // Only call this when the entire application is being closed/refreshed or backend is down
   destroy() {
     this.debug.log('Destroying SSE connection')
+    this.destroyed = true
+    
+    // Clear any pending reconnect timeout
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId)
+      this.reconnectTimeoutId = null
+    }
+    
     if (this.eventSource) {
       this.eventSource.close()
       this.eventSource = null
@@ -223,6 +253,19 @@ class SSESingleton {
     this.allSubscribers.clear()
     this.setupPromise = null
     this.reconnectAttempts = 0 // Reset reconnect attempts when destroyed
+  }
+
+  // Reset state to allow reconnection (called when backend comes back up)
+  reset() {
+    this.debug.log('Resetting SSE singleton for reconnection')
+    this.destroyed = false
+    this.reconnectAttempts = 0
+    
+    // Clear any pending reconnect timeout
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId)
+      this.reconnectTimeoutId = null
+    }
   }
 }
 

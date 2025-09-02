@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { 
   RefreshCw, 
   Heart, 
@@ -26,7 +27,9 @@ import {
   Zap,
   Copy,
   Check,
-  Shield
+  Shield,
+  ChevronDown,
+  ChevronRight
 } from "lucide-react"
 import { 
   AreaChart, 
@@ -78,6 +81,20 @@ interface MemoryInfo {
   processPercentage: number;
 }
 
+interface CircuitBreakerProfile {
+  implementation_type: string;
+  failure_threshold: number;
+  operation_timeout: string;
+  reset_timeout: string;
+  success_threshold: number;
+  acceptable_status_codes: string[];
+}
+
+interface CircuitBreakerConfig {
+  global: CircuitBreakerProfile;
+  profiles: Record<string, CircuitBreakerProfile>;
+}
+
 function formatUptime(uptimeSeconds: number): string {
   const days = Math.floor(uptimeSeconds / 86400)
   const hours = Math.floor((uptimeSeconds % 86400) / 3600)
@@ -104,6 +121,25 @@ function formatMemorySize(mb: number): string {
 
 function formatPercentage(value: number): string {
   return `${value.toFixed(1)}%`
+}
+
+function formatHumanNumber(num: number): { display: string; full: string } {
+  if (num >= 1000000) {
+    return {
+      display: `${(num / 1000000).toFixed(1)}m`,
+      full: num.toLocaleString()
+    };
+  } else if (num >= 1000) {
+    return {
+      display: `${(num / 1000).toFixed(1)}k`,
+      full: num.toLocaleString()
+    };
+  } else {
+    return {
+      display: num.toString(),
+      full: num.toLocaleString()
+    };
+  }
 }
 
 function formatTime(date: Date): string {
@@ -135,6 +171,7 @@ export function Debug() {
   const [liveProbe, setLiveProbe] = useState<KubernetesProbeResponse | null>(null)
   const [readyProbe, setReadyProbe] = useState<KubernetesProbeResponse | null>(null)
   const [copied, setCopied] = useState(false)
+  const [rawJsonExpanded, setRawJsonExpanded] = useState(false)
   
   // Custom step values: 1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
   const stepValues = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
@@ -143,6 +180,7 @@ export function Debug() {
   const [refreshInterval, setRefreshInterval] = useState(stepValues[3]) // Default 15 seconds (index 3)
   const [chartData, setChartData] = useState<ChartDataPoint[]>([])
   const [isAutoRefresh, setIsAutoRefresh] = useState(true) // Start enabled
+  const [circuitBreakerConfig, setCircuitBreakerConfig] = useState<CircuitBreakerConfig | null>(null)
 
   // Use the health data hook
   const { healthData } = useHealthData(isAutoRefresh ? refreshInterval * 1000 : 0)
@@ -270,6 +308,25 @@ export function Debug() {
       startAutoRefresh()
     }
   }, [refreshInterval, isAutoRefresh, startAutoRefresh, stopAutoRefresh])
+
+  // Fetch circuit breaker configuration on component mount
+  useEffect(() => {
+    const fetchCircuitBreakerConfig = async () => {
+      try {
+        const backendUrl = getBackendUrl()
+        const response = await fetch(`${backendUrl}/api/v1/circuit-breakers/config`)
+        const result = await response.json()
+        
+        if (result.success && result.data?.config) {
+          setCircuitBreakerConfig(result.data.config)
+        }
+      } catch (error) {
+        console.warn('Failed to fetch circuit breaker configuration:', error)
+      }
+    }
+
+    fetchCircuitBreakerConfig()
+  }, [])
 
   return (
     <div className="space-y-6">
@@ -637,6 +694,134 @@ export function Debug() {
       {/* System Components */}
       {healthData && (
         <div className="grid gap-4 md:grid-cols-2">
+          {/* Feature Flags Debug */}
+          <FeatureFlagsDebug />
+          
+          {/* Circuit Breakers Component */}
+          {healthData?.components?.circuit_breakers && Object.keys(healthData.components.circuit_breakers).length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5" />
+                  Circuit Breakers
+                </CardTitle>
+                <CardDescription>
+                  Active circuit breaker statistics
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <TooltipProvider>
+                  {Object.entries(healthData.components.circuit_breakers).map(([serviceName, stats]) => {
+                    const successRate = ((stats.successful_calls / (stats.total_calls || 1)) * 100);
+                    const successFormat = formatHumanNumber(stats.successful_calls);
+                    const failedFormat = formatHumanNumber(stats.failed_calls);
+                    const totalFormat = formatHumanNumber(stats.total_calls);
+                    
+                    // Get configuration for this service (use profile-specific or fallback to global)
+                    const config = circuitBreakerConfig?.profiles?.[serviceName] || circuitBreakerConfig?.global;
+                    const profileType = circuitBreakerConfig?.profiles?.[serviceName] ? 'Custom' : 'Global';
+                    
+                    return (
+                      <div key={serviceName} className="bg-muted/50 rounded p-3">
+                        <div className="space-y-2">
+                          {/* Header row: Service name and Status badge */}
+                          <div className="flex justify-between items-center">
+                            <div className="font-medium font-mono">{serviceName}</div>
+                            <Badge variant={stats.state === 'Closed' ? "default" : stats.state === 'Open' ? "destructive" : "secondary"} className="text-xs px-2 py-1 w-20 justify-center">
+                              {stats.state}
+                            </Badge>
+                          </div>
+                          
+                          {/* Configuration info with success badge aligned */}
+                          <div className="flex justify-between items-center">
+                            <div className="text-xs text-muted-foreground">
+                              {config ? (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="cursor-help leading-relaxed">
+                                      <div>{profileType}: {config.failure_threshold}→{config.success_threshold} thresholds</div>
+                                      <div>{config.operation_timeout} op • {config.reset_timeout} reset • {config.acceptable_status_codes.join(', ')}</div>
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <div className="text-xs space-y-1">
+                                      <div><strong>Type:</strong> {config.implementation_type}</div>
+                                      <div><strong>Failure Threshold:</strong> {config.failure_threshold} failures to open</div>
+                                      <div><strong>Success Threshold:</strong> {config.success_threshold} successes to close</div>
+                                      <div><strong>Operation Timeout:</strong> {config.operation_timeout}</div>
+                                      <div><strong>Reset Timeout:</strong> {config.reset_timeout}</div>
+                                      <div><strong>Acceptable Codes:</strong> {config.acceptable_status_codes.join(', ')}</div>
+                                    </div>
+                                  </TooltipContent>
+                                </Tooltip>
+                              ) : (
+                                <span>Profile: Loading...</span>
+                              )}
+                            </div>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="outline" className="text-xs px-2 py-1 text-green-600 border-green-600/50 w-20 justify-center">
+                                  {successFormat.display}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{successFormat.full} successful calls</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          
+                          {/* Success percentage and failed badge row */}
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm font-medium text-muted-foreground">
+                              {formatPercentage(successRate)} success
+                            </span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="outline" className="text-xs px-2 py-1 text-red-600 border-red-600/50 w-20 justify-center">
+                                  {failedFormat.display}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{failedFormat.full} failed calls</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          
+                          {/* Progress bar and total aligned */}
+                          <div className="flex items-center gap-3">
+                            <div className="flex-1 bg-gray-200 rounded-full h-2 dark:bg-gray-700">
+                              <div 
+                                className="bg-gradient-to-r from-green-500 to-green-600 h-2 rounded-full transition-all duration-300"
+                                style={{ width: `${successRate}%` }}
+                              />
+                            </div>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="outline" className="text-xs px-2 py-1 w-20 justify-center">
+                                  {totalFormat.display}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{totalFormat.full} total calls</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </TooltipProvider>
+                
+                {Object.keys(healthData.components.circuit_breakers).length === 0 && (
+                  <div className="text-center py-4 text-muted-foreground">
+                    <Shield className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p className="text-xs">No active circuit breakers</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+          
           {/* Database Component - Enhanced */}
           <Card>
             <CardHeader>
@@ -953,126 +1138,65 @@ export function Debug() {
               </div>
             </CardContent>
           </Card>
-
-          {/* Circuit Breakers Component */}
-          {healthData?.components?.circuit_breakers && Object.keys(healthData.components.circuit_breakers).length > 0 && (
-            <Card className="md:col-span-2">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Shield className="h-5 w-5" />
-                  Circuit Breakers
-                </CardTitle>
-                <CardDescription>
-                  Circuit breaker status and statistics for protected services
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {Object.entries(healthData.components.circuit_breakers).map(([serviceName, stats]) => (
-                  <div key={serviceName} className="bg-muted/50 rounded p-3">
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <div className="font-medium">{serviceName}</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <div className={`h-2 w-2 rounded-full ${
-                            stats.state === 'Closed' ? 'bg-green-500' : 
-                            stats.state === 'Open' ? 'bg-red-500' : 'bg-yellow-500'
-                          }`} />
-                          <Badge variant={stats.state === 'Closed' ? "default" : stats.state === 'Open' ? "destructive" : "secondary"}>
-                            {stats.state}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground">
-                            {formatPercentage(stats.failure_rate)} failure rate
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-3 gap-4 text-sm">
-                      <div className="space-y-1">
-                        <div className="text-muted-foreground text-xs">Total Calls</div>
-                        <div className="font-medium text-lg">{stats.total_calls}</div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-muted-foreground text-xs">Successful</div>
-                        <div className="font-medium text-lg text-green-600">{stats.successful_calls}</div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-muted-foreground text-xs">Failed</div>
-                        <div className="font-medium text-lg text-red-600">{stats.failed_calls}</div>
-                      </div>
-                    </div>
-
-                    {/* Success Rate Bar */}
-                    <div className="mt-3">
-                      <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                        <span>Success Rate</span>
-                        <span>{formatPercentage(((stats.successful_calls / (stats.total_calls || 1)) * 100))}</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
-                        <div 
-                          className="bg-gradient-to-r from-green-500 to-green-600 h-2 rounded-full transition-all duration-300"
-                          style={{ width: `${((stats.successful_calls / (stats.total_calls || 1)) * 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                
-                {Object.keys(healthData.components.circuit_breakers).length === 0 && (
-                  <div className="text-center py-4 text-muted-foreground">
-                    No active circuit breakers
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
         </div>
       )}
 
 
-      {/* Feature Flags Debug */}
-      <FeatureFlagsDebug />
-
-      {/* Raw JSON Data */}
+      {/* Raw JSON Data - Collapsible */}
       {healthData && (
         <Card>
-          <CardHeader>
-            <CardTitle>Raw Response Data</CardTitle>
+          <CardHeader 
+            className="cursor-pointer select-none"
+            onClick={() => setRawJsonExpanded(!rawJsonExpanded)}
+          >
+            <CardTitle className="flex items-center gap-2">
+              {rawJsonExpanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+              Raw Response Data
+              <Badge variant="outline" className="text-xs">
+                {rawJsonExpanded ? 'Collapse' : 'Expand'}
+              </Badge>
+            </CardTitle>
             <CardDescription>
               Complete JSON responses from health endpoints
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="relative">
-              <h4 className="font-medium mb-2">Health Data (/health)</h4>
-              <div className="relative group">
-                <pre className="bg-muted p-3 rounded text-xs overflow-auto">
-                  {JSON.stringify(healthData, null, 2)}
-                </pre>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 p-0"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(JSON.stringify(healthData, null, 2))
-                      setCopied(true)
-                      setTimeout(() => setCopied(false), 2000)
-                    } catch (err) {
-                      console.error('Failed to copy to clipboard:', err)
-                    }
-                  }}
-                  title="Copy to clipboard"
-                >
-                  {copied ? (
-                    <Check className="h-3 w-3 text-green-600" />
-                  ) : (
-                    <Copy className="h-3 w-3" />
-                  )}
-                </Button>
+          {rawJsonExpanded && (
+            <CardContent>
+              <div className="relative">
+                <h4 className="font-medium mb-2">Health Data (/health)</h4>
+                <div className="relative group">
+                  <pre className="bg-muted p-3 rounded text-xs overflow-auto">
+                    {JSON.stringify(healthData, null, 2)}
+                  </pre>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 p-0"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(JSON.stringify(healthData, null, 2))
+                        setCopied(true)
+                        setTimeout(() => setCopied(false), 2000)
+                      } catch (err) {
+                        console.error('Failed to copy to clipboard:', err)
+                      }
+                    }}
+                    title="Copy to clipboard"
+                  >
+                    {copied ? (
+                      <Check className="h-3 w-3 text-green-600" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </Button>
+                </div>
               </div>
-            </div>
-          </CardContent>
+            </CardContent>
+          )}
         </Card>
       )}
     </div>

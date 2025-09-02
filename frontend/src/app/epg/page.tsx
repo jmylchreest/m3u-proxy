@@ -61,6 +61,7 @@ import { cn } from "@/lib/utils";
 import { VideoPlayerModal } from "@/components/video-player-modal";
 import { getBackendUrl } from "@/lib/config";
 import { Debug } from "@/utils/debug";
+import { CanvasEPG } from "@/components/epg/CanvasEPG";
 
 interface Channel {
   id: string;
@@ -627,75 +628,9 @@ export default function EpgPage() {
     setSelectedCategory(value === "all" ? "" : value);
   };
 
-  // Program virtualization constants - render all channels, virtualize programs
-  const CHANNEL_HEIGHT = 60;
-  const CHANNEL_SIDEBAR_WIDTH = 192;
-  
-  // Responsive time window and program virtualization
-  const PIXELS_PER_HOUR = 200;
-  const GUIDE_HOURS = parseInt(guideTimeRange.replace("h", ""));
-  const VIEWPORT_HOURS = GUIDE_HOURS; // Show all hours, don't limit to 6
-  const VISIBLE_GUIDE_WIDTH = VIEWPORT_HOURS * PIXELS_PER_HOUR;
-  
-  // Scrolling state for channel and program virtualization
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [horizontalScrollLeft, setHorizontalScrollLeft] = useState(0);
-  const [verticalScrollTop, setVerticalScrollTop] = useState(0);
-  const [viewportWidth, setViewportWidth] = useState(1200);
-  const [viewportHeight, setViewportHeight] = useState(600);
   
   
   
-  // Calculate position and width for a program based on its actual times
-  const calculateProgramMetrics = (program: EpgProgram, guideStartTime: Date) => {
-    const programStart = new Date(program.start_time);
-    const programEnd = new Date(program.end_time);
-    const guideStart = guideStartTime;
-    const guideEnd = new Date(guideStart.getTime() + GUIDE_HOURS * 60 * 60 * 1000);
-    
-    // Skip programs that don't overlap with guide timeframe
-    if (programEnd <= guideStart || programStart >= guideEnd) {
-      return {
-        left: -9999, // Hide completely off-screen
-        width: 0,
-        programStart,
-        programEnd
-      };
-    }
-    
-    // Calculate visible portion of program within guide timeframe
-    const visibleStart = programStart < guideStart ? guideStart : programStart;
-    const visibleEnd = programEnd > guideEnd ? guideEnd : programEnd;
-    
-    // Calculate position from guide start (in pixels)
-    const startOffset = visibleStart.getTime() - guideStart.getTime();
-    const leftPosition = (startOffset / (1000 * 60 * 60)) * PIXELS_PER_HOUR;
-    
-    // Calculate width based on visible duration
-    const visibleDuration = visibleEnd.getTime() - visibleStart.getTime();
-    const width = (visibleDuration / (1000 * 60 * 60)) * PIXELS_PER_HOUR;
-    
-    return {
-      left: Math.max(0, leftPosition), // Ensure non-negative position
-      width: Math.max(30, width), // Minimum 30px width for readability
-      programStart,
-      programEnd
-    };
-  };
-  
-  // Generate time grid headers (every hour)
-  const generateTimeHeaders = (startTime: Date, hours: number) => {
-    const headers = [];
-    for (let i = 0; i < hours; i++) {
-      const time = new Date(startTime.getTime() + i * 60 * 60 * 1000);
-      headers.push({
-        time,
-        position: i * PIXELS_PER_HOUR,
-        label: formatGuideTimeInTimezone(time.toISOString())
-      });
-    }
-    return headers;
-  };
 
   // Handle channel play (only for channel rows, not individual programs)
   const handlePlayChannel = (channel: { id: string; name: string; logo?: string }) => {
@@ -703,7 +638,7 @@ export default function EpgPage() {
       id: channel.id,
       name: channel.name,
       logo_url: channel.logo,
-      stream_url: `/channel/${encodeURIComponent(channel.id)}/stream`,
+      stream_url: `${getBackendUrl()}/channel/${encodeURIComponent(channel.id)}/stream`,
       source_type: 'channel',
       group: '',
       source_name: 'EPG',
@@ -758,61 +693,6 @@ export default function EpgPage() {
     return channels.sort(([, a], [, b]) => a.name.localeCompare(b.name));
   }, [guideData, channelFilter]);
 
-  // Calculate which time window/programs are visible horizontally based on scroll viewport
-  const getVisibleTimeWindow = useMemo(() => {
-    if (!guideData?.start_time) return { startHour: 0, endHour: GUIDE_HOURS };
-    
-    const scrollHours = horizontalScrollLeft / PIXELS_PER_HOUR;
-    const viewportHours = Math.ceil(viewportWidth / PIXELS_PER_HOUR) + 2; // +2 for buffer
-    const startHour = Math.max(0, Math.floor(scrollHours) - 1); // -1 for buffer
-    const endHour = Math.min(GUIDE_HOURS, startHour + viewportHours);
-    
-    return { startHour, endHour };
-  }, [horizontalScrollLeft, GUIDE_HOURS, viewportWidth]);
-
-  // Calculate which channels should load programs based on viewport (for performance)
-  const getChannelsWithProgramViewport = useMemo(() => {
-    if (!guideData) return new Set<string>();
-    
-    const allChannels = getAllChannels;
-    const totalChannels = allChannels.length;
-    
-    // Calculate which channel indices are visible in viewport (with buffer for program loading)
-    const startIndex = Math.max(0, Math.floor(verticalScrollTop / CHANNEL_HEIGHT) - 3);
-    const visibleCount = Math.ceil(viewportHeight / CHANNEL_HEIGHT) + 6; // +6 for buffer
-    const endIndex = Math.min(totalChannels, startIndex + visibleCount);
-    
-    // Return set of channel IDs that should load programs
-    const channelIdsWithPrograms = new Set<string>();
-    for (let i = startIndex; i < endIndex; i++) {
-      if (allChannels[i]) {
-        channelIdsWithPrograms.add(allChannels[i][0]); // channel ID
-      }
-    }
-    
-    return channelIdsWithPrograms;
-  }, [getAllChannels, verticalScrollTop, viewportHeight, guideData]);
-
-  // Scroll handling for both horizontal and vertical virtualization
-  const handleHorizontalScroll = useCallback((scrollLeft: number) => {
-    setHorizontalScrollLeft(scrollLeft);
-  }, []);
-
-  const handleVerticalScroll = useCallback((scrollTop: number) => {
-    setVerticalScrollTop(scrollTop);
-  }, []);
-
-  // Update viewport dimensions on resize
-  useEffect(() => {
-    const updateViewportDimensions = () => {
-      setViewportWidth(window.innerWidth);
-      setViewportHeight(600); // Fixed height for the guide container
-    };
-
-    updateViewportDimensions();
-    window.addEventListener('resize', updateViewportDimensions);
-    return () => window.removeEventListener('resize', updateViewportDimensions);
-  }, []);
 
 
   // Filter programs based on hide past programs toggle and live only toggle
@@ -1038,244 +918,10 @@ export default function EpgPage() {
     );
   };
 
-  // TV Guide Components with All Time Headers
-  const GuideTimeSlotHeader = () => {
-    if (!guideData?.start_time) return null;
-
-    const startTime = new Date(guideData.start_time);
-
-    // Generate ALL time headers for the entire guide
-    const allTimeHeaders = [];
-    for (let hour = 0; hour < GUIDE_HOURS; hour++) {
-      const time = new Date(startTime.getTime() + hour * 60 * 60 * 1000);
-      allTimeHeaders.push({
-        time,
-        position: hour * PIXELS_PER_HOUR,
-        label: formatGuideTimeInTimezone(time.toISOString()),
-        hour
-      });
-    }
-
-    return (
-      <div className="flex bg-background border-b sticky top-0 z-20">
-        <div className="w-48 flex-shrink-0 p-3 border-r bg-muted/50 sticky left-0 z-30">
-          <span className="text-sm font-medium">Channels</span>
-        </div>
-        <div className="relative flex-1" style={{ width: `${GUIDE_HOURS * PIXELS_PER_HOUR}px` }}>
-          {/* Time grid lines and headers - all of them */}
-          {allTimeHeaders.map((header) => {
-            const isCurrent = (() => {
-              const now = currentTime;
-              const headerTime = header.time;
-              const nextHour = new Date(headerTime.getTime() + 60 * 60 * 1000);
-              return now >= headerTime && now < nextHour;
-            })();
-            
-            return (
-              <div
-                key={header.hour}
-                className={`absolute top-0 bottom-0 border-l ${
-                  isCurrent
-                    ? "bg-primary/10 text-primary-foreground"
-                    : "bg-muted/30"
-                }`}
-                style={{
-                  left: `${header.position}px`,
-                  width: `${PIXELS_PER_HOUR}px`
-                }}
-              >
-                <div className="p-3 text-center">
-                  <Badge
-                    variant={isCurrent ? "default" : "outline"}
-                    className="text-xs"
-                  >
-                    {header.label}
-                  </Badge>
-                </div>
-              </div>
-            );
-          })}
-          
-          {/* Vertical hour marker lines */}
-          {allTimeHeaders.map((header) => (
-            <div
-              key={`line-${header.hour}`}
-              className="absolute top-0 w-px bg-border/30 pointer-events-none z-10"
-              style={{
-                left: `${header.position}px`,
-                height: '200vh' // Extend through all channel rows
-              }}
-            />
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  const GuideChannelRow = ({
-    channelId,
-    channel,
-    isVisible = true,
-  }: {
-    channelId: string;
-    channel: { id: string; name: string; logo?: string };
-    isVisible?: boolean;
-  }) => {
-    if (!guideData?.start_time) return null;
-
-    return (
-      <div className="flex border-b hover:bg-muted/50" style={{ height: `${CHANNEL_HEIGHT}px` }}>
-        {/* Channel Info - Always visible */}
-        <div className="w-48 flex-shrink-0 p-3 border-r bg-background sticky left-0 z-10">
-          <div className="flex items-center space-x-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="sm"
-                  onClick={() => handlePlayChannel({ id: channelId, name: channel.name || channelId, logo: channel.logo })}
-                  className="h-8 w-8 p-0"
-                >
-                  <Play className="w-4 h-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Play channel live stream</p>
-              </TooltipContent>
-            </Tooltip>
-            {channel.logo && (
-              <img
-                src={channel.logo}
-                alt={channel.name}
-                className="w-8 h-8 object-contain"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                }}
-              />
-            )}
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">
-                {channel.name || channelId}
-              </p>
-              <p className="text-xs text-muted-foreground">{channelId}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Program Grid - Only render for visible channels */}
-        <div className="flex-1 relative overflow-hidden">
-          <div
-            className="relative h-16"
-            style={{ width: `${GUIDE_HOURS * PIXELS_PER_HOUR}px` }}
-          >
-            {isVisible ? (
-              <GuideChannelPrograms channelId={channelId} />
-            ) : (
-              // Empty placeholder for non-visible channels
-              <div className="w-full h-full bg-muted/20 flex items-center justify-center">
-                <span className="text-xs text-muted-foreground">Scroll to load programs</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Separate component for rendering programs within a channel
-  const GuideChannelPrograms = ({ channelId }: { channelId: string }) => {
-    if (!guideData?.start_time) return null;
-
-    const startTime = new Date(guideData.start_time);
-    const allPrograms = guideData.programs[channelId] || [];
-
-    return (
-      <>
-        {allPrograms.map((program) => {
-          const metrics = calculateProgramMetrics(program, startTime);
-          
-          // Skip programs that are completely outside the guide timeframe
-          if (metrics.left < -9999 || metrics.width === 0) return null;
-          
-          const now = currentTime;
-          const programStart = new Date(program.start_time);
-          const programEnd = new Date(program.end_time);
-          const isLive = now >= programStart && now <= programEnd;
-          
-          // Calculate description length based on program width
-          const maxDescriptionLength = Math.floor(metrics.width / 8);
-          const truncatedDescription = program.description && program.description.length > maxDescriptionLength
-            ? program.description.substring(0, maxDescriptionLength) + '...'
-            : program.description;
-
-          return (
-            <div
-              key={program.id}
-              className={`absolute top-0 bottom-0 p-1 transition-colors overflow-hidden ${
-                isLive 
-                  ? "bg-accent text-accent-foreground border-l-2 border-r border-primary border-border" 
-                  : "bg-secondary hover:bg-muted/80 border-l border-r border-border"
-              }`}
-              style={{
-                left: `${metrics.left}px`,
-                width: `${metrics.width}px`
-              }}
-              title={`${program.title} (${formatTimeInTimezone(program.start_time)} - ${formatTimeInTimezone(program.end_time)})${program.description ? '\n' + program.description : ''}`}
-            >
-              <div className="w-full h-full flex flex-col justify-between">
-                <h4 className="text-xs font-medium truncate leading-tight">
-                  {program.title}
-                </h4>
-                <div className="flex-1 flex flex-col justify-center">
-                  <p className="text-xs text-muted-foreground truncate">
-                    {formatTimeInTimezone(program.start_time)} - {formatTimeInTimezone(program.end_time)}
-                  </p>
-                  {truncatedDescription && (
-                    <p className="text-xs text-muted-foreground italic truncate mt-0.5 leading-tight">
-                      {truncatedDescription}
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </>
-    );
-  };
 
 
-  const CurrentTimeIndicator = () => {
-    if (!guideData?.start_time) return null;
 
-    const now = currentTime;
-    const guideStart = new Date(guideData.start_time);
-    const guideEnd = new Date(guideData.end_time);
-    
-    // Only show indicator if current time is within the guide time range
-    if (now < guideStart || now > guideEnd) return null;
 
-    // Calculate position using the same logic as program positioning
-    const currentOffset = now.getTime() - guideStart.getTime();
-    const pixelPosition = (currentOffset / (1000 * 60 * 60)) * PIXELS_PER_HOUR;
-    
-    // Channel sidebar is 192px (w-48 = 192px) - this is the sticky column width
-    const leftPosition = CHANNEL_SIDEBAR_WIDTH + pixelPosition;
-
-    return (
-      <div
-        className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-30 pointer-events-none"
-        style={{ left: `${leftPosition}px` }}
-      >
-        <div className="absolute -top-2 -left-2 w-4 h-4 bg-red-500 rounded-full"></div>
-        <Badge
-          variant="destructive"
-          className="absolute -top-8 -left-8 text-xs px-1 py-0.5"
-        >
-          LIVE
-        </Badge>
-      </div>
-    );
-  };
 
   if (loading && programs.length === 0 && !guideData) {
     return (
@@ -1558,6 +1204,7 @@ export default function EpgPage() {
                     </SelectContent>
                   </Select>
                 )}
+
 
 
                 {/* Layout Buttons */}
@@ -1877,148 +1524,43 @@ export default function EpgPage() {
           {viewMode === "guide" && (
             <div className="space-y-6">
 
-            {/* TV Guide Grid with Program Virtualization */}
+            {/* TV Guide Grid - Canvas Rendering Only */}
             {guideData ? (
-              <Card className="overflow-hidden">
-                <div className="relative">
-                  <GuideTimeSlotHeader />
-                  
-                  <ScrollArea 
-                    className="h-[600px] w-full"
-                    onScrollCapture={(e) => {
-                      const target = e.target as HTMLElement;
-                      const scrollLeft = target.scrollLeft;
-                      const scrollTop = target.scrollTop;
-                      handleHorizontalScroll(scrollLeft);
-                      handleVerticalScroll(scrollTop);
+              <Card className="overflow-hidden flex flex-col h-[600px]">
+                <div className="relative flex-1 min-h-0">
+                  <CanvasEPG
+                    guideData={guideData}
+                    guideTimeRange={guideTimeRange}
+                    channelFilter={channelFilter}
+                    currentTime={currentTime}
+                    selectedTimezone={selectedTimezone}
+                    onProgramClick={(program) => {
+                      // Handle program clicks - could open modal, navigate, etc.
+                      console.log('Program clicked:', program);
                     }}
-                    ref={scrollContainerRef}
-                  >
-                    <div 
-                      className="relative"
-                      style={{ 
-                        height: `${getAllChannels.length * CHANNEL_HEIGHT}px`,
-                        width: `calc(${CHANNEL_SIDEBAR_WIDTH}px + ${GUIDE_HOURS * PIXELS_PER_HOUR}px)`,
-                        minWidth: `calc(${CHANNEL_SIDEBAR_WIDTH}px + ${GUIDE_HOURS * PIXELS_PER_HOUR}px)`
-                      }}
-                    >
-                      {/* Render ALL channels - no channel virtualization */}
-                      {getAllChannels.map(([channelId, channel]) => {
-                        // Only load programs for channels in the viewport (for performance)
-                        const shouldLoadPrograms = getChannelsWithProgramViewport.has(channelId);
-                        
-                        return (
-                          <GuideChannelRow
-                            key={channelId}
-                            channelId={channelId}
-                            channel={channel}
-                            isVisible={shouldLoadPrograms}
-                          />
-                        );
-                      })}
+                    onChannelPlay={(channel) => {
+                      handlePlayChannel(channel);
+                    }}
+                    className="border-0"
+                  />
+                  
+                  {/* Guide Footer */}
+                  <div className="border-t bg-muted/50 p-3">
+                    <div className="flex justify-between items-center text-sm text-muted-foreground">
+                      <span>
+                        {getAllChannels.length} channels • {guideTimeRange} time range
+                      </span>
+                      <span>Updated: {new Date().toLocaleTimeString()}</span>
                     </div>
-                    <ScrollBar orientation="horizontal" />
-                    <ScrollBar orientation="vertical" />
-                  </ScrollArea>
-
-                  <CurrentTimeIndicator />
-                </div>
-
-                {/* Guide Footer */}
-                <div className="border-t bg-muted/50 p-3">
-                  <div className="flex justify-between items-center text-sm text-muted-foreground">
-                    <span>
-                      {getAllChannels.length} channels • Programs loaded for {getChannelsWithProgramViewport.size} visible channels • Time: {getVisibleTimeWindow.startHour}h-{getVisibleTimeWindow.endHour}h
-                    </span>
-                    <span>Updated: {new Date().toLocaleTimeString()}</span>
                   </div>
                 </div>
               </Card>
             ) : loading ? (
               <Card className="overflow-hidden">
-                <div className="relative">
-                  {/* Skeleton TV Guide Header */}
-                  <div className="flex bg-background border-b sticky top-0 z-20">
-                    <div className="w-48 flex-shrink-0 p-3 border-r bg-muted/50 sticky left-0 z-30">
-                      <Skeleton className="h-5 w-20" />
-                    </div>
-                    <div className="relative flex-1" style={{ width: `${VISIBLE_GUIDE_WIDTH}px` }}>
-                      {Array.from({ length: 6 }).map((_, i) => (
-                        <div 
-                          key={i} 
-                          className="absolute top-0 bottom-0 border-l bg-muted/30"
-                          style={{
-                            left: `${i * PIXELS_PER_HOUR}px`,
-                            width: `${PIXELS_PER_HOUR}px`
-                          }}
-                        >
-                          <div className="p-3 text-center">
-                            <Skeleton className="h-6 w-16 mx-auto" />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Skeleton TV Guide Rows */}
-                  <ScrollArea className="h-[600px] w-full">
-                    <div className="relative" style={{ width: `calc(192px + ${24 * 200}px)`, minWidth: `calc(192px + ${24 * 200}px)` }}>
-                      {Array.from({ length: 8 }).map((_, i) => (
-                        <div key={i} className="flex border-b" style={{ height: `${CHANNEL_HEIGHT}px` }}>
-                          {/* Skeleton Channel Info */}
-                          <div className="w-48 flex-shrink-0 p-3 border-r bg-background sticky left-0 z-10">
-                            <div className="flex items-center space-x-2">
-                              <Skeleton className="w-6 h-6 rounded" />
-                              <Skeleton className="w-8 h-8 rounded" />
-                              <div className="flex-1">
-                                <Skeleton className="h-4 w-24 mb-1" />
-                                <Skeleton className="h-3 w-16" />
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Skeleton Program Cells */}
-                          <div className="flex-1 relative overflow-hidden">
-                            <div className="relative h-16" style={{ width: `${24 * 200}px` }}>
-                              {Array.from({ length: Math.floor(Math.random() * 4) + 2 }).map((_, j) => {
-                                const startPos = Math.random() * (24 * 200 - 200);
-                                const width = 120 + Math.random() * 360; // Random width between 120-480px (0.5-2 hours)
-                                return (
-                                  <div 
-                                    key={j} 
-                                    className="absolute top-0 bottom-0 border-r h-16 p-1"
-                                    style={{
-                                      left: `${startPos}px`,
-                                      width: `${width}px`
-                                    }}
-                                  >
-                                    {Math.random() > 0.2 ? (
-                                      <div className="h-full bg-secondary p-1 rounded overflow-hidden">
-                                        <Skeleton className="h-3 w-3/4 mb-1" />
-                                        <Skeleton className="h-3 w-1/2" />
-                                      </div>
-                                    ) : (
-                                      <div className="h-full bg-muted/30 flex items-center justify-center">
-                                        <Skeleton className="h-3 w-16" />
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <ScrollBar orientation="horizontal" />
-                  </ScrollArea>
-                </div>
-
-                {/* Skeleton Guide Footer */}
-                <div className="border-t bg-muted/50 p-3">
-                  <div className="flex justify-between items-center">
-                    <Skeleton className="h-4 w-32" />
-                    <Skeleton className="h-4 w-20" />
+                <div className="h-[600px] w-full flex items-center justify-center">
+                  <div className="flex flex-col items-center space-y-4">
+                    <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent"></div>
+                    <p className="text-muted-foreground">Loading EPG guide...</p>
                   </div>
                 </div>
               </Card>

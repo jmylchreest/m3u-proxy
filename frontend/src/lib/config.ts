@@ -2,9 +2,9 @@
 // Since the frontend is embedded and served by the same backend server,
 // we can use relative URLs which automatically use the correct host and port
 export function getBackendUrl(): string {
-  // For development, use relative URLs to leverage Next.js proxy
+  // For development, use environment variable with fallback to localhost:8080
   if (process.env.NODE_ENV === 'development') {
-    return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || ''
+    return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
   }
   
   // For production (embedded in backend), use relative URLs

@@ -20,6 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { VideoPlayerModal } from '@/components/video-player-modal';
+import { getBackendUrl } from '@/lib/config';
 
 interface Channel {
   id: string;
@@ -255,7 +256,7 @@ export default function ChannelsPage() {
   const handlePlayChannel = async (channel: Channel) => {
     try {
       // Use the new unified channel streaming endpoint (directly streams content, no CORS issues)
-      const streamUrl = `/channel/${channel.id}/stream`;
+      const streamUrl = `${getBackendUrl()}/channel/${channel.id}/stream`;
       
       setSelectedChannel({
         ...channel,

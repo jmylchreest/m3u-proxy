@@ -75,8 +75,8 @@ Check the endpoints below to see the complete API surface.
         (url = "/api/v1", description = "API Version 1 - Auto-discovered routes"),
     ),
     tags(
-        (name = "stream-sources", description = "Stream source management - M3U playlists and Xtream Codes APIs"),
-        (name = "epg-sources", description = "Electronic Program Guide (EPG) source management"),  
+        (name = "sources-streams", description = "Stream source management - M3U playlists and Xtream Codes APIs"),
+        (name = "sources-epg", description = "Electronic Program Guide (EPG) source management"),  
         (name = "proxies", description = "Proxy configuration and M3U playlist generation"),
         (name = "streaming", description = "Live IPTV streaming endpoints"),
         (name = "filters", description = "Channel filtering and rules management"),
@@ -88,7 +88,6 @@ Check the endpoints below to see the complete API surface.
         (name = "progress", description = "Background operation progress tracking"),
         (name = "sources", description = "Unified source management operations"),
         (name = "epg", description = "Electronic Program Guide operations"),
-        (name = "active-relays", description = "Active relay process monitoring"),
         (name = "logs", description = "Real-time log streaming and monitoring"),
         (name = "settings", description = "Runtime server settings management"),
     ),
@@ -232,7 +231,8 @@ Check the endpoints below to see the complete API surface.
         crate::web::handlers::channels::probe_channel_codecs,
         
         // EPG viewer
-        // EPG viewer functionality removed
+        crate::web::handlers::epg::list_epg_programs,
+        crate::web::handlers::epg::get_epg_guide,
         
         // Proxy endpoints
         crate::web::handlers::proxies::list_proxies,
@@ -285,9 +285,6 @@ Check the endpoints below to see the complete API surface.
 
         // Metrics endpoints
         crate::web::api::get_dashboard_metrics,
-        crate::web::api::get_realtime_metrics,
-        crate::web::api::get_usage_metrics,
-        crate::web::api::get_popular_channels,
         
         // Log streaming endpoints
         crate::web::api::log_streaming::stream_logs,

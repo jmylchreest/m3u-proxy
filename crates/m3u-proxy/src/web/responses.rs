@@ -4,13 +4,14 @@
 //! for the web layer, ensuring consistent API responses across all endpoints.
 
 use axum::{
-    http::StatusCode,
+    http::{StatusCode, HeaderMap, HeaderValue},
     response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
+use sha2::{Sha256, Digest};
 
 use crate::errors::{AppError, AppResult};
 
@@ -82,7 +83,7 @@ where
             StatusCode::INTERNAL_SERVER_ERROR
         };
 
-        (status, Json(self)).into_response()
+        (status, with_default_headers(Json(self))).into_response()
     }
 }
 
@@ -132,7 +133,7 @@ where
     T: Serialize,
 {
     match result {
-        Ok(data) => (StatusCode::OK, Json(ApiResponse::success(data))).into_response(),
+        Ok(data) => (StatusCode::OK, with_default_headers(Json(ApiResponse::success(data)))).into_response(),
         Err(error) => handle_error(error).into_response(),
     }
 }
@@ -208,16 +209,25 @@ pub fn handle_error(error: AppError) -> impl IntoResponse {
         ApiResponse::<()>::error(message)
     };
 
-    (status, Json(response)).into_response()
+    (status, with_default_headers(Json(response))).into_response()
 }
 
 /// Success response helpers
 pub fn ok<T: Serialize>(data: T) -> impl IntoResponse {
-    (StatusCode::OK, Json(ApiResponse::success(data)))
+    (StatusCode::OK, with_default_headers(Json(ApiResponse::success(data))))
 }
 
 pub fn created<T: Serialize>(data: T) -> impl IntoResponse {
-    (StatusCode::CREATED, Json(ApiResponse::success(data)))
+    (StatusCode::CREATED, with_default_headers(Json(ApiResponse::success(data))))
+}
+
+/// Success response with custom cache control
+pub fn ok_with_cache<T: Serialize>(data: T, cache_control: CacheControl) -> impl IntoResponse {
+    (StatusCode::OK, with_cache_headers(Json(ApiResponse::success(data)), cache_control))
+}
+
+pub fn created_with_cache<T: Serialize>(data: T, cache_control: CacheControl) -> impl IntoResponse {
+    (StatusCode::CREATED, with_cache_headers(Json(ApiResponse::success(data)), cache_control))
 }
 
 pub fn no_content() -> impl IntoResponse {
@@ -228,28 +238,28 @@ pub fn no_content() -> impl IntoResponse {
 pub fn bad_request(message: &str) -> impl IntoResponse {
     (
         StatusCode::BAD_REQUEST,
-        Json(ApiResponse::<()>::error(message.to_string())),
+        with_default_headers(Json(ApiResponse::<()>::error(message.to_string()))),
     )
 }
 
 pub fn not_found(resource: &str, id: &str) -> impl IntoResponse {
     (
         StatusCode::NOT_FOUND,
-        Json(ApiResponse::<()>::error(format!("{resource} with id '{id}' not found"))),
+        with_default_headers(Json(ApiResponse::<()>::error(format!("{resource} with id '{id}' not found")))),
     )
 }
 
 pub fn internal_error(message: &str) -> impl IntoResponse {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ApiResponse::<()>::error(message.to_string())),
+        with_default_headers(Json(ApiResponse::<()>::error(message.to_string()))),
     )
 }
 
 pub fn conflict(message: &str) -> impl IntoResponse {
     (
         StatusCode::CONFLICT,
-        Json(ApiResponse::<()>::error(message.to_string())),
+        with_default_headers(Json(ApiResponse::<()>::error(message.to_string()))),
     )
 }
 
@@ -268,10 +278,10 @@ pub fn validation_error(errors: Vec<ValidationErrorResponse>) -> impl IntoRespon
 
     (
         StatusCode::BAD_REQUEST,
-        Json(ApiResponse::<()>::error_with_details(
+        with_default_headers(Json(ApiResponse::<()>::error_with_details(
             "Validation failed".to_string(),
             details,
-        )),
+        ))),
     )
 }
 
@@ -446,4 +456,93 @@ pub struct ProcessMemoryBreakdown {
     pub percentage_of_system: f64,
     /// Number of child processes tracked
     pub child_process_count: u32,
+}
+
+/// Cache control options for responses
+#[derive(Debug, Clone)]
+pub enum CacheControl {
+    NoCache,
+    MaxAge(u32),
+    Private(u32),
+    Public(u32),
+}
+
+impl CacheControl {
+    pub fn header_value(&self) -> String {
+        match self {
+            CacheControl::NoCache => "no-cache, no-store, must-revalidate".to_string(),
+            CacheControl::MaxAge(seconds) => format!("max-age={}", seconds),
+            CacheControl::Private(seconds) => format!("private, max-age={}", seconds),
+            CacheControl::Public(seconds) => format!("public, max-age={}", seconds),
+        }
+    }
+}
+
+/// Generate ETag from serializable data
+pub fn generate_etag<T: Serialize>(data: &T) -> String {
+    let json = serde_json::to_string(data).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(json.as_bytes());
+    let hash = hasher.finalize();
+    format!("\"{}\"", hex::encode(&hash[..8])) // Use first 8 bytes for shorter ETag
+}
+
+/// Generate ETag from raw bytes
+pub fn generate_etag_bytes(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let hash = hasher.finalize();
+    format!("\"{}\"", hex::encode(&hash[..8])) // Use first 8 bytes for shorter ETag
+}
+
+/// Add default cache headers (no-cache) and ETag to a response
+pub fn with_default_headers<T>(response: Json<T>) -> (HeaderMap, Json<T>)
+where
+    T: Serialize,
+{
+    with_cache_headers(response, CacheControl::NoCache)
+}
+
+/// Add cache headers and ETag to a response
+pub fn with_cache_headers<T>(response: Json<T>, cache_control: CacheControl) -> (HeaderMap, Json<T>)
+where
+    T: Serialize,
+{
+    let mut headers = HeaderMap::new();
+    
+    // Add cache-control header
+    if let Ok(cache_value) = HeaderValue::from_str(&cache_control.header_value()) {
+        headers.insert("cache-control", cache_value);
+    }
+    
+    // Add ETag header - serialize the inner value for ETag generation
+    let etag = generate_etag(&response.0);
+    if let Ok(etag_value) = HeaderValue::from_str(&etag) {
+        headers.insert("etag", etag_value);
+    }
+    
+    (headers, response)
+}
+
+/// Add cache headers and ETag to raw bytes response
+pub fn with_cache_headers_bytes(data: Vec<u8>, cache_control: CacheControl, content_type: &str) -> (HeaderMap, Vec<u8>) {
+    let mut headers = HeaderMap::new();
+    
+    // Add cache-control header
+    if let Ok(cache_value) = HeaderValue::from_str(&cache_control.header_value()) {
+        headers.insert("cache-control", cache_value);
+    }
+    
+    // Add ETag header
+    let etag = generate_etag_bytes(&data);
+    if let Ok(etag_value) = HeaderValue::from_str(&etag) {
+        headers.insert("etag", etag_value);
+    }
+    
+    // Add content-type header
+    if let Ok(content_type_value) = HeaderValue::from_str(content_type) {
+        headers.insert("content-type", content_type_value);
+    }
+    
+    (headers, data)
 }

@@ -124,7 +124,7 @@ pub struct ProgressEvent {
         (status = 200, description = "Real-time progress events stream (SSE)", content_type = "text/event-stream"),
         (status = 500, description = "Internal server error")
     ),
-    tag = "Progress"
+    tag = "progress"
 )]
 pub async fn progress_events_stream(
     Query(query): Query<ProgressEventQuery>,

@@ -27,7 +27,17 @@ pub async fn serve_embedded_asset(request: Request) -> impl IntoResponse {
             let content_type = StaticAssets::get_content_type(path);
             let mut headers = HeaderMap::new();
             headers.insert("content-type", content_type.parse().unwrap());
-            headers.insert("cache-control", "public, max-age=31536000".parse().unwrap());
+            
+            // Set cache duration based on file type
+            let cache_control = if path.ends_with(".js") || path.ends_with(".css") {
+                "public, max-age=600" // 10 minutes for JS and CSS files
+            } else if path.contains("_next/static/") || path.ends_with(".ico") {
+                "public, max-age=31536000" // 1 year for hashed Next.js assets and icons
+            } else {
+                "public, max-age=3600" // 1 hour for other static assets
+            };
+            
+            headers.insert("cache-control", cache_control.parse().unwrap());
             
             (headers, file.data.to_vec()).into_response()
         }

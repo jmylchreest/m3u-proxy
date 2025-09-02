@@ -77,6 +77,7 @@ pub struct ChannelsListResponse {
 #[utoipa::path(
     get,
     path = "/api/v1/channels",
+    tag = "channels",
     params(ChannelsQuery),
     responses(
         (status = 200, description = "Channels retrieved successfully", body = ChannelsListResponse),
@@ -241,6 +242,7 @@ pub async fn list_channels(
 #[utoipa::path(
     get,
     path = "/api/v1/channels/proxy/{proxy_id}",
+    tag = "channels",
     params(
         ("proxy_id" = String, Path, description = "Proxy ID")
     ),
@@ -343,6 +345,7 @@ pub async fn get_proxy_channels(
 #[utoipa::path(
     get,
     path = "/api/v1/channels/{channel_id}/stream",
+    tag = "streaming",
     params(
         ("channel_id" = String, Path, description = "Channel ID")
     ),

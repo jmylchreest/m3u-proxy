@@ -1,7 +1,7 @@
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::StatusCode,
-    response::Json,
+    response::{Json, IntoResponse},
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -934,7 +934,7 @@ pub async fn test_filter(
 /// Validate expression with proper field validation (new generalized endpoint)
 #[utoipa::path(
     post,
-    path = "/expressions/validate",
+    path = "/api/v1/expressions/validate",
     tag = "expressions",
     summary = "Validate expression with context-aware field validation",
     description = "
@@ -973,7 +973,7 @@ pub async fn validate_expression(
 /// Validate stream source filter expressions
 #[utoipa::path(
     post,
-    path = "/expressions/validate/stream",
+    path = "/api/v1/expressions/validate/stream",
     tag = "expressions",
     summary = "Validate stream source filter expression",
     description = "Validate expression for stream source filtering with stream-specific fields (channel_name, group_title, stream_url, etc.)",
@@ -994,7 +994,7 @@ pub async fn validate_stream_expression(
 /// Validate EPG source filter expressions  
 #[utoipa::path(
     post,
-    path = "/expressions/validate/epg",
+    path = "/api/v1/expressions/validate/epg",
     tag = "expressions", 
     summary = "Validate EPG source filter expression",
     description = "Validate expression for EPG source filtering with EPG-specific fields (programme_title, programme_description, start_time, etc.)",
@@ -1015,7 +1015,7 @@ pub async fn validate_epg_expression(
 /// Validate data mapping expressions
 #[utoipa::path(
     post,
-    path = "/expressions/validate/data-mapping",
+    path = "/api/v1/expressions/validate/data-mapping",
     tag = "expressions",
     summary = "Validate data mapping expression", 
     description = "Validate expression for data mapping transformations with mapping-specific fields (input and output fields)",
@@ -3213,7 +3213,7 @@ pub async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
 #[utoipa::path(
     post,
     path = "/sources/stream/{id}/cancel",
-    tag = "stream-sources",
+    tag = "sources-streams",
     summary = "Cancel stream source ingestion",
     description = "Cancel an ongoing ingestion operation for a stream source",
     params(
@@ -3273,7 +3273,7 @@ pub async fn get_stream_source_progress(
 #[utoipa::path(
     get,
     path = "/sources/stream/{id}/processing-info",
-    tag = "stream-sources",
+    tag = "sources-streams",
     summary = "Get stream source processing info",
     description = "Get detailed processing information for a stream source",
     params(
@@ -3316,7 +3316,7 @@ pub async fn get_stream_source_channels(
     Path(id): Path<Uuid>,
     Query(params): Query<ChannelQueryParams>,
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<impl IntoResponse, StatusCode> {
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(50);
 
@@ -3325,7 +3325,11 @@ pub async fn get_stream_source_channels(
         .get_source_channels_paginated(&id, Some(page as u64), Some(limit as u64))
         .await
     {
-        Ok(result) => Ok(Json(json!(result))),
+        Ok(result) => {
+            use crate::web::{CacheControl, with_cache_headers};
+            // Channel data changes periodically, cache for 5 minutes
+            Ok(with_cache_headers(Json(json!(result)), CacheControl::MaxAge(300)))
+        },
         Err(e) => {
             error!("Failed to get channels for stream source {}: {}", id, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -3451,7 +3455,7 @@ pub async fn get_epg_source_channels_unified(
     Path(id): Path<Uuid>,
     Query(params): Query<ChannelQueryParams>,
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<impl IntoResponse, StatusCode> {
     let _page = params.page.unwrap_or(1);
     let _limit = params.limit.unwrap_or(50);
     let _filter = params.filter;
@@ -3492,7 +3496,9 @@ pub async fn get_epg_source_channels_unified(
                     .cmp(b["channel_name"].as_str().unwrap_or(""))
             });
             
-            Ok(Json(json!(channel_summary)))
+            use crate::web::{CacheControl, with_cache_headers};
+            // EPG channel data changes less frequently, cache for 10 minutes
+            Ok(with_cache_headers(Json(json!(channel_summary)), CacheControl::MaxAge(600)))
         },
         Err(e) => {
             error!("Failed to get channels for EPG source {}: {}", id, e);
@@ -4053,7 +4059,7 @@ pub struct UsageQuery {
 
 #[utoipa::path(
     get,
-    path = "/dashboard/metrics",
+    path = "/api/v1/metrics/dashboard",
     tag = "metrics",
     summary = "Get dashboard metrics",
     description = "Retrieve overview metrics for the dashboard",
@@ -4099,7 +4105,7 @@ pub async fn get_dashboard_metrics(
 
 #[utoipa::path(
     get,
-    path = "/metrics/realtime",
+    path = "/api/v1/metrics/realtime",
     tag = "metrics",
     summary = "Get real-time metrics",
     description = "Retrieve real-time performance metrics",
@@ -4121,7 +4127,7 @@ pub async fn get_realtime_metrics(
 
 #[utoipa::path(
     get,
-    path = "/metrics/usage",
+    path = "/api/v1/metrics/usage",
     tag = "metrics",
     summary = "Get usage metrics",
     description = "Retrieve usage metrics over time",
@@ -4148,7 +4154,7 @@ pub async fn get_usage_metrics(
 /// Get popular channels
 #[utoipa::path(
     get,
-    path = "/metrics/channels/popular",
+    path = "/api/v1/metrics/channels/popular",
     tag = "metrics",
     summary = "Get popular channels",
     description = "Get most popular channels based on usage metrics",

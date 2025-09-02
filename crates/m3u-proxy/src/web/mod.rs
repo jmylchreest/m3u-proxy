@@ -58,7 +58,7 @@ pub mod utils;
 
 // Re-export commonly used types
 pub use extractors::{ListParams, PaginationParams, RequestContext, SearchParams};
-pub use responses::{ApiResponse, PaginatedResponse, handle_error, handle_result};
+pub use responses::{ApiResponse, PaginatedResponse, handle_error, handle_result, CacheControl, with_cache_headers, ok_with_cache};
 
 /// Web server configuration and setup
 pub struct WebServer {
@@ -227,14 +227,12 @@ impl WebServer {
 
     /// OpenAPI documentation routes
     fn openapi_routes() -> Router<AppState> {
-        use utoipa_rapidoc::RapiDoc;
+        use utoipa_swagger_ui::SwaggerUi;
         
         Router::new()
-            // RapiDoc interactive documentation (includes OpenAPI spec endpoint)
-            .merge(
-                RapiDoc::with_openapi("/api/openapi.json", openapi::get_comprehensive_openapi_spec())
-                    .path("/docs")
-            )
+            // Swagger UI integration - automatically serves both /docs and /api/openapi.json
+            .merge(SwaggerUi::new("/docs")
+                .url("/api/openapi.json", openapi::get_comprehensive_openapi_spec()))
     }
 
     /// API v1 routes with standard Axum routing
@@ -295,7 +293,6 @@ impl WebServer {
             )
             // Unified sources
             .route("/sources", get(api::list_all_sources))
-            .route("/sources/unified", get(api::list_all_sources))
             // Progress events SSE endpoint
             .route("/progress/events", get(api::progress_events::progress_events_stream))
             // Progress operations REST endpoint  
@@ -392,9 +389,6 @@ impl WebServer {
             .merge(api::relay::relay_routes())
             // Metrics and analytics
             .route("/metrics/dashboard", get(api::get_dashboard_metrics))
-            .route("/metrics/realtime", get(api::get_realtime_metrics))
-            .route("/metrics/usage", get(api::get_usage_metrics))
-            .route("/metrics/channels/popular", get(api::get_popular_channels))
             // Log streaming endpoints
             .route("/logs/stream", get(api::log_streaming::stream_logs))
             .route("/logs/stats", get(api::log_streaming::get_log_stats))

@@ -174,7 +174,7 @@ impl From<StreamSource> for StreamSourceResponse {
 #[utoipa::path(
     get,
     path = "/sources/stream",
-    tag = "stream-sources",
+    tag = "sources-streams",
     params(
         ("page" = Option<u32>, Query, description = "Page number (1-based)", example = 1),
         ("limit" = Option<u32>, Query, description = "Items per page (1-100)", example = 20),
@@ -262,7 +262,7 @@ pub async fn list_stream_sources(
 #[utoipa::path(
     get,
     path = "/sources/stream/{id}",
-    tag = "stream-sources",
+    tag = "sources-streams",
     params(
         ("id" = String, Path, description = "Stream source ID (UUID)", example = "550e8400-e29b-41d4-a716-446655440000"),
     ),
@@ -305,7 +305,7 @@ pub async fn get_stream_source(
 #[utoipa::path(
     post,
     path = "/sources/stream",
-    tag = "stream-sources",
+    tag = "sources-streams",
     request_body = CreateStreamSourceRequest,
     responses(
         (status = 201, description = "Stream source created successfully"),
@@ -352,7 +352,7 @@ pub async fn create_stream_source(
 #[utoipa::path(
     put,
     path = "/sources/stream/{id}",
-    tag = "stream-sources",
+    tag = "sources-streams",
     params(
         ("id" = String, Path, description = "Stream source ID (UUID)"),
     ),
@@ -419,7 +419,7 @@ pub async fn update_stream_source(
 #[utoipa::path(
     delete,
     path = "/sources/stream/{id}",
-    tag = "stream-sources",
+    tag = "sources-streams",
     params(
         ("id" = String, Path, description = "Stream source ID (UUID)", example = "550e8400-e29b-41d4-a716-446655440000"),
     ),
@@ -465,7 +465,7 @@ pub async fn delete_stream_source(
 #[utoipa::path(
     post,
     path = "/sources/stream/validate",
-    tag = "stream-sources",
+    tag = "sources-streams",
     request_body = CreateStreamSourceRequest,
     responses(
         (status = 200, description = "Stream source validation result"),

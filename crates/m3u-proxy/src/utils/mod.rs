@@ -41,7 +41,7 @@ pub use database_operations::DatabaseOperations;
 pub use database_retry::{RetryConfig, with_retry};
 pub use decompression::{CompressionFormat, DecompressionService};
 pub use deterministic_uuid::{generate_channel_uuid, generate_deterministic_uuid, generate_proxy_config_uuid, generate_relay_config_uuid};
-pub use http_client::{DecompressingHttpClient, StandardHttpClient, FallbackHttpClient};
+pub use http_client::{DecompressingHttpClient, StandardHttpClient};
 pub use http_client_factory::HttpClientFactory;
 pub use human_format::{format_duration, format_memory, format_memory_delta};
 pub use memory_cleanup::{

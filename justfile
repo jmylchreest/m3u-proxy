@@ -216,6 +216,7 @@ install-all: install
 # Upgrade backend dependencies (Rust)
 # Use --aggressive to upgrade to latest compatible versions beyond Cargo.toml constraints
 # Use --yes for non-interactive mode
+# Requires: cargo install cargo-outdated cargo-udeps, rustup toolchain install nightly
 upgrade-deps-backend *args="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -247,6 +248,14 @@ upgrade-deps-backend *args="":
         echo "cargo-outdated not installed - run 'cargo install cargo-outdated' to check for updates"
     fi
     
+    echo "Checking for unused Rust dependencies..."
+    if command -v cargo-udeps >/dev/null 2>&1; then
+        cargo +nightly udeps --all-targets
+    else
+        echo "cargo-udeps not installed - run 'cargo install cargo-udeps' to check for unused dependencies"
+        echo "Note: cargo-udeps requires nightly toolchain: 'rustup toolchain install nightly'"
+    fi
+    
     echo "Rust dependencies upgraded!"
     echo ""
     if [[ "{{args}}" != *"--aggressive"* ]]; then
@@ -254,6 +263,10 @@ upgrade-deps-backend *args="":
         echo "   just upgrade-deps-backend --aggressive"
         echo "   (requires: cargo install cargo-edit)"
         echo "For non-interactive mode: just upgrade-deps-backend --aggressive --yes"
+        echo ""
+        echo "Optional tools for enhanced dependency management:"
+        echo "   cargo install cargo-outdated cargo-udeps"
+        echo "   rustup toolchain install nightly  # Required for cargo-udeps"
     fi
 
 # Upgrade frontend dependencies (npm)
@@ -288,6 +301,9 @@ upgrade-deps-frontend *args="":
     
     echo "Checking for outdated npm packages..."
     cd frontend && { npm outdated || echo "All npm packages are up to date"; }
+    
+    echo "Checking for unused npm dependencies..."
+    (cd frontend && { npx depcheck || echo "No unused dependencies found"; })
     
     echo "npm dependencies upgraded!"
     echo ""

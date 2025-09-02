@@ -151,7 +151,7 @@ impl From<EpgSource> for EpgSourceResponse {
 #[utoipa::path(
     get,
     path = "/sources/epg",
-    tag = "epg-sources",
+    tag = "sources-epg",
     summary = "List EPG sources",
     description = "Retrieve a paginated list of EPG sources with optional filtering",
     params(
@@ -243,7 +243,7 @@ pub async fn list_epg_sources(
 #[utoipa::path(
     get,
     path = "/sources/epg/{id}",
-    tag = "epg-sources",
+    tag = "sources-epg",
     summary = "Get EPG source",
     description = "Retrieve a specific EPG source by ID",
     params(
@@ -288,7 +288,7 @@ pub async fn get_epg_source(
 #[utoipa::path(
     post,
     path = "/sources/epg",
-    tag = "epg-sources",
+    tag = "sources-epg",
     summary = "Create EPG source",
     description = "Create a new EPG source configuration",
     request_body = CreateEpgSourceRequest,
@@ -336,7 +336,7 @@ pub async fn create_epg_source(
 #[utoipa::path(
     put,
     path = "/sources/epg/{id}",
-    tag = "epg-sources",
+    tag = "sources-epg",
     summary = "Update EPG source",
     description = "Update an existing EPG source configuration",
     params(
@@ -393,7 +393,7 @@ pub async fn update_epg_source(
 #[utoipa::path(
     delete,
     path = "/sources/epg/{id}",
-    tag = "epg-sources",
+    tag = "sources-epg",
     summary = "Delete EPG source",
     description = "Delete an EPG source and clean up related data",
     params(
@@ -439,7 +439,7 @@ pub async fn delete_epg_source(
 #[utoipa::path(
     post,
     path = "/sources/epg/validate",
-    tag = "epg-sources",
+    tag = "sources-epg",
     summary = "Validate EPG source",
     description = "Test an EPG source configuration for validity",
     request_body = CreateEpgSourceRequest,

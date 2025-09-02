@@ -76,6 +76,7 @@ pub struct EpgSourceResponse {
 #[utoipa::path(
     get,
     path = "/api/v1/epg/programs",
+    tag = "epg",
     params(EpgQuery),
     responses(
         (status = 200, description = "EPG programs retrieved successfully", body = EpgListResponse),
@@ -387,6 +388,7 @@ pub async fn list_epg_sources(
 #[utoipa::path(
     get,
     path = "/api/v1/epg/guide",
+    tag = "epg",
     params(EpgQuery),
     responses(
         (status = 200, description = "EPG guide data retrieved successfully"),

@@ -3510,7 +3510,7 @@ pub async fn get_epg_source_channels_unified(
 // Unified Sources API
 #[utoipa::path(
     get,
-    path = "/sources/unified",
+    path = "/sources",
     tag = "sources",
     summary = "List all sources (unified)",
     description = "Retrieve a unified list of all stream and EPG sources with statistics",

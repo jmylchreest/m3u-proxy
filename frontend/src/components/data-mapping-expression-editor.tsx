@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
+import { Debug } from "@/utils/debug"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Code } from "@/components/ui/code"
@@ -87,7 +88,7 @@ export function DataMappingExpressionEditor({
   })
   
   // Debug logging
-  console.log('DataMapping: Sources debug', {
+  Debug.log('DataMapping: Sources debug', {
     allSourcesCount: allSources.length,
     filteredSourcesCount: sources.length,
     sourceType,
@@ -155,15 +156,15 @@ export function DataMappingExpressionEditor({
         
         if (response.ok) {
           const data = await response.json()
-          console.log('📡 DataMapping: Helpers API response', data)
+          Debug.log('📡 DataMapping: Helpers API response', data)
           if (data.helpers && Array.isArray(data.helpers)) {
-            console.log('✅ DataMapping: Setting helpers', data.helpers)
+            Debug.log('✅ DataMapping: Setting helpers', data.helpers)
             setHelpers(data.helpers)
           } else {
-            console.log('❌ DataMapping: No helpers in response')
+            Debug.log('❌ DataMapping: No helpers in response')
           }
         } else {
-          console.log('❌ DataMapping: Helpers API failed', response.status, response.statusText)
+          Debug.log('❌ DataMapping: Helpers API failed', response.status, response.statusText)
         }
       } catch (error) {
         console.warn('Failed to fetch data mapping helpers:', error)
@@ -175,13 +176,13 @@ export function DataMappingExpressionEditor({
 
   // Test expression against a single source
   const previewSingleSource = useCallback(async (sourceId: string) => {
-    console.log('🧪 previewSingleSource called for:', sourceId, 'with value:', value)
+    Debug.log('🧪 previewSingleSource called for:', sourceId, 'with value:', value)
     if (!value.trim()) {
-      console.log('❌ No value, returning early')
+      Debug.log('❌ No value, returning early')
       return
     }
 
-    console.log('⏳ Setting loading state for source:', sourceId)
+    Debug.log('⏳ Setting loading state for source:', sourceId)
     // Set loading state for this source
     setSourceValidations(prev => new Map(prev.set(sourceId, {
       valid: false,
@@ -196,7 +197,7 @@ export function DataMappingExpressionEditor({
         source_type: sourceType,
         expression: value
       }
-      console.log('Making preview request:', testRequest)
+      Debug.log('Making preview request:', testRequest)
       
       const response = await fetch(`${backendUrl}/api/v1/data-mapping/preview`, {
         method: 'POST',
@@ -271,7 +272,7 @@ export function DataMappingExpressionEditor({
 
   // Stable callback functions to prevent infinite re-renders
   const handleValidationChange = useCallback((validation: ExpressionValidationResponse | null) => {
-    console.log('DataMapping: handleValidationChange called with:', validation)
+    Debug.log('DataMapping: handleValidationChange called with:', validation)
     setValidation(validation)
   }, [])
 
@@ -283,7 +284,7 @@ export function DataMappingExpressionEditor({
   const handleValidationComplete = useCallback(() => {
     // Use a slight delay to ensure validation state is updated
     setTimeout(() => {
-      console.log('DataMapping: handleValidationComplete called', {
+      Debug.log('DataMapping: handleValidationComplete called', {
         autoTest,
         isValid: currentValidationRef.current?.is_valid,
         value: currentValueRef.current?.trim(),
@@ -301,7 +302,7 @@ export function DataMappingExpressionEditor({
       
       // Only trigger source testing if auto-test is enabled and expression is valid
       if (!autoTest || !currentValidationRef.current?.is_valid || !currentValueRef.current.trim() || currentSourcesRef.current.length === 0) {
-        console.log('Not triggering source previews - conditions not met', {
+        Debug.log('Not triggering source previews - conditions not met', {
           autoTest,
           isValid: currentValidationRef.current?.is_valid,
           hasValue: !!currentValueRef.current?.trim(),
@@ -310,14 +311,14 @@ export function DataMappingExpressionEditor({
         return
       }
       
-      console.log('Scheduling source previews for', currentSourcesRef.current?.length, 'sources')
+      Debug.log('Scheduling source previews for', currentSourcesRef.current?.length, 'sources')
       
       // Debounce source testing to prevent spam
       sourceValidationTimeoutRef.current = setTimeout(async () => {
         const currentSources = currentSourcesRef.current
         const currentValue = currentValueRef.current
         
-        console.log('Executing source previews', { sourcesCount: currentSources?.length, value: currentValue })
+        Debug.log('Executing source previews', { sourcesCount: currentSources?.length, value: currentValue })
         
         if (!currentValue.trim() || currentSources.length === 0) {
           setSourceValidations(new Map())
@@ -326,10 +327,10 @@ export function DataMappingExpressionEditor({
         }
 
         // Preview each source individually using /data-mapping/preview endpoint
-        console.log('Starting previews for sources:', currentSources.map(s => s.id))
+        Debug.log('Starting previews for sources:', currentSources.map(s => s.id))
         await Promise.all(
           currentSources.map(source => {
-            console.log('Previewing source:', source.id)
+            Debug.log('Previewing source:', source.id)
             return previewSingleSource(source.id)
           })
         )

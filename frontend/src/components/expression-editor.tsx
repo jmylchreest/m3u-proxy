@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { getBackendUrl } from '@/lib/config'
+import { Debug } from '@/utils/debug'
 import { 
   ExpressionValidationResponse, 
   ExpressionValidationError,
@@ -280,7 +281,7 @@ export const ExpressionEditor = forwardRef<HTMLTextAreaElement, ExpressionEditor
           }
         }
       } catch (error) {
-        console.warn('Failed to fetch expression fields:', error)
+        Debug.log('Failed to fetch expression fields:', error)
       }
     }
 
@@ -299,9 +300,9 @@ export const ExpressionEditor = forwardRef<HTMLTextAreaElement, ExpressionEditor
 
   // Debounced validation
   const validateExpression = useCallback(async (expression: string) => {
-    console.log('ExpressionEditor: validateExpression called', { expression: expression.slice(0, 50) + '...', validationEndpoint })
+    Debug.log('ExpressionEditor: validateExpression called', { expression: expression.slice(0, 50) + '...', validationEndpoint })
     if (!expression.trim()) {
-      console.log('ExpressionEditor: Empty expression, clearing validation')
+      Debug.log('ExpressionEditor: Empty expression, clearing validation')
       setValidation(null)
       setErrorHighlights([])
       onValidationChange?.(null)
@@ -370,7 +371,7 @@ export const ExpressionEditor = forwardRef<HTMLTextAreaElement, ExpressionEditor
           
           onValidationComplete?.()
         } catch (parseError) {
-          console.warn('Could not parse validation error response')
+          Debug.log('Could not parse validation error response')
           
           const validationResult: ExpressionValidationResponse = {
             is_valid: false,
@@ -385,7 +386,7 @@ export const ExpressionEditor = forwardRef<HTMLTextAreaElement, ExpressionEditor
         }
       }
     } catch (error) {
-      console.warn('Failed to validate expression:', error)
+      Debug.log('Failed to validate expression:', error)
       
       const validationResult: ExpressionValidationResponse = {
         is_valid: false,
@@ -404,13 +405,13 @@ export const ExpressionEditor = forwardRef<HTMLTextAreaElement, ExpressionEditor
 
   // Handle value changes with debouncing
   useEffect(() => {
-    console.log('ExpressionEditor: Value changed, setting up debounced validation', { value: value.slice(0, 50) + '...', debounceMs })
+    Debug.log('ExpressionEditor: Value changed, setting up debounced validation', { value: value.slice(0, 50) + '...', debounceMs })
     if (debounceTimeoutRef.current) {
       clearTimeout(debounceTimeoutRef.current)
     }
 
     debounceTimeoutRef.current = setTimeout(() => {
-      console.log('ExpressionEditor: Debounce timeout fired, calling validateExpression')
+      Debug.log('ExpressionEditor: Debounce timeout fired, calling validateExpression')
       validateExpression(value)
     }, debounceMs)
 

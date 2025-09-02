@@ -5,6 +5,7 @@ import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import { AlertCircle, CheckCircle, Loader2 } from "lucide-react"
 import { useProgressContext, ProgressEvent } from "@/providers/ProgressProvider"
+import { Debug } from "@/utils/debug"
 
 interface RefreshProgressProps {
   sourceId: string
@@ -32,22 +33,22 @@ export function RefreshProgress({ sourceId, isActive, onComplete }: RefreshProgr
       return
     }
 
-    console.log(`[RefreshProgress] Starting SSE for source ${sourceId}`)
+    Debug.log(`[RefreshProgress] Starting SSE for source ${sourceId}`)
 
     // SSE connection is managed by ProgressProvider
     // We don't need to check connection status here
 
     const handleProgressEvent = (event: ProgressEvent) => {
-      console.log('[RefreshProgress] Received SSE event:', event)
+      Debug.log('[RefreshProgress] Received SSE event:', event)
       
       // Only handle events for this specific source - use owner_id to match the source
       if (event.owner_id !== sourceId) {
-        console.log(`[RefreshProgress] Ignoring event for different source: ${event.owner_id} vs ${sourceId}`)
+        Debug.log(`[RefreshProgress] Ignoring event for different source: ${event.owner_id} vs ${sourceId}`)
         return
       }
 
       const currentStage = event.stages.find(s => s.id === event.current_stage)
-      console.log(`[RefreshProgress] Processing event for source ${sourceId}:`, event.state, event.overall_percentage, currentStage?.stage_step)
+      Debug.log(`[RefreshProgress] Processing event for source ${sourceId}:`, event.state, event.overall_percentage, currentStage?.stage_step)
 
       const newState: ProgressState = {
         state: event.state,
@@ -60,7 +61,7 @@ export function RefreshProgress({ sourceId, isActive, onComplete }: RefreshProgr
 
       // Call completion callback if operation finished
       if ((event.state === 'completed' || event.state === 'error') && onComplete) {
-        console.log(`[RefreshProgress] Operation ${event.state} for source ${sourceId}`)
+        Debug.log(`[RefreshProgress] Operation ${event.state} for source ${sourceId}`)
         setTimeout(() => {
           onComplete()
           setProgress({ state: 'idle', percentage: 0 })

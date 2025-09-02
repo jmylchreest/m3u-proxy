@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
+import { Debug } from "@/utils/debug"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Code } from "@/components/ui/code"
@@ -129,13 +130,13 @@ export function FilterExpressionEditor({
 
   // Test expression against a single source
   const validateSingleSource = useCallback(async (sourceId: string) => {
-    console.log('🧪 validateSingleSource called for:', sourceId, 'with value:', value)
+    Debug.log('🧪 validateSingleSource called for:', sourceId, 'with value:', value)
     if (!value.trim()) {
-      console.log('❌ No value, returning early')
+      Debug.log('❌ No value, returning early')
       return
     }
 
-    console.log('⏳ Setting loading state for source:', sourceId)
+    Debug.log('⏳ Setting loading state for source:', sourceId)
     // Set loading state for this source
     setSourceValidations(prev => new Map(prev.set(sourceId, {
       valid: false,
@@ -152,7 +153,7 @@ export function FilterExpressionEditor({
         filter_expression: value,
         is_inverse: false
       }
-      console.log('🚀 Making test request:', testRequest)
+      Debug.log('🚀 Making test request:', testRequest)
       
       const response = await fetch(`${backendUrl}/api/v1/filters/test`, {
         method: 'POST',
@@ -230,7 +231,7 @@ export function FilterExpressionEditor({
 
   // Stable callback functions to prevent infinite re-renders
   const handleValidationChange = useCallback((validation: ExpressionValidationResponse | null) => {
-    console.log('📝 handleValidationChange called with:', validation)
+    Debug.log('📝 handleValidationChange called with:', validation)
     setValidation(validation)
   }, [])
 
@@ -242,7 +243,7 @@ export function FilterExpressionEditor({
   const handleValidationComplete = useCallback(() => {
     // Use a slight delay to ensure validation state is updated
     setTimeout(() => {
-      console.log('🔍 handleValidationComplete called', {
+      Debug.log('🔍 handleValidationComplete called', {
         autoTest,
         isValid: currentValidationRef.current?.is_valid,
         value: currentValueRef.current?.trim(),
@@ -260,7 +261,7 @@ export function FilterExpressionEditor({
       
       // Only trigger source testing if auto-test is enabled and expression is valid
       if (!autoTest || !currentValidationRef.current?.is_valid || !currentValueRef.current.trim() || currentSourcesRef.current.length === 0) {
-        console.log('Not triggering source tests - conditions not met', {
+        Debug.log('Not triggering source tests - conditions not met', {
           autoTest,
           isValid: currentValidationRef.current?.is_valid,
           hasValue: !!currentValueRef.current?.trim(),
@@ -269,14 +270,14 @@ export function FilterExpressionEditor({
         return
       }
       
-      console.log('Scheduling source tests for', currentSourcesRef.current?.length, 'sources')
+      Debug.log('Scheduling source tests for', currentSourcesRef.current?.length, 'sources')
       
       // Debounce source testing to prevent spam
       sourceValidationTimeoutRef.current = setTimeout(async () => {
         const currentSources = currentSourcesRef.current
         const currentValue = currentValueRef.current
         
-        console.log('Executing source tests', { sourcesCount: currentSources?.length, value: currentValue })
+        Debug.log('Executing source tests', { sourcesCount: currentSources?.length, value: currentValue })
         
         if (!currentValue.trim() || currentSources.length === 0) {
           setSourceValidations(new Map())
@@ -285,10 +286,10 @@ export function FilterExpressionEditor({
         }
 
         // Test each source individually using /filters/test endpoint
-        console.log('Starting tests for sources:', currentSources.map(s => s.id))
+        Debug.log('Starting tests for sources:', currentSources.map(s => s.id))
         await Promise.all(
           currentSources.map(source => {
-            console.log('Testing source:', source.id)
+            Debug.log('Testing source:', source.id)
             return validateSingleSource(source.id)
           })
         )

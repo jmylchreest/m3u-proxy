@@ -46,6 +46,7 @@ import {
   type ChartConfig
 } from '@/components/ui/chart'
 import { ClientMetrics, RelayMetrics, DashboardMetrics, RelayHealthApiResponse, RelayProcess, RelayConnectedClient, HealthData } from "@/types/api"
+import { Debug } from '@/utils/debug'
 import { getStatusIndicatorClasses, getStatusType } from "@/lib/status-colors"
 import { apiClient } from "@/lib/api-client"
 import { 
@@ -186,7 +187,7 @@ function validateChartData(data: RelayDataPoint[] = [], keys: (keyof RelayDataPo
   // Debug logging for CPU data
   if (keys.includes('cpuUsage') && filtered.length > 0) {
     const cpuValues = filtered.map(p => p.cpuUsage)
-    console.log('CPU chart data:', {
+    Debug.log('CPU chart data:', {
       count: filtered.length,
       min: Math.min(...cpuValues),
       max: Math.max(...cpuValues),
@@ -319,7 +320,7 @@ export function Dashboard() {
       clearInterval(intervalRef.current)
     }
     
-    console.log('Starting dashboard auto-refresh with interval:', refreshInterval, 'seconds')
+    Debug.log('Starting dashboard auto-refresh with interval:', refreshInterval, 'seconds')
     intervalRef.current = setInterval(() => {
       refreshDashboardData()
     }, refreshInterval * 1000)
@@ -346,7 +347,7 @@ export function Dashboard() {
   const handleRefreshIntervalChange = useCallback((value: number[]) => {
     const sliderIndex = value[0]
     const newInterval = stepValues[sliderIndex]
-    console.log('Dashboard refresh interval changed:', { sliderIndex, newInterval, stepValues })
+    Debug.log('Dashboard refresh interval changed:', { sliderIndex, newInterval, stepValues })
     setRefreshInterval(newInterval)
   }, [stepValues])
 
@@ -365,7 +366,7 @@ export function Dashboard() {
   // Update auto-refresh when refresh interval changes
   useEffect(() => {
     if (isAutoRefresh) {
-      console.log('Restarting dashboard auto-refresh due to interval change:', refreshInterval)
+      Debug.log('Restarting dashboard auto-refresh due to interval change:', refreshInterval)
       stopAutoRefresh()
       startAutoRefresh()
     }

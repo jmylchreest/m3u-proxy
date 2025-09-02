@@ -218,7 +218,7 @@ export default function EpgPage() {
         timeZone: selectedTimezone,
       });
     } catch (error) {
-      console.warn('Error formatting time in timezone:', error);
+      Debug.warn('Error formatting time in timezone:', error);
       return '--:--';
     }
   }, [selectedTimezone]);
@@ -238,7 +238,7 @@ export default function EpgPage() {
         timeZone: selectedTimezone,
       });
     } catch (error) {
-      console.warn('Error formatting date in timezone:', error);
+      Debug.warn('Error formatting date in timezone:', error);
       return 'Invalid Date';
     }
   }, [selectedTimezone]);
@@ -257,7 +257,7 @@ export default function EpgPage() {
         timeZone: selectedTimezone,
       });
     } catch (error) {
-      console.warn('Error formatting guide time in timezone:', error);
+      Debug.warn('Error formatting guide time in timezone:', error);
       return '--';
     }
   }, [selectedTimezone]);
@@ -449,7 +449,7 @@ export default function EpgPage() {
           }
         }
       } catch (err) {
-        console.warn("Failed to fetch EPG sources:", err);
+        Debug.warn("Failed to fetch EPG sources:", err);
       }
 
 
@@ -1536,7 +1536,7 @@ export default function EpgPage() {
                     selectedTimezone={selectedTimezone}
                     onProgramClick={(program) => {
                       // Handle program clicks - could open modal, navigate, etc.
-                      console.log('Program clicked:', program);
+                      Debug.log('Program clicked:', program);
                     }}
                     onChannelPlay={(channel) => {
                       handlePlayChannel(channel);

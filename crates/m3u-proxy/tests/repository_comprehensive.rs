@@ -675,9 +675,8 @@ async fn create_in_memory_database() -> Database {
     };
     
     let ingestion_config = IngestionConfig::default();
-    let app_config = m3u_proxy::config::Config::default();
     
-    Database::new(&db_config, &ingestion_config, &app_config).await
+    Database::new(&db_config, &ingestion_config).await
         .expect("Failed to create in-memory database")
 }
 

@@ -41,7 +41,10 @@
 //!     };
 //!     
 //!     // Get appropriate handler for source type
-//!     let handler = SourceHandlerFactory::create_handler(&source.source_type)?;
+//!     use m3u_proxy::utils::HttpClientFactory;
+//!     use std::time::Duration;
+//!     let factory = HttpClientFactory::new(None, Duration::from_secs(5));
+//!     let handler = SourceHandlerFactory::create_handler(&source.source_type, &factory).await?;
 //!     
 //!     // Example operations would be done here in actual usage
 //!     Ok(())

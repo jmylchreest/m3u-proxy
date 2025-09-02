@@ -23,9 +23,8 @@ get-version:
     set -euo pipefail
 
     # Check if we're on a git tag (exact match)
-    if git describe --exact-match --tags HEAD 2>/dev/null; then
+    if TAG=$(git describe --exact-match --tags HEAD 2>/dev/null); then
         # On a tag: v0.1.3 → 0.1.3
-        TAG=$(git describe --exact-match --tags HEAD 2>/dev/null)
         VERSION=${TAG#v}  # Remove 'v' prefix if present
         echo "$VERSION"
     else
@@ -179,6 +178,44 @@ build-backend:
     cargo build --release --bin m3u-proxy
     @echo "Backend built to target/release/"
 
+# Build backend with full release optimizations (strip debug symbols, optimize for size)
+build-backend-optimized:
+    @echo "Building Rust backend with full release optimizations..."
+    RUSTFLAGS="-C strip=symbols -C opt-level=s" cargo build --release --bin m3u-proxy
+    @echo "Optimized backend built to target/release/"
+
+# Get the path to the built binary
+binary-path:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Check if release binary exists
+    if [ -f "target/release/m3u-proxy" ]; then
+        echo "$(pwd)/target/release/m3u-proxy"
+    # Check if debug binary exists
+    elif [ -f "target/debug/m3u-proxy" ]; then
+        echo "$(pwd)/target/debug/m3u-proxy" 
+    else
+        echo "Binary not found. Run 'just build-backend' or 'just build-backend-optimized' first." >&2
+        exit 1
+    fi
+
+# Get binary info (path, size, type, etc.)
+binary-info:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BINARY_PATH=$(just binary-path)
+    if [ $? -eq 0 ]; then
+        echo "Binary location: $BINARY_PATH"
+        echo "Binary size: $(du -h "$BINARY_PATH" | cut -f1)"
+        echo "File type: $(file "$BINARY_PATH")"
+        if command -v ldd >/dev/null 2>&1; then
+            echo "Linked libraries:"
+            ldd "$BINARY_PATH" 2>/dev/null | head -5 || echo "  Static binary or libraries not shown"
+        fi
+    fi
+
 # Copy frontend build to backend static directory
 copy-frontend:
     @echo "Copying frontend build to backend static directory..."
@@ -303,7 +340,7 @@ upgrade-deps-frontend *args="":
     cd frontend && { npm outdated || echo "All npm packages are up to date"; }
     
     echo "Checking for unused npm dependencies..."
-    (cd frontend && { npx depcheck || echo "No unused dependencies found"; })
+    (cd frontend && { npx depcheck --ignores="@tailwindcss/postcss,autoprefixer,postcss,tw-animate-css" || echo "No unused dependencies found"; })
     
     echo "npm dependencies upgraded!"
     echo ""
@@ -417,7 +454,15 @@ build-versioned:
     echo "Updating Cargo.toml to version: $VERSION"
     just set-version "$VERSION"
     
-    just build-all
+    # Check if this is a release version (no -dev suffix)
+    if [[ "$VERSION" =~ -dev ]]; then
+        echo "Development build detected - using standard release build"
+        just build-frontend copy-frontend build-backend
+    else
+        echo "Release build detected - using optimized build with stripped symbols"
+        just build-frontend copy-frontend build-backend-optimized
+    fi
+    
     echo "✅ Versioned build complete with version: $VERSION"
     echo "   Cargo.toml, containers, and SBOM will all reference: $VERSION"
 

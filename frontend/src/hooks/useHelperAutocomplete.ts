@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { getBackendUrl } from '@/lib/config'
+import { Debug } from '@/utils/debug'
 
 export interface Helper {
   name: string
@@ -141,7 +142,7 @@ export function useHelperAutocomplete(
 
   // Get helper suggestions
   const getHelperSuggestions = useCallback((query: string): AutocompleteSuggestion[] => {
-    console.log('AutoComplete: getHelperSuggestions called', { query, helpersCount: helpers.length })
+    Debug.log('AutoComplete: getHelperSuggestions called', { query, helpersCount: helpers.length })
     const suggestions = helpers
       .filter(helper => helper.name.toLowerCase().includes(query.toLowerCase()))
       .map(helper => ({
@@ -150,7 +151,7 @@ export function useHelperAutocomplete(
         description: helper.description,
         type: 'helper' as const
       }))
-    console.log('AutoComplete: helper suggestions generated', suggestions)
+    Debug.log('AutoComplete: helper suggestions generated', suggestions)
     return suggestions
   }, [helpers])
 
@@ -160,17 +161,17 @@ export function useHelperAutocomplete(
     query: string,
     signal?: AbortSignal
   ): Promise<AutocompleteSuggestion[]> => {
-    console.log('AutoComplete: getCompletionSuggestions called', { helper: helper.name, query, completion: helper.completion })
+    Debug.log('AutoComplete: getCompletionSuggestions called', { helper: helper.name, query, completion: helper.completion })
     
     if (!helper.completion) {
-      console.log('AutoComplete: No completion config for helper')
+      Debug.log('AutoComplete: No completion config for helper')
       return []
     }
 
     const { completion } = helper
 
     if (completion.type === 'static') {
-      console.log('AutoComplete: Static completion with options', completion.options)
+      Debug.log('AutoComplete: Static completion with options', completion.options)
       return (completion.options || [])
         .filter(option => option.label.toLowerCase().includes(query.toLowerCase()))
         .map(option => ({
@@ -183,10 +184,10 @@ export function useHelperAutocomplete(
 
     if (completion.type === 'search' && completion.endpoint) {
       const minChars = completion.min_chars || 1
-      console.log('AutoComplete: Search completion', { query, minChars, queryLength: query.length })
+      Debug.log('AutoComplete: Search completion', { query, minChars, queryLength: query.length })
       
       if (query.length < minChars) {
-        console.log('AutoComplete: Query too short, need', minChars, 'chars')
+        Debug.log('AutoComplete: Query too short, need', minChars, 'chars')
         return []
       }
 
@@ -201,19 +202,19 @@ export function useHelperAutocomplete(
           url.searchParams.set('limit', completion.max_results.toString())
         }
 
-        console.log('AutoComplete: Fetching from URL', url.toString())
+        Debug.log('AutoComplete: Fetching from URL', url.toString())
         const response = await fetch(url.toString(), { signal })
         
         if (!response.ok) {
-          console.log('AutoComplete: Search API failed', response.status, response.statusText)
+          Debug.log('AutoComplete: Search API failed', response.status, response.statusText)
           return []
         }
 
         const data = await response.json()
-        console.log('AutoComplete: Search API response', data)
+        Debug.log('AutoComplete: Search API response', data)
         
         const items = Array.isArray(data) ? data : data.results || data.items || data.data || []
-        console.log('AutoComplete: Extracted items', items)
+        Debug.log('AutoComplete: Extracted items', items)
 
         const suggestions = items.map((item: any) => ({
           label: item[completion.display_field || 'name'] || item.name,
@@ -223,11 +224,11 @@ export function useHelperAutocomplete(
           type: 'completion' as const
         }))
         
-        console.log('AutoComplete: Generated suggestions', suggestions)
+        Debug.log('AutoComplete: Generated suggestions', suggestions)
         return suggestions
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') {
-          console.log('AutoComplete: Search request aborted')
+          Debug.log('AutoComplete: Search request aborted')
           return []
         }
         console.error('AutoComplete: Search API error', error)
@@ -236,20 +237,20 @@ export function useHelperAutocomplete(
     }
 
     if (completion.type === 'function') {
-      console.log('AutoComplete: Function completion - generating dynamic suggestions')
+      Debug.log('AutoComplete: Function completion - generating dynamic suggestions')
       // For function type completions, we could generate suggestions based on context
       // This could involve calling a function to get dynamic suggestions
       // For now, return empty array as function completions might not need suggestions
       return []
     }
 
-    console.log('AutoComplete: Unhandled completion type', completion.type)
+    Debug.log('AutoComplete: Unhandled completion type', completion.type)
     return []
   }, [])
 
   // Update suggestions based on context
   const updateSuggestions = useCallback(async (context: AutocompleteContext) => {
-    console.log('AutoComplete: updateSuggestions called', context)
+    Debug.log('AutoComplete: updateSuggestions called', context)
     setState(prev => ({ ...prev, loading: true }))
 
     // Cancel previous request
@@ -264,10 +265,10 @@ export function useHelperAutocomplete(
       let suggestions: AutocompleteSuggestion[] = []
 
       if (context.type === 'helper') {
-        console.log('AutoComplete: Getting helper suggestions')
+        Debug.log('AutoComplete: Getting helper suggestions')
         suggestions = getHelperSuggestions(context.query)
       } else if (context.type === 'completion' && context.helper) {
-        console.log('AutoComplete: Getting completion suggestions for helper', context.helper.name)
+        Debug.log('AutoComplete: Getting completion suggestions for helper', context.helper.name)
         suggestions = await getCompletionSuggestions(
           context.helper, 
           context.query, 
@@ -275,7 +276,7 @@ export function useHelperAutocomplete(
         )
       }
 
-      console.log('AutoComplete: Final suggestions', suggestions)
+      Debug.log('AutoComplete: Final suggestions', suggestions)
 
       if (!abortController.signal.aborted) {
         setState(prev => ({
@@ -296,15 +297,15 @@ export function useHelperAutocomplete(
 
   // Handle input changes
   const handleInputChange = useCallback(() => {
-    console.log('AutoComplete: handleInputChange called')
+    Debug.log('AutoComplete: handleInputChange called')
     const textarea = textareaRef.current
     if (!textarea) {
-      console.log('AutoComplete: No textarea ref')
+      Debug.log('AutoComplete: No textarea ref')
       return
     }
 
     const context = getAutocompleteContext(textarea)
-    console.log('AutoComplete: context detected', context)
+    Debug.log('AutoComplete: context detected', context)
     
     if (!context) {
       setState(prev => ({ ...prev, isOpen: false, suggestions: [], context: undefined }))
@@ -312,7 +313,7 @@ export function useHelperAutocomplete(
     }
 
     const position = getCursorPosition(textarea)
-    console.log('📍 AutoComplete: position calculated', position)
+    Debug.log('📍 AutoComplete: position calculated', position)
     setState(prev => ({ ...prev, isOpen: true, position }))
 
     // Debounce API calls for completions
@@ -328,7 +329,7 @@ export function useHelperAutocomplete(
 
   // Handle keyboard navigation
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    console.log('AutoComplete: Key pressed', {
+    Debug.log('AutoComplete: Key pressed', {
       key: event.key,
       isOpen: state.isOpen,
       suggestionsCount: state.suggestions.length,
@@ -336,7 +337,7 @@ export function useHelperAutocomplete(
     })
 
     if (!state.isOpen || state.suggestions.length === 0) {
-      console.log('AutoComplete: Early return - not open or no suggestions')
+      Debug.log('AutoComplete: Early return - not open or no suggestions')
       return
     }
 
@@ -360,15 +361,15 @@ export function useHelperAutocomplete(
       case 'Tab':
       case 'Enter':
         event.preventDefault()
-        console.log('AutoComplete: Tab/Enter pressed for completion')
+        Debug.log('AutoComplete: Tab/Enter pressed for completion')
         const selectedSuggestion = state.suggestions[state.selectedIndex]
-        console.log('AutoComplete: Selected suggestion', selectedSuggestion)
-        console.log('📍 AutoComplete: Current context', state.context)
+        Debug.log('AutoComplete: Selected suggestion', selectedSuggestion)
+        Debug.log('📍 AutoComplete: Current context', state.context)
         if (selectedSuggestion && state.context) {
-          console.log('AutoComplete: Calling insertCompletion')
+          Debug.log('AutoComplete: Calling insertCompletion')
           insertCompletion(selectedSuggestion, state.context)
         } else {
-          console.log('AutoComplete: Missing suggestion or context')
+          Debug.log('AutoComplete: Missing suggestion or context')
         }
         break
 
@@ -382,7 +383,7 @@ export function useHelperAutocomplete(
   const insertCompletion = useCallback((suggestion: AutocompleteSuggestion, context: AutocompleteContext) => {
     const textarea = textareaRef.current
     if (!textarea || !onValueChange) {
-      console.log('AutoComplete: Missing textarea or onValueChange callback')
+      Debug.log('AutoComplete: Missing textarea or onValueChange callback')
       return
     }
 
@@ -400,7 +401,7 @@ export function useHelperAutocomplete(
       newValue = beforeReplacement + suggestion.value + afterReplacement
     }
 
-    console.log('AutoComplete: Inserting completion', {
+    Debug.log('AutoComplete: Inserting completion', {
       contextType: context.type,
       beforeReplacement,
       suggestionValue: suggestion.value,
@@ -430,11 +431,11 @@ export function useHelperAutocomplete(
 
   // Handle suggestion click
   const handleSuggestionClick = useCallback((suggestion: AutocompleteSuggestion) => {
-    console.log('AutoComplete: Mouse click on suggestion', { suggestion, hasContext: !!state.context })
+    Debug.log('AutoComplete: Mouse click on suggestion', { suggestion, hasContext: !!state.context })
     if (state.context) {
       insertCompletion(suggestion, state.context)
     } else {
-      console.log('AutoComplete: No context available for mouse click')
+      Debug.log('AutoComplete: No context available for mouse click')
     }
   }, [state.context, insertCompletion])
 

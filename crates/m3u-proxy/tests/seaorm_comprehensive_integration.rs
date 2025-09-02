@@ -49,8 +49,7 @@ async fn test_database_comprehensive(database_url: &str) -> Result<()> {
     };
     
     let ingestion_config = IngestionConfig::default();
-    let app_config = m3u_proxy::config::Config::default();
-    let db = Database::new(&config, &ingestion_config, &app_config).await?;
+    let db = Database::new(&config, &ingestion_config).await?;
     
     // Skip migrations for SQLite to avoid foreign key constraint issues
     // For PostgreSQL and MySQL, migrations should run normally (if containers are available)
@@ -226,8 +225,7 @@ async fn test_seaorm_migration_system() -> Result<()> {
     };
     
     let ingestion_config = IngestionConfig::default();
-    let app_config = m3u_proxy::config::Config::default();
-    let db = Database::new(&config, &ingestion_config, &app_config).await?;
+    let db = Database::new(&config, &ingestion_config).await?;
     
     // Skip migration for SQLite to avoid foreign key constraint issues
     // Create minimal tables for testing instead

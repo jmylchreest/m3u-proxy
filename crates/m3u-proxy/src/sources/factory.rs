@@ -25,13 +25,17 @@ use super::xtream_epg::XtreamEpgHandler;
 /// ```rust
 /// use m3u_proxy::sources::factory::SourceHandlerFactory;
 /// use m3u_proxy::models::StreamSourceType;
+/// use m3u_proxy::utils::HttpClientFactory;
+/// use std::time::Duration;
 ///
 /// async fn example() -> Result<(), Box<dyn std::error::Error>> {
+///     let factory = HttpClientFactory::new(None, Duration::from_secs(5));
+///     
 ///     // Create handler for M3U source
-///     let m3u_handler = SourceHandlerFactory::create_handler(&StreamSourceType::M3u)?;
+///     let m3u_handler = SourceHandlerFactory::create_handler(&StreamSourceType::M3u, &factory).await?;
 ///     
 ///     // Create handler for Xtream source  
-///     let xtream_handler = SourceHandlerFactory::create_handler(&StreamSourceType::Xtream)?;
+///     let xtream_handler = SourceHandlerFactory::create_handler(&StreamSourceType::Xtream, &factory).await?;
 ///     
 ///     Ok(())
 /// }
@@ -240,6 +244,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_epg_factory_functionality() {
+        use crate::utils::HttpClientFactory;
+        use std::time::Duration;
+        
         // Test EPG factory methods  
         let factory = HttpClientFactory::new(None, Duration::from_secs(5));
         for epg_type in [EpgSourceType::Xmltv, EpgSourceType::Xtream] {

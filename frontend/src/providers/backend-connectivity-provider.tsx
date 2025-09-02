@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { getBackendUrl } from '@/lib/config'
+import { Debug } from '@/utils/debug'
 
 export interface BackendConnectivityState {
   isConnected: boolean
@@ -52,7 +53,7 @@ export function BackendConnectivityProvider({
     
     try {
       // Simple logging without feature flag dependency to prevent circular dependency
-      console.log('[BackendConnectivity] Checking connectivity to:', backendUrl)
+      Debug.log('[BackendConnectivity] Checking connectivity to:', backendUrl)
       
       // Use the /live endpoint as it's a simple health check
       const controller = new AbortController()
@@ -71,7 +72,7 @@ export function BackendConnectivityProvider({
       activeRequestRef.current = null
       
       if (response.ok) {
-        console.log('[BackendConnectivity] Connection successful')
+        Debug.log('[BackendConnectivity] Connection successful')
         setIsConnected(true)
         setError(null)
       } else {
@@ -82,7 +83,7 @@ export function BackendConnectivityProvider({
       
       // Don't log aborted requests as errors - they're intentional cancellations
       if (err instanceof Error && err.name === 'AbortError') {
-        console.log('[BackendConnectivity] Connection check aborted')
+        Debug.log('[BackendConnectivity] Connection check aborted')
         return // Don't update state for aborted requests
       }
       
@@ -114,9 +115,9 @@ export function BackendConnectivityProvider({
     
     // Only start monitoring if we're connected
     if (isConnected && !isChecking) {
-      console.log('[BackendConnectivity] Starting periodic health checks (60s interval)')
+      Debug.log('[BackendConnectivity] Starting periodic health checks (60s interval)')
       intervalRef.current = setInterval(() => {
-        console.log('[BackendConnectivity] Performing periodic health check')
+        Debug.log('[BackendConnectivity] Performing periodic health check')
         checkConnection()
       }, 60000) // 60 seconds
     }
@@ -125,7 +126,7 @@ export function BackendConnectivityProvider({
   // Stop monitoring
   const stopMonitoring = useCallback(() => {
     if (intervalRef.current) {
-      console.log('[BackendConnectivity] Stopping periodic health checks')
+      Debug.log('[BackendConnectivity] Stopping periodic health checks')
       clearInterval(intervalRef.current)
       intervalRef.current = null
     }
@@ -133,7 +134,7 @@ export function BackendConnectivityProvider({
 
   // Initial connection check - run once on mount
   useEffect(() => {
-    console.log('[BackendConnectivity] Running initial connection check')
+    Debug.log('[BackendConnectivity] Running initial connection check')
     checkConnection()
   }, []) // Empty dependency array to run only once on mount
 
@@ -153,7 +154,7 @@ export function BackendConnectivityProvider({
   // Cleanup active requests on unmount
   useEffect(() => {
     return () => {
-      console.log('[BackendConnectivity] Cleaning up on unmount')
+      Debug.log('[BackendConnectivity] Cleaning up on unmount')
       if (activeRequestRef.current) {
         activeRequestRef.current.abort()
         activeRequestRef.current = null

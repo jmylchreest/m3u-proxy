@@ -1,6 +1,7 @@
 "use client"
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { Debug } from '@/utils/debug'
 
 export interface ThemeDefinition {
   id: string
@@ -117,7 +118,7 @@ export function EnhancedThemeProvider({
     link.rel = 'stylesheet'
     link.href = `/themes/${themeName}.css`
     link.setAttribute('data-theme-css', themeName)
-    link.onload = () => console.log(`Theme CSS loaded: ${themeName}`)
+    link.onload = () => Debug.log(`Theme CSS loaded: ${themeName}`)
     link.onerror = () => console.error(`Failed to load theme CSS: ${themeName}`)
     document.head.appendChild(link)
 
@@ -128,9 +129,9 @@ export function EnhancedThemeProvider({
     }
     
     
-    console.log(`Applied theme: ${themeName} (${actualMode})`)
-    console.log(`Document classes:`, document.documentElement.className)
-    console.log(`Has dark class:`, document.documentElement.classList.contains('dark'))
+    Debug.log(`Applied theme: ${themeName} (${actualMode})`)
+    Debug.log(`Document classes:`, document.documentElement.className)
+    Debug.log(`Has dark class:`, document.documentElement.classList.contains('dark'))
   }, [])
 
   // Load themes from JSON file

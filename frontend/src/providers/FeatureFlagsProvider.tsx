@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useFeatureFlags, invalidateFeatureFlagsCache } from '@/hooks/useFeatureFlags';
+import { Debug } from '@/utils/debug';
 
 interface FeatureFlagsContextType {
   isLoaded: boolean;
@@ -36,7 +37,7 @@ export function FeatureFlagsProvider({ children }: FeatureFlagsProviderProps) {
   // Log feature flags state for debugging
   useEffect(() => {
     if (isLoaded) {
-      console.log('[FeatureFlags] Loaded:', Object.keys(featureFlags).length, 'flags');
+      Debug.log('[FeatureFlags] Loaded:', Object.keys(featureFlags).length, 'flags');
       if (error) {
         console.warn('[FeatureFlags] Error loading flags:', error);
       }

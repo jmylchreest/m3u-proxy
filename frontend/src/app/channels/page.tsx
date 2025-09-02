@@ -20,7 +20,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { VideoPlayerModal } from '@/components/video-player-modal';
-import { getBackendUrl } from '@/lib/config';
+import { getBackendUrl } from '@/lib/config'
+import { Debug } from '@/utils/debug';
 
 interface Channel {
   id: string;
@@ -208,7 +209,7 @@ export default function ChannelsPage() {
         // Trigger load more when the element comes into view and we have more data
         // Only trigger on intersection, not when search changes to prevent focus loss
         if (entry.isIntersecting && hasMore && !loading && !debouncedSearch) {
-          console.log('[Channels] Loading more items via infinite scroll');
+          Debug.log('[Channels] Loading more items via infinite scroll');
           handleLoadMore();
         }
       },

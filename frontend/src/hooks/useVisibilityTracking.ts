@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useProgressContext } from '@/providers/ProgressProvider'
+import { Debug } from '@/utils/debug'
 
 /**
  * Hook to automatically mark events as seen when they appear in the UI
@@ -27,7 +28,7 @@ export function useVisibilityTracking(eventIds: string[], enabled: boolean = tru
 
     // Mark new events as seen/acknowledged
     if (newEventIds.length > 0) {
-      console.log('[useVisibilityTracking] Marking events as seen:', newEventIds)
+      Debug.log('[useVisibilityTracking] Marking events as seen:', newEventIds)
       context.markAsSeen(newEventIds)
     }
 
@@ -46,7 +47,7 @@ export function useMarkAsSeen(eventIds: string[]) {
   
   useEffect(() => {
     if (eventIds.length > 0) {
-      console.log('[useMarkAsSeen] Marking events as seen:', eventIds)
+      Debug.log('[useMarkAsSeen] Marking events as seen:', eventIds)
       context.markAsSeen(eventIds)
     }
   }, [eventIds, context])

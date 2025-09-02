@@ -307,8 +307,7 @@ async fn create_in_memory_database() -> anyhow::Result<Database> {
         use_new_source_handlers: true,
     };
     
-    let app_config = m3u_proxy::config::Config::default();
-    Database::new(&db_config, &ingestion_config, &app_config).await
+    Database::new(&db_config, &ingestion_config).await
 }
 
 /// Additional exemplary SeaORM test helper functions demonstrating best practices

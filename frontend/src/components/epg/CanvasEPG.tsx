@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Play } from 'lucide-react';
+import { Debug } from '@/utils/debug';
 
 interface Channel {
   id: string;
@@ -149,21 +150,21 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     const canvas = canvasRef.current;
     const scrollArea = scrollAreaRef.current;
     if (!canvas || !scrollArea) {
-      console.log('Canvas or scroll area not found');
+      Debug.log('Canvas or scroll area not found');
       return;
     }
 
     // Get the main container that constrains the visible area (not the scroll content)
     const mainContainer = document.querySelector('main main');
     if (!mainContainer) {
-      console.log('Main container not found');
+      Debug.log('Main container not found');
       return;
     }
     
     // Find the ScrollArea viewport element to get the actual available space
     const viewport = scrollArea.querySelector('[data-radix-scroll-area-viewport]');
     if (!viewport) {
-      console.log('ScrollArea viewport not found');
+      Debug.log('ScrollArea viewport not found');
       return;
     }
     
@@ -177,7 +178,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     
     const devicePixelRatio = window.devicePixelRatio || 1;
     
-    console.log('Initializing canvas to available viewport size:', width, 'x', height);
+    Debug.log('Initializing canvas to available viewport size:', width, 'x', height);
     
     // Set canvas size to available viewport dimensions
     canvas.width = width * devicePixelRatio;
@@ -191,7 +192,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       ctx.scale(devicePixelRatio, devicePixelRatio);
       setCanvasContext(ctx);
       setCanvasDimensions({ width, height });
-      console.log('Canvas context initialized with proper viewport dimensions');
+      Debug.log('Canvas context initialized with proper viewport dimensions');
     } else {
       console.error('Failed to get canvas context');
     }
@@ -220,7 +221,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       
       const devicePixelRatio = window.devicePixelRatio || 1;
       
-      console.log('Resizing canvas to available viewport size:', width, 'x', height);
+      Debug.log('Resizing canvas to available viewport size:', width, 'x', height);
       
       try {
         canvas.width = width * devicePixelRatio;
@@ -257,7 +258,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       mutations.forEach((mutation) => {
         if (mutation.type === 'attributes' && 
             (mutation.attributeName === 'class' || mutation.attributeName === 'data-theme')) {
-          console.log('Theme changed, updating Canvas colors');
+          Debug.log('Theme changed, updating Canvas colors');
           setThemeKey(prev => prev + 1);
         }
       });
@@ -314,14 +315,14 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
   // Main render function
   const renderCanvas = useCallback(() => {
     if (!canvasContext || !guideData) {
-      console.log('Missing context or data:', !!canvasContext, !!guideData);
+      Debug.log('Missing context or data:', !!canvasContext, !!guideData);
       return;
     }
 
     const ctx = canvasContext;
     const { width, height } = canvasDimensions;
     
-    console.log('Rendering canvas:', width, 'x', height, 'channels:', filteredChannels.length);
+    Debug.log('Rendering canvas:', width, 'x', height, 'channels:', filteredChannels.length);
     
     // Clear canvas
     ctx.clearRect(0, 0, width, height);
@@ -614,7 +615,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
   useEffect(() => {
     if (!canvasContext || !guideData || isRenderingRef.current) return;
     
-    console.log('Render effect triggered');
+    Debug.log('Render effect triggered');
     isRenderingRef.current = true;
     
     // Use requestAnimationFrame to debounce and optimize rendering
@@ -660,14 +661,14 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     // we need to find the viewport within it
     const scrollViewport = scrollArea.querySelector('[data-radix-scroll-area-viewport]');
     if (!scrollViewport) {
-      console.log('ScrollArea viewport not found');
+      Debug.log('ScrollArea viewport not found');
       return;
     }
 
-    console.log('Setting up scroll listener on viewport');
+    Debug.log('Setting up scroll listener on viewport');
     scrollViewport.addEventListener('scroll', handleScroll);
     return () => {
-      console.log('Removing scroll listener');
+      Debug.log('Removing scroll listener');
       scrollViewport.removeEventListener('scroll', handleScroll);
     };
   }, [handleScroll]);
@@ -769,7 +770,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
   }, [findProgramAtPoint, onProgramClick, onChannelPlay, scrollPosition, filteredChannels]);
 
   // Handle mouse wheel events and forward them to the ScrollArea
-  const handleWheel = useCallback((event: React.WheelEvent<HTMLCanvasElement>) => {
+  const handleWheel = useCallback((event: WheelEvent) => {
     const scrollArea = scrollAreaRef.current;
     if (!scrollArea) return;
 
@@ -788,6 +789,19 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     });
   }, []);
 
+  // Set up wheel event listener with { passive: false }
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Add wheel event listener as non-passive to allow preventDefault
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      canvas.removeEventListener('wheel', handleWheel);
+    };
+  }, [handleWheel]);
+
   return (
     <div className={`w-full flex-1 ${className}`} style={{ position: 'relative', height: '100%' }}>
       <canvas
@@ -798,7 +812,6 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
         }}
         onMouseMove={handleMouseMove}
         onClick={handleClick}
-        onWheel={handleWheel}
         tabIndex={0}
       />
       <ScrollArea className="w-full h-full" ref={scrollAreaRef} style={{ height: '100%' }}>

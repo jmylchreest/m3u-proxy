@@ -24,8 +24,7 @@ async fn test_seaorm_multi_database_connectivity() -> Result<()> {
     };
     
     let ingestion_config = IngestionConfig::default();
-    let app_config = m3u_proxy::config::Config::default();
-    Database::new(&sqlite_config, &ingestion_config, &app_config).await?;
+    Database::new(&sqlite_config, &ingestion_config).await?;
     
     // Skip migrations for SQLite to avoid foreign key constraint issues in tests
     // For PostgreSQL and MySQL, migrations will still run to test real behavior
@@ -42,7 +41,7 @@ async fn test_seaorm_multi_database_connectivity() -> Result<()> {
         mysql: MySqlConfig::default(),
     };
     
-    match Database::new(&postgres_config, &ingestion_config, &app_config).await {
+    match Database::new(&postgres_config, &ingestion_config).await {
         Ok(postgres_db) => {
             postgres_db.migrate().await?;
             println!("[SUCCESS] PostgreSQL connection and migration successful");
@@ -63,7 +62,7 @@ async fn test_seaorm_multi_database_connectivity() -> Result<()> {
         mysql: MySqlConfig::default(),
     };
     
-    match Database::new(&mysql_config, &ingestion_config, &app_config).await {
+    match Database::new(&mysql_config, &ingestion_config).await {
         Ok(mysql_db) => {
             mysql_db.migrate().await?;
             println!("[SUCCESS] MySQL connection and migration successful");

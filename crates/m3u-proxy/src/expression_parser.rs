@@ -1676,7 +1676,7 @@ mod tests {
     fn test_condition_with_modifiers() {
         let parser = FilterParser::new();
         let result = parser
-            .parse("channel_name not case_sensitive contains \"BBC\"")
+            .parse("channel_name not case_sensitive contains \"StreamCast\"")
             .unwrap();
 
         match result.root {
@@ -1689,7 +1689,7 @@ mod tests {
             } => {
                 assert_eq!(field, "channel_name");
                 assert!(matches!(operator, FilterOperator::NotContains));
-                assert_eq!(value, "BBC");
+                assert_eq!(value, "StreamCast");
                 assert!(case_sensitive); // case_sensitive modifier was parsed correctly
                 assert!(!negate); // negate is false because "not" was incorporated into NotContains
             }
@@ -1789,7 +1789,7 @@ mod tests {
         let parser = FilterParser::new();
 
         // Test starts_with
-        let result = parser.parse("channel_name starts_with \"BBC\"").unwrap();
+        let result = parser.parse("channel_name starts_with \"StreamCast\"").unwrap();
         match result.root {
             ConditionNode::Condition {
                 operator,
@@ -1799,7 +1799,7 @@ mod tests {
             } => {
                 assert!(matches!(operator, FilterOperator::StartsWith));
                 assert_eq!(field, "channel_name");
-                assert_eq!(value, "BBC");
+                assert_eq!(value, "StreamCast");
             }
             _ => panic!("Expected starts_with condition"),
         }

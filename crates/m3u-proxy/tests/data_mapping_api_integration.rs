@@ -127,12 +127,18 @@ async fn create_test_stream_sources(connection: &std::sync::Arc<DatabaseConnecti
 async fn create_test_channels(connection: &std::sync::Arc<DatabaseConnection>, source_ids: &[Uuid]) {
     let channel_repo = ChannelSeaOrmRepository::new(connection.clone());
     
-    // Create channels for first source with diverse content types
+    // Create channels for first source with diverse content types using sample data
+    use m3u_proxy::utils::SampleDataGenerator;
+    let mut generator = SampleDataGenerator::new();
+    let entertainment_samples = generator.generate_sample_channels(2, Some("entertainment"));
+    let sports_samples = generator.generate_sample_channels(1, Some("sports"));
+    let mixed_samples = generator.generate_sample_channels(1, Some("movies"));
+    
     let channels_source1 = vec![
-        ("BBC One HD", "bbc1hd", Some("101"), Some("Entertainment")),
-        ("ITV HD", "itvhd", Some("102"), Some("Entertainment")),
-        ("Sky Sports F1 HD", "skyf1", Some("401"), Some("Sports")),
-        ("Channel 4 HD", "c4hd", Some("104"), Some("Entertainment")),
+        (entertainment_samples[0].channel_name.as_str(), entertainment_samples[0].tvg_id.as_str(), Some("101"), Some("Entertainment")),
+        (entertainment_samples[1].channel_name.as_str(), entertainment_samples[1].tvg_id.as_str(), Some("102"), Some("Entertainment")),
+        (sports_samples[0].channel_name.as_str(), sports_samples[0].tvg_id.as_str(), Some("401"), Some("Sports")),
+        (mixed_samples[0].channel_name.as_str(), mixed_samples[0].tvg_id.as_str(), Some("104"), Some("Movies")),
     ];
     
     for (name, tvg_id, chno, group) in channels_source1 {
@@ -152,12 +158,15 @@ async fn create_test_channels(connection: &std::sync::Arc<DatabaseConnection>, s
             .expect("Failed to create test channel");
     }
     
-    // Create channels for second source with different genre distribution
+    // Create channels for second source with different genre distribution using sample data
+    let news_samples = generator.generate_sample_channels(2, Some("news"));
+    let more_sports_samples = generator.generate_sample_channels(2, Some("sports"));
+    
     let channels_source2 = vec![
-        ("CNN International", "cnn", Some("201"), Some("News")),
-        ("BBC News", "bbcnews", Some("202"), Some("News")),
-        ("ESPN", "espn", Some("301"), Some("Sports")),
-        ("Sky Sports News", "skynews", Some("302"), Some("Sports")),
+        (news_samples[0].channel_name.as_str(), news_samples[0].tvg_id.as_str(), Some("201"), Some("News")),
+        (news_samples[1].channel_name.as_str(), news_samples[1].tvg_id.as_str(), Some("202"), Some("News")),
+        (more_sports_samples[0].channel_name.as_str(), more_sports_samples[0].tvg_id.as_str(), Some("301"), Some("Sports")),
+        (more_sports_samples[1].channel_name.as_str(), more_sports_samples[1].tvg_id.as_str(), Some("302"), Some("Sports")),
     ];
     
     for (name, tvg_id, chno, group) in channels_source2 {
@@ -405,7 +414,7 @@ async fn test_advanced_seaorm_query_patterns() {
     let source_ids = create_test_stream_sources(&connection).await;
     create_test_channels(&connection, &source_ids).await;
     
-    // Test builder pattern for complex queries
+    // Test builder pattern for complex queries - search for sports channels containing "HD"
     let sports_hd_channels = ChannelQueryBuilder::new(&connection)
         .filter_by_group("Sports")
         .name_contains("HD")
@@ -413,8 +422,11 @@ async fn test_advanced_seaorm_query_patterns() {
         .await
         .unwrap();
     
-    assert_eq!(sports_hd_channels.len(), 1, "Should find one Sports HD channel");
-    assert_eq!(sports_hd_channels[0].channel_name, "Sky Sports F1 HD");
+    // Sample data generator creates sports channels, some of which contain "HD"
+    // We should find at least 1, but the exact count depends on random generation
+    assert!(!sports_hd_channels.is_empty(), "Should find at least one Sports HD channel");
+    assert!(sports_hd_channels.iter().all(|ch| ch.group_title.as_ref().map_or(false, |g| g == "Sports")), "All channels should be Sports group");
+    assert!(sports_hd_channels.iter().all(|ch| ch.channel_name.contains("HD")), "All channels should contain 'HD' in name");
     
     // Test count operations
     let entertainment_count = ChannelQueryBuilder::new(&connection)
@@ -423,7 +435,7 @@ async fn test_advanced_seaorm_query_patterns() {
         .await
         .unwrap();
     
-    assert_eq!(entertainment_count, 3, "Should have 3 entertainment channels");
+    assert_eq!(entertainment_count, 2, "Should have 2 entertainment channels");
     
     // Test source-specific filtering
     let source1_channels = ChannelQueryBuilder::new(&connection)

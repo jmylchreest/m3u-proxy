@@ -318,8 +318,8 @@ impl SandboxedManager {
                 })?;
 
         // Create parent directories if they don't exist
-        if let Some(parent) = full_path.parent() {
-            if !parent.exists() {
+        if let Some(parent) = full_path.parent()
+            && !parent.exists() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     SandboxedFileError::DirectoryCreation {
                         path: parent.to_path_buf(),
@@ -327,7 +327,6 @@ impl SandboxedManager {
                     }
                 })?;
             }
-        }
 
         // Use OS to resolve the actual path the file would have
         let resolved_path = if full_path.exists() {
@@ -531,8 +530,8 @@ impl SandboxedManager {
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.is_file() {
-                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+            if path.is_file()
+                && let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                     // Use the filename as both ID and original name
                     let filename = file_name.to_string();
                     let metadata = entry.metadata().await?;
@@ -554,7 +553,6 @@ impl SandboxedManager {
                     self.file_registry.write().await.insert(filename, file_info);
                     loaded_count += 1;
                 }
-            }
         }
 
         if loaded_count > 0 {
@@ -594,21 +592,19 @@ impl SandboxedManager {
                 let entry_path = entry.path();
                 
                 // Get relative path from the sandbox base
-                if let Ok(relative) = entry_path.strip_prefix(&self.base_dir) {
-                    if let Some(path_str) = relative.to_str() {
+                if let Ok(relative) = entry_path.strip_prefix(&self.base_dir)
+                    && let Some(path_str) = relative.to_str() {
                         // Skip empty paths (files in root directory)
                         if !path_str.is_empty() {
                             files.push(path_str.to_string());
                         } else {
                             // For files in root directory, use just the filename
-                            if let Some(filename) = entry_path.file_name() {
-                                if let Some(filename_str) = filename.to_str() {
+                            if let Some(filename) = entry_path.file_name()
+                                && let Some(filename_str) = filename.to_str() {
                                     files.push(filename_str.to_string());
                                 }
-                            }
                         }
                     }
-                }
             }
         }
         

@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: m3u-proxy
-  labels:
-    name: m3u-proxy

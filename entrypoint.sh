@@ -35,7 +35,7 @@ HOST="${M3U_PROXY_HOST:-0.0.0.0}"
 PORT="${M3U_PROXY_PORT:-8080}"
 CONFIG="${M3U_PROXY_CONFIG:-/app/config/config.toml}"
 LOG_LEVEL="${M3U_PROXY_LOG_LEVEL:-info}"
-DATABASE_URL="${M3U_PROXY_DATABASE_URL:-sqlite:///app/data/m3u-proxy.db}"
+DATABASE_URL="${M3U_PROXY_DATABASE__URL:-sqlite:///app/data/m3u-proxy.db}"
 
 # Build command line arguments only if not already provided
 ARGS=()

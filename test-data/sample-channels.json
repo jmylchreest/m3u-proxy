@@ -1,0 +1,236 @@
+{
+  "broadcasters": [
+    "StreamCast",
+    "ViewMedia",
+    "AeroVision",
+    "GlobalStream",
+    "NationalNet",
+    "Europa",
+    "Nordic",
+    "Deutsche",
+    "SportsCentral",
+    "EntertainTV",
+    "DiscoverMax",
+    "CinemaMax",
+    "MusicMax",
+    "TechMedia",
+    "WorldView",
+    "MetroNet",
+    "RegionalTV",
+    "CommunityNet",
+    "UrbanStream",
+    "CountryView"
+  ],
+
+  "channel_variants": {
+    "standard": [
+      "One",
+      "Two",
+      "Three",
+      "Prime",
+      "Plus",
+      "Max",
+      "Central",
+      "Network",
+      "Vision",
+      "Stream"
+    ],
+
+    "quality": ["HD", "SD", "4K", "UHD", "FHD"],
+
+    "timeshift": ["+1", "+2", "+6", "+24", "-1", "+1h", "+6h", "+24h", "-1h"],
+
+    "categories": {
+      "news": [
+        "News",
+        "News HD",
+        "News +1",
+        "Breaking News",
+        "World News",
+        "Local News",
+        "Business News",
+        "Weather Channel"
+      ],
+
+      "sports": [
+        "Sports",
+        "Sports HD",
+        "Sports +1",
+        "Racing",
+        "Racing HD",
+        "Football",
+        "Football HD",
+        "Basketball HD",
+        "Tennis HD",
+        "Golf HD",
+        "Extreme Sports",
+        "Sports News"
+      ],
+
+      "entertainment": [
+        "Entertainment",
+        "Entertainment HD",
+        "Entertainment +1",
+        "Reality TV",
+        "Comedy Central",
+        "Drama HD",
+        "Variety Show"
+      ],
+
+      "movies": [
+        "Movies",
+        "Movies HD",
+        "Movies +1",
+        "Action Movies HD",
+        "Comedy Movies",
+        "Horror Movies",
+        "Romance Movies",
+        "Classic Movies",
+        "Foreign Films",
+        "Premiere HD"
+      ],
+
+      "kids": [
+        "Kids",
+        "Kids HD",
+        "Kids +1",
+        "Cartoon Network",
+        "Animation Station",
+        "Family First",
+        "Learning Kids",
+        "Toys TV"
+      ],
+
+      "music": [
+        "Music",
+        "Music HD",
+        "Rock TV",
+        "Pop Hits",
+        "Jazz Lounge",
+        "Classical HD",
+        "Country Music",
+        "Electronic Beats",
+        "World Music"
+      ],
+
+      "documentary": [
+        "Documentary",
+        "Documentary HD",
+        "Science Now",
+        "History Vault",
+        "Nature HD",
+        "Wildlife 4K",
+        "Geography Live",
+        "Biography Channel",
+        "Tech Today"
+      ],
+
+      "lifestyle": [
+        "Lifestyle",
+        "Lifestyle HD",
+        "Cooking Channel",
+        "Travel Vision",
+        "Fashion TV",
+        "Home & Garden",
+        "Food Network",
+        "Health & Wellness"
+      ],
+
+      "adult": [
+        "Adult Channel",
+        "XXX Movies",
+        "Porn Central",
+        "Adult Entertainment",
+        "XXX Premium",
+        "Porn Movies HD",
+        "Adult Network",
+        "XXX International"
+      ]
+    }
+  },
+
+  "international": {
+    "european": [
+      {
+        "broadcaster": "Europa",
+        "channels": ["Noticias", "Música HD", "Deportes +1", "Cine Clásico"]
+      },
+      {
+        "broadcaster": "Européen",
+        "channels": ["Actualités", "Sports HD", "Cinéma +1"]
+      }
+    ],
+
+    "nordic": [
+      {
+        "broadcaster": "Nordic",
+        "channels": ["Nyheter HD", "Sport HD", "Barn", "Natur HD"]
+      },
+      {
+        "broadcaster": "Norðic",
+        "channels": ["Fréttir"]
+      }
+    ],
+
+    "german": [
+      {
+        "broadcaster": "Deutsche",
+        "channels": ["Nachrichten HD", "Sport HD", "Kino +1", "Musik"]
+      },
+      {
+        "broadcaster": "Österreich",
+        "channels": ["TV"]
+      }
+    ],
+
+    "other": [
+      {
+        "broadcaster": "Россия",
+        "channels": ["Новости HD"]
+      },
+      {
+        "broadcaster": "中华",
+        "channels": ["新闻 HD"]
+      },
+      {
+        "broadcaster": "العربية",
+        "channels": ["الإخبارية"]
+      },
+      {
+        "broadcaster": "हिंदी",
+        "channels": ["समाचार HD"]
+      }
+    ]
+  },
+
+  "special_formats": [
+    {
+      "pattern": "Channel {number}",
+      "examples": ["Channel 101", "Channel 202", "Channel 303"]
+    },
+    {
+      "pattern": "{broadcaster} 24/7",
+      "examples": ["News 24/7", "Sports 24/7", "Music 24/7"]
+    },
+    {
+      "pattern": "{category}+",
+      "examples": ["Sports+", "Movies+", "News+"]
+    },
+    {
+      "pattern": "{category}@ Night",
+      "examples": ["Movies@ Night", "Music@ Night"]
+    },
+    {
+      "pattern": "{category}&{category}",
+      "examples": ["Kids&Family", "Sports&News"]
+    },
+    {
+      "pattern": "{category}_{number}",
+      "examples": ["News_24", "Sports_1", "Movies_2"]
+    },
+    {
+      "pattern": "{category}#{number}",
+      "examples": ["Stream#1", "Network#2"]
+    }
+  ]
+}

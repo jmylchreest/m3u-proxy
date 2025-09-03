@@ -469,7 +469,7 @@ channel_name contains "sport" AND group_title not contains "adult"
 | `contains` | Text contains substring (case insensitive) | `channel_name contains "news"` |
 | `equals` | Exact text match (case insensitive) | `group_title equals "Sports"` |
 | `matches` | Regular expression match (see [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax)) | `channel_name matches "(hd|4k|uhd)"` |
-| `starts_with` | Text starts with substring | `channel_name starts_with "BBC"` |
+| `starts_with` | Text starts with substring | `channel_name starts_with "StreamCast"` |
 | `ends_with` | Text ends with substring | `channel_name ends_with "HD"` |
 
 ### Modifiers
@@ -477,7 +477,7 @@ channel_name contains "sport" AND group_title not contains "adult"
 | Modifier | Description | Example |
 |----------|-------------|---------|
 | `not` | Negates the operator | `channel_name not contains "adult"` or `not channel_name contains "adult"` |
-| `case_sensitive` | Makes the match case sensitive | `channel_name case_sensitive equals "BBC One"` |
+| `case_sensitive` | Makes the match case sensitive | `channel_name case_sensitive equals "StreamCast One HD"` |
 
 ### Logical Operators
 
@@ -513,10 +513,10 @@ channel_name contains "sport" AND group_title not contains "adult"
 channel_name contains "sport" AND group_title not contains "adult"
 
 # Multiple conditions with grouping
-(channel_name contains "BBC" OR channel_name contains "ITV") AND channel_name ends_with "HD"
+(channel_name contains "StreamCast" OR channel_name contains "ViewMedia") AND channel_name ends_with "HD"
 
 # Case sensitive matching
-channel_name case_sensitive equals "BBC One" OR channel_name case_sensitive equals "BBC Two"
+channel_name case_sensitive equals "StreamCast One HD" OR channel_name case_sensitive equals "StreamCast Two HD"
 
 # Negation examples (two valid syntaxes)
 channel_name not contains "adult" AND not group_title contains "xxx"

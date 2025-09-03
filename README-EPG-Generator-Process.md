@@ -132,12 +132,12 @@ for channel in source_channels {
 
 ```
 M3U Channel Definition:
-#EXTINF:-1 tvg-id="cnn-international" tvg-logo="...",CNN International
+#EXTINF:-1 tvg-id="globalstream-news" tvg-logo="...",GlobalStream News International
 http://stream.url
 
 EPG Channel Definition:
-<channel id="cnn-international">
-  <display-name>CNN International</display-name>
+<channel id="globalstream-news">
+  <display-name>GlobalStream News International</display-name>
 </channel>
 
 Result: ✓ Direct match → EPG programs included for this channel
@@ -185,11 +185,11 @@ matched_channels.retain(|channel| seen_ids.insert(channel.channel_id.clone()));
 
 **Example Deduplication:**
 ```
-Premium EPG (priority 1):  channel_id="cnn" → display_name="CNN HD", rich metadata
-Regional EPG (priority 2): channel_id="cnn" → display_name="CNN", basic metadata
-Backup EPG (priority 3):   channel_id="cnn" → display_name="CNN", poor quality
+Premium EPG (priority 1):  channel_id="globalstream-news" → display_name="GlobalStream News HD", rich metadata
+Regional EPG (priority 2): channel_id="globalstream-news" → display_name="GlobalStream News", basic metadata
+Backup EPG (priority 3):   channel_id="globalstream-news" → display_name="GlobalStream News", poor quality
 
-Result: Only Premium EPG's "cnn" channel survives (first-source-wins)
+Result: Only Premium EPG's "globalstream-news" channel survives (first-source-wins)
 ```
 
 ### Real-World Multi-Source Scenario
@@ -209,7 +209,7 @@ Channel Pipeline Result: 150 channels survive filtering
 Step 1: Channel ID Extraction
 ├─ 150 final channels from pipeline
 ├─ Extract tvg_id values
-└─ Create allowlist: ["cnn", "bbc", "fox", ...]
+└─ Create allowlist: ["globalstream-news", "streamcast-one", "aerovision-sports", ...]
 
 Step 2: EPG Source Processing (priority order)
 ├─ XMLTV-Premium: 
@@ -267,11 +267,11 @@ else if channel_id_set.contains(&channel.channel_name) {
 **Perfect Match (Primary):**
 ```xml
 <!-- M3U -->
-#EXTINF:-1 tvg-id="discovery-channel",Discovery Channel
+#EXTINF:-1 tvg-id="discovermax-nature",DiscoverMax Nature HD
 
 <!-- EPG -->
-<channel id="discovery-channel">
-  <display-name>Discovery Channel</display-name>
+<channel id="discovermax-nature">
+  <display-name>DiscoverMax Nature HD</display-name>
 </channel>
 
 Result: ✓ Direct ID match
@@ -280,11 +280,11 @@ Result: ✓ Direct ID match
 **Fallback Match (Name-based):**
 ```xml
 <!-- M3U -->
-#EXTINF:-1,Discovery Channel  <!-- No tvg-id, uses channel name -->
+#EXTINF:-1,DiscoverMax Nature HD  <!-- No tvg-id, uses channel name -->
 
 <!-- EPG -->  
-<channel id="Discovery Channel">  <!-- ID matches channel name -->
-  <display-name>Discovery</display-name>
+<channel id="DiscoverMax Nature HD">  <!-- ID matches channel name -->
+  <display-name>DiscoverMax Nature</display-name>
 </channel>
 
 Result: ✓ Name-based fallback match
@@ -293,11 +293,11 @@ Result: ✓ Name-based fallback match
 **No Match:**
 ```xml
 <!-- M3U -->
-#EXTINF:-1 tvg-id="disc",Discovery Channel
+#EXTINF:-1 tvg-id="discmax",DiscoverMax Nature HD
 
 <!-- EPG -->
-<channel id="discovery-hd">
-  <display-name>Discovery Channel HD</display-name>
+<channel id="discovermax-hd">
+  <display-name>DiscoverMax Nature HD</display-name>
 </channel>
 
 Result: ✗ No match (neither ID nor name matches)
@@ -308,11 +308,11 @@ Result: ✗ No match (neither ID nor name matches)
 Different EPG sources may use different channel ID schemes:
 
 ```
-M3U Channel: tvg-id="cnn-international"
+M3U Channel: tvg-id="globalstream-news"
 
-EPG Source 1 (Premium):  channel_id="cnn-international" ✓ (Direct match)
-EPG Source 2 (Regional): channel_id="cnn-intl"         ✗ (No match)
-EPG Source 3 (Backup):   channel_id="CNN International" ✓ (Name fallback)
+EPG Source 1 (Premium):  channel_id="globalstream-news" ✓ (Direct match)
+EPG Source 2 (Regional): channel_id="globalstream-intl"         ✗ (No match)
+EPG Source 3 (Backup):   channel_id="GlobalStream News International" ✓ (Name fallback)
 
 Resolution: 
 ├─ Premium EPG's channel used (priority 1, direct match)
@@ -351,8 +351,8 @@ Source 2: "Breaking News" | 2024-01-07 12:00:00 | 2024-01-07 13:00:00
 
 **2. Near Duplicates:**
 ```
-Source 1: "CNN Newsroom" | 2024-01-07 12:00:00 | 2024-01-07 13:00:00
-Source 2: "CNN Newsroom" | 2024-01-07 12:02:00 | 2024-01-07 13:05:00  
+Source 1: "GlobalStream Breaking News" | 2024-01-07 12:00:00 | 2024-01-07 13:00:00
+Source 2: "GlobalStream Breaking News" | 2024-01-07 12:02:00 | 2024-01-07 13:05:00  
 → Near duplicate: Times within 5-10 minute threshold → Keep higher priority
 ```
 

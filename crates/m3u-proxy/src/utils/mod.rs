@@ -21,6 +21,7 @@ pub mod logo;
 pub mod memory_cleanup;
 pub mod memory_stats;
 pub mod regex_preprocessor;
+pub mod sample_data;
 pub mod sandbox_health;
 pub mod status_code_matcher;
 pub mod system_manager;
@@ -46,6 +47,7 @@ pub use memory_cleanup::{
 // Memory monitoring modules available for future pipeline integration
 // but not exposed to prevent accidental usage
 pub use regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
+pub use sample_data::{SampleDataGenerator, SampleChannel};
 pub use status_code_matcher::is_status_acceptable;
 pub use system_manager::SystemManager;
 pub use url::UrlUtils;

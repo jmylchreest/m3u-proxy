@@ -13,6 +13,10 @@ categories = ["multimedia", "web-programming", "network-programming"]
 name = "m3u-proxy"
 path = "src/main.rs"
 
+[[example]]
+name = "sample_data_demo"
+path = "examples/sample_data_demo.rs"
+
 
 [features]
 default = ["compression-gzip"]
@@ -40,6 +44,7 @@ clap = { version = "4.5", features = ["derive"] }
 cron = "0.15"
 env_logger = "0.11"
 quick-xml = { version = "0.38", features = ["serialize"] }
+rand = "0.8"
 regex = "1.11"
 rust-embed = "8.7"
 reqwest = { version = "0.12", features = [

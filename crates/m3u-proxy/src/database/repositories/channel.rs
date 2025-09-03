@@ -297,22 +297,26 @@ mod tests {
         let source_id = Uuid::new_v4();
 
         // Test create
+        use crate::utils::SampleDataGenerator;
+        let mut generator = SampleDataGenerator::new();
+        let sample_channel = generator.generate_sample_channels(1, Some("entertainment"))[0].clone();
+        
         let create_request = ChannelCreateRequest {
             source_id,
-            tvg_id: Some("bbc1hd".to_string()),
-            tvg_name: Some("BBC One HD".to_string()),
-            tvg_chno: Some("101".to_string()),
-            tvg_logo: Some("http://example.com/logo.png".to_string()),
+            tvg_id: Some(sample_channel.tvg_id.clone()),
+            tvg_name: sample_channel.tvg_name.clone(),
+            tvg_chno: sample_channel.tvg_chno.clone(),
+            tvg_logo: sample_channel.tvg_logo.clone(),
             tvg_shift: None,
-            group_title: Some("Entertainment".to_string()),
-            channel_name: "BBC One HD".to_string(),
-            stream_url: "http://example.com/stream".to_string(),
+            group_title: Some(sample_channel.group_title.clone()),
+            channel_name: sample_channel.channel_name.clone(),
+            stream_url: sample_channel.stream_url.clone(),
         };
 
-        let created_channel = repo.create(create_request).await?;
-        assert_eq!(created_channel.channel_name, "BBC One HD");
+        let created_channel = repo.create(create_request.clone()).await?;
+        assert_eq!(created_channel.channel_name, sample_channel.channel_name);
         assert_eq!(created_channel.source_id, source_id);
-        assert_eq!(created_channel.tvg_id, Some("bbc1hd".to_string()));
+        assert_eq!(created_channel.tvg_id, Some(sample_channel.tvg_id));
 
         // Test find by ID
         let found_channel = repo.find_by_id(&created_channel.id).await?;
@@ -350,12 +354,15 @@ mod tests {
 
         let source_id = Uuid::new_v4();
 
-        // Create multiple channels for the same source
-        let channels = vec![
-            ("BBC One HD", "bbc1hd", "101", "Entertainment"),
-            ("BBC Two HD", "bbc2hd", "102", "Entertainment"),
-            ("ITV HD", "itvhd", "103", "Entertainment"),
-        ];
+        // Create multiple channels for the same source using sample data
+        use crate::utils::SampleDataGenerator;
+        let mut generator = SampleDataGenerator::new();
+        let sample_channels = generator.generate_sample_channels(3, Some("entertainment"));
+        
+        let channels: Vec<(String, String, String, String)> = sample_channels.iter().enumerate().map(|(i, ch)| {
+            (ch.channel_name.clone(), ch.tvg_id.clone(), 
+             format!("{}", 101 + i), "Entertainment".to_string())
+        }).collect();
 
         let mut created_ids = Vec::new();
         for (name, tvg_id, chno, group) in channels {

@@ -6,6 +6,7 @@ Cargo.lock
 
 # Configuration
 config.toml
+.env
 
 # Data directories
 crates/m3u-proxy/data/

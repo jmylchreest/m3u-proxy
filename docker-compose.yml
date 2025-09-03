@@ -15,18 +15,14 @@ services:
     image: postgres:latest
     # networks:
     #   - m3u-proxy-net
-    environment:
-      POSTGRES_DB: m3u_proxy
-      POSTGRES_USER: m3u_proxy
-      POSTGRES_PASSWORD: secure_password_change_me
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432" # Optional: expose for external access
+      - "${POSTGRES_PORT:-5432}:5432" # Optional: expose for external access
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U m3u_proxy -d m3u_proxy"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-m3u_proxy} -d ${POSTGRES_DB:-m3u_proxy}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -42,25 +38,8 @@ services:
     # networks:
     #   - m3u-proxy-net
     ports:
-      - "8080:8080"
-    environment:
-      M3U_PROXY_HOST: "0.0.0.0"
-      M3U_PROXY_PORT: "8080"
-      M3U_PROXY_CONFIG: "/app/config/config.toml"
-      M3U_PROXY_LOG_LEVEL: "info"
-      # PostgreSQL connection
-      M3U_PROXY_DATABASE__URL: "postgresql://m3u_proxy:secure_password_change_me@postgres:5432/m3u_proxy"
-
-      # Storage paths (these are the defaults, mounted as volumes)
-      # M3U_PROXY_M3U_PATH: "/app/data/m3u"
-      # M3U_PROXY_UPLOADED_LOGO_PATH: "/app/data/logos/uploaded"
-      # M3U_PROXY_CACHED_LOGO_PATH: "/app/data/logos/cached"
-      # M3U_PROXY_TEMP_PATH: "/app/data/temp"
-      # M3U_PROXY_PIPELINE_PATH: "/app/data/pipeline"
-
-      # FFmpeg commands (useful if you have custom FFmpeg installations)
-      # M3U_PROXY_FFMPEG_COMMAND: "ffmpeg"
-      # M3U_PROXY_FFPROBE_COMMAND: "ffprobe"
+      - "${M3U_PROXY_PORT:-8080}:8080"
+    env_file: .env
 
     volumes:
       - m3u_data:/app/data

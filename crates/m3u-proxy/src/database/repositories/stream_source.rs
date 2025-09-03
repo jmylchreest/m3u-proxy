@@ -65,10 +65,7 @@ impl StreamSourceSeaOrmRepository {
             ignore_channel_numbers: model.ignore_channel_numbers,
             created_at: model.created_at,
             updated_at: model.updated_at,
-            last_ingested_at: match model.last_ingested_at {
-                Some(ref time) => Some(*time),
-                None => None
-            },
+            last_ingested_at: model.last_ingested_at.as_ref().map(|time| *time),
             is_active: model.is_active,
         })
     }
@@ -268,10 +265,7 @@ impl StreamSourceSeaOrmRepository {
             is_active: updated_model.is_active,
             created_at: updated_model.created_at,
             updated_at: updated_model.updated_at,
-            last_ingested_at: match updated_model.last_ingested_at {
-                Some(ref time) => Some(*time),
-                None => None
-            },
+            last_ingested_at: updated_model.last_ingested_at.as_ref().map(|time| *time),
         })
     }
 

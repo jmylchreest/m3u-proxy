@@ -3815,13 +3815,11 @@ fn generate_condition_node_json(node: &crate::models::ConditionNode) -> serde_js
 /// 
 /// Note: This function is no longer used in the filter system as expressions are now stored directly.
 /// It's kept for potential debugging and data mapping use cases.
-
 pub fn generate_human_expression(tree: &crate::models::ConditionTree) -> String {
     generate_condition_node_expression(&tree.root)
 }
 
 /// Generate human-readable expression from a condition node
-
 fn generate_condition_node_expression(node: &crate::models::ConditionNode) -> String {
     match node {
         crate::models::ConditionNode::Condition {

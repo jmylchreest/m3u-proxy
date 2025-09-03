@@ -48,6 +48,10 @@ impl M3uSourceHandler {
     async fn parse_m3u_content(&self, content: &str, source: &StreamSource) -> AppResult<Vec<Channel>> {
         let mut channels = Vec::new();
         let mut current_channel: Option<PartialChannel> = None;
+        
+        // Track channels to prevent duplicates (based on stream URL + channel name)
+        let mut seen_channels = std::collections::HashSet::new();
+        let mut duplicate_count = 0;
 
         debug!("Starting M3U parsing for source: {}", source.name);
 
@@ -66,17 +70,47 @@ impl M3uSourceHandler {
                 if let Some(mut channel) = current_channel.take() {
                     channel.url = line.to_string();
                     
+                    // Create deduplication key based on stream URL and channel name
+                    let dedup_key = format!("{}|{}", channel.url, channel.name);
+                    
+                    if seen_channels.contains(&dedup_key) {
+                        duplicate_count += 1;
+                        debug!("Skipping duplicate channel '{}' with URL '{}' at line {}", 
+                               channel.name, channel.url, line_num + 1);
+                        continue;
+                    }
+                    seen_channels.insert(dedup_key);
+                    
                     let complete_channel = self.complete_channel(channel, source, line_num + 1)?;
                     channels.push(complete_channel);
                 } else {
                     warn!("Found stream URL without EXTINF metadata at line {}: {}", line_num + 1, line);
                     // Create a basic channel without metadata
+                    
+                    // Create deduplication key for basic channels too
+                    let channel_name = line.split('/').last().unwrap_or("Unnamed Channel");
+                    let dedup_key = format!("{}|{}", line, channel_name);
+                    
+                    if seen_channels.contains(&dedup_key) {
+                        duplicate_count += 1;
+                        debug!("Skipping duplicate basic channel with URL '{}' at line {}", line, line_num + 1);
+                        continue;
+                    }
+                    seen_channels.insert(dedup_key);
+                    
                     let channel = self.create_basic_channel(line, source, line_num + 1)?;
                     channels.push(channel);
                 }
             }
         }
 
+        // Clean up deduplication set to free memory
+        drop(seen_channels);
+        
+        if duplicate_count > 0 {
+            info!("Removed {} duplicate channel entries from M3U source '{}'", duplicate_count, source.name);
+        }
+        
         info!("Parsed {} channels from M3U source: {}", channels.len(), source.name);
         Ok(channels)
     }

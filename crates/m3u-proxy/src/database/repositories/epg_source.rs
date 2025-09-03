@@ -28,7 +28,7 @@ impl EpgSourceSeaOrmRepository {
         let id = Uuid::new_v4();
 
         let active_model = epg_sources::ActiveModel {
-            id: Set(id.clone()),
+            id: Set(id),
             name: Set(request.name.clone()),
             source_type: Set(request.source_type.to_string()),
             url: Set(request.url.clone()),
@@ -37,8 +37,8 @@ impl EpgSourceSeaOrmRepository {
             password: Set(request.password.clone()),
             original_timezone: Set(request.timezone.clone()),
             time_offset: Set(Some(request.time_offset.unwrap_or_else(|| "+00:00".to_string()))),
-            created_at: Set(now.clone()),
-            updated_at: Set(now.clone()),
+            created_at: Set(now),
+            updated_at: Set(now),
             last_ingested_at: Set(None),
             is_active: Set(true),
         };

@@ -49,7 +49,7 @@ impl FeaturesConfig {
     /// Get configuration for a specific feature (returns empty map if not found)
     pub fn get_feature_config(&self, feature_name: &str) -> &std::collections::HashMap<String, serde_json::Value> {
         use std::sync::LazyLock;
-        static EMPTY_CONFIG: LazyLock<std::collections::HashMap<String, serde_json::Value>> = LazyLock::new(|| std::collections::HashMap::new());
+        static EMPTY_CONFIG: LazyLock<std::collections::HashMap<String, serde_json::Value>> = LazyLock::new(std::collections::HashMap::new);
         self.config.get(feature_name).unwrap_or(&EMPTY_CONFIG)
     }
     

@@ -234,7 +234,7 @@ impl FilterSeaOrmRepository {
 
             let usage_count = self.get_usage_count(&filter.id).await.unwrap_or(0);
             filter_usage_list.push(crate::models::FilterWithUsage {
-                filter: filter,
+                filter,
                 usage_count: usage_count as i64,
             });
         }

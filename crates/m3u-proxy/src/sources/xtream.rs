@@ -541,10 +541,35 @@ impl ChannelIngestor for XtreamSourceHandler {
         // Get live channels (authentication errors will be handled by this call)
         let xtream_channels = self.get_live_channels(source).await?;
         
-        // Convert to internal format
-        let channels: Vec<Channel> = xtream_channels.iter()
-            .map(|ch| self.convert_xtream_channel(ch, source))
-            .collect();
+        // Convert to internal format with deduplication
+        let mut channels = Vec::new();
+        let mut seen_channels = std::collections::HashSet::new();
+        let mut duplicate_count = 0;
+        
+        for xtream_channel in &xtream_channels {
+            let stream_url = self.generate_xtream_stream_url(source, &xtream_channel.stream_id.to_string());
+            
+            // Create deduplication key based on stream URL and channel name
+            let dedup_key = format!("{}|{}", stream_url, xtream_channel.name);
+            
+            if seen_channels.contains(&dedup_key) {
+                duplicate_count += 1;
+                debug!("Skipping duplicate Xtream channel '{}' with stream_id {}", 
+                       xtream_channel.name, xtream_channel.stream_id);
+                continue;
+            }
+            seen_channels.insert(dedup_key);
+            
+            let channel = self.convert_xtream_channel(xtream_channel, source);
+            channels.push(channel);
+        }
+        
+        // Clean up deduplication set to free memory
+        drop(seen_channels);
+        
+        if duplicate_count > 0 {
+            info!("Removed {} duplicate channel entries from Xtream source '{}'", duplicate_count, source.name);
+        }
         
         info!("Successfully ingested {} channels from Xtream source: {}", channels.len(), source.name);
         Ok(channels)

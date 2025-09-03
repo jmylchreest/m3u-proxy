@@ -3,7 +3,7 @@
 //! This provides a database-agnostic repository for Channel operations using SeaORM.
 
 use anyhow::Result;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, ColumnTrait, QueryFilter, PaginatorTrait, QueryOrder, QuerySelect};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, ColumnTrait, QueryFilter, PaginatorTrait, QueryOrder, QuerySelect, ConnectionTrait};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -157,32 +157,156 @@ impl ChannelSeaOrmRepository {
             return Ok(());
         }
 
-        // Use transaction for atomicity
+        // Use a single transaction for both delete and insert operations
         let txn = self.connection.begin().await?;
 
-        // First, delete existing channels for this source
-        Channels::delete_many()
+        // Delete existing channels for this source
+        let delete_result = Channels::delete_many()
             .filter(channels::Column::SourceId.eq(source_id))
             .exec(&txn)
             .await?;
+        
+        tracing::debug!("Deleted {} existing channels for source {}", delete_result.rows_affected, source_id);
 
-        txn.commit().await?;
-
-        // Use the optimized batch insert function from DatabaseOperations
-        match crate::utils::database_operations::DatabaseOperations::insert_stream_channels_batch(
+        // Use the batch insert function but pass the transaction instead of the connection
+        match Self::insert_stream_channels_batch_in_transaction(
             channels.to_vec(),
-            &*self.connection,
+            &txn,
             batch_config,
         ).await {
             Ok(inserted_count) => {
-                tracing::info!("Successfully inserted {} channels for source {}", inserted_count, source_id);
+                // Commit the transaction only after both operations succeed
+                txn.commit().await?;
+                tracing::info!("Successfully updated {} channels for source {} (atomic operation)", inserted_count, source_id);
                 Ok(())
             },
             Err(e) => {
+                // Transaction will be automatically rolled back when dropped
                 tracing::error!("Failed to insert channels for source {}: {}", source_id, e);
                 Err(anyhow::anyhow!("Failed to insert channels: {}", e))
             }
         }
+    }
+
+    /// Insert stream channels in a transaction (helper method for atomic operations)
+    async fn insert_stream_channels_batch_in_transaction(
+        channels: Vec<Channel>,
+        txn: &sea_orm::DatabaseTransaction,
+        batch_config: Option<&crate::config::DatabaseBatchConfig>
+    ) -> Result<usize> {
+        if channels.is_empty() {
+            return Ok(0);
+        }
+
+        let batch_size = channels.len();
+        tracing::debug!("Inserting batch of {} stream channels using multi-value INSERT in transaction", batch_size);
+
+        // Use configurable batch size based on database backend and user configuration
+        let max_records_per_query = if let Some(config) = batch_config {
+            config.safe_stream_channel_batch_size(txn.get_database_backend())
+        } else {
+            // Fallback to defaults if no config provided
+            let default_config = crate::config::DatabaseBatchConfig::default();
+            default_config.safe_stream_channel_batch_size(txn.get_database_backend())
+        };
+        
+        tracing::debug!("Using stream channel batch size: {} for backend: {:?}", max_records_per_query, txn.get_database_backend());
+        
+        let mut total_inserted = 0;
+        
+        for chunk in channels.chunks(max_records_per_query) {
+            if chunk.is_empty() {
+                continue;
+            }
+            
+            // Build multi-value INSERT statement with conflict resolution
+            let mut query = match txn.get_database_backend() {
+                sea_orm::DatabaseBackend::Postgres => {
+                    String::from("INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES ")
+                },
+                sea_orm::DatabaseBackend::Sqlite => {
+                    String::from("INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES ")
+                },
+                _ => {
+                    String::from("INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES ")
+                }
+            };
+            
+            // Generate placeholders based on database backend
+            let placeholders: Vec<String> = (0..chunk.len())
+                .enumerate()
+                .map(|(i, _)| {
+                    let base_idx = i * 12; // 12 fields per channel
+                    match txn.get_database_backend() {
+                        sea_orm::DatabaseBackend::Postgres => {
+                            format!("(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                                base_idx + 1, base_idx + 2, base_idx + 3, base_idx + 4,
+                                base_idx + 5, base_idx + 6, base_idx + 7, base_idx + 8,
+                                base_idx + 9, base_idx + 10, base_idx + 11, base_idx + 12)
+                        }
+                        _ => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string()
+                    }
+                })
+                .collect();
+            query.push_str(&placeholders.join(", "));
+            
+            // Add conflict resolution clause based on database backend
+            match txn.get_database_backend() {
+                sea_orm::DatabaseBackend::Postgres => {
+                    query.push_str(" ON CONFLICT (id) DO NOTHING");
+                },
+                sea_orm::DatabaseBackend::Sqlite => {
+                    query.push_str(" ON CONFLICT (id) DO NOTHING");
+                },
+                _ => {
+                    // For MySQL/MariaDB, use INSERT IGNORE or handle differently
+                    // For now, we'll rely on the transaction isolation
+                }
+            }
+            
+            let mut values = Vec::new();
+            
+            // Collect all parameters - order must match INSERT statement
+            // Use the deterministic UUIDs from the channel data
+            for channel in chunk {
+                values.push(channel.id.into());                           // id
+                values.push(channel.source_id.into());                    // source_id
+                values.push(channel.tvg_id.clone().into());               // tvg_id
+                values.push(channel.tvg_name.clone().into());             // tvg_name
+                values.push(channel.tvg_chno.clone().into());             // tvg_chno
+                values.push(channel.channel_name.clone().into());         // channel_name
+                values.push(channel.tvg_logo.clone().into());             // tvg_logo
+                values.push(channel.tvg_shift.clone().into());            // tvg_shift
+                values.push(channel.group_title.clone().into());          // group_title
+                values.push(channel.stream_url.clone().into());           // stream_url
+                values.push(channel.created_at.into());                   // created_at
+                values.push(channel.updated_at.into());                   // updated_at
+            }
+            
+            use sea_orm::{ConnectionTrait, Statement};
+            let stmt = Statement::from_sql_and_values(txn.get_database_backend(), &query, values);
+            let result = txn.execute(stmt).await
+                .map_err(|e| {
+                    tracing::debug!("SQL execution failed: {}", e);
+                    tracing::debug!("Query was: {}", query);
+                    tracing::debug!("Attempted to insert {} channels in batch", chunk.len());
+                    anyhow::anyhow!("Failed to insert stream channels batch: {}", e)
+                })?;
+            
+            let rows_affected = result.rows_affected() as usize;
+            total_inserted += rows_affected;
+            
+            // Log if fewer rows were inserted than expected (due to conflicts)
+            if rows_affected < chunk.len() {
+                tracing::debug!("Inserted {} out of {} channels in batch (some may have been deduplicated)", 
+                              rows_affected, chunk.len());
+            } else {
+                tracing::trace!("Inserted {} channels in multi-value query", rows_affected);
+            }
+        }
+
+        tracing::debug!("Successfully prepared {} stream channels for insertion in transaction", total_inserted);
+        Ok(total_inserted)
     }
 
     /// Convert SeaORM model to domain model

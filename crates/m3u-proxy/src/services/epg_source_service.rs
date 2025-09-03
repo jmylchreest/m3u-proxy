@@ -370,7 +370,7 @@ impl EpgSourceService {
     
 
 
-    /// Save EPG programs to database with robust batching and retry logic
+    /// Save EPG programs to database with robust batching and retry logic (atomic operation)
     async fn save_epg_programs(
         &self,
         source_id: uuid::Uuid,
@@ -384,150 +384,190 @@ impl EpgSourceService {
             return Ok(0);
         }
 
+        // Use a single atomic transaction for delete + insert to prevent race conditions
+        use sea_orm::TransactionTrait;
+        let txn = self.database.connection().begin().await
+            .map_err(|e| anyhow::anyhow!("Failed to begin transaction for EPG programs: {}", e))?;
 
-        // SeaORM handles bulk operations efficiently - no manual optimization needed
-        
-        // Delete existing programs for this source using SeaORM entities
+        // Delete existing programs for this source within the transaction
         use crate::entities::{prelude::*, epg_programs};
         use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
         
-        let deleted_result = EpgPrograms::delete_many()
+        let delete_result = EpgPrograms::delete_many()
             .filter(epg_programs::Column::SourceId.eq(source_id))
-            .exec(&*self.database.connection())
-            .await;
+            .exec(&txn)
+            .await?;
         
-        if let Err(e) = deleted_result {
-            warn!("Failed to delete existing EPG programs for source {}: {}", source_id, e);
+        debug!("Deleted {} existing EPG programs for source {}", delete_result.rows_affected, source_id);
+
+        // Convert programs to domain models for batch insertion (prepare data)
+        let mut domain_programs = Vec::new();
+        for program in programs {
+            // Ensure each program has a unique ID
+            let program_with_id = crate::models::EpgProgram {
+                id: if program.id == uuid::Uuid::nil() { 
+                    uuid::Uuid::new_v4() 
+                } else { 
+                    program.id 
+                },
+                source_id,
+                channel_id: program.channel_id,
+                channel_name: program.channel_name,
+                program_title: program.program_title,
+                program_description: program.program_description,
+                program_category: program.program_category,
+                start_time: program.start_time,
+                end_time: program.end_time,
+                episode_num: program.episode_num,
+                season_num: program.season_num,
+                rating: program.rating,
+                language: program.language,
+                subtitles: program.subtitles,
+                aspect_ratio: program.aspect_ratio,
+                program_icon: program.program_icon,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            domain_programs.push(program_with_id);
         }
 
-        // Insert programs using SeaORM - handles batching automatically and efficiently
-        let total_saved = if !programs.is_empty() {
-            // Convert to SeaORM ActiveModel for efficient insertion
-            use sea_orm::Set;
-            use crate::entities::epg_programs::ActiveModel;
-            
-            let active_models: Vec<ActiveModel> = programs.into_iter().map(|program| {
-                ActiveModel {
-                    source_id: Set(source_id),
-                    channel_id: Set(program.channel_id),
-                    channel_name: Set(program.channel_name),
-                    program_title: Set(program.program_title),
-                    program_description: Set(program.program_description),
-                    start_time: Set(program.start_time),
-                    end_time: Set(program.end_time),
-                    program_category: Set(program.program_category),
-                    episode_num: Set(program.episode_num),
-                    season_num: Set(program.season_num),
-                    rating: Set(program.rating),
-                    language: Set(program.language),
-                    subtitles: Set(program.subtitles),
-                    aspect_ratio: Set(program.aspect_ratio),
-                    program_icon: Set(program.program_icon),
-                    created_at: Set(chrono::Utc::now()),
-                    updated_at: Set(chrono::Utc::now()),
-                    ..Default::default()
-                }
-            }).collect();
-            
-            // Convert SeaORM ActiveModel to our domain model for batch insertion
-            let domain_programs: Vec<crate::models::EpgProgram> = active_models.into_iter().map(|active_model| {
-                crate::models::EpgProgram {
-                    id: match active_model.id {
-                        Set(val) => val,
-                        _ => uuid::Uuid::new_v4(),
-                    },
-                    source_id: match active_model.source_id {
-                        Set(val) => val,
-                        _ => source_id,
-                    },
-                    channel_id: match active_model.channel_id {
-                        Set(val) => val,
-                        _ => String::new(),
-                    },
-                    channel_name: match active_model.channel_name {
-                        Set(val) => val,
-                        _ => String::new(),
-                    },
-                    program_title: match active_model.program_title {
-                        Set(val) => val,
-                        _ => String::new(),
-                    },
-                    program_description: match active_model.program_description {
-                        Set(val) => val,
-                        _ => None,
-                    },
-                    program_category: match active_model.program_category {
-                        Set(val) => val,
-                        _ => None,
-                    },
-                    start_time: match active_model.start_time {
-                        Set(val) => val,
-                        _ => chrono::Utc::now(),
-                    },
-                    end_time: match active_model.end_time {
-                        Set(val) => val,
-                        _ => chrono::Utc::now(),
-                    },
-                    episode_num: match active_model.episode_num {
-                        Set(val) => val,
-                        _ => None,
-                    },
-                    season_num: match active_model.season_num {
-                        Set(val) => val,
-                        _ => None,
-                    },
-                    rating: match active_model.rating {
-                        Set(val) => val,
-                        _ => None,
-                    },
-                    language: match active_model.language {
-                        Set(val) => val,
-                        _ => None,
-                    },
-                    subtitles: match active_model.subtitles {
-                        Set(val) => val,
-                        _ => None,
-                    },
-                    aspect_ratio: match active_model.aspect_ratio {
-                        Set(val) => val,
-                        _ => None,
-                    },
-                    program_icon: match active_model.program_icon {
-                        Set(val) => val,
-                        _ => None,
-                    },
-                    created_at: chrono::Utc::now(),
-                    updated_at: chrono::Utc::now(),
-                }
-            }).collect();
-
-            // Use our configurable batch insertion with proper database backend support
-            // TODO: Pass actual config from service constructor once config is available
-            match crate::utils::database_operations::DatabaseOperations::insert_epg_programs_batch(
+        // Insert programs using our atomic batch insert function
+        let total_saved = if !domain_programs.is_empty() {
+            match Self::insert_epg_programs_batch_in_transaction(
                 domain_programs,
-                &*self.database.connection(),
+                &txn,
                 None, // Use default batch config for now
+                progress_updater,
             ).await {
                 Ok(inserted_count) => {
-                    // Report progress completion
-                    if let Some(progress) = progress_updater {
-                        progress.update_progress(100.0, &format!("Inserted {} programs", inserted_count)).await;
-                    }
+                    // Commit the transaction only after both delete and insert succeed
+                    txn.commit().await
+                        .map_err(|e| anyhow::anyhow!("Failed to commit EPG programs transaction: {}", e))?;
+                    
+                    debug!("Successfully updated {} EPG programs for source {} (atomic operation)", inserted_count, source_id);
                     inserted_count
                 },
                 Err(e) => {
-                    error!("Failed to insert EPG programs: {}", e);
-                    0
+                    // Transaction will be automatically rolled back when dropped
+                    error!("Failed to insert EPG programs for source {}: {}", source_id, e);
+                    return Err(anyhow::anyhow!("Failed to insert EPG programs: {}", e));
                 }
             }
         } else {
+            // Commit even if no programs to insert (to finalize the delete)
+            txn.commit().await
+                .map_err(|e| anyhow::anyhow!("Failed to commit EPG programs delete transaction: {}", e))?;
             0
         };
 
-        // SeaORM and modern database configurations handle optimization automatically
-
         debug!("Successfully saved {} EPG programs for source: {}", total_saved, source_id);
         Ok(total_saved)
+    }
+
+    /// Insert EPG programs in a transaction (helper method for atomic operations)
+    async fn insert_epg_programs_batch_in_transaction(
+        programs: Vec<crate::models::EpgProgram>,
+        txn: &sea_orm::DatabaseTransaction,
+        batch_config: Option<&crate::config::DatabaseBatchConfig>,
+        progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
+    ) -> Result<usize> {
+        if programs.is_empty() {
+            return Ok(0);
+        }
+
+        let batch_size = programs.len();
+        debug!("Inserting batch of {} EPG programs using multi-value INSERT in transaction", batch_size);
+
+        // Use configurable batch size based on database backend and user configuration
+        use sea_orm::ConnectionTrait;
+        let max_records_per_query = if let Some(config) = batch_config {
+            config.safe_epg_program_batch_size(txn.get_database_backend())
+        } else {
+            // Fallback to defaults if no config provided
+            let default_config = crate::config::DatabaseBatchConfig::default();
+            default_config.safe_epg_program_batch_size(txn.get_database_backend())
+        };
+        
+        debug!("Using EPG program batch size: {} for backend: {:?}", max_records_per_query, txn.get_database_backend());
+        
+        let mut total_inserted = 0;
+        let total_items = programs.len();
+        
+        for (chunk_index, chunk) in programs.chunks(max_records_per_query).enumerate() {
+            if chunk.is_empty() {
+                continue;
+            }
+            
+            // Build multi-value INSERT statement
+            let mut query = String::from(
+                "INSERT INTO epg_programs (id, source_id, channel_id, channel_name, program_title, program_description, program_category, start_time, end_time, language, created_at, updated_at) VALUES "
+            );
+            
+            // Generate placeholders based on database backend
+            let placeholders: Vec<String> = (0..chunk.len())
+                .enumerate()
+                .map(|(i, _)| {
+                    let base_idx = i * 12; // 12 fields per EPG program
+                    match txn.get_database_backend() {
+                        sea_orm::DatabaseBackend::Postgres => {
+                            format!("(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                                base_idx + 1, base_idx + 2, base_idx + 3, base_idx + 4,
+                                base_idx + 5, base_idx + 6, base_idx + 7, base_idx + 8,
+                                base_idx + 9, base_idx + 10, base_idx + 11, base_idx + 12)
+                        }
+                        _ => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string()
+                    }
+                })
+                .collect();
+            query.push_str(&placeholders.join(", "));
+            
+            let mut values = Vec::new();
+            
+            // Collect all parameters
+            for program in chunk {
+                values.push(program.id.into());
+                values.push(program.source_id.into());
+                values.push(program.channel_id.clone().into());
+                values.push(program.channel_name.clone().into());
+                values.push(program.program_title.clone().into());
+                values.push(program.program_description.clone().into());
+                values.push(program.program_category.clone().into());
+                values.push(program.start_time.into());
+                values.push(program.end_time.into());
+                values.push(program.language.clone().into());
+                values.push(program.created_at.into());
+                values.push(program.updated_at.into());
+            }
+            
+            use sea_orm::Statement;
+            let stmt = Statement::from_sql_and_values(txn.get_database_backend(), &query, values);
+            let result = txn.execute(stmt).await
+                .map_err(|e| {
+                    debug!("SQL execution failed: {}", e);
+                    debug!("Query was: {}", query);
+                    anyhow::anyhow!("Failed to insert EPG programs batch: {}", e)
+                })?;
+            
+            total_inserted += result.rows_affected() as usize;
+            debug!("Inserted {} EPG programs in multi-value query", result.rows_affected());
+            
+            // Update progress if updater is available
+            if let Some(updater) = progress_updater {
+                // Calculate progress: 20% base + up to 80% for database saving
+                let save_progress = (total_inserted as f64 / total_items as f64) * 80.0;
+                let total_progress = 20.0 + save_progress;
+                let batch_num = chunk_index + 1;
+                let total_batches = total_items.div_ceil(max_records_per_query);
+                
+                let progress_message = format!("Inserting batch {}/{} ({} of {} programs)", 
+                    batch_num, total_batches, total_inserted, total_items);
+                
+                updater.update_progress(total_progress, &progress_message).await;
+            }
+        }
+
+        debug!("Successfully prepared {} EPG programs for insertion in transaction", total_inserted);
+        Ok(total_inserted)
     }
     
     /// Ingest EPG programs using ProgressStageUpdater (new API)

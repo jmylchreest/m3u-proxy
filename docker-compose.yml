@@ -22,16 +22,21 @@ services:
       - "${POSTGRES_PORT:-5432}:5432" # Optional: expose for external access
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-m3u_proxy} -d ${POSTGRES_DB:-m3u_proxy}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-m3u_proxy} -d ${POSTGRES_DB:-m3u_proxy}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
 
   m3u-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/jmylchreest/m3u-proxy:latest
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy

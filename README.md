@@ -201,6 +201,20 @@ Interactive Swagger UI at: `/docs` (when running)
 - [ ] Add support for manipulation of EPG data in data-mapping and filters
 - [ ] Add support for manual stream sources (custom local streams, literal manual list)
 
+## Provider Links
+
+Useful resources for finding IPTV streams and EPG data:
+
+### IPTV Sources
+- **[IPTV-Org](https://github.com/iptv-org/iptv)** - Collection of publicly available IPTV channels from all over the world
+- **[Free-TV IPTV](https://github.com/Free-TV/IPTV)** - Community-maintained collection of free IPTV channels
+
+### EPG Sources  
+- **[IPTV-Org EPG Sites](https://github.com/iptv-org/epg/tree/master/sites)** - Electronic Program Guide sources for various regions
+- **[Free-TV EPG List](https://github.com/Free-TV/IPTV/blob/master/epglist.txt)** - Curated list of EPG sources
+
+*Note: Always respect content licensing and terms of service when using IPTV sources.*
+
 ## Support
 
 - **Documentation**: Full API docs at `/openapi.json`

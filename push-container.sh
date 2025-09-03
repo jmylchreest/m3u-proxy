@@ -151,7 +151,9 @@ else
 fi
 
 # Determine tag strategy based on version type
+# Check for both localhost/ prefixed and non-prefixed images (Podman vs Docker)
 SOURCE_IMAGE_TAG="${IMAGE_NAME}:${VERSION}"
+LOCALHOST_SOURCE_IMAGE_TAG="localhost/${IMAGE_NAME}:${VERSION}"
 if echo "$VERSION" | grep -q "snapshot"; then
     ADDITIONAL_TAG="snapshot"
     echo "Detected snapshot version - will push as 'snapshot' tag"
@@ -166,8 +168,14 @@ ADDITIONAL_TARGET="${REGISTRY}:${ADDITIONAL_TAG}"
 
 # Verify source images exist locally
 echo "Verifying local images..."
-if ! "${CONTAINER_RUNTIME}" images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${SOURCE_IMAGE_TAG}$"; then
-    echo "Error: Local image '${SOURCE_IMAGE_TAG}' not found!"
+if "${CONTAINER_RUNTIME}" images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${SOURCE_IMAGE_TAG}$"; then
+    ACTUAL_SOURCE_IMAGE_TAG="${SOURCE_IMAGE_TAG}"
+    echo "Found source image: ${ACTUAL_SOURCE_IMAGE_TAG}"
+elif "${CONTAINER_RUNTIME}" images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${LOCALHOST_SOURCE_IMAGE_TAG}$"; then
+    ACTUAL_SOURCE_IMAGE_TAG="${LOCALHOST_SOURCE_IMAGE_TAG}"
+    echo "Found source image: ${ACTUAL_SOURCE_IMAGE_TAG}"
+else
+    echo "Error: Local image '${SOURCE_IMAGE_TAG}' or '${LOCALHOST_SOURCE_IMAGE_TAG}' not found!"
     echo "Please run 'build-container.sh' or 'just build-container' first."
     echo ""
     echo "Available m3u-proxy images:"
@@ -177,8 +185,15 @@ fi
 
 # Check if additional source tag exists (e.g., m3u-proxy:latest or m3u-proxy:snapshot)
 SOURCE_ADDITIONAL_TAG="${IMAGE_NAME}:${ADDITIONAL_TAG}"
+LOCALHOST_SOURCE_ADDITIONAL_TAG="localhost/${IMAGE_NAME}:${ADDITIONAL_TAG}"
 HAS_ADDITIONAL_SOURCE=false
+ACTUAL_SOURCE_ADDITIONAL_TAG=""
+
 if "${CONTAINER_RUNTIME}" images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${SOURCE_ADDITIONAL_TAG}$"; then
+    ACTUAL_SOURCE_ADDITIONAL_TAG="${SOURCE_ADDITIONAL_TAG}"
+    HAS_ADDITIONAL_SOURCE=true
+elif "${CONTAINER_RUNTIME}" images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${LOCALHOST_SOURCE_ADDITIONAL_TAG}$"; then
+    ACTUAL_SOURCE_ADDITIONAL_TAG="${LOCALHOST_SOURCE_ADDITIONAL_TAG}"
     HAS_ADDITIONAL_SOURCE=true
 fi
 
@@ -187,9 +202,9 @@ echo "  Container Runtime: ${CONTAINER_RUNTIME}"
 echo "  Registry: ${REGISTRY}"
 echo "  Version: ${VERSION}"
 echo "  Source Images:"
-echo "    - ${SOURCE_IMAGE_TAG}"
+echo "    - ${ACTUAL_SOURCE_IMAGE_TAG}"
 if [[ "$HAS_ADDITIONAL_SOURCE" == true ]]; then
-    echo "    - ${SOURCE_ADDITIONAL_TAG}"
+    echo "    - ${ACTUAL_SOURCE_ADDITIONAL_TAG}"
 fi
 echo "  Target Images:"
 echo "    - ${VERSIONED_TARGET}"
@@ -200,11 +215,11 @@ if [[ "$DRY_RUN" == true ]]; then
     echo "DRY RUN - Commands that would be executed:"
     echo ""
     echo "# Tag images for registry"
-    echo "${CONTAINER_RUNTIME} tag ${SOURCE_IMAGE_TAG} ${VERSIONED_TARGET}"
+    echo "${CONTAINER_RUNTIME} tag ${ACTUAL_SOURCE_IMAGE_TAG} ${VERSIONED_TARGET}"
     if [[ "$HAS_ADDITIONAL_SOURCE" == true ]]; then
-        echo "${CONTAINER_RUNTIME} tag ${SOURCE_ADDITIONAL_TAG} ${ADDITIONAL_TARGET}"
+        echo "${CONTAINER_RUNTIME} tag ${ACTUAL_SOURCE_ADDITIONAL_TAG} ${ADDITIONAL_TARGET}"
     else
-        echo "${CONTAINER_RUNTIME} tag ${SOURCE_IMAGE_TAG} ${ADDITIONAL_TARGET}"
+        echo "${CONTAINER_RUNTIME} tag ${ACTUAL_SOURCE_IMAGE_TAG} ${ADDITIONAL_TARGET}"
     fi
     echo ""
     echo "# Push images to registry"
@@ -217,21 +232,21 @@ fi
 
 # Tag images for the registry
 echo "Tagging images for registry..."
-echo "  ${SOURCE_IMAGE_TAG} → ${VERSIONED_TARGET}"
-if ! "${CONTAINER_RUNTIME}" tag "${SOURCE_IMAGE_TAG}" "${VERSIONED_TARGET}"; then
+echo "  ${ACTUAL_SOURCE_IMAGE_TAG} → ${VERSIONED_TARGET}"
+if ! "${CONTAINER_RUNTIME}" tag "${ACTUAL_SOURCE_IMAGE_TAG}" "${VERSIONED_TARGET}"; then
     echo "Error: Failed to tag image for registry"
     exit 1
 fi
 
 if [[ "$HAS_ADDITIONAL_SOURCE" == true ]]; then
-    echo "  ${SOURCE_ADDITIONAL_TAG} → ${ADDITIONAL_TARGET}"
-    if ! "${CONTAINER_RUNTIME}" tag "${SOURCE_ADDITIONAL_TAG}" "${ADDITIONAL_TARGET}"; then
+    echo "  ${ACTUAL_SOURCE_ADDITIONAL_TAG} → ${ADDITIONAL_TARGET}"
+    if ! "${CONTAINER_RUNTIME}" tag "${ACTUAL_SOURCE_ADDITIONAL_TAG}" "${ADDITIONAL_TARGET}"; then
         echo "Error: Failed to tag additional image for registry"
         exit 1
     fi
 else
-    echo "  ${SOURCE_IMAGE_TAG} → ${ADDITIONAL_TARGET}"
-    if ! "${CONTAINER_RUNTIME}" tag "${SOURCE_IMAGE_TAG}" "${ADDITIONAL_TARGET}"; then
+    echo "  ${ACTUAL_SOURCE_IMAGE_TAG} → ${ADDITIONAL_TARGET}"
+    if ! "${CONTAINER_RUNTIME}" tag "${ACTUAL_SOURCE_IMAGE_TAG}" "${ADDITIONAL_TARGET}"; then
         echo "Error: Failed to tag additional image for registry"
         exit 1
     fi

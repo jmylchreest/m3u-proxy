@@ -91,20 +91,17 @@ pub async fn request_size_middleware(
 ) -> Response {
     const MAX_REQUEST_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
-    if let Some(content_length) = headers.get("content-length") {
-        if let Ok(length_str) = content_length.to_str() {
-            if let Ok(length) = length_str.parse::<usize>() {
-                if length > MAX_REQUEST_SIZE {
-                    return (
-                        StatusCode::PAYLOAD_TOO_LARGE,
-                        Json(ApiResponse::<()>::error(format!(
-                            "Request too large: {length} bytes (max: {MAX_REQUEST_SIZE})"
-                        ))),
-                    ).into_response();
-                }
-            }
+    if let Some(content_length) = headers.get("content-length")
+        && let Ok(length_str) = content_length.to_str()
+        && let Ok(length) = length_str.parse::<usize>()
+        && length > MAX_REQUEST_SIZE {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(ApiResponse::<()>::error(format!(
+                    "Request too large: {length} bytes (max: {MAX_REQUEST_SIZE})"
+                ))),
+            ).into_response();
         }
-    }
 
     next.run(request).await
 }

@@ -478,14 +478,13 @@ fn find_child_processes_simple(system: &sysinfo::System, parent_pid: u32) -> Vec
     let mut children = Vec::new();
     
     for (pid, process) in system.processes() {
-        if let Some(parent) = process.parent() {
-            if parent.as_u32() == parent_pid {
+        if let Some(parent) = process.parent()
+            && parent.as_u32() == parent_pid {
                 children.push(pid.as_u32());
                 // Recursively find grandchildren
                 let grandchildren = find_child_processes_simple(system, pid.as_u32());
                 children.extend(grandchildren);
             }
-        }
     }
     
     children
@@ -615,11 +614,10 @@ pub async fn check_hardware_acceleration() -> (bool, crate::web::responses::Deta
     
     // Check for common hardware acceleration methods
     if let Ok(output) = tokio::process::Command::new("ffmpeg")
-        .args(&["-hide_banner", "-hwaccels"])
+        .args(["-hide_banner", "-hwaccels"])
         .output()
         .await
-    {
-        if output.status.success() {
+        && output.status.success() {
             let hwaccel_output = String::from_utf8_lossy(&output.stdout);
             for line in hwaccel_output.lines() {
                 let accel = line.trim();
@@ -647,7 +645,6 @@ pub async fn check_hardware_acceleration() -> (bool, crate::web::responses::Deta
                 }
             }
         }
-    }
     
     // Remove duplicates from codecs
     codecs.sort();

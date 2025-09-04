@@ -20,8 +20,6 @@ pub struct RuntimeSettings {
     pub log_level: String,
     /// Enable/disable request logging
     pub enable_request_logging: bool,
-    /// Enable/disable metrics collection
-    pub enable_metrics: bool,
 }
 
 /// Request to update runtime settings
@@ -31,8 +29,6 @@ pub struct UpdateSettingsRequest {
     pub log_level: Option<String>,
     /// Enable/disable request logging (optional)
     pub enable_request_logging: Option<bool>,
-    /// Enable/disable metrics collection (optional)
-    pub enable_metrics: Option<bool>,
 }
 
 /// Response for settings operations
@@ -66,7 +62,6 @@ pub async fn get_settings(
     let settings = RuntimeSettings {
         log_level: runtime_settings.log_level,
         enable_request_logging: runtime_settings.enable_request_logging,
-        enable_metrics: runtime_settings.enable_metrics,
     };
 
     let response = SettingsResponse {
@@ -127,7 +122,6 @@ pub async fn update_settings(
     let applied_changes = state.runtime_settings_store.update_multiple(
         request.log_level.as_deref(),
         request.enable_request_logging,
-        request.enable_metrics,
     ).await;
 
     // Get current settings after update
@@ -135,7 +129,6 @@ pub async fn update_settings(
     let current_settings = RuntimeSettings {
         log_level: updated_settings.log_level,
         enable_request_logging: updated_settings.enable_request_logging,
-        enable_metrics: updated_settings.enable_metrics,
     };
 
     let response = SettingsResponse {
@@ -178,12 +171,6 @@ pub async fn get_settings_info(
                 "description": "Enable or disable request logging",
                 "type": "boolean",
                 "current_value": current_settings.enable_request_logging,
-                "changeable_at_runtime": true
-            },
-            "enable_metrics": {
-                "description": "Enable or disable metrics collection",
-                "type": "boolean", 
-                "current_value": current_settings.enable_metrics,
                 "changeable_at_runtime": true
             }
         },

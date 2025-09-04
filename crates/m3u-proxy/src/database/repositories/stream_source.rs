@@ -90,10 +90,7 @@ impl StreamSourceSeaOrmRepository {
                 ignore_channel_numbers: m.ignore_channel_numbers,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
-                last_ingested_at: match m.last_ingested_at {
-                    Some(ref time) => Some(*time),
-                    None => None
-                },
+                last_ingested_at: m.last_ingested_at.as_ref().map(|time| *time),
                 is_active: m.is_active,
             })),
             None => Ok(None)
@@ -118,10 +115,7 @@ impl StreamSourceSeaOrmRepository {
                 ignore_channel_numbers: m.ignore_channel_numbers,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
-                last_ingested_at: match m.last_ingested_at {
-                    Some(ref time) => Some(*time),
-                    None => None
-                },
+                last_ingested_at: m.last_ingested_at.as_ref().map(|time| *time),
                 is_active: m.is_active,
             });
         }
@@ -152,10 +146,7 @@ impl StreamSourceSeaOrmRepository {
                 ignore_channel_numbers: m.ignore_channel_numbers,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
-                last_ingested_at: match m.last_ingested_at {
-                    Some(ref time) => Some(*time),
-                    None => None
-                },
+                last_ingested_at: m.last_ingested_at.as_ref().map(|time| *time),
                 is_active: m.is_active,
             });
         }
@@ -219,10 +210,7 @@ impl StreamSourceSeaOrmRepository {
                 ignore_channel_numbers: m.ignore_channel_numbers,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
-                last_ingested_at: match m.last_ingested_at {
-                    Some(ref time) => Some(*time),
-                    None => None
-                },
+                last_ingested_at: m.last_ingested_at.as_ref().map(|time| *time),
                 max_concurrent_streams: m.max_concurrent_streams,
             });
         }

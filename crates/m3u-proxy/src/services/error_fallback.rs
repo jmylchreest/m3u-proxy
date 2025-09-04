@@ -21,7 +21,7 @@ pub struct ErrorFallbackGenerator {
     cyclic_buffer: Arc<CyclicBuffer>,
     current_token: std::sync::Mutex<Option<CancellationToken>>,
     is_active: std::sync::atomic::AtomicBool,
-    font_manager: std::sync::Mutex<EmbeddedFontManager>,
+    font_manager: tokio::sync::Mutex<EmbeddedFontManager>,
 }
 
 impl ErrorFallbackGenerator {
@@ -32,7 +32,7 @@ impl ErrorFallbackGenerator {
             cyclic_buffer,
             current_token: std::sync::Mutex::new(None),
             is_active: std::sync::atomic::AtomicBool::new(false),
-            font_manager: std::sync::Mutex::new(EmbeddedFontManager::new()),
+            font_manager: tokio::sync::Mutex::new(EmbeddedFontManager::new()),
         }
     }
 
@@ -127,7 +127,7 @@ impl ErrorFallbackGenerator {
             const CHUNK_SIZE: usize = 188 * 7; // 7 TS packets per chunk
             let video_chunks: Vec<bytes::Bytes> = error_video
                 .chunks(CHUNK_SIZE)
-                .map(|chunk| bytes::Bytes::copy_from_slice(chunk))
+                .map(bytes::Bytes::copy_from_slice)
                 .collect();
 
             if video_chunks.is_empty() {
@@ -234,9 +234,8 @@ impl ErrorFallbackGenerator {
     ) -> Result<bytes::Bytes, RelayError> {
         let error_message = self.format_error_message(error_type);
         let font_param = {
-            let mut font_manager = self.font_manager.lock().unwrap();
-            font_manager.get_ffmpeg_font_param().await
-                .unwrap_or(None)
+            let mut font_manager = self.font_manager.lock().await;
+            font_manager.get_ffmpeg_font_param().await.unwrap_or(None)
         };
         
         let ffmpeg_cmd = self.build_error_video_command(
@@ -389,15 +388,13 @@ impl ErrorFallbackGenerator {
 
                 let exit_status = child.wait().await;
 
-                if let Some(stdout_handle) = stdout_handle {
-                    if let Ok(output) = stdout_handle.await {
-                        if let Some(stderr_handle) = stderr_handle {
-                            if let Ok(stderr_output) = stderr_handle.await {
-                                if !stderr_output.is_empty() {
-                                    warn!("FFmpeg stderr: {}", stderr_output);
-                                }
+                if let Some(stdout_handle) = stdout_handle
+                    && let Ok(output) = stdout_handle.await {
+                        if let Some(stderr_handle) = stderr_handle
+                            && let Ok(stderr_output) = stderr_handle.await
+                            && !stderr_output.is_empty() {
+                                warn!("FFmpeg stderr: {}", stderr_output);
                             }
-                        }
 
                         match exit_status {
                             Ok(status) if status.success() && !output.is_empty() => {
@@ -412,7 +409,6 @@ impl ErrorFallbackGenerator {
                             }
                         }
                     }
-                }
             }
             Err(e) => {
                 warn!("Failed to spawn FFmpeg for error video generation: {}", e);
@@ -520,11 +516,10 @@ impl StreamHealthMonitor {
         let mut last_error = self.last_error_time.lock().unwrap();
         
         // Reset error count if enough time has passed
-        if let Some(last_time) = *last_error {
-            if now.duration_since(last_time).as_secs() > self.fallback_config.error_threshold_seconds as u64 {
+        if let Some(last_time) = *last_error
+            && now.duration_since(last_time).as_secs() > self.fallback_config.error_threshold_seconds as u64 {
                 self.error_count.store(0, std::sync::atomic::Ordering::Relaxed);
             }
-        }
         
         *last_error = Some(now);
         let error_count = self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;

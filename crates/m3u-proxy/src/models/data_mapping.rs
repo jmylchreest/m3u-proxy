@@ -322,12 +322,11 @@ impl DataMappingRuleCreateRequest {
 
 impl DataMappingRuleUpdateRequest {
     pub fn validate_expression(&self) -> Result<(), String> {
-        if let Some(expression) = &self.expression {
-            if expression.trim().is_empty() {
+        if let Some(expression) = &self.expression
+            && expression.trim().is_empty() {
                 return Err("Expression cannot be empty".to_string());
             }
             // Add more expression validation logic here as needed
-        }
         Ok(())
     }
 }

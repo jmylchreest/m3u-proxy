@@ -17,8 +17,6 @@ pub struct RuntimeSettings {
     pub log_level: String,
     /// Enable/disable request logging
     pub enable_request_logging: bool,
-    /// Enable/disable metrics collection
-    pub enable_metrics: bool,
 }
 
 impl Default for RuntimeSettings {
@@ -26,7 +24,6 @@ impl Default for RuntimeSettings {
         Self {
             log_level: "INFO".to_string(),
             enable_request_logging: true,
-            enable_metrics: true,
         }
     }
 }
@@ -46,8 +43,6 @@ pub struct RuntimeSettingsStore {
 pub struct RuntimeFlags {
     /// Whether request logging is currently enabled
     pub request_logging_enabled: bool,
-    /// Whether metrics collection is currently enabled  
-    pub metrics_enabled: bool,
     /// Runtime feature flags
     pub feature_flags: HashMap<String, bool>,
     /// Runtime feature configuration
@@ -57,8 +52,7 @@ pub struct RuntimeFlags {
 impl Default for RuntimeFlags {
     fn default() -> Self {
         Self {
-            request_logging_enabled: true,
-            metrics_enabled: true,
+            request_logging_enabled: false, // Default to false, override from config
             feature_flags: HashMap::new(),
             feature_config: HashMap::new(),
         }
@@ -161,18 +155,6 @@ impl RuntimeSettingsStore {
               if enable { "enabled" } else { "disabled" });
     }
 
-    /// Update metrics collection setting (temporary, not persisted)
-    pub async fn update_metrics_collection(&self, enable: bool) {
-        let mut settings = self.settings.write().await;
-        settings.enable_metrics = enable;
-        
-        // Apply to runtime flags immediately (temporary application)
-        let mut flags = self.runtime_flags.write().await;
-        flags.metrics_enabled = enable;
-        
-        info!("Metrics collection {} (temporary - resets on restart)", 
-              if enable { "enabled" } else { "disabled" });
-    }
 
 
     /// Bulk update multiple settings
@@ -180,16 +162,14 @@ impl RuntimeSettingsStore {
         &self,
         log_level: Option<&str>,
         enable_request_logging: Option<bool>,
-        enable_metrics: Option<bool>,
     ) -> Vec<String> {
         let mut applied_changes = Vec::new();
 
         // Update log level if provided
-        if let Some(level) = log_level {
-            if self.update_log_level(level).await {
+        if let Some(level) = log_level
+            && self.update_log_level(level).await {
                 applied_changes.push(format!("Log level changed to {}", level.to_uppercase()));
             }
-        }
 
 
         // Update request logging if provided
@@ -201,14 +181,6 @@ impl RuntimeSettingsStore {
             ));
         }
 
-        // Update metrics collection if provided
-        if let Some(enable_metrics) = enable_metrics {
-            self.update_metrics_collection(enable_metrics).await;
-            applied_changes.push(format!(
-                "Metrics collection {}", 
-                if enable_metrics { "enabled" } else { "disabled" }
-            ));
-        }
 
         applied_changes
     }
@@ -268,17 +240,34 @@ impl RuntimeSettingsStore {
 
     /// Initialize feature flags from config (called on startup)
     pub async fn initialize_feature_flags_from_config(&self, config: &crate::config::Config) {
+        let mut runtime_flags = self.runtime_flags.write().await;
+        
+        // Start with known default features that should always be available
+        let mut feature_flags = std::collections::HashMap::new();
+        feature_flags.insert("debug-frontend".to_string(), false);
+        feature_flags.insert("feature-cache".to_string(), false);
+        
+        // Override with config values if present
         if let Some(features) = &config.features {
-            let mut runtime_flags = self.runtime_flags.write().await;
-            runtime_flags.feature_flags = features.flags.clone();
+            for (key, value) in &features.flags {
+                feature_flags.insert(key.clone(), *value);
+            }
             runtime_flags.feature_config = features.config.clone();
             
             info!(
-                "Initialized feature flags from config: {} flags, {} configurations",
+                "Initialized feature flags: {} total ({} from config, {} defaults)",
+                feature_flags.len(),
                 features.flags.len(),
-                features.config.len()
+                feature_flags.len() - features.flags.len()
+            );
+        } else {
+            info!(
+                "Initialized feature flags: {} default features (no config provided)",
+                feature_flags.len()
             );
         }
+        
+        runtime_flags.feature_flags = feature_flags;
     }
 }
 

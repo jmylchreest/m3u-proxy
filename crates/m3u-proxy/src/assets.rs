@@ -187,21 +187,19 @@ mod tests {
         let css_files: Vec<_> = StaticAssets::iter()
             .filter(|f| f.contains(".css"))
             .collect();
-        if !css_files.is_empty() {
-            if let Some(css_file) = StaticAssets::get_asset(&css_files[0]) {
+        if !css_files.is_empty()
+            && let Some(css_file) = StaticAssets::get_asset(&css_files[0]) {
                 let content = String::from_utf8_lossy(&css_file.data);
                 assert!(!content.is_empty(), "CSS files should have content");
             }
-        }
 
         // Test that we have some JS content (Next.js JS files have dynamic names)
         let js_files: Vec<_> = StaticAssets::iter().filter(|f| f.contains(".js")).collect();
-        if !js_files.is_empty() {
-            if let Some(js_file) = StaticAssets::get_asset(&js_files[0]) {
+        if !js_files.is_empty()
+            && let Some(js_file) = StaticAssets::get_asset(&js_files[0]) {
                 let content = String::from_utf8_lossy(&js_file.data);
                 assert!(!content.is_empty(), "JS files should have content");
             }
-        }
 
         // Test relay page content (may be at different paths in Next.js builds)
         if let Some(relay_html) = StaticAssets::get_asset("static/admin/relays/index.html") {

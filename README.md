@@ -47,6 +47,7 @@ chmod +x m3u-proxy
 | **WEB SERVER** |
 | `M3U_PROXY_WEB__HOST` | Listening IP address | `0.0.0.0` | |
 | `M3U_PROXY_WEB__PORT` | Listening port | `8080` | |
+| `M3U_PROXY_WEB__ENABLE_REQUEST_LOGGING` | Enable HTTP request/response logging | `false` | |
 | **DATABASE** |
 | `M3U_PROXY_DATABASE__MAX_CONNECTIONS` | Database connection pool size | `10` | |
 | `M3U_PROXY_DATABASE__BATCH_SIZE` | Batch processing size | `1000` | |
@@ -71,6 +72,7 @@ M3U_PROXY_DATABASE__URL=sqlite://./m3u-proxy.db
 # Web server
 M3U_PROXY_WEB__HOST=0.0.0.0
 M3U_PROXY_WEB__PORT=8080
+M3U_PROXY_WEB__ENABLE_REQUEST_LOGGING=false
 
 # Storage paths
 M3U_PROXY_STORAGE__M3U_PATH=./data/m3u
@@ -200,6 +202,10 @@ Interactive Swagger UI at: `/docs` (when running)
 ### Current Development
 - [ ] Add support for manipulation of EPG data in data-mapping and filters
 - [ ] Add support for manual stream sources (custom local streams, literal manual list)
+- [ ] Add OpenTelemetry integration with automatic request/response tracing
+- [ ] Implement Prometheus metrics endpoint (`/metrics`) for monitoring stream counts, response times, errors
+- [ ] Add request correlation IDs to logs for easier debugging across components
+- [ ] Export performance metrics (channel fetch times, proxy generation duration, database query times)
 
 ## Provider Links
 

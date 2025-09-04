@@ -158,13 +158,12 @@ impl Database {
         }
 
         // Create parent directories if they don't exist
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
+        if let Some(parent) = path.parent()
+            && !parent.exists() {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("Failed to create directory for SQLite database: {}", parent.display()))?;
                 info!("Created directory for SQLite database: {}", parent.display());
             }
-        }
 
         // Add mode=rwc to enable auto-creation
         let auto_create_url = if url.contains('?') {

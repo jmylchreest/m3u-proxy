@@ -88,7 +88,7 @@ impl M3uSourceHandler {
                     // Create a basic channel without metadata
                     
                     // Create deduplication key for basic channels too
-                    let channel_name = line.split('/').last().unwrap_or("Unnamed Channel");
+                    let channel_name = line.split('/').next_back().unwrap_or("Unnamed Channel");
                     let dedup_key = format!("{}|{}", line, channel_name);
                     
                     if seen_channels.contains(&dedup_key) {
@@ -147,11 +147,10 @@ impl M3uSourceHandler {
         };
 
         // Apply custom field mapping if configured
-        if let Some(field_map_json) = &source.field_map {
-            if let Ok(field_map) = serde_json::from_str::<HashMap<String, String>>(field_map_json) {
+        if let Some(field_map_json) = &source.field_map
+            && let Ok(field_map) = serde_json::from_str::<HashMap<String, String>>(field_map_json) {
                 channel = self.apply_field_mapping(channel, &field_map);
             }
-        }
 
         Ok(Some(channel))
     }

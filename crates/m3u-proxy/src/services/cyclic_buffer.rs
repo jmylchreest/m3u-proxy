@@ -418,13 +418,12 @@ impl CyclicBuffer {
         if !spilled_chunks_to_cleanup.is_empty() {
             tokio::spawn(async move {
                 for chunk in spilled_chunks_to_cleanup {
-                    if let Some(spill_path) = &chunk.spill_path {
-                        if let Some(spill_path_str) = spill_path.to_str() {
+                    if let Some(spill_path) = &chunk.spill_path
+                        && let Some(spill_path_str) = spill_path.to_str() {
                             debug!("Scheduled cleanup of spilled file: {}", spill_path_str);
                             // Note: We can't access temp_manager here since it's not available in static context
                             // The cleanup will be handled by the system's temporary file cleanup
                         }
-                    }
                 }
             });
         }
@@ -486,22 +485,19 @@ impl CyclicBuffer {
             }
             
             // Clean up spilled files in the background
-            if !spilled_chunks_to_cleanup.is_empty() {
-                if let Some(temp_manager) = &self.temp_manager {
+            if !spilled_chunks_to_cleanup.is_empty()
+                && let Some(temp_manager) = &self.temp_manager {
                     let manager_clone = temp_manager.clone();
                     tokio::spawn(async move {
                         for chunk in spilled_chunks_to_cleanup {
-                            if let Some(ref spill_path) = chunk.spill_path {
-                                if let Some(spill_path_str) = spill_path.to_str() {
-                                    if let Err(e) = manager_clone.remove_file(spill_path_str).await {
-                                        debug!("Failed to remove spilled file {}: {}", spill_path_str, e);
-                                    }
+                            if let Some(ref spill_path) = chunk.spill_path
+                                && let Some(spill_path_str) = spill_path.to_str()
+                                && let Err(e) = manager_clone.remove_file(spill_path_str).await {
+                                    debug!("Failed to remove spilled file {}: {}", spill_path_str, e);
                                 }
-                            }
                         }
                     });
                 }
-            }
             
             if removed_count > 0 {
                 self.buffer_size.fetch_sub(removed_size, Ordering::Relaxed);

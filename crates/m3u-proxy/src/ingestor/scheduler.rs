@@ -124,6 +124,7 @@ impl SchedulerService {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_http_client_factory(
         progress_service: Arc<crate::services::progress_service::ProgressService>,
         database: Database,
@@ -392,8 +393,8 @@ impl SchedulerService {
         for cached_source in cache.values() {
             let source = &cached_source.source;
 
-            if let Some(schedule) = &cached_source.schedule {
-                if let Some(next_time) = schedule.upcoming(Utc).next() {
+            if let Some(schedule) = &cached_source.schedule
+                && let Some(next_time) = schedule.upcoming(Utc).next() {
                     trace!(
                         "Source '{}' (ID: {}, Type: {}) - Next scheduled update: {} (cron: {})",
                         source.name(),
@@ -404,26 +405,21 @@ impl SchedulerService {
                     );
 
                     // Check if we missed a scheduled run
-                    if self.run_missed_immediately && source.last_ingested_at().is_some() {
-                        if let Some(last_ingested) = source.last_ingested_at() {
-                            if let Some(should_have_run) = schedule.after(&last_ingested).next() {
-                                if now >= should_have_run
-                                    && now.signed_duration_since(should_have_run).num_seconds() > 5
-                                {
-                                    trace!(
-                                        "Source '{}' (ID: {}) missed scheduled run at {} - will run immediately",
-                                        source.name(),
-                                        source.id(),
-                                        should_have_run.format("%Y-%m-%d %H:%M:%S UTC")
-                                    );
-                                    // Add to missed sources list for immediate processing
-                                    missed_sources.push(source.clone());
-                                }
-                            }
+                    if self.run_missed_immediately && source.last_ingested_at().is_some()
+                        && let Some(last_ingested) = source.last_ingested_at()
+                        && let Some(should_have_run) = schedule.after(&last_ingested).next()
+                        && now >= should_have_run
+                        && now.signed_duration_since(should_have_run).num_seconds() > 5 {
+                            trace!(
+                                "Source '{}' (ID: {}) missed scheduled run at {} - will run immediately",
+                                source.name(),
+                                source.id(),
+                                should_have_run.format("%Y-%m-%d %H:%M:%S UTC")
+                            );
+                            // Add to missed sources list for immediate processing
+                            missed_sources.push(source.clone());
                         }
-                    }
                 }
-            }
         }
 
         Ok(missed_sources)
@@ -647,8 +643,8 @@ impl SchedulerService {
                 // Update cached source data - the timestamp was already updated by the shared function
                 {
                     let mut cache = self.cached_sources.write().await;
-                    if let Some(cached_source) = cache.get_mut(&source.id) {
-                        if let SchedulableSource::Stream(stream_src) = &mut cached_source.source {
+                    if let Some(cached_source) = cache.get_mut(&source.id)
+                        && let SchedulableSource::Stream(stream_src) = &mut cached_source.source {
                             // Refresh the cached timestamp from database
                             if let Ok(Some(updated_source)) =
                                 self.stream_source_repo.find_by_id(&source.id).await
@@ -660,19 +656,17 @@ impl SchedulerService {
                                 );
                             }
                         }
-                    }
                 }
 
                 // Calculate next update time
-                if let Ok(schedule) = Schedule::from_str(&source.update_cron) {
-                    if let Some(next_time) = schedule.upcoming(Utc).next() {
+                if let Ok(schedule) = Schedule::from_str(&source.update_cron)
+                    && let Some(next_time) = schedule.upcoming(Utc).next() {
                         debug!(
                             "Scheduled refresh completed for stream source '{}' - Next update: {}",
                             source.name,
                             next_time.format("%Y-%m-%d %H:%M:%S UTC")
                         );
                     }
-                }
                 true
             }
             Err(e) => {
@@ -696,12 +690,11 @@ impl SchedulerService {
         }
 
         // Trigger proxy auto-regeneration after successful stream source update
-        if success {
-            if let Some(ref proxy_service) = self.proxy_regeneration_service {
+        if success
+            && let Some(ref proxy_service) = self.proxy_regeneration_service {
                 // COORDINATION FIX: Use coordinated method to prevent scheduler-manual conflicts
                 proxy_service.queue_affected_proxies_coordinated(source.id, "stream").await;
             }
-        }
     }
 
     async fn process_epg_source_update(&self, source: &EpgSource) {
@@ -740,8 +733,8 @@ impl SchedulerService {
                 // Update cached source data - the timestamp was already updated by the shared function
                 {
                     let mut cache = self.cached_sources.write().await;
-                    if let Some(cached_source) = cache.get_mut(&source.id) {
-                        if let SchedulableSource::Epg(epg_src) = &mut cached_source.source {
+                    if let Some(cached_source) = cache.get_mut(&source.id)
+                        && let SchedulableSource::Epg(epg_src) = &mut cached_source.source {
                             // Refresh the cached timestamp from database
                             if let Ok(Some(updated_source)) =
                                 self.epg_source_repo.find_by_id(&source.id).await
@@ -753,19 +746,17 @@ impl SchedulerService {
                                 );
                             }
                         }
-                    }
                 }
 
                 // Calculate next update time
-                if let Ok(schedule) = Schedule::from_str(&source.update_cron) {
-                    if let Some(next_time) = schedule.upcoming(Utc).next() {
+                if let Ok(schedule) = Schedule::from_str(&source.update_cron)
+                    && let Some(next_time) = schedule.upcoming(Utc).next() {
                         debug!(
                             "Scheduled refresh completed for EPG source '{}' - Next update: {}",
                             source.name,
                             next_time.format("%Y-%m-%d %H:%M:%S UTC")
                         );
                     }
-                }
                 true
             }
             Err(e) => {
@@ -789,12 +780,11 @@ impl SchedulerService {
         }
 
         // Trigger proxy auto-regeneration after successful EPG source update
-        if success {
-            if let Some(ref proxy_service) = self.proxy_regeneration_service {
+        if success
+            && let Some(ref proxy_service) = self.proxy_regeneration_service {
                 // COORDINATION FIX: Use coordinated method to prevent scheduler-manual conflicts
                 proxy_service.queue_affected_proxies_coordinated(source.id, "epg").await;
             }
-        }
     }
 
     fn should_update_cached(
@@ -805,11 +795,10 @@ impl SchedulerService {
         last_checked: &mut Option<DateTime<Utc>>,
     ) -> Result<bool> {
         // Only check if we haven't checked this source in the last second
-        if let Some(last_check_time) = *last_checked {
-            if now.signed_duration_since(last_check_time).num_seconds() < 1 {
+        if let Some(last_check_time) = *last_checked
+            && now.signed_duration_since(last_check_time).num_seconds() < 1 {
                 return Ok(false);
             }
-        }
 
         *last_checked = Some(now);
 
@@ -865,12 +854,11 @@ impl SchedulerService {
         
         for (source_id, cached_source) in cache.iter() {
             // Skip sources in grace period
-            if let Some(grace_until) = cached_source.grace_period_until {
-                if now < grace_until {
+            if let Some(grace_until) = cached_source.grace_period_until
+                && now < grace_until {
                     trace!("Source '{}' in grace period until {}", cached_source.source.name(), grace_until);
                     continue;
                 }
-            }
             
             // Check if source is in backoff period
             if let Some(processing_info) = self.ingestor.get_state_manager().get_processing_info(*source_id).await {
@@ -899,8 +887,8 @@ impl SchedulerService {
             }
             
             // Check cron schedule
-            if let Some(schedule) = &cached_source.schedule {
-                if let Some(next_time) = schedule.upcoming(Utc).next() {
+            if let Some(schedule) = &cached_source.schedule
+                && let Some(next_time) = schedule.upcoming(Utc).next() {
                     // Apply grace period check
                     if let Some(last_ingested) = cached_source.source.last_ingested_at() {
                         let time_since_last = now.signed_duration_since(last_ingested);
@@ -912,7 +900,6 @@ impl SchedulerService {
                     
                     upcoming_times.push(next_time);
                 }
-            }
         }
         
         // Find the earliest upcoming time
@@ -1136,8 +1123,8 @@ impl SchedulerService {
             }
             
             // Get next scheduled time if schedule is available
-            if let Some(ref schedule) = cached_source.schedule {
-                if let Some(next_time) = schedule.upcoming(Utc).next() {
+            if let Some(ref schedule) = cached_source.schedule
+                && let Some(next_time) = schedule.upcoming(Utc).next() {
                     next_scheduled_times.push(crate::web::responses::NextScheduledTime {
                         source_id: cached_source.source.id(),
                         source_name: cached_source.source.name().to_string(),
@@ -1146,7 +1133,6 @@ impl SchedulerService {
                         cron_expression: cached_source.source.update_cron().to_string(),
                     });
                 }
-            }
         }
         
         // Sort by next run time

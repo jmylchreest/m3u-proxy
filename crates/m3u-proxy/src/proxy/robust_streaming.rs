@@ -290,15 +290,14 @@ impl RobustStreamingProxy {
         ];
 
         for header_name in safe_headers {
-            if let Some(value) = headers.get(header_name) {
-                if let Ok(header_value) = reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+            if let Some(value) = headers.get(header_name)
+                && let Ok(header_value) = reqwest::header::HeaderValue::from_bytes(value.as_bytes())
                 {
                     upstream_headers.insert(
                         reqwest::header::HeaderName::from_static(header_name),
                         header_value,
                     );
                 }
-            }
         }
 
         let response = client
@@ -350,11 +349,10 @@ impl RobustStreamingProxy {
 
         // Forward response headers
         for (name, value) in headers.iter() {
-            if let Ok(header_name) = header::HeaderName::from_bytes(name.as_str().as_bytes()) {
-                if let Ok(header_value) = header::HeaderValue::from_bytes(value.as_bytes()) {
+            if let Ok(header_name) = header::HeaderName::from_bytes(name.as_str().as_bytes())
+                && let Ok(header_value) = header::HeaderValue::from_bytes(value.as_bytes()) {
                     response_builder = response_builder.header(header_name, header_value);
                 }
-            }
         }
 
         Ok(response_builder.body(body)?)

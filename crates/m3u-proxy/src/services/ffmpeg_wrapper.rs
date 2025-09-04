@@ -474,52 +474,42 @@ impl FFmpegProcessWrapper {
             
             // Extract resolution - with safe bounds checking
             if resolution.is_none() { // Only try once to avoid overwriting
-                if let Some(res_start) = line.find(", ") {
-                    if let Some(res_end) = line.get(res_start..).and_then(|s| s.find(" [")) {
-                        if let Some(res_part) = line.get(res_start + 2..res_start + res_end) {
-                            if res_part.contains("x") && 
-                               res_part.len() > 3 && res_part.len() < 20 && 
-                               res_part.chars().any(|c| c.is_ascii_digit()) {
-                                resolution = Some(res_part);
-                            }
-                        }
+                if let Some(res_start) = line.find(", ")
+                    && let Some(res_end) = line.get(res_start..).and_then(|s| s.find(" ["))
+                    && let Some(res_part) = line.get(res_start + 2..res_start + res_end)
+                    && res_part.contains("x") && 
+                       res_part.len() > 3 && res_part.len() < 20 && 
+                       res_part.chars().any(|c| c.is_ascii_digit()) {
+                        resolution = Some(res_part);
                     }
-                }
             }
             
             // Extract FPS - with safe parsing
             if fps.is_none() { // Only try once to avoid overwriting
-                if let Some(fps_pos) = line_lower.find(" fps") {
-                    if let Some(fps_start) = line.get(..fps_pos).and_then(|s| s.rfind(' ')) {
-                        if let Some(fps_str) = line.get(fps_start + 1..fps_pos) {
-                            // Safe parsing - ignore any parse errors
-                            if let Ok(fps_val) = fps_str.parse::<f32>() {
-                                if fps_val > 0.0 && fps_val < 1000.0 { // Reasonable bounds
-                                    fps = Some(fps_val);
-                                }
-                            }
-                        }
+                if let Some(fps_pos) = line_lower.find(" fps")
+                    && let Some(fps_start) = line.get(..fps_pos).and_then(|s| s.rfind(' '))
+                    && let Some(fps_str) = line.get(fps_start + 1..fps_pos)
+                    && let Ok(fps_val) = fps_str.parse::<f32>()
+                    && fps_val > 0.0 && fps_val < 1000.0 { // Reasonable bounds
+                        fps = Some(fps_val);
                     }
-                }
             }
             
             // Extract bitrate from progress lines - with safe bounds
-            if line_lower.contains("bitrate=") {
-                if let Some(br_start) = line_lower.find("bitrate=") {
-                    if let Some(remaining) = line.get(br_start + 8..) {
-                        let br_value = if let Some(br_end) = remaining.find(" ") {
-                            remaining.get(..br_end).unwrap_or("").trim()
-                        } else {
-                            remaining.trim()
-                        };
-                        
-                        // Only set if non-empty and reasonable length
-                        if !br_value.is_empty() && br_value.len() < 50 {
-                            bitrate = Some(br_value);
-                        }
+            if line_lower.contains("bitrate=")
+                && let Some(br_start) = line_lower.find("bitrate=")
+                && let Some(remaining) = line.get(br_start + 8..) {
+                    let br_value = if let Some(br_end) = remaining.find(" ") {
+                        remaining.get(..br_end).unwrap_or("").trim()
+                    } else {
+                        remaining.trim()
+                    };
+                    
+                    // Only set if non-empty and reasonable length
+                    if !br_value.is_empty() && br_value.len() < 50 {
+                        bitrate = Some(br_value);
                     }
                 }
-            }
             
             // Extract input info - safe string operations only
             if input_info.is_none() && line_lower.starts_with("input #") {

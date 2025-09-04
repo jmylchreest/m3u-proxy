@@ -643,13 +643,11 @@ export type LogHandler = (log: LogEntry) => void
 export interface RuntimeSettings {
   log_level: string;
   enable_request_logging: boolean;
-  enable_metrics: boolean;
 }
 
 export interface UpdateSettingsRequest {
   log_level?: string;
   enable_request_logging?: boolean;
-  enable_metrics?: boolean;
 }
 
 export interface SettingsResponse {

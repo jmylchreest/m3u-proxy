@@ -87,7 +87,7 @@ impl LogoAssetService {
         use sea_orm::{ActiveModelTrait, Set};
         
         let created_at = Utc::now();
-        let updated_at = created_at.clone();
+        let updated_at = created_at;
 
         // Create using SeaORM ActiveModel - clean database-agnostic approach
         let active_model = crate::entities::logo_assets::ActiveModel {
@@ -100,8 +100,8 @@ impl LogoAssetService {
             mime_type: Set(params.mime_type.clone()),
             asset_type: Set(params.asset_type.to_string()),
             source_url: Set(params.source_url.clone()),
-            width: Set(params.width.map(|w| w as i32)),
-            height: Set(params.height.map(|h| h as i32)),
+            width: Set(params.width),
+            height: Set(params.height),
             parent_asset_id: Set(None),
             format_type: Set("original".to_string()),
             created_at: Set(created_at),
@@ -241,6 +241,7 @@ impl LogoAssetService {
         active_model.update(&*self.connection).await.map_err(Into::into)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn replace_asset_image(
         &self,
         asset_id: Uuid,
@@ -421,8 +422,8 @@ impl LogoAssetService {
         all_assets.extend(db_result.assets);
 
         // Add cached logos from filesystem if requested and scanner is available
-        if include_cached {
-            if let Some(scanner) = logo_cache_scanner {
+        if include_cached
+            && let Some(scanner) = logo_cache_scanner {
                 let cached_logos = scanner
                     .search_cached_logos(search_query, None)
                     .await
@@ -461,7 +462,6 @@ impl LogoAssetService {
                     });
                 }
             }
-        }
 
         // Sort by asset type (uploaded first, cached after), then by name
         all_assets.sort_by(|a, b| {

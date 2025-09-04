@@ -133,11 +133,10 @@ pub fn parse_source_type(source_type: &str) -> Result<crate::models::StreamSourc
 
 /// Request size validation
 pub fn validate_request_size(content_length: Option<usize>, max_size: usize) -> Result<(), String> {
-    if let Some(size) = content_length {
-        if size > max_size {
+    if let Some(size) = content_length
+        && size > max_size {
             return Err(format!("Request too large: {size} bytes (max: {max_size})"));
         }
-    }
     Ok(())
 }
 

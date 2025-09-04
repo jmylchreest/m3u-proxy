@@ -226,11 +226,10 @@ impl FilterSeaOrmRepository {
 
         for filter in filters {
             // Filter by source type if specified
-            if let Some(ref st) = source_type {
-                if &filter.source_type != st {
+            if let Some(ref st) = source_type
+                && &filter.source_type != st {
                     continue;
                 }
-            }
 
             let usage_count = self.get_usage_count(&filter.id).await.unwrap_or(0);
             filter_usage_list.push(crate::models::FilterWithUsage {

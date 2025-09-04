@@ -215,7 +215,7 @@ fn default_base_url() -> String {
 }
 
 fn default_enable_request_logging() -> bool {
-    true
+    false
 }
 
 fn default_user_agent() -> String {
@@ -392,7 +392,7 @@ fn default_max_quantifier_limit() -> usize {
 }
 
 /// Circuit breaker configuration with support for named profiles
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub struct CircuitBreakerConfig {
     /// Global circuit breaker settings that apply to all profiles unless overridden
     #[serde(default)]
@@ -470,14 +470,6 @@ impl Default for CircuitBreakerProfileConfig {
     }
 }
 
-impl Default for CircuitBreakerConfig {
-    fn default() -> Self {
-        Self {
-            global: CircuitBreakerProfileConfig::default(),
-            profiles: std::collections::HashMap::new(),
-        }
-    }
-}
 
 
 impl DatabaseBatchConfig {

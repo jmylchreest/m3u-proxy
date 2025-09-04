@@ -1612,11 +1612,10 @@ impl GenerationStats {
             .saturating_sub(self.channels_after_filtering);
 
         // Calculate memory efficiency
-        if let Some(peak_memory) = self.peak_memory_usage_mb {
-            if peak_memory > 0.0 {
+        if let Some(peak_memory) = self.peak_memory_usage_mb
+            && peak_memory > 0.0 {
                 self.memory_efficiency = Some(self.total_channels_processed as f64 / peak_memory);
             }
-        }
     }
 
     /// Generate a concise summary string for logging with tree-style stage breakdown

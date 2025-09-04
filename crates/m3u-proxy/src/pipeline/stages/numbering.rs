@@ -40,11 +40,10 @@ impl NumberingStage {
     
     /// Helper method for reporting progress
     async fn report_progress(&self, percentage: f64, message: &str) {
-        if let Some(pm) = &self.progress_manager {
-            if let Some(updater) = pm.get_stage_updater("numbering").await {
+        if let Some(pm) = &self.progress_manager
+            && let Some(updater) = pm.get_stage_updater("numbering").await {
                 updater.update_progress(percentage, message).await;
             }
-        }
     }
     
     /// Set the progress manager for this stage

@@ -55,11 +55,10 @@ impl<'a> ProgressReporter<'a> {
     pub async fn complete_stage(&self, stage_id: &str, message: &str) {
         self.report_stage_progress(stage_id, 100.0, message).await;
         
-        if let Some(pm) = self.progress_manager {
-            if let Some(updater) = pm.get_stage_updater(stage_id).await {
+        if let Some(pm) = self.progress_manager
+            && let Some(updater) = pm.get_stage_updater(stage_id).await {
                 updater.complete_stage().await;
             }
-        }
     }
 }
 

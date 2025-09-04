@@ -368,11 +368,11 @@ export function Settings() {
   }, [])
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header with controls */}
       <div className="flex justify-between items-center">
         <div>
-          <p className="text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             Runtime application settings that can be changed without restart
           </p>
         </div>
@@ -442,206 +442,166 @@ export function Settings() {
               <span>Loading circuit breaker configuration...</span>
             </div>
           ) : circuitBreakerConfig ? (
-            <div className="space-y-6">
-              {/* Global Configuration - Editable */}
-              {circuitBreakerConfig?.global && (
-                <div className="space-y-4">
-                  <h4 className="font-medium flex items-center gap-2">
-                    <SettingsIcon className="h-4 w-4" />
-                    Global Default Settings
-                  </h4>
-                  <div className="grid grid-cols-1 gap-4">
-                    {/* Implementation Type - Read Only */}
-                    <div className="flex items-center justify-between py-4 border-b">
-                      <div className="space-y-1">
-                        <div className="font-medium">Implementation Type</div>
-                        <div className="text-sm text-muted-foreground">Circuit breaker implementation strategy</div>
+            <div className="space-y-3">
+              {/* Circuit Breaker Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {/* Global Configuration Card */}
+                {circuitBreakerConfig?.global && (
+                  <Card className="h-fit">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <SettingsIcon className="h-4 w-4" />
+                        Global Defaults
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="text-xs text-muted-foreground">
+                        Implementation: <span className="font-medium capitalize">{getCbGlobalValue('implementation_type')}</span>
                       </div>
-                      <div className="text-right">
-                        <div className="font-medium capitalize">{getCbGlobalValue('implementation_type')}</div>
-                      </div>
-                    </div>
-                    
-                    {/* Failure Threshold - Editable */}
-                    <div className="flex items-center justify-between py-4 border-b">
-                      <div className="space-y-1">
-                        <div className="font-medium">Failure Threshold</div>
-                        <div className="text-sm text-muted-foreground">Number of failures before opening circuit</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isCbGlobalModified('failure_threshold') && (
-                          <Badge variant="secondary">Modified</Badge>
-                        )}
-                        <Input
-                          type="number"
-                          min="1"
-                          max="100"
-                          value={getCbGlobalValue('failure_threshold') || ''}
-                          onChange={(e) => handleCbGlobalChange('failure_threshold', parseInt(e.target.value))}
-                          className="w-20 text-right"
-                        />
-                      </div>
-                    </div>
-                    
-                    {/* Operation Timeout - Editable */}
-                    <div className="flex items-center justify-between py-4 border-b">
-                      <div className="space-y-1">
-                        <div className="font-medium">Operation Timeout</div>
-                        <div className="text-sm text-muted-foreground">Maximum time to wait for operation completion</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isCbGlobalModified('operation_timeout') && (
-                          <Badge variant="secondary">Modified</Badge>
-                        )}
-                        <Input
-                          type="text"
-                          value={getCbGlobalValue('operation_timeout') || ''}
-                          onChange={(e) => handleCbGlobalChange('operation_timeout', e.target.value)}
-                          placeholder="e.g., 5s, 30s"
-                          className="w-24 text-right"
-                        />
-                      </div>
-                    </div>
-                    
-                    {/* Reset Timeout - Editable */}
-                    <div className="flex items-center justify-between py-4 border-b">
-                      <div className="space-y-1">
-                        <div className="font-medium">Reset Timeout</div>
-                        <div className="text-sm text-muted-foreground">Time to wait before attempting to close circuit</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isCbGlobalModified('reset_timeout') && (
-                          <Badge variant="secondary">Modified</Badge>
-                        )}
-                        <Input
-                          type="text"
-                          value={getCbGlobalValue('reset_timeout') || ''}
-                          onChange={(e) => handleCbGlobalChange('reset_timeout', e.target.value)}
-                          placeholder="e.g., 30s, 1m"
-                          className="w-24 text-right"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Success Threshold - Editable */}
-                    <div className="flex items-center justify-between py-4">
-                      <div className="space-y-1">
-                        <div className="font-medium">Success Threshold</div>
-                        <div className="text-sm text-muted-foreground">Number of successes needed to close circuit from half-open</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isCbGlobalModified('success_threshold') && (
-                          <Badge variant="secondary">Modified</Badge>
-                        )}
-                        <Input
-                          type="number"
-                          min="1"
-                          max="100"
-                          value={getCbGlobalValue('success_threshold') || ''}
-                          onChange={(e) => handleCbGlobalChange('success_threshold', parseInt(e.target.value))}
-                          className="w-20 text-right"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Service-Specific Profiles - Editable */}
-              {circuitBreakerConfig?.profiles && Object.keys(circuitBreakerConfig.profiles).length > 0 && (
-                <div className="space-y-4">
-                  <h4 className="font-medium flex items-center gap-2">
-                    <Activity className="h-4 w-4" />
-                    Service-Specific Profiles
-                  </h4>
-                  <div className="space-y-4">
-                    {Object.entries(circuitBreakerConfig.profiles).map(([serviceName, profile]: [string, any]) => (
-                      <div key={serviceName} className="border rounded-lg p-4">
-                        <div className="font-medium mb-4">{serviceName}</div>
-                        <div className="grid grid-cols-1 gap-4 text-sm">
-                          {/* Implementation Type - Read Only */}
-                          <div className="flex items-center justify-between py-2 border-b">
-                            <span className="text-muted-foreground">Implementation Type:</span>
-                            <span className="font-medium capitalize">{getCbProfileValue(serviceName, 'implementation_type')}</span>
-                          </div>
-                          
-                          {/* Failure Threshold - Editable */}
-                          <div className="flex items-center justify-between py-2 border-b">
-                            <span className="text-muted-foreground">Failure Threshold:</span>
-                            <div className="flex items-center gap-2">
-                              {isCbProfileModified(serviceName, 'failure_threshold') && (
-                                <Badge variant="secondary" className="text-xs">Modified</Badge>
-                              )}
-                              <Input
-                                type="number"
-                                min="1"
-                                max="100"
-                                value={getCbProfileValue(serviceName, 'failure_threshold') || ''}
-                                onChange={(e) => handleCbProfileChange(serviceName, 'failure_threshold', parseInt(e.target.value))}
-                                className="w-16 text-right text-sm"
-                              />
-                            </div>
-                          </div>
-                          
-                          {/* Operation Timeout - Editable */}
-                          <div className="flex items-center justify-between py-2 border-b">
-                            <span className="text-muted-foreground">Operation Timeout:</span>
-                            <div className="flex items-center gap-2">
-                              {isCbProfileModified(serviceName, 'operation_timeout') && (
-                                <Badge variant="secondary" className="text-xs">Modified</Badge>
-                              )}
-                              <Input
-                                type="text"
-                                value={getCbProfileValue(serviceName, 'operation_timeout') || ''}
-                                onChange={(e) => handleCbProfileChange(serviceName, 'operation_timeout', e.target.value)}
-                                className="w-20 text-right text-sm"
-                              />
-                            </div>
-                          </div>
-                          
-                          {/* Reset Timeout - Editable */}
-                          <div className="flex items-center justify-between py-2 border-b">
-                            <span className="text-muted-foreground">Reset Timeout:</span>
-                            <div className="flex items-center gap-2">
-                              {isCbProfileModified(serviceName, 'reset_timeout') && (
-                                <Badge variant="secondary" className="text-xs">Modified</Badge>
-                              )}
-                              <Input
-                                type="text"
-                                value={getCbProfileValue(serviceName, 'reset_timeout') || ''}
-                                onChange={(e) => handleCbProfileChange(serviceName, 'reset_timeout', e.target.value)}
-                                className="w-20 text-right text-sm"
-                              />
-                            </div>
-                          </div>
-                          
-                          {/* Success Threshold - Editable */}
-                          <div className="flex items-center justify-between py-2">
-                            <span className="text-muted-foreground">Success Threshold:</span>
-                            <div className="flex items-center gap-2">
-                              {isCbProfileModified(serviceName, 'success_threshold') && (
-                                <Badge variant="secondary" className="text-xs">Modified</Badge>
-                              )}
-                              <Input
-                                type="number"
-                                min="1"
-                                max="100"
-                                value={getCbProfileValue(serviceName, 'success_threshold') || ''}
-                                onChange={(e) => handleCbProfileChange(serviceName, 'success_threshold', parseInt(e.target.value))}
-                                className="w-16 text-right text-sm"
-                              />
-                            </div>
-                          </div>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                            Failures
+                            {isCbGlobalModified('failure_threshold') && <Badge variant="secondary" className="text-xs">*</Badge>}
+                          </Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={getCbGlobalValue('failure_threshold') || ''}
+                            onChange={(e) => handleCbGlobalChange('failure_threshold', parseInt(e.target.value))}
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                            Success
+                            {isCbGlobalModified('success_threshold') && <Badge variant="secondary" className="text-xs">*</Badge>}
+                          </Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={getCbGlobalValue('success_threshold') || ''}
+                            onChange={(e) => handleCbGlobalChange('success_threshold', parseInt(e.target.value))}
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                            Op Timeout
+                            {isCbGlobalModified('operation_timeout') && <Badge variant="secondary" className="text-xs">*</Badge>}
+                          </Label>
+                          <Input
+                            type="text"
+                            value={getCbGlobalValue('operation_timeout') || ''}
+                            onChange={(e) => handleCbGlobalChange('operation_timeout', e.target.value)}
+                            placeholder="5s"
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                            Reset
+                            {isCbGlobalModified('reset_timeout') && <Badge variant="secondary" className="text-xs">*</Badge>}
+                          </Label>
+                          <Input
+                            type="text"
+                            value={getCbGlobalValue('reset_timeout') || ''}
+                            onChange={(e) => handleCbGlobalChange('reset_timeout', e.target.value)}
+                            placeholder="30s"
+                            className="h-7 text-xs"
+                          />
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                    </CardContent>
+                  </Card>
+                )}
 
-              <div className="text-sm text-muted-foreground p-3 bg-muted/50 rounded">
-                Circuit breaker configuration can be modified in real-time and takes effect immediately. 
-                Changes are persisted to the configuration file. Check the debug page for real-time statistics and monitoring.
+                {/* Service-Specific Profile Cards */}
+                {circuitBreakerConfig?.profiles && Object.entries(circuitBreakerConfig.profiles).map(([serviceName, profile]: [string, any]) => (
+                  <Card key={serviceName} className="h-fit">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <Activity className="h-4 w-4" />
+                        {serviceName}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="text-xs text-muted-foreground">
+                        Implementation: <span className="font-medium capitalize">{getCbProfileValue(serviceName, 'implementation_type')}</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                            Failures
+                            {isCbProfileModified(serviceName, 'failure_threshold') && <Badge variant="secondary" className="text-xs">*</Badge>}
+                          </Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={getCbProfileValue(serviceName, 'failure_threshold') || ''}
+                            onChange={(e) => handleCbProfileChange(serviceName, 'failure_threshold', parseInt(e.target.value))}
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                            Success
+                            {isCbProfileModified(serviceName, 'success_threshold') && <Badge variant="secondary" className="text-xs">*</Badge>}
+                          </Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={getCbProfileValue(serviceName, 'success_threshold') || ''}
+                            onChange={(e) => handleCbProfileChange(serviceName, 'success_threshold', parseInt(e.target.value))}
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                            Op Timeout
+                            {isCbProfileModified(serviceName, 'operation_timeout') && <Badge variant="secondary" className="text-xs">*</Badge>}
+                          </Label>
+                          <Input
+                            type="text"
+                            value={getCbProfileValue(serviceName, 'operation_timeout') || ''}
+                            onChange={(e) => handleCbProfileChange(serviceName, 'operation_timeout', e.target.value)}
+                            placeholder="5s"
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                            Reset
+                            {isCbProfileModified(serviceName, 'reset_timeout') && <Badge variant="secondary" className="text-xs">*</Badge>}
+                          </Label>
+                          <Input
+                            type="text"
+                            value={getCbProfileValue(serviceName, 'reset_timeout') || ''}
+                            onChange={(e) => handleCbProfileChange(serviceName, 'reset_timeout', e.target.value)}
+                            placeholder="30s"
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              <div className="text-xs text-muted-foreground p-2 bg-muted/50 rounded text-center">
+                Changes apply immediately and persist to config. Check debug page for statistics.
               </div>
             </div>
           ) : (
@@ -667,52 +627,44 @@ export function Settings() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Log Level */}
-              <div className="flex items-center justify-between py-4 border-b">
-                <div className="space-y-1">
-                  <div className="font-medium">Log Level</div>
-                  <div className="text-sm text-muted-foreground">
-                    Minimum log level to output. Lower levels include all higher levels.
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium flex items-center gap-2">
+                  Log Level
                   {isModified('log_level') && (
-                    <Badge variant="secondary">Modified</Badge>
+                    <Badge variant="secondary" className="text-xs">*</Badge>
                   )}
-                  <Select
-                    value={String(getCurrentValue('log_level') || 'INFO')}
-                    onValueChange={(value) => handleInputChange('log_level', value)}
-                  >
-                    <SelectTrigger className="w-[240px] justify-between">
-                      <SelectValue placeholder="Select level" className="text-left" />
-                    </SelectTrigger>
-                    <SelectContent className="w-[240px]">
-                      {LOG_LEVELS.map((level) => (
-                        <SelectItem key={level.value} value={level.value} className="cursor-pointer">
-                          <div className="flex flex-col py-1 w-full text-left">
-                            <span className="font-medium text-sm">{level.label}</span>
-                            <span className="text-xs text-muted-foreground whitespace-nowrap">{level.description}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                </Label>
+                <Select
+                  value={String(getCurrentValue('log_level') || 'INFO')}
+                  onValueChange={(value) => handleInputChange('log_level', value)}
+                >
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Select level" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LOG_LEVELS.map((level) => (
+                      <SelectItem key={level.value} value={level.value}>
+                        <div className="flex flex-col text-left">
+                          <span className="font-medium text-sm">{level.label}</span>
+                          <span className="text-xs text-muted-foreground">{level.description}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               {/* Request Logging */}
-              <div className="flex items-center justify-between py-4 border-b">
-                <div className="space-y-1">
-                  <div className="font-medium">Request Logging</div>
-                  <div className="text-sm text-muted-foreground">
-                    Enable detailed logging of HTTP requests
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium flex items-center gap-2">
+                  Request Logging
                   {isModified('enable_request_logging') && (
-                    <Badge variant="secondary">Modified</Badge>
+                    <Badge variant="secondary" className="text-xs">*</Badge>
                   )}
+                </Label>
+                <div className="flex items-center gap-2 h-8">
                   <input
                     id="enable_request_logging"
                     type="checkbox"
@@ -720,28 +672,9 @@ export function Settings() {
                     onChange={(e) => handleInputChange('enable_request_logging', e.target.checked)}
                     className="rounded border-gray-300"
                   />
-                </div>
-              </div>
-
-              {/* Metrics Collection */}
-              <div className="flex items-center justify-between py-4">
-                <div className="space-y-1">
-                  <div className="font-medium">Metrics Collection</div>
-                  <div className="text-sm text-muted-foreground">
-                    Enable collection of application metrics
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {isModified('enable_metrics') && (
-                    <Badge variant="secondary">Modified</Badge>
-                  )}
-                  <input
-                    id="enable_metrics"
-                    type="checkbox"
-                    checked={Boolean(getCurrentValue('enable_metrics')) || false}
-                    onChange={(e) => handleInputChange('enable_metrics', e.target.checked)}
-                    className="rounded border-gray-300"
-                  />
+                  <Label htmlFor="enable_request_logging" className="text-sm text-muted-foreground">
+                    Enable HTTP request logs
+                  </Label>
                 </div>
               </div>
             </div>

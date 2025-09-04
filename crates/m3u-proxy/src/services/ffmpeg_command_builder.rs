@@ -42,11 +42,10 @@ impl FFmpegCommandBuilder {
         let mut args = Vec::new();
 
         // Add hardware acceleration setup if available
-        if config.profile.enable_hardware_acceleration {
-            if let Some(hwaccel_args) = self.generate_hwaccel_args(&config.profile, hwaccel_caps) {
+        if config.profile.enable_hardware_acceleration
+            && let Some(hwaccel_args) = self.generate_hwaccel_args(&config.profile, hwaccel_caps) {
                 args.extend(hwaccel_args);
             }
-        }
 
         // Add input arguments with analysis parameters
         self.add_input_args(&mut args, input_url);
@@ -58,11 +57,10 @@ impl FFmpegCommandBuilder {
         self.add_video_codec_args(&mut args, &config.profile, hwaccel_caps, mapping_strategy);
 
         // Add hardware acceleration filters if needed
-        if self.should_apply_hwaccel_filters(&config.profile, hwaccel_caps, mapping_strategy) {
-            if let Some(hwaccel_filters) = self.generate_hwaccel_video_filters(&config.profile, hwaccel_caps) {
+        if self.should_apply_hwaccel_filters(&config.profile, hwaccel_caps, mapping_strategy)
+            && let Some(hwaccel_filters) = self.generate_hwaccel_video_filters(&config.profile, hwaccel_caps) {
                 args.extend(hwaccel_filters);
             }
-        }
 
         // Add video encoding settings
         if self.should_apply_video_settings(&config.profile, mapping_strategy) {

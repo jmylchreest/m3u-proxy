@@ -57,15 +57,14 @@ impl SeaOrmDataMappingService {
         request: DataMappingRuleUpdateRequest,
     ) -> Result<DataMappingRule> {
         // Validate expression if provided
-        if let Some(ref expression) = request.expression {
-            if let Some(ref source_type) = request.source_type {
+        if let Some(ref expression) = request.expression
+            && let Some(ref source_type) = request.source_type {
                 let validation = DataMappingValidator::validate_expression(expression, source_type);
                 if !validation.is_valid {
                     error!("Invalid expression for rule update: {:?}", validation.error);
                     return Err(anyhow::anyhow!("Invalid expression: {:?}", validation.error.unwrap_or_default()));
                 }
             }
-        }
 
         self.repository.update(&rule_id, request).await
     }

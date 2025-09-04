@@ -54,7 +54,7 @@ impl XtreamEpgHandler {
 
 
         // Try the original URL first - use circuit breaker-wrapped HTTP client
-        let content = match self.http_client.fetch_text(&epg_url).await {
+        match self.http_client.fetch_text(&epg_url).await {
             Ok(content) => Ok(content),
             Err(e) => {
                 // If HTTPS failed and URL started with https://, try HTTP fallback
@@ -79,9 +79,7 @@ impl XtreamEpgHandler {
                     Err(AppError::source_error(format!("Failed to fetch Xtream EPG: {e}")))
                 }
             }
-        };
-        
-        content
+        }
     }
 
     /// Fetch EPG content from Xtream API with progress updates

@@ -17,6 +17,12 @@ pub struct EmbeddedFontManager {
     temp_font_path: Option<PathBuf>,
 }
 
+impl Default for EmbeddedFontManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EmbeddedFontManager {
     pub fn new() -> Self {
         Self {
@@ -27,10 +33,6 @@ impl EmbeddedFontManager {
     /// Get the path to the embedded font, creating a temporary file if needed
     /// Returns None if no embedded font is available
     pub async fn get_font_path(&mut self) -> Result<Option<&PathBuf>> {
-        if LIBERATION_SANS_TTF.is_empty() {
-            return Ok(None);
-        }
-        
         if self.temp_font_path.is_none() {
             self.create_temp_font_file().await?;
         }

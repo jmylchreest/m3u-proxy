@@ -14,7 +14,7 @@ impl Migration {
         match manager.get_database_backend() {
             sea_orm::DatabaseBackend::Postgres => {
                 // PostgreSQL requires explicit UUID casting
-                Expr::cust(&format!("'{}'::uuid", uuid_str))
+                Expr::cust(format!("'{}'::uuid", uuid_str))
             }
             _ => {
                 // SQLite and MySQL use string values
@@ -31,7 +31,7 @@ impl Migration {
         match manager.get_database_backend() {
             sea_orm::DatabaseBackend::Postgres => {
                 // PostgreSQL timestamptz - use custom SQL for proper timezone handling
-                Expr::cust(&format!("'{}'::timestamptz", timestamp.to_rfc3339()))
+                Expr::cust(format!("'{}'::timestamptz", timestamp.to_rfc3339()))
             }
             sea_orm::DatabaseBackend::MySql => {
                 // MySQL expects proper timestamp format

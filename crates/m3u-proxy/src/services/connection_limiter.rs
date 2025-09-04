@@ -185,24 +185,22 @@ impl Drop for ConnectionHandle {
             let mut connections = limiter.write().await;
             
             // Decrement proxy count
-            if let Some(count) = connections.get_mut(&proxy_id) {
-                if *count > 0 {
+            if let Some(count) = connections.get_mut(&proxy_id)
+                && *count > 0 {
                     *count -= 1;
                     if *count == 0 {
                         connections.remove(&proxy_id);
                     }
                 }
-            }
             
             // Decrement channel count  
-            if let Some(count) = connections.get_mut(&channel_id) {
-                if *count > 0 {
+            if let Some(count) = connections.get_mut(&channel_id)
+                && *count > 0 {
                     *count -= 1;
                     if *count == 0 {
                         connections.remove(&channel_id);
                     }
                 }
-            }
 
             debug!("Released connection - proxy: {}, channel: {}", proxy_id, channel_id);
         });

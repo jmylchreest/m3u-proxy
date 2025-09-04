@@ -59,10 +59,7 @@ impl StreamProxySeaOrmRepository {
             starting_channel_number: model.starting_channel_number,
             created_at: model.created_at,
             updated_at: model.updated_at,
-            last_generated_at: match model.last_generated_at {
-                Some(ref time) => Some(*time),
-                None => None
-            },
+            last_generated_at: model.last_generated_at.as_ref().map(|time| *time),
             is_active: model.is_active,
             auto_regenerate: model.auto_regenerate,
             cache_channel_logos: model.cache_channel_logos,
@@ -86,10 +83,7 @@ impl StreamProxySeaOrmRepository {
                 starting_channel_number: m.starting_channel_number,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
-                last_generated_at: match m.last_generated_at {
-                    Some(ref time) => Some(*time),
-                    None => None
-                },
+                last_generated_at: m.last_generated_at.as_ref().map(|time| *time),
                 is_active: m.is_active,
                 auto_regenerate: m.auto_regenerate,
                 cache_channel_logos: m.cache_channel_logos,
@@ -120,10 +114,7 @@ impl StreamProxySeaOrmRepository {
                 starting_channel_number: m.starting_channel_number,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
-                last_generated_at: match m.last_generated_at {
-                    Some(ref time) => Some(*time),
-                    None => None
-                },
+                last_generated_at: m.last_generated_at.as_ref().map(|time| *time),
                 is_active: m.is_active,
                 auto_regenerate: m.auto_regenerate,
                 cache_channel_logos: m.cache_channel_logos,
@@ -169,10 +160,7 @@ impl StreamProxySeaOrmRepository {
             starting_channel_number: updated_model.starting_channel_number,
             created_at: updated_model.created_at,
             updated_at: updated_model.updated_at,
-            last_generated_at: match updated_model.last_generated_at {
-                Some(ref time) => Some(*time),
-                None => None
-            },
+            last_generated_at: updated_model.last_generated_at.as_ref().map(|time| *time),
             is_active: updated_model.is_active,
             auto_regenerate: updated_model.auto_regenerate,
             cache_channel_logos: updated_model.cache_channel_logos,

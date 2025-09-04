@@ -506,11 +506,10 @@ impl RelayProfile {
     /// Create a new relay profile
     pub fn new(request: CreateRelayProfileRequest) -> Result<Self, String> {
         // Validate manual args if provided (basic security check)
-        if let Some(ref manual_args) = request.manual_args {
-            if let Ok(args_vec) = serde_json::from_str::<Vec<String>>(manual_args) {
+        if let Some(ref manual_args) = request.manual_args
+            && let Ok(args_vec) = serde_json::from_str::<Vec<String>>(manual_args) {
                 Self::validate_ffmpeg_args(&args_vec)?;
             }
-        }
         
         Ok(Self {
             id: Uuid::new_v4(),
@@ -698,11 +697,10 @@ impl ResolvedRelayConfig {
         let mut args = Vec::new();
         
         // Hardware acceleration setup (if enabled)
-        if self.profile.enable_hardware_acceleration {
-            if let Some(hwaccel_args) = self.generate_hwaccel_args(hwaccel_caps) {
+        if self.profile.enable_hardware_acceleration
+            && let Some(hwaccel_args) = self.generate_hwaccel_args(hwaccel_caps) {
                 args.extend(hwaccel_args);
             }
-        }
         
         // Input with analyzeduration and probesize for better stream analysis
         args.extend([
@@ -763,11 +761,10 @@ impl ResolvedRelayConfig {
             self.profile.enable_hardware_acceleration && self.profile.video_codec != VideoCodec::Copy
         };
         
-        if should_apply_hwaccel_filters {
-            if let Some(hwaccel_filters) = self.generate_hwaccel_video_filters(hwaccel_caps) {
+        if should_apply_hwaccel_filters
+            && let Some(hwaccel_filters) = self.generate_hwaccel_video_filters(hwaccel_caps) {
                 args.extend(hwaccel_filters);
             }
-        }
         
         // Video settings - only apply encoding parameters if we're not copying
         let should_apply_video_settings = if let Some(strategy) = mapping_strategy {

@@ -748,11 +748,10 @@ impl ExpressionParser {
                 }
 
                 // Validate regex patterns for matches operators
-                if matches!(operator, FilterOperator::Matches | FilterOperator::NotMatches) {
-                    if let Some(regex_error) = self.validate_regex_pattern(value) {
+                if matches!(operator, FilterOperator::Matches | FilterOperator::NotMatches)
+                    && let Some(regex_error) = self.validate_regex_pattern(value) {
                         errors.push(regex_error);
                     }
-                }
             }
             ConditionNode::Group { children, .. } => {
                 for child in children {
@@ -879,8 +878,8 @@ impl ExpressionParser {
         }
 
         // Validate value length
-        if let ActionValue::Literal(literal) = &action.value {
-            if literal.len() > 255 {
+        if let ActionValue::Literal(literal) = &action.value
+            && literal.len() > 255 {
                 return Some(ExpressionValidationError {
                     category: ExpressionErrorCategory::Value,
                     error_type: "value_too_long".to_string(),
@@ -891,7 +890,6 @@ impl ExpressionParser {
                     suggestion: Some("Shorten the value to 255 characters or less".to_string()),
                 });
             }
-        }
 
         None
     }
@@ -1277,8 +1275,8 @@ impl ExpressionParser {
         let left = self.parse_term(tokens, pos)?;
 
         // Check if there's a logical operator
-        if *pos < tokens.len() {
-            if let Token::LogicalOp(op) = &tokens[*pos] {
+        if *pos < tokens.len()
+            && let Token::LogicalOp(op) = &tokens[*pos] {
                 let operator = op.clone();
                 *pos += 1;
 
@@ -1305,7 +1303,6 @@ impl ExpressionParser {
 
                 return Ok(ConditionNode::Group { operator, children });
             }
-        }
 
         Ok(left)
     }

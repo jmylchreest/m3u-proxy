@@ -175,7 +175,7 @@ impl DataMappingStage {
             
             // Get total channel count for this source for progress percentage calculation using SeaORM
             let total_channels = Channels::find()
-                .filter(channels::Column::SourceId.eq(source_id.clone()))
+                .filter(channels::Column::SourceId.eq(source_id))
                 .count(&*self.db_connection)
                 .await
                 .unwrap_or(0);

@@ -69,11 +69,10 @@ impl IngestionStateManager {
             }
             
             // Check if we're in backoff period
-            if let Some(retry_after) = existing_info.next_retry_after {
-                if now < retry_after {
+            if let Some(retry_after) = existing_info.next_retry_after
+                && now < retry_after {
                     return false; // Still in backoff period
                 }
-            }
         }
 
         // Start processing - preserve failure count from any existing entry
@@ -364,11 +363,10 @@ impl IngestionStateManager {
         }
         
         // Also check the new ProgressService for active database operations
-        if let Some(service) = progress_service {
-            if service.has_active_database_operations().await {
+        if let Some(service) = progress_service
+            && service.has_active_database_operations().await {
                 return Ok(true);
             }
-        }
         
         Ok(false)
     }

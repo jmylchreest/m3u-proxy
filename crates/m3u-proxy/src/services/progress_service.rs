@@ -350,11 +350,10 @@ impl UniversalProgress {
     /// Update items progress for backwards compatibility
     pub fn update_items(&mut self, processed: usize, total: Option<usize>, stage_step: String) -> &mut Self {
         if let Some(current_stage) = self.stages.first_mut() {
-            if let Some(total_count) = total {
-                if total_count > 0 {
+            if let Some(total_count) = total
+                && total_count > 0 {
                     current_stage.percentage = (processed as f64 / total_count as f64 * 100.0).clamp(0.0, 100.0);
                 }
-            }
             current_stage.stage_step = stage_step;
         }
         self.last_update = Utc::now();

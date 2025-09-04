@@ -54,11 +54,10 @@ impl GenerationStage {
     
     /// Helper method for reporting progress
     async fn report_progress(&self, percentage: f64, message: &str) {
-        if let Some(pm) = &self.progress_manager {
-            if let Some(updater) = pm.get_stage_updater("generation").await {
+        if let Some(pm) = &self.progress_manager
+            && let Some(updater) = pm.get_stage_updater("generation").await {
                 updater.update_progress(percentage, message).await;
             }
-        }
     }
     
     /// Set the progress manager for this stage
@@ -178,11 +177,10 @@ impl GenerationStage {
                 
                 // Add stream display names (channel_name and tvg_name)
                 entry.stream_display_names.insert(numbered_channel.channel.channel_name.clone());
-                if let Some(ref tvg_name) = numbered_channel.channel.tvg_name {
-                    if !tvg_name.is_empty() {
+                if let Some(ref tvg_name) = numbered_channel.channel.tvg_name
+                    && !tvg_name.is_empty() {
                         entry.stream_display_names.insert(tvg_name.clone());
                     }
-                }
                 
                 // Set logo from first detected channel
                 if entry.logo_url.is_none() {
@@ -226,39 +224,34 @@ impl GenerationStage {
             let mut extinf_line = "#EXTINF:-1".to_string();
             
             // Add tvg-id if present
-            if let Some(ref tvg_id) = channel.tvg_id {
-                if !tvg_id.is_empty() {
+            if let Some(ref tvg_id) = channel.tvg_id
+                && !tvg_id.is_empty() {
                     extinf_line.push_str(&format!(" tvg-id=\"{tvg_id}\""));
                 }
-            }
             
             // Add tvg-name if present
-            if let Some(ref tvg_name) = channel.tvg_name {
-                if !tvg_name.is_empty() {
+            if let Some(ref tvg_name) = channel.tvg_name
+                && !tvg_name.is_empty() {
                     extinf_line.push_str(&format!(" tvg-name=\"{tvg_name}\""));
                 }
-            }
             
             // Add tvg-logo if present
-            if let Some(ref tvg_logo) = channel.tvg_logo {
-                if !tvg_logo.is_empty() {
+            if let Some(ref tvg_logo) = channel.tvg_logo
+                && !tvg_logo.is_empty() {
                     extinf_line.push_str(&format!(" tvg-logo=\"{tvg_logo}\""));
                 }
-            }
             
             // Add group-title if present
-            if let Some(ref group_title) = channel.group_title {
-                if !group_title.is_empty() {
+            if let Some(ref group_title) = channel.group_title
+                && !group_title.is_empty() {
                     extinf_line.push_str(&format!(" group-title=\"{group_title}\""));
                 }
-            }
             
             // Add tvg-chno if present
-            if let Some(ref tvg_chno) = channel.tvg_chno {
-                if !tvg_chno.is_empty() {
+            if let Some(ref tvg_chno) = channel.tvg_chno
+                && !tvg_chno.is_empty() {
                     extinf_line.push_str(&format!(" tvg-chno=\"{tvg_chno}\""));
                 }
-            }
             
             // Add channel name and newline
             extinf_line.push_str(&format!(",{}\n", channel.channel_name));
@@ -340,11 +333,10 @@ impl GenerationStage {
             channel_line.push_str(&format!("    <display-name>{}</display-name>\n", quick_xml::escape::escape(&display_name)));
             
             // Add logo if present
-            if let Some(ref logo_url) = channel_info.logo_url {
-                if !logo_url.is_empty() {
+            if let Some(ref logo_url) = channel_info.logo_url
+                && !logo_url.is_empty() {
                     channel_line.push_str(&format!("    <icon src=\"{}\"/>\n", quick_xml::escape::escape(logo_url)));
                 }
-            }
             
             channel_line.push_str("  </channel>\n");
             
@@ -370,11 +362,10 @@ impl GenerationStage {
             
             program_line.push_str(&format!("    <title>{}</title>\n", quick_xml::escape::escape(&program.title)));
             
-            if let Some(ref description) = program.description {
-                if !description.is_empty() {
+            if let Some(ref description) = program.description
+                && !description.is_empty() {
                     program_line.push_str(&format!("    <desc>{}</desc>\n", quick_xml::escape::escape(description)));
                 }
-            }
             
             program_line.push_str("  </programme>\n");
             

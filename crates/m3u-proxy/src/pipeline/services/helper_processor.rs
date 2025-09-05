@@ -114,6 +114,13 @@ pub struct MockLogoRepository {
 }
 
 #[cfg(test)]
+impl Default for MockLogoRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 impl MockLogoRepository {
     pub fn new() -> Self {
         Self {

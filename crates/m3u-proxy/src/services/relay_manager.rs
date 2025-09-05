@@ -16,21 +16,22 @@ use crate::utils::SystemManager;
 
 use crate::config::Config;
 use crate::database::Database;
-use crate::metrics::MetricsLogger;
 use crate::models::relay::*;
 use crate::proxy::session_tracker::ClientInfo;
 use crate::database::repositories::channel::ChannelSeaOrmRepository;
 use crate::services::ffmpeg_wrapper::{FFmpegProcess, FFmpegProcessWrapper};
+use crate::observability::AppObservability;
 use sandboxed_file_manager::SandboxedManager;
+use opentelemetry::KeyValue;
 
 /// Manages FFmpeg relay processes with automatic lifecycle management
 pub struct RelayManager {
     active_processes: Arc<RwLock<HashMap<Uuid, FFmpegProcess>>>,
     database: Database,
     ffmpeg_wrapper: FFmpegProcessWrapper,
-    metrics_logger: Arc<MetricsLogger>,
     cleanup_interval: Duration,
     system_manager: SystemManager,
+    observability: Option<Arc<AppObservability>>,
     pub ffmpeg_available: bool,
     pub ffmpeg_version: Option<String>,
     pub ffprobe_available: bool,
@@ -44,7 +45,6 @@ impl RelayManager {
     pub async fn new(
         database: Database,
         temp_manager: SandboxedManager,
-        metrics_logger: Arc<MetricsLogger>,
         config: Config,
     ) -> Self {
         // Get FFmpeg command from config
@@ -98,15 +98,14 @@ impl RelayManager {
             database,
             ffmpeg_wrapper: FFmpegProcessWrapper::new(
                 temp_manager,
-                metrics_logger.clone(),
                 hwaccel_capabilities.clone(),
                 config.relay.as_ref().map(|r| r.buffer.clone()).unwrap_or_default(),
                 stream_prober,
                 ffmpeg_command.clone(),
             ),
-            metrics_logger,
             cleanup_interval: Duration::from_secs(10),
             system_manager: SystemManager::new(Duration::from_secs(5)),
+            observability: None,
             ffmpeg_available,
             ffmpeg_version: ffmpeg_version.clone(),
             ffprobe_available,
@@ -126,6 +125,11 @@ impl RelayManager {
         manager
     }
 
+    /// Set observability for metrics collection
+    pub fn with_observability(mut self, observability: Arc<AppObservability>) -> Self {
+        self.observability = Some(observability);
+        self
+    }
 
     /// Ensure a relay process is running for the given configuration
     pub async fn ensure_relay_running(
@@ -134,25 +138,70 @@ impl RelayManager {
         input_url: &str,
     ) -> Result<(), RelayError> {
         let config_id = config.config.id;
+        let start_time = std::time::Instant::now();
 
         // Check if already running
         if self.active_processes.read().await.contains_key(&config_id) {
             debug!("Relay {} already running", config_id);
+            
+            // Record relay already running metric
+            if let Some(obs) = &self.observability {
+                obs.batch_operations.add(1, &[
+                    KeyValue::new("operation", "ensure_relay_running"),
+                    KeyValue::new("result", "already_running"),
+                    KeyValue::new("config_id", config_id.to_string()),
+                ]);
+            }
+            
             return Ok(());
         }
 
         // Start new process
-        let process = self.ffmpeg_wrapper.start_process(config, input_url).await?;
+        let result = self.ffmpeg_wrapper.start_process(config, input_url).await;
+        
+        match result {
+            Ok(process) => {
+                // Store the process
+                self.active_processes
+                    .write()
+                    .await
+                    .insert(config_id, process);
 
-        // Store the process
-        self.active_processes
-            .write()
-            .await
-            .insert(config_id, process);
+                // Record successful relay start metrics
+                if let Some(obs) = &self.observability {
+                    let duration = start_time.elapsed().as_secs_f64();
+                    
+                    obs.batch_operations.add(1, &[
+                        KeyValue::new("operation", "ensure_relay_running"),
+                        KeyValue::new("result", "started"),
+                        KeyValue::new("config_id", config_id.to_string()),
+                    ]);
+                    
+                    obs.relay_uptime.record(duration, &[
+                        KeyValue::new("config_id", config_id.to_string()),
+                        KeyValue::new("status", "success"),
+                    ]);
+                    
+                    // Update active relay count
+                    let active_count = self.active_processes.read().await.len() as i64;
+                    obs.active_relays.add(active_count, &[]);
+                }
 
-
-
-        Ok(())
+                Ok(())
+            }
+            Err(e) => {
+                // Record relay start failure metrics
+                if let Some(obs) = &self.observability {
+                    obs.relay_errors.add(1, &[
+                        KeyValue::new("operation", "ensure_relay_running"),
+                        KeyValue::new("config_id", config_id.to_string()),
+                        KeyValue::new("error_type", "start_failed"),
+                    ]);
+                }
+                
+                Err(e)
+            }
+        }
     }
 
     /// Serve content from a relay process with automatic lifecycle management
@@ -173,9 +222,36 @@ impl RelayManager {
             
             let content = process.serve_content(path, client_info).await?;
 
+            // Record content serving metrics
+            if let Some(obs) = &self.observability {
+                // Note: RelayContent is an enum - bytes will be tracked at stream level
+                obs.client_connections.add(1, &[
+                    KeyValue::new("operation", "serve_content"),
+                    KeyValue::new("config_id", config_id.to_string()),
+                    KeyValue::new("content_type", match &content {
+                        crate::models::relay::RelayContent::Stream(_) => "stream",
+                        crate::models::relay::RelayContent::Playlist(_) => "playlist", 
+                        crate::models::relay::RelayContent::Segment(_) => "segment",
+                    }),
+                ]);
+                
+                // Update client count metric for this relay
+                obs.active_clients.add(buffer_client_count as i64, &[
+                    KeyValue::new("config_id", config_id.to_string()),
+                ]);
+            }
 
             Ok(content)
         } else {
+            // Record relay not found error
+            if let Some(obs) = &self.observability {
+                obs.relay_errors.add(1, &[
+                    KeyValue::new("operation", "serve_content"),
+                    KeyValue::new("config_id", config_id.to_string()),
+                    KeyValue::new("error_type", "process_not_found"),
+                ]);
+            }
+            
             Err(RelayError::ProcessNotFound(config_id))
         }
     }
@@ -185,8 +261,29 @@ impl RelayManager {
         if let Some(mut process) = self.active_processes.write().await.remove(&config_id) {
             process.kill().await?;
             
+            // Record relay stop metrics
+            if let Some(obs) = &self.observability {
+                obs.batch_operations.add(1, &[
+                    KeyValue::new("operation", "stop_relay"),
+                    KeyValue::new("result", "stopped"),
+                    KeyValue::new("config_id", config_id.to_string()),
+                ]);
+                
+                // Update active relay count
+                let active_count = self.active_processes.read().await.len() as i64;
+                obs.active_relays.add(active_count, &[]);
+            }
             
             info!("Stopped relay process for config {}", config_id);
+        } else {
+            // Record stop attempt for non-existent relay
+            if let Some(obs) = &self.observability {
+                obs.batch_operations.add(1, &[
+                    KeyValue::new("operation", "stop_relay"),
+                    KeyValue::new("result", "not_found"),
+                    KeyValue::new("config_id", config_id.to_string()),
+                ]);
+            }
         }
         Ok(())
     }
@@ -412,7 +509,6 @@ impl RelayManager {
     fn start_cleanup_task(&self) {
         let processes = self.active_processes.clone();
         let _database = self.database.clone();
-        let _metrics_logger = self.metrics_logger.clone();
         let interval = self.cleanup_interval;
 
         tokio::spawn(async move {

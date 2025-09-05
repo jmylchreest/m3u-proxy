@@ -431,8 +431,8 @@ impl LogoCacheScanner {
                 match serde_json::from_str::<CachedLogoMetadata>(trimmed_content) {
                     Ok(mut metadata) => {
                         // If dimensions are missing, try to extract them from the image file
-                        if metadata.width.is_none() || metadata.height.is_none() {
-                            if let Some(dimensions) = Self::extract_dimensions_from_image_file(file_manager, cache_id).await {
+                        if (metadata.width.is_none() || metadata.height.is_none())
+                            && let Some(dimensions) = Self::extract_dimensions_from_image_file(file_manager, cache_id).await {
                                 debug!("Extracted missing dimensions {}x{} for cached logo {}", dimensions.0, dimensions.1, cache_id);
                                 metadata.width = Some(dimensions.0);
                                 metadata.height = Some(dimensions.1);
@@ -447,7 +447,6 @@ impl LogoCacheScanner {
                                     }
                                 }
                             }
-                        }
                         Some(metadata)
                     },
                     Err(e) => {

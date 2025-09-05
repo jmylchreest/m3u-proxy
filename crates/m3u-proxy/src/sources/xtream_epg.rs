@@ -271,13 +271,11 @@ impl XtreamEpgHandler {
                         Ok(json) => {
                             
                             // Check if we have user_info and if the status is "Active"
-                            if let Some(user_info) = json.get("user_info") {
-                                if let Some(status) = user_info.get("status") {
-                                    if let Some(status_str) = status.as_str() {
-                                        let is_active = status_str == "Active";
-                                        return Ok(is_active);
-                                    }
-                                }
+                            if let Some(user_info) = json.get("user_info")
+                                && let Some(status) = user_info.get("status")
+                                && let Some(status_str) = status.as_str() {
+                                let is_active = status_str == "Active";
+                                return Ok(is_active);
                             }
                             // If we don't have proper user_info, it might be an error response
                             warn!("EPG auth response missing valid user_info");
@@ -315,13 +313,11 @@ impl XtreamEpgHandler {
                                     Ok(json) => {
                                         
                                         // Check if we have user_info and if the status is "Active"
-                                        if let Some(user_info) = json.get("user_info") {
-                                            if let Some(status) = user_info.get("status") {
-                                                if let Some(status_str) = status.as_str() {
-                                                    let is_active = status_str == "Active";
-                                                    return Ok(is_active);
-                                                }
-                                            }
+                                        if let Some(user_info) = json.get("user_info")
+                                            && let Some(status) = user_info.get("status")
+                                            && let Some(status_str) = status.as_str() {
+                                            let is_active = status_str == "Active";
+                                            return Ok(is_active);
                                         }
                                         // If we don't have proper user_info, it might be an error response
                                         warn!("EPG auth fallback response missing valid user_info");

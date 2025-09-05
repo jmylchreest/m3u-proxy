@@ -378,7 +378,7 @@ impl DatabaseOperations {
         loop {
             match async {
                 let txn = db.begin().await
-                    .map_err(|e| AppError::Database(e))?;
+                    .map_err(AppError::Database)?;
 
                 let stmt = Statement::from_sql_and_values(
                     db.get_database_backend(),
@@ -386,10 +386,10 @@ impl DatabaseOperations {
                     vec![source_id_string.clone().into()]
                 );
                 let result = txn.execute(stmt).await
-                    .map_err(|e| AppError::Database(e))?;
+                    .map_err(AppError::Database)?;
 
                 txn.commit().await
-                    .map_err(|e| AppError::Database(e))?;
+                    .map_err(AppError::Database)?;
 
                 AppResult::Ok(result.rows_affected())
             }.await {

@@ -12,7 +12,6 @@
 
 use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter, PaginatorTrait};
 use uuid::Uuid;
-use anyhow;
 
 use m3u_proxy::{
     database::Database,
@@ -287,7 +286,7 @@ async fn test_channel_data_integrity() {
         .iter()
         .filter(|channel| {
             if let Some(ref chno) = channel.tvg_chno {
-                chno.parse::<i32>().map_or(false, |n| n > 200)
+                chno.parse::<i32>().is_ok_and(|n| n > 200)
             } else {
                 false
             }
@@ -320,7 +319,6 @@ async fn create_in_memory_database() -> anyhow::Result<Database> {
 }
 
 /// Additional exemplary SeaORM test helper functions demonstrating best practices
-
 /// Helper for advanced channel querying with builder pattern
 /// 
 /// This demonstrates the Builder Pattern for constructing complex queries
@@ -425,7 +423,7 @@ async fn test_advanced_seaorm_query_patterns() {
     // Sample data generator creates sports channels, some of which contain "HD"
     // We should find at least 1, but the exact count depends on random generation
     assert!(!sports_hd_channels.is_empty(), "Should find at least one Sports HD channel");
-    assert!(sports_hd_channels.iter().all(|ch| ch.group_title.as_ref().map_or(false, |g| g == "Sports")), "All channels should be Sports group");
+    assert!(sports_hd_channels.iter().all(|ch| ch.group_title.as_ref().is_some_and(|g| g == "Sports")), "All channels should be Sports group");
     assert!(sports_hd_channels.iter().all(|ch| ch.channel_name.contains("HD")), "All channels should contain 'HD' in name");
     
     // Test count operations

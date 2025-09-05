@@ -208,15 +208,14 @@ impl XtreamSourceHandler {
         }
 
         // Check for port (many Xtream servers use non-standard ports)
-        if let Ok(parsed_url) = reqwest::Url::parse(url) {
-            if let Some(port) = parsed_url.port() {
+        if let Ok(parsed_url) = reqwest::Url::parse(url)
+            && let Some(port) = parsed_url.port() {
                 result = result.with_context("port", port.to_string());
                 #[allow(unused_comparisons)]
                 if !(1024..=65535).contains(&port) {
                     result = result.with_warning("Port number is outside typical range");
                 }
             }
-        }
 
         Ok(result)
     }
@@ -445,10 +444,9 @@ impl SourceHandler for XtreamSourceHandler {
                         }
                     }
                     
-                    if let Some(server_details) = &server_info.server_info {
-                        if let Some(timezone) = &server_details.timezone {
-                            result = result.with_context("server_timezone", timezone.clone());
-                        }
+                    if let Some(server_details) = &server_info.server_info
+                        && let Some(timezone) = &server_details.timezone {
+                        result = result.with_context("server_timezone", timezone.clone());
                     }
                 }
                 Err(e) => {
@@ -468,10 +466,9 @@ impl SourceHandler for XtreamSourceHandler {
                 let mut capabilities = SourceCapabilities::xtream_full();
                 
                 if let Some(user_info) = &server_info.user_info {
-                    if let Some(max_conn_str) = &user_info.max_connections {
-                        if let Ok(max_conn) = max_conn_str.parse::<u32>() {
-                            capabilities.max_concurrent_connections = Some(max_conn);
-                        }
+                    if let Some(max_conn_str) = &user_info.max_connections
+                        && let Ok(max_conn) = max_conn_str.parse::<u32>() {
+                        capabilities.max_concurrent_connections = Some(max_conn);
                     }
                     
                     if let Some(formats) = &user_info.allowed_output_formats {

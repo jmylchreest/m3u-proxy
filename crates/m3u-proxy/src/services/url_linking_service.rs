@@ -170,28 +170,25 @@ impl UrlLinkingService {
                         update_linked: false, // Prevent circular updates
                     };
 
-                    if let Some(update_url) = url {
-                        if epg_source.url != **update_url {
+                    if let Some(update_url) = url
+                        && epg_source.url != **update_url {
                             update_request.url = update_url.clone();
                             needs_update = true;
                         }
-                    }
 
-                    if let Some(update_username) = username {
-                        if !update_username.is_empty() && epg_source.username.as_deref() != Some(update_username) {
+                    if let Some(update_username) = username
+                        && !update_username.is_empty() && epg_source.username.as_deref() != Some(update_username) {
                             update_request.username = Some(update_username.clone());
                             needs_update = true;
                             debug!("Username will be updated for linked EPG source '{}'", epg_source.name);
                         }
-                    }
 
-                    if let Some(update_password) = password {
-                        if !update_password.is_empty() && epg_source.password.as_deref() != Some(update_password) {
+                    if let Some(update_password) = password
+                        && !update_password.is_empty() && epg_source.password.as_deref() != Some(update_password) {
                             update_request.password = Some(update_password.clone());
                             needs_update = true;
                             debug!("Password will be updated for linked EPG source '{}'", epg_source.name);
                         }
-                    }
 
                     if needs_update {
                         self.epg_source_repo.update(&epg_source.id, update_request).await?;
@@ -226,28 +223,25 @@ impl UrlLinkingService {
                         update_linked: false, // Prevent circular updates
                     };
 
-                    if let Some(update_url) = url {
-                        if stream_source.url != **update_url {
+                    if let Some(update_url) = url
+                        && stream_source.url != **update_url {
                             update_request.url = update_url.clone();
                             needs_update = true;
                         }
-                    }
 
-                    if let Some(update_username) = username {
-                        if !update_username.is_empty() && stream_source.username.as_deref() != Some(update_username) {
+                    if let Some(update_username) = username
+                        && !update_username.is_empty() && stream_source.username.as_deref() != Some(update_username) {
                             update_request.username = Some(update_username.clone());
                             needs_update = true;
                             debug!("Username will be updated for linked stream source '{}'", stream_source.name);
                         }
-                    }
 
-                    if let Some(update_password) = password {
-                        if !update_password.is_empty() && stream_source.password.as_deref() != Some(update_password) {
+                    if let Some(update_password) = password
+                        && !update_password.is_empty() && stream_source.password.as_deref() != Some(update_password) {
                             update_request.password = Some(update_password.clone());
                             needs_update = true;
                             debug!("Password will be updated for linked stream source '{}'", stream_source.name);
                         }
-                    }
 
                     if needs_update {
                         self.stream_source_repo.update(&stream_source.id, update_request).await?;

@@ -150,18 +150,16 @@ pub async fn stream_logs(
             };
 
             // Apply log level filtering
-            if let Some(event_level) = LogLevel::from_str(&event.level) {
-                if event_level < min_level {
+            if let Some(event_level) = LogLevel::from_str(&event.level)
+                && event_level < min_level {
                     return None;
                 }
-            }
 
             // Apply target filtering
-            if let Some(ref target_filter) = params.target {
-                if !event.target.contains(target_filter) {
+            if let Some(ref target_filter) = params.target
+                && !event.target.contains(target_filter) {
                     return None;
                 }
-            }
 
             // Optionally strip fields/spans based on parameters
             let mut filtered_event = event;

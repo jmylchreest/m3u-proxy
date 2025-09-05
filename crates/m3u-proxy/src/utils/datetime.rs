@@ -116,11 +116,10 @@ impl DateTimeParser {
         let trimmed = datetime_str.trim();
 
         // Try parsing as Unix timestamp first (fastest check)
-        if let Ok(epoch) = trimmed.parse::<i64>() {
-            if let Some(dt) = DateTime::from_timestamp(epoch, 0) {
+        if let Ok(epoch) = trimmed.parse::<i64>()
+            && let Some(dt) = DateTime::from_timestamp(epoch, 0) {
                 return Ok(dt);
             }
-        }
 
         // Try RFC3339 first (most common for APIs)
         if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {

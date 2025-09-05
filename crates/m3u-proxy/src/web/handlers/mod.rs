@@ -14,6 +14,7 @@ pub mod features;
 pub mod index;
 pub mod static_assets;
 pub mod circuit_breaker;
+pub mod metrics;
 
 // Re-export common handler utilities
 pub use crate::web::utils::*;

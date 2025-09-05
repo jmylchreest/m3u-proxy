@@ -106,8 +106,8 @@ impl SandboxedFileManager for SandboxedManagerAdapter {
         let mut result = Vec::new();
         for file_path in files {
             // Extract file_id and extension from the path
-            if let Some(file_name) = std::path::Path::new(&file_path).file_name().and_then(|n| n.to_str()) {
-                if let Some((name, ext)) = file_name.rsplit_once('.') {
+            if let Some(file_name) = std::path::Path::new(&file_path).file_name().and_then(|n| n.to_str())
+                && let Some((name, ext)) = file_name.rsplit_once('.') {
                     // Get file metadata if possible
                     let now = chrono::Utc::now();
                     result.push(FileInfo {
@@ -118,7 +118,6 @@ impl SandboxedFileManager for SandboxedManagerAdapter {
                         last_accessed: now,
                     });
                 }
-            }
         }
         
         Ok(result)

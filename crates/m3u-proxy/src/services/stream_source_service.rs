@@ -4,8 +4,10 @@
 //! including auto-linking with EPG sources for Xtream providers.
 
 use anyhow::Result;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
+use opentelemetry::KeyValue;
 
 use crate::database::Database;
 use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceUpdateRequest};
@@ -15,6 +17,7 @@ use crate::database::repositories::{
     epg_source::EpgSourceSeaOrmRepository,
 };
 use crate::services::UrlLinkingService;
+use crate::observability::AppObservability;
 
 /// Service for managing stream sources with business logic
 pub struct StreamSourceService {
@@ -24,6 +27,7 @@ pub struct StreamSourceService {
     url_linking_service: UrlLinkingService,
     cache_invalidation_tx: broadcast::Sender<()>,
     http_client_factory: Option<crate::utils::HttpClientFactory>,
+    observability: Option<Arc<AppObservability>>,
 }
 
 impl StreamSourceService {
@@ -42,7 +46,14 @@ impl StreamSourceService {
             url_linking_service,
             cache_invalidation_tx,
             http_client_factory: None,
+            observability: None,
         }
+    }
+
+    /// Set observability for metrics collection
+    pub fn with_observability(mut self, observability: Arc<AppObservability>) -> Self {
+        self.observability = Some(observability);
+        self
     }
 
     /// Create a new stream source service with HTTP client factory
@@ -61,6 +72,7 @@ impl StreamSourceService {
             url_linking_service,
             cache_invalidation_tx,
             http_client_factory: Some(http_client_factory),
+            observability: None,
         }
     }
 
@@ -107,9 +119,52 @@ impl StreamSourceService {
     /// Create a stream source with automatic EPG linking for Xtream sources
     pub async fn create_with_auto_epg(
         &self,
-        mut request: StreamSourceCreateRequest,
+        request: StreamSourceCreateRequest,
     ) -> Result<StreamSource> {
+        let start_time = std::time::Instant::now();
+        let source_type = request.source_type.to_string();
         info!("Creating stream source: {}", request.name);
+
+        // Record start metrics if observability is available
+        if let Some(obs) = &self.observability {
+            obs.channels_processed.add(1, &[
+                KeyValue::new("operation", "create_stream_source"),
+                KeyValue::new("source_type", source_type.clone()),
+            ]);
+        }
+
+        // Wrap the entire operation to catch any errors for metrics
+        let result = self.create_stream_source_internal(request, start_time).await;
+
+        // Record outcome metrics
+        if let Some(obs) = &self.observability {
+            match &result {
+                Ok(_) => {
+                    let duration = start_time.elapsed().as_secs_f64();
+                    obs.channel_refresh_duration.record(duration, &[
+                        KeyValue::new("operation", "create_stream_source"),
+                        KeyValue::new("source_type", source_type),
+                        KeyValue::new("status", "success"),
+                    ]);
+                }
+                Err(_) => {
+                    obs.source_failures.add(1, &[
+                        KeyValue::new("operation", "create_stream_source"),
+                        KeyValue::new("source_type", source_type),
+                    ]);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Internal method for creating stream source (extracted for metrics wrapping)
+    async fn create_stream_source_internal(
+        &self,
+        mut request: StreamSourceCreateRequest,
+        _start_time: std::time::Instant,
+    ) -> Result<StreamSource> {
         
         // Normalize the URL to ensure it has a proper scheme
         request.url = Self::smart_normalize_url(request.url);
@@ -169,6 +224,7 @@ impl StreamSourceService {
 
         // Invalidate cache since we added a new source
         let _ = self.cache_invalidation_tx.send(());
+
 
         info!(
             "Successfully created stream source: {} ({})",
@@ -456,7 +512,20 @@ impl StreamSourceService {
     ) -> Result<usize> {
         use crate::sources::factory::SourceHandlerFactory;
         
+        let start_time = std::time::Instant::now();
+        let source_type = source.source_type.to_string();
+        let source_name = source.name.clone();
+        
         info!("Starting stream source refresh with ProgressStageUpdater for source: {}", source.name);
+
+        // Record channel refresh start
+        if let Some(obs) = &self.observability {
+            obs.channel_refresh_total.add(1, &[
+                KeyValue::new("source_id", source.id.to_string()),
+                KeyValue::new("source_type", source_type.clone()),
+                KeyValue::new("source_name", source_name.clone()),
+            ]);
+        }
         
         // Create stream source handler using the factory with HTTP client factory
         let factory = if let Some(factory) = &self.http_client_factory {
@@ -505,6 +574,16 @@ impl StreamSourceService {
             Ok(count) => count,
             Err(e) => {
                 warn!("Failed to save channels for '{}': {}", source.name, e);
+                
+                // Record failure metrics
+                if let Some(obs) = &self.observability {
+                    obs.source_failures.add(1, &[
+                        KeyValue::new("operation", "refresh_channels"),
+                        KeyValue::new("source_type", source_type),
+                        KeyValue::new("error_type", "save_channels_failed"),
+                    ]);
+                }
+                
                 return Err(e);
             }
         };
@@ -524,6 +603,26 @@ impl StreamSourceService {
         
         // Invalidate cache since we updated channels
         let _ = self.cache_invalidation_tx.send(());
+        
+        // Record comprehensive completion metrics
+        if let Some(obs) = &self.observability {
+            let duration = start_time.elapsed().as_secs_f64();
+            
+            // Channel refresh duration
+            obs.channel_refresh_duration.record(duration, &[
+                KeyValue::new("source_id", source.id.to_string()),
+                KeyValue::new("source_type", source_type.clone()),
+                KeyValue::new("source_name", source_name.clone()),
+                KeyValue::new("status", "success"),
+            ]);
+            
+            // Channels processed count
+            obs.channels_processed.add(channels_saved as u64, &[
+                KeyValue::new("source_id", source.id.to_string()),
+                KeyValue::new("source_type", source_type),
+                KeyValue::new("operation", "refresh_channels"),
+            ]);
+        }
         
         info!(
             "Stream source refresh completed for '{}': {} channels saved",

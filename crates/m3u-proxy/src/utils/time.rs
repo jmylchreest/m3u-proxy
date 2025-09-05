@@ -99,8 +99,8 @@ pub fn detect_timezone_from_xmltv(content: &str) -> Option<String> {
     // XMLTV times are typically in format: 20230101120000 +0100
     let time_regex = Regex::new(r"\d{14}\s+([+-]\d{4})").ok()?;
 
-    if let Some(caps) = time_regex.captures(content) {
-        if let Some(tz_match) = caps.get(1) {
+    if let Some(caps) = time_regex.captures(content)
+        && let Some(tz_match) = caps.get(1) {
             let tz_str = tz_match.as_str();
             debug!("Detected timezone offset from XMLTV: {}", tz_str);
 
@@ -117,17 +117,15 @@ pub fn detect_timezone_from_xmltv(content: &str) -> Option<String> {
                 return find_timezone_by_offset(total_offset);
             }
         }
-    }
 
     // Look for explicit timezone declarations in XML
     let tz_decl_regex = Regex::new(r#"timezone\s*=\s*["']([^"']+)["']"#).ok()?;
-    if let Some(caps) = tz_decl_regex.captures(content) {
-        if let Some(tz_match) = caps.get(1) {
+    if let Some(caps) = tz_decl_regex.captures(content)
+        && let Some(tz_match) = caps.get(1) {
             let tz_name = tz_match.as_str();
             debug!("Found explicit timezone declaration in XMLTV: {}", tz_name);
             return Some(tz_name.to_string());
         }
-    }
 
     None
 }

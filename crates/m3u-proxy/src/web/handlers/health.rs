@@ -278,8 +278,8 @@ async fn get_next_scheduled_from_services(state: &crate::web::AppState) -> Vec<c
         for source in stream_sources {
             if !source.update_cron.is_empty() {
                 // Calculate actual next run time from cron expression
-                if let Ok(schedule) = cron::Schedule::from_str(&source.update_cron) {
-                    if let Some(next_run) = schedule.upcoming(chrono::Utc).next() {
+                if let Ok(schedule) = cron::Schedule::from_str(&source.update_cron)
+                    && let Some(next_run) = schedule.upcoming(chrono::Utc).next() {
                         scheduled_times.push(crate::web::responses::NextScheduledTime {
                             source_id: source.id,
                             source_name: source.name,
@@ -291,7 +291,6 @@ async fn get_next_scheduled_from_services(state: &crate::web::AppState) -> Vec<c
                             cron_expression: source.update_cron,
                         });
                     }
-                }
             }
         }
     }
@@ -301,8 +300,8 @@ async fn get_next_scheduled_from_services(state: &crate::web::AppState) -> Vec<c
         for source in epg_sources {
             if !source.update_cron.is_empty() {
                 // Calculate actual next run time from cron expression
-                if let Ok(schedule) = cron::Schedule::from_str(&source.update_cron) {
-                    if let Some(next_run) = schedule.upcoming(chrono::Utc).next() {
+                if let Ok(schedule) = cron::Schedule::from_str(&source.update_cron)
+                    && let Some(next_run) = schedule.upcoming(chrono::Utc).next() {
                         scheduled_times.push(crate::web::responses::NextScheduledTime {
                             source_id: source.id,
                             source_name: source.name,
@@ -314,7 +313,6 @@ async fn get_next_scheduled_from_services(state: &crate::web::AppState) -> Vec<c
                             cron_expression: source.update_cron,
                         });
                     }
-                }
             }
         }
     }

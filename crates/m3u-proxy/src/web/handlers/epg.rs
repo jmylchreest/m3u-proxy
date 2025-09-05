@@ -93,7 +93,7 @@ pub async fn list_epg_programs(
 
         // Default time range if not specified (next 24 hours)
         // Note: start_time is used to find programs that END after this time (to include currently running programs)
-        let filter_start = params.start_time.unwrap_or_else(|| Utc::now());
+        let filter_start = params.start_time.unwrap_or_else(Utc::now);
         let filter_end = params.end_time.unwrap_or_else(|| {
             Utc::now() + chrono::Duration::hours(24)
         });
@@ -115,23 +115,22 @@ pub async fn list_epg_programs(
             .await.map_err(|e| AppError::Validation { message: e.to_string() })?;
         
         // Apply additional filters in memory (simplified for cleaner code)
-        if let Some(channel_id_str) = params.channel_id {
-            if let Ok(channel_id) = parse_uuid_flexible(&channel_id_str) {
+        if let Some(channel_id_str) = params.channel_id
+            && let Ok(channel_id) = parse_uuid_flexible(&channel_id_str) {
                 programs.retain(|p| p.channel_id == channel_id.to_string());
             }
-        }
         
         if let Some(search) = params.search {
             let search_lower = search.to_lowercase();
             programs.retain(|p| {
                 p.program_title.to_lowercase().contains(&search_lower) ||
-                p.program_description.as_ref().map_or(false, |d| d.to_lowercase().contains(&search_lower))
+                p.program_description.as_ref().is_some_and(|d| d.to_lowercase().contains(&search_lower))
             });
         }
         
         if let Some(category) = params.category {
             programs.retain(|p| {
-                p.program_category.as_ref().map_or(false, |c| c.eq_ignore_ascii_case(&category))
+                p.program_category.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&category))
             });
         }
         
@@ -243,7 +242,7 @@ pub async fn get_source_epg_programs(
         let page = params.page.unwrap_or(1).max(1);
         let limit = params.limit.unwrap_or(50).min(200);
 
-        let start_time = params.start_time.unwrap_or_else(|| Utc::now());
+        let start_time = params.start_time.unwrap_or_else(Utc::now);
         let end_time = params.end_time.unwrap_or_else(|| {
             Utc::now() + chrono::Duration::hours(24)
         });
@@ -256,23 +255,22 @@ pub async fn get_source_epg_programs(
             .await.map_err(|e| AppError::Validation { message: e.to_string() })?;
         
         // Apply additional filters in memory (simplified approach)
-        if let Some(channel_id_str) = params.channel_id {
-            if let Ok(channel_id) = parse_uuid_flexible(&channel_id_str) {
+        if let Some(channel_id_str) = params.channel_id
+            && let Ok(channel_id) = parse_uuid_flexible(&channel_id_str) {
                 programs.retain(|p| p.channel_id == channel_id.to_string());
             }
-        }
         
         if let Some(search) = params.search {
             let search_lower = search.to_lowercase();
             programs.retain(|p| {
                 p.program_title.to_lowercase().contains(&search_lower) ||
-                p.program_description.as_ref().map_or(false, |d| d.to_lowercase().contains(&search_lower))
+                p.program_description.as_ref().is_some_and(|d| d.to_lowercase().contains(&search_lower))
             });
         }
         
         if let Some(category) = params.category {
             programs.retain(|p| {
-                p.program_category.as_ref().map_or(false, |c| c.eq_ignore_ascii_case(&category))
+                p.program_category.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&category))
             });
         }
 
@@ -402,7 +400,7 @@ pub async fn get_epg_guide(
     async fn inner(state: AppState, params: EpgQuery) -> AppResult<HashMap<String, serde_json::Value>> {
         // This would return EPG data in a time-grid format suitable for TV guide display
         
-        let start_time = params.start_time.unwrap_or_else(|| Utc::now());
+        let start_time = params.start_time.unwrap_or_else(Utc::now);
         let end_time = params.end_time.unwrap_or_else(|| {
             Utc::now() + chrono::Duration::hours(6)
         });
@@ -423,11 +421,10 @@ pub async fn get_epg_guide(
             .await.map_err(|e| AppError::Validation { message: e.to_string() })?;
         
         // Apply channel filter if specified
-        if let Some(channel_id_str) = params.channel_id {
-            if let Ok(channel_id) = parse_uuid_flexible(&channel_id_str) {
+        if let Some(channel_id_str) = params.channel_id
+            && let Ok(channel_id) = parse_uuid_flexible(&channel_id_str) {
                 programs.retain(|p| p.channel_id == channel_id.to_string());
             }
-        }
         
         // No truncation - return all matching programs for comprehensive EPG display
 
@@ -465,7 +462,7 @@ pub async fn get_epg_guide(
         let mut current_time = start_time;
         while current_time < end_time {
             time_slots.push(current_time);
-            current_time = current_time + chrono::Duration::hours(1);
+            current_time += chrono::Duration::hours(1);
         }
 
         let response = HashMap::from([

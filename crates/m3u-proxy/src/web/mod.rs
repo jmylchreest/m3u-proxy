@@ -33,6 +33,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
+use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
 
 use crate::{
     config::Config,
@@ -40,7 +41,7 @@ use crate::{
     database::Database,
     ingestor::{IngestionStateManager, scheduler::{CacheInvalidationSender, SchedulerEvent}},
     logo_assets::{LogoAssetService, LogoAssetStorage},
-    metrics::MetricsLogger,
+    observability::AppObservability,
     runtime_settings::RuntimeSettingsStore,
     services::{ProxyRegenerationService, progress_service::ProgressService},
 };
@@ -88,8 +89,9 @@ pub struct WebServerBuilder {
     pub stream_source_service: std::sync::Arc<crate::services::StreamSourceBusinessService>,
     pub epg_source_service: std::sync::Arc<crate::services::EpgSourceService>,
     pub log_broadcaster: broadcast::Sender<crate::web::api::log_streaming::LogEvent>,
-    pub runtime_settings_store: RuntimeSettingsStore,
+    pub runtime_settings_store: Arc<RuntimeSettingsStore>,
     pub circuit_breaker_manager: Option<std::sync::Arc<crate::services::CircuitBreakerManager>>,
+    pub observability: Arc<AppObservability>,
 }
 
 impl WebServerBuilder {
@@ -150,7 +152,7 @@ impl WebServer {
             logo_file_manager: builder.logos_cached_file_manager,
             proxy_output_file_manager: builder.proxy_output_file_manager,
             temp_file_manager: builder.temp_file_manager,
-            metrics_logger: MetricsLogger::new(builder.database.connection().clone()),
+            observability: builder.observability.clone(),
             scheduler_event_tx: None,
             logo_cache_scanner,
             session_tracker: std::sync::Arc::new(
@@ -184,6 +186,8 @@ impl WebServer {
             .route("/health", get(handlers::health::health_check))
             .route("/ready", get(handlers::health::readiness_check))
             .route("/live", get(handlers::health::liveness_check))
+            // Prometheus metrics endpoint
+            .route("/metrics", get(handlers::metrics::prometheus_metrics))
             // OpenAPI documentation
             .merge(Self::openapi_routes())
             // API v1 routes
@@ -212,6 +216,8 @@ impl WebServer {
             .fallback(handlers::static_assets::serve_embedded_asset)
             // Middleware (applied in reverse order)
             .layer(CorsLayer::permissive())
+            // OpenTelemetry tracing middleware (should be outer layer to capture all requests)
+            .layer(OtelAxumLayer::default())
             // Security headers middleware
             .layer(axum::middleware::from_fn(middleware::security_headers_middleware))
             // Conditional request logging middleware (respects runtime settings)
@@ -525,7 +531,7 @@ pub struct AppState {
     pub logo_file_manager: SandboxedManager,
     pub proxy_output_file_manager: SandboxedManager,
     pub temp_file_manager: SandboxedManager,
-    pub metrics_logger: MetricsLogger,
+    pub observability: Arc<AppObservability>,
     pub scheduler_event_tx: Option<mpsc::UnboundedSender<SchedulerEvent>>,
     pub logo_cache_scanner: Option<crate::services::logo_cache_scanner::LogoCacheScanner>,
     pub session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
@@ -545,7 +551,7 @@ pub struct AppState {
     /// Application start time for uptime calculation
     pub start_time: chrono::DateTime<chrono::Utc>,
     /// Runtime settings store for dynamic configuration changes
-    pub runtime_settings_store: RuntimeSettingsStore,
+    pub runtime_settings_store: Arc<RuntimeSettingsStore>,
     /// Circuit breaker manager for resilience patterns
     pub circuit_breaker_manager: Option<std::sync::Arc<crate::services::CircuitBreakerManager>>,
 }

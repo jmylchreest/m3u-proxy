@@ -52,6 +52,12 @@ services:
       # Optional: Mount configuration directory
       # - ./config:/app/config
 
+    # Hardware acceleration support for FFmpeg transcoding
+    devices:
+      - /dev/dri:/dev/dri  # Intel/AMD GPU hardware acceleration
+    group_add:
+      - video              # Video group access for hardware devices
+    
     restart: unless-stopped
 
     # Optional: Add resource limits
@@ -70,8 +76,93 @@ services:
       retries: 3
       start_period: 10s
 
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    profiles:
+      - observability
+    command:
+      - --config=/etc/otelcol-contrib/otel-collector.yml
+    volumes:
+      - ./observability/otel-collector.yml:/etc/otelcol-contrib/otel-collector.yml
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8888:8888"   # Prometheus metrics
+      - "8889:8889"   # Prometheus metrics
+    depends_on:
+      - tempo
+      - loki
+      - mimir
+
+  # Tempo - Distributed Tracing
+  tempo:
+    image: grafana/tempo:latest
+    profiles:
+      - observability
+    command:
+      - -config.file=/etc/tempo.yaml
+    volumes:
+      - ./observability/tempo.yml:/etc/tempo.yaml
+      - tempo_data:/tmp/tempo
+    ports:
+      - "3200:3200"   # Tempo
+
+  # Loki - Log Aggregation
+  loki:
+    image: grafana/loki:latest
+    profiles:
+      - observability
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./observability/loki.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+
+  # Mimir - Metrics Storage
+  mimir:
+    image: grafana/mimir:latest
+    profiles:
+      - observability
+    command:
+      - -config.file=/etc/mimir.yaml
+    volumes:
+      - ./observability/mimir.yml:/etc/mimir.yaml
+      - mimir_data:/data
+    ports:
+      - "9009:9009"
+
+  # Grafana - Observability Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    profiles:
+      - observability
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - tempo
+      - loki
+      - mimir
+
 volumes:
   m3u_data:
     driver: local
   postgres_data:
+    driver: local
+  # Observability volumes
+  tempo_data:
+    driver: local
+  loki_data:
+    driver: local
+  mimir_data:
+    driver: local
+  grafana_data:
     driver: local

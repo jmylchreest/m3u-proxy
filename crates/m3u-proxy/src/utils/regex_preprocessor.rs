@@ -88,8 +88,8 @@ impl RegexPreprocessor {
                 ')' => {
                     if paren_depth > 0 {
                         // Check if this group is followed by a quantifier
-                        if let Some(&next_ch) = chars.peek() {
-                            if matches!(next_ch, '*' | '+' | '?' | '{') {
+                        if let Some(&next_ch) = chars.peek()
+                            && matches!(next_ch, '*' | '+' | '?' | '{') {
                                 // Group has quantifier - check if it contains quantifiers
                                 if paren_depth > 0 && quantifier_levels.get(paren_depth - 1) == Some(&true) {
                                     return Err(
@@ -98,7 +98,6 @@ impl RegexPreprocessor {
                                     );
                                 }
                             }
-                        }
                         paren_depth -= 1;
                         if quantifier_levels.len() > paren_depth {
                             quantifier_levels.truncate(paren_depth);
@@ -113,7 +112,7 @@ impl RegexPreprocessor {
                 }
                 '{' => {
                     // Skip quantifier content
-                    while let Some(ch) = chars.next() {
+                    for ch in chars.by_ref() {
                         if ch == '}' { break; }
                     }
                     // Mark current nesting level as having quantifiers
@@ -149,36 +148,32 @@ impl RegexPreprocessor {
         let mut chars = pattern.chars().peekable();
         
         while let Some(ch) = chars.next() {
-            match ch {
-                '{' => {
-                    let quantifier = self.parse_quantifier(&mut chars);
-                    
-                    // Check min limit
-                    if quantifier.min > self.config.max_quantifier_limit {
-                        return Err(format!(
-                            "Quantifier min value {} exceeds security limit of {}", 
-                            quantifier.min, self.config.max_quantifier_limit
-                        ));
-                    }
-                    
-                    // Check max limit if specified
-                    if let Some(max) = quantifier.max {
-                        if max > self.config.max_quantifier_limit {
-                            return Err(format!(
-                                "Quantifier max value {} exceeds security limit of {}", 
-                                max, self.config.max_quantifier_limit
-                            ));
-                        }
-                    }
-                    
-                    // Check for unbounded quantifiers
-                    if quantifier.max.is_none() && quantifier.min == 0 {
-                        tracing::warn!(
-                            "Unbounded quantifier detected: consider adding upper bounds for performance"
-                        );
-                    }
+            if ch == '{' {
+                let quantifier = self.parse_quantifier(&mut chars);
+                
+                // Check min limit
+                if quantifier.min > self.config.max_quantifier_limit {
+                    return Err(format!(
+                        "Quantifier min value {} exceeds security limit of {}", 
+                        quantifier.min, self.config.max_quantifier_limit
+                    ));
                 }
-                _ => {}
+                
+                // Check max limit if specified
+                if let Some(max) = quantifier.max
+                    && max > self.config.max_quantifier_limit {
+                    return Err(format!(
+                        "Quantifier max value {} exceeds security limit of {}", 
+                        max, self.config.max_quantifier_limit
+                    ));
+                }
+                
+                // Check for unbounded quantifiers
+                if quantifier.max.is_none() && quantifier.min == 0 {
+                    tracing::warn!(
+                        "Unbounded quantifier detected: consider adding upper bounds for performance"
+                    );
+                }
             }
         }
         
@@ -196,15 +191,14 @@ impl RegexPreprocessor {
         ];
         
         for dangerous_pattern in &dangerous_patterns {
-            if let Ok(regex) = regex::Regex::new(dangerous_pattern) {
-                if regex.is_match(pattern) {
+            if let Ok(regex) = regex::Regex::new(dangerous_pattern)
+                && regex.is_match(pattern) {
                     return Err(format!(
                         "Potentially dangerous regex pattern detected. \
                          Pattern '{}' matches rule '{}' which can cause exponential backtracking.",
                         pattern, dangerous_pattern
                     ));
                 }
-            }
         }
         
         Ok(())
@@ -230,7 +224,7 @@ impl RegexPreprocessor {
                 '[' => {
                     complexity += 1;
                     // Skip character class content
-                    while let Some(ch) = chars.next() {
+                    for ch in chars.by_ref() {
                         if ch == ']' { break; }
                     }
                 }
@@ -460,14 +454,13 @@ impl RegexPreprocessor {
             match ch {
                 '\\' => {
                     // Check escaped characters for special chars we care about
-                    if let Some(escaped_char) = chars.next() {
-                        if self.config.precheck_special_chars.contains(escaped_char) {
+                    if let Some(escaped_char) = chars.next()
+                        && self.config.precheck_special_chars.contains(escaped_char) {
                             // Check if this escaped char is followed by optional quantifier
                             if !self.is_followed_by_optional_quantifier(&mut chars.clone()) {
                                 required_special_chars.push(escaped_char);
                             }
                         }
-                    }
                 },
                 '[' => {
                     // Character classes are more complex - collect chars but check if class is optional

@@ -39,7 +39,7 @@ pub struct RuntimeSettingsStore {
 }
 
 /// Runtime flags that can be checked by middleware and services
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RuntimeFlags {
     /// Whether request logging is currently enabled
     pub request_logging_enabled: bool,
@@ -47,16 +47,6 @@ pub struct RuntimeFlags {
     pub feature_flags: HashMap<String, bool>,
     /// Runtime feature configuration
     pub feature_config: HashMap<String, HashMap<String, serde_json::Value>>,
-}
-
-impl Default for RuntimeFlags {
-    fn default() -> Self {
-        Self {
-            request_logging_enabled: false, // Default to false, override from config
-            feature_flags: HashMap::new(),
-            feature_config: HashMap::new(),
-        }
-    }
 }
 
 impl RuntimeSettingsStore {
@@ -157,6 +147,7 @@ impl RuntimeSettingsStore {
 
 
 
+
     /// Bulk update multiple settings
     pub async fn update_multiple(
         &self,
@@ -180,7 +171,6 @@ impl RuntimeSettingsStore {
                 if enable_logging { "enabled" } else { "disabled" }
             ));
         }
-
 
         applied_changes
     }

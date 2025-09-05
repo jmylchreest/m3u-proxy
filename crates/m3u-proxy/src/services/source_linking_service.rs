@@ -151,11 +151,10 @@ impl SourceLinkingService {
 
         // No existing EPG source found, check if we can create one
         if let (Some(username), Some(password)) = (&stream_source.username, &stream_source.password)
-        {
-            if self
+            && self
                 .check_epg_availability(&stream_source.url, username, password)
                 .await?
-            {
+        {
                 info!(
                     "Stream source '{}' provides EPG data - creating EPG source",
                     stream_source.name
@@ -164,7 +163,6 @@ impl SourceLinkingService {
                 self.create_bidirectional_link(Some(stream_source.id), Some(epg_source.id))
                     .await?;
                 return Ok(true);
-            }
         }
 
         Ok(false)
@@ -193,11 +191,11 @@ impl SourceLinkingService {
         }
 
         // No existing stream source found, check if we can create one
-        if let (Some(username), Some(password)) = (&epg_source.username, &epg_source.password) {
-            if self
+        if let (Some(username), Some(password)) = (&epg_source.username, &epg_source.password)
+            && self
                 .check_stream_availability(&epg_source.url, username, password)
                 .await?
-            {
+        {
                 info!(
                     "EPG source '{}' provides stream data - creating stream source",
                     epg_source.name
@@ -206,7 +204,6 @@ impl SourceLinkingService {
                 self.create_bidirectional_link(Some(stream_source.id), Some(epg_source.id))
                     .await?;
                 return Ok(true);
-            }
         }
 
         Ok(false)

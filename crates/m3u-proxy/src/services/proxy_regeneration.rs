@@ -15,6 +15,8 @@ use crate::database::Database;
 use crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository;
 use crate::services::progress_service::{ProgressManager, ProgressService, OperationType};
 use crate::ingestor::IngestionStateManager;
+use crate::observability::AppObservability;
+use opentelemetry::KeyValue;
 
 // Removed scheduler dependency - now uses pure in-memory Tokio timers
 
@@ -73,9 +75,12 @@ pub struct ProxyRegenerationService {
     temp_file_manager: sandboxed_file_manager::SandboxedManager,
     /// HTTP client factory for circuit breaker-enabled clients
     http_client_factory: Arc<crate::utils::HttpClientFactory>,
+    /// Observability for metrics collection
+    observability: Option<Arc<AppObservability>>,
 }
 
 impl ProxyRegenerationService {
+    #[allow(clippy::too_many_arguments)] // Required for proper dependency injection
     pub fn new(
         database: Database,
         proxy_repository: StreamProxySeaOrmRepository,
@@ -106,6 +111,7 @@ impl ProxyRegenerationService {
             ingestion_state_manager: ingestion_state_manager.clone(),
             temp_file_manager: temp_file_manager.clone(),
             http_client_factory,
+            observability: None,
         };
         
         // Start the priority queue processor in the background
@@ -124,6 +130,12 @@ impl ProxyRegenerationService {
     pub fn shutdown(&self) {
         self.shutdown_flag.store(true, std::sync::atomic::Ordering::Relaxed);
         info!("Proxy regeneration service shutdown signaled - pending operations will be cancelled");
+    }
+
+    /// Set observability for metrics collection
+    pub fn with_observability(mut self, observability: Arc<AppObservability>) -> Self {
+        self.observability = Some(observability);
+        self
     }
 
     /// Wait for a duration while checking for cancellation
@@ -210,6 +222,7 @@ impl ProxyRegenerationService {
     }
     
     /// Process a single regeneration request with all safety checks
+    #[allow(clippy::too_many_arguments)] // Internal method with required dependencies
     async fn process_regeneration_request(
         request: RegenerationRequest,
         database: &Database,
@@ -278,6 +291,15 @@ impl ProxyRegenerationService {
         trigger_source_id: Uuid,
         trigger_source_type: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // Record queue attempt metrics
+        if let Some(obs) = &self.observability {
+            obs.proxy_generations.add(1, &[
+                KeyValue::new("operation", "queue_regeneration"),
+                KeyValue::new("trigger_type", trigger_source_type.to_string()),
+                KeyValue::new("proxy_id", proxy_id.to_string()),
+            ]);
+        }
+        
         // CRITICAL FIX: Check if proxy is already actively regenerating
         {
             let active = self.active_regenerations.lock().await;
@@ -286,6 +308,16 @@ impl ProxyRegenerationService {
                     "Proxy {proxy_id} is already actively regenerating, ignoring new {trigger_source_type} trigger from source {trigger_source_id}"
                 );
                 debug!("{}", message);
+                
+                // Record already active metric
+                if let Some(obs) = &self.observability {
+                    obs.proxy_generations.add(1, &[
+                        KeyValue::new("operation", "queue_regeneration_skipped"),
+                        KeyValue::new("reason", "already_active"),
+                        KeyValue::new("trigger_type", trigger_source_type.to_string()),
+                    ]);
+                }
+                
                 return Ok(()); // Silently ignore to avoid error spam
             }
         }
@@ -395,6 +427,21 @@ impl ProxyRegenerationService {
             "Queued proxy {} for regeneration (trigger: {} {}, scheduled in {}s)",
             proxy_id, trigger_source_type, trigger_source_id, self.config.delay_seconds
         );
+
+        // Record successful queue metrics
+        if let Some(obs) = &self.observability {
+            obs.proxy_generations.add(1, &[
+                KeyValue::new("operation", "queue_regeneration_success"),
+                KeyValue::new("trigger_type", trigger_source_type.to_string()),
+                KeyValue::new("delay_seconds", self.config.delay_seconds.to_string()),
+            ]);
+            
+            // Update pending queue metrics
+            let pending_count = self.pending_regenerations.lock().await.len() as u64;
+            obs.proxy_generations.add(pending_count, &[
+                KeyValue::new("operation", "queue_pending"),
+            ]);
+        }
 
         Ok(())
     }

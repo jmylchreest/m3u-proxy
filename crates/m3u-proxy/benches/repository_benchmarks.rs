@@ -3,7 +3,8 @@
 //! These benchmarks measure the performance of newly implemented features
 //! to ensure they meet performance requirements and detect regressions.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
 
 // =============================================================================
 // DATABASE RETRY PERFORMANCE BENCHMARKS

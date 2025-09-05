@@ -107,14 +107,13 @@ fn find_child_processes(system: &System, parent_pid: u32) -> Vec<u32> {
     let mut children = Vec::new();
     
     for (pid, process) in system.processes() {
-        if let Some(parent) = process.parent() {
-            if parent.as_u32() == parent_pid {
+        if let Some(parent) = process.parent()
+            && parent.as_u32() == parent_pid {
                 children.push(pid.as_u32());
                 // Recursively find grandchildren
                 let grandchildren = find_child_processes(system, pid.as_u32());
                 children.extend(grandchildren);
             }
-        }
     }
     
     children

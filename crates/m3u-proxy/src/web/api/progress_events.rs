@@ -173,17 +173,15 @@ pub async fn progress_events_stream(
                     }
                     
                     // Support both resource_id and owner_id (for compatibility)
-                    if let Some(ref resource_id) = query.resource_id {
-                        if progress.owner_id.to_string() != *resource_id {
+                    if let Some(ref resource_id) = query.resource_id
+                        && progress.owner_id.to_string() != *resource_id {
                             continue;
                         }
-                    }
                     
-                    if let Some(ref owner_id) = query.owner_id {
-                        if progress.owner_id.to_string() != *owner_id {
+                    if let Some(ref owner_id) = query.owner_id
+                        && progress.owner_id.to_string() != *owner_id {
                             continue;
                         }
-                    }
                     
                     // Filter by completion status
                     if query.active_only.unwrap_or(false) {

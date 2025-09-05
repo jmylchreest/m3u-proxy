@@ -184,15 +184,14 @@ impl UrlUtils {
         let mut obfuscated = url.to_string();
 
         // Handle URL auth (user:pass@host)
-        if let Ok(parsed) = Url::parse(url) {
-            if !parsed.username().is_empty() || parsed.password().is_some() {
+        if let Ok(parsed) = Url::parse(url)
+            && (!parsed.username().is_empty() || parsed.password().is_some()) {
                 let mut new_url = parsed.clone();
                 // Clear existing credentials and set obfuscated ones
                 let _ = new_url.set_username("****");
                 let _ = new_url.set_password(Some("****"));
                 obfuscated = new_url.to_string();
             }
-        }
 
         // Handle query parameters with case-insensitive matching
         let sensitive_params = ["username", "password", "user", "pass", "pwd", "passwd"];

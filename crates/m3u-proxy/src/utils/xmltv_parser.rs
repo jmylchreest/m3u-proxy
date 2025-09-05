@@ -106,14 +106,13 @@ pub fn parse_xmltv_programs(content: &str) -> AppResult<Vec<SimpleXmltvProgram>>
                     .to_string();
                 
                 // Handle self-closing elements
-                if let Some(ref mut program) = current_program {
-                    if name.as_str() == "icon" {
+                if let Some(ref mut program) = current_program
+                    && name.as_str() == "icon" {
                         let attrs = parse_attributes(e);
                         if let Some(src) = attrs.get("src") {
                             program.icon = Some(src.clone());
                         }
                     }
-                }
             }
             
             Ok(Event::Text(e)) => {

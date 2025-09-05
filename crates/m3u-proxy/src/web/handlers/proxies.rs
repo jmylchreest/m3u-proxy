@@ -1381,7 +1381,7 @@ pub async fn proxy_stream(
 
     // 4. Log access metrics and create active session
     let session = state
-        .metrics_logger
+        .observability
         .log_stream_start(
             proxy.name.clone(),
             channel_id,
@@ -1405,7 +1405,7 @@ pub async fn proxy_stream(
 
             // Create active session for redirect (will be cleaned up quickly by housekeeper)
             let session_id = match state
-                .metrics_logger
+                .observability
                 .create_active_session(
                     proxy.name.clone(),
                     channel_id,
@@ -1447,16 +1447,15 @@ pub async fn proxy_stream(
             let state_clone = state.clone();
             let session_id_clone = session_id.clone();
             tokio::spawn(async move {
-                session.finish(&state_clone.metrics_logger, 0).await;
-                if !session_id_clone.is_empty() {
-                    if let Err(e) = state_clone
-                        .metrics_logger
+                session.finish(&state_clone.observability, 0).await;
+                if !session_id_clone.is_empty()
+                    && let Err(e) = state_clone
+                        .observability
                         .complete_active_session(&session_id_clone)
                         .await
                     {
                         error!("Failed to complete active session: {}", e);
                     }
-                }
                 // End session tracking for redirect
                 state_clone
                     .session_tracker
@@ -1475,7 +1474,7 @@ pub async fn proxy_stream(
 
             // Create active session for proxy tracking
             let session_id = match state
-                .metrics_logger
+                .observability
                 .create_active_session(
                     proxy.name.clone(),
                     channel_id,
@@ -1548,7 +1547,7 @@ pub async fn proxy_stream(
 
             // Create session for relay mode
             let session_id = match state
-                .metrics_logger
+                .observability
                 .create_active_session(
                     proxy.name.clone(),
                     channel_id,
@@ -1860,7 +1859,7 @@ async fn diagnose_channel_access_issue_seaorm(
 // TODO: Re-enable unreachable relay functionality code when SeaORM migration is complete
 /*
             let session_id = match state
-                .metrics_logger
+                .observability
                 .create_active_session(
                     proxy.name.clone(),
                     channel_id,
@@ -1912,9 +1911,9 @@ async fn diagnose_channel_access_issue_seaorm(
                 Err(e) => {
                     error!("Failed to start FFmpeg relay process: {}", e);
                     // Clean up session
-                    session.finish(&state.metrics_logger, 0).await;
+                    session.finish(&state.observability, 0).await;
                     if let Err(e) = state
-                        .metrics_logger
+                        .observability
                         .complete_active_session(&session_id)
                         .await
                     {
@@ -2050,9 +2049,9 @@ async fn proxy_http_stream(
             let state_clone = state.clone();
             let session_id_clone = session_id.clone();
             tokio::spawn(async move {
-                session.finish(&state_clone.metrics_logger, 0).await;
+                session.finish(&state_clone.observability, 0).await;
                 if let Err(e) = state_clone
-                    .metrics_logger
+                    .observability
                     .complete_active_session(&session_id_clone)
                     .await
                 {
@@ -2115,9 +2114,9 @@ async fn proxy_http_stream(
             let state_clone = state.clone();
             let session_id_clone = session_id.clone();
             tokio::spawn(async move {
-                session.finish(&state_clone.metrics_logger, 0).await;
+                session.finish(&state_clone.observability, 0).await;
                 if let Err(e) = state_clone
-                    .metrics_logger
+                    .observability
                     .complete_active_session(&session_id_clone)
                     .await
                 {
@@ -2202,7 +2201,7 @@ async fn proxy_http_stream(
                     let session_update = session_id_clone.clone();
                     tokio::spawn(async move {
                         if let Err(e) = state_update
-                            .metrics_logger
+                            .observability
                             .update_active_session(&session_update, bytes_len)
                             .await
                         {
@@ -2243,12 +2242,12 @@ async fn proxy_http_stream(
 
                             // Finish metrics tracking
                             final_session
-                                .finish(&final_state.metrics_logger, final_bytes)
+                                .finish(&final_state.observability, final_bytes)
                                 .await;
 
                             // Complete the active session
                             if let Err(e) = final_state
-                                .metrics_logger
+                                .observability
                                 .complete_active_session(&final_session_id)
                                 .await
                             {
@@ -2324,12 +2323,12 @@ async fn proxy_http_stream(
                                 tokio::spawn(async move {
                                     // Finish metrics tracking
                                     cleanup_session
-                                        .finish(&cleanup_state.metrics_logger, current_bytes)
+                                        .finish(&cleanup_state.observability, current_bytes)
                                         .await;
 
                                     // Complete the active session
                                     if let Err(e) = cleanup_state
-                                        .metrics_logger
+                                        .observability
                                         .complete_active_session(&cleanup_session_id)
                                         .await
                                     {
@@ -2391,12 +2390,12 @@ async fn proxy_http_stream(
                             tokio::spawn(async move {
                                 // Finish metrics tracking
                                 final_session
-                                    .finish(&final_state.metrics_logger, final_bytes)
+                                    .finish(&final_state.observability, final_bytes)
                                     .await;
 
                                 // Complete the active session
                                 if let Err(e) = final_state
-                                    .metrics_logger
+                                    .observability
                                     .complete_active_session(&final_session_id)
                                     .await
                                 {

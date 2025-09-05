@@ -1396,8 +1396,8 @@ pub async fn validate_pipeline_expression(
             }
 
             // Add expression tree for valid expressions (UI feature)
-            if validation_result.is_valid && stage_name == "data_mapping" {
-                if let Some(source_type_str) = source_type {
+            if validation_result.is_valid && stage_name == "data_mapping"
+                && let Some(source_type_str) = source_type {
                     let source_type_enum = match source_type_str {
                         "stream" => Some(DataMappingSourceType::Stream),
                         "epg" => Some(DataMappingSourceType::Epg),
@@ -1427,7 +1427,6 @@ pub async fn validate_pipeline_expression(
                         }
                     }
                 }
-            }
 
             Ok(Json(response))
         }
@@ -2949,7 +2948,7 @@ pub async fn replace_logo_asset_image(
     let (file_name, content_type, data) = file_data.ok_or(StatusCode::BAD_REQUEST)?;
 
     // Get the file extension from content type
-    let file_extension = content_type.split('/').last().unwrap_or("img");
+    let file_extension = content_type.split('/').next_back().unwrap_or("img");
 
     // Get the existing asset first to delete the old file
     let existing_asset = match state.logo_asset_service.get_asset(id).await {
@@ -2969,11 +2968,10 @@ pub async fn replace_logo_asset_image(
     {
         Ok((_, new_file_path, new_file_size, new_mime_type, dimensions)) => {
             // Delete the old file if it exists and is different
-            if existing_asset.file_path != new_file_path {
-                if let Err(e) = state.logo_asset_service.storage.delete_file(&existing_asset.file_path).await {
+            if existing_asset.file_path != new_file_path
+                && let Err(e) = state.logo_asset_service.storage.delete_file(&existing_asset.file_path).await {
                     debug!("Failed to delete old logo file {}: {}", existing_asset.file_path, e);
                 }
-            }
 
             // Update the database record
             match state
@@ -3666,11 +3664,10 @@ pub async fn get_logo_asset_with_formats(
                     .to_string(),
             ];
             for linked in &linked_with_urls {
-                if let Some(format) = linked.asset.mime_type.split('/').next_back() {
-                    if !available_formats.contains(&format.to_string()) {
+                if let Some(format) = linked.asset.mime_type.split('/').next_back()
+                    && !available_formats.contains(&format.to_string()) {
                         available_formats.push(format.to_string());
                     }
-                }
             }
 
             let domain_asset = match model_to_logo_asset(&asset) {

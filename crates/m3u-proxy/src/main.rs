@@ -152,6 +152,7 @@ async fn main() -> Result<()> {
     
     // Create runtime settings store with tracing reload capability
     let runtime_settings_store = m3u_proxy::runtime_settings::RuntimeSettingsStore::with_tracing_reload(reload_handle);
+    let runtime_settings_arc = std::sync::Arc::new(runtime_settings_store);
 
 
     info!("Starting M3U Proxy Service v{}", env!("CARGO_PKG_VERSION"));
@@ -165,10 +166,10 @@ async fn main() -> Result<()> {
     info!("Configuration loaded from: {}", cli.config);
 
     // Initialize feature flags from config in runtime store
-    runtime_settings_store.initialize_feature_flags_from_config(&config).await;
+    runtime_settings_arc.initialize_feature_flags_from_config(&config).await;
     
     // Initialize request logging setting from config
-    runtime_settings_store.update_request_logging(config.web.enable_request_logging).await;
+    runtime_settings_arc.update_request_logging(config.web.enable_request_logging).await;
 
     // Override config with CLI arguments
     if let Some(host) = cli.host {
@@ -350,6 +351,12 @@ async fn main() -> Result<()> {
     let system_manager = SystemManager::new(Duration::from_secs(10));
     info!("Shared system manager initialized with 10-second refresh interval");
 
+    // Initialize observability system
+    let observability = std::sync::Arc::new(
+        m3u_proxy::observability::AppObservability::new("m3u-proxy")
+            .expect("Failed to initialize observability")
+    );
+    info!("Observability system initialized");
 
     let proxy_regeneration_service = {
         let proxy_repository = StreamProxySeaOrmRepository::new(database.connection().clone());
@@ -362,7 +369,7 @@ async fn main() -> Result<()> {
             progress_service.clone(), // Pass ProgressService to create ProgressManagers
             state_manager.clone(), // Pass IngestionStateManager to check for active operations
             Arc::new(http_client_factory.clone()), // Pass HttpClientFactory for circuit breaker support
-        )
+        ).with_observability(observability.clone())
     };
     info!("Proxy regeneration service initialized with in-memory state");
 
@@ -397,7 +404,7 @@ async fn main() -> Result<()> {
             url_linking_service,
             cache_invalidation_tx.clone(),
             http_client_factory.clone(),
-        ))
+        ).with_observability(observability.clone()))
     };
 
     // Create scheduler service now that proxy regeneration service exists
@@ -413,17 +420,15 @@ async fn main() -> Result<()> {
     );
     info!("Scheduler service initialized");
 
-
-
     // Initialize relay manager with shared system (SeaORM)
     let relay_manager = std::sync::Arc::new(
         m3u_proxy::services::RelayManager::new(
             database.clone(),
             temp_file_manager.clone(),
-            std::sync::Arc::new(m3u_proxy::metrics::MetricsLogger::new(database.connection())),
             config.clone(),
         )
-        .await,
+        .await
+        .with_observability(observability.clone()),
     );
     info!("Relay manager initialized with shared system monitoring");
 
@@ -454,8 +459,9 @@ async fn main() -> Result<()> {
             stream_source_service: stream_source_service.clone(),
             epg_source_service: epg_source_service.clone(),
             log_broadcaster,
-            runtime_settings_store,
+            runtime_settings_store: runtime_settings_arc.clone(),
             circuit_breaker_manager: Some(circuit_breaker_manager.clone()),
+            observability: observability.clone(),
         },
     )
     .await?;

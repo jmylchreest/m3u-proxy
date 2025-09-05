@@ -102,6 +102,22 @@ pub fn get_fallback_font_config() -> String {
     format!("font={}", fallback_fonts[0])
 }
 
+/// Placeholder for the actual font file - in a real implementation, 
+/// you would download Liberation Sans Regular from:
+/// https://github.com/liberationfonts/liberation-fonts/releases
+/// and place it in crates/m3u-proxy/src/assets/fonts/LiberationSans-Regular.ttf
+///
+/// For now, we'll create a minimal placeholder
+const _FONT_PLACEHOLDER: &[u8] = &[
+    // TTF header placeholder - this would be replaced with actual font data
+    0x00, 0x01, 0x00, 0x00, // version
+    0x00, 0x0A, // numTables
+    0x00, 0x80, // searchRange
+    0x00, 0x03, // entrySelector
+    0x00, 0x20, // rangeShift
+    // ... rest of font data would go here
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,19 +152,3 @@ mod tests {
         assert!(fallback.contains("font="), "Fallback should provide a font parameter");
     }
 }
-
-/// Placeholder for the actual font file - in a real implementation, 
-/// you would download Liberation Sans Regular from:
-/// https://github.com/liberationfonts/liberation-fonts/releases
-/// and place it in crates/m3u-proxy/src/assets/fonts/LiberationSans-Regular.ttf
-///
-/// For now, we'll create a minimal placeholder
-const _FONT_PLACEHOLDER: &[u8] = &[
-    // TTF header placeholder - this would be replaced with actual font data
-    0x00, 0x01, 0x00, 0x00, // version
-    0x00, 0x0A, // numTables
-    0x00, 0x80, // searchRange
-    0x00, 0x03, // entrySelector
-    0x00, 0x20, // rangeShift
-    // ... rest of font data would go here
-];

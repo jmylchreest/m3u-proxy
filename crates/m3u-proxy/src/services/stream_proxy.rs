@@ -498,11 +498,10 @@ impl StreamProxyService {
     /// Extract attribute value from EXTINF line
     fn extract_attribute(line: &str, attr: &str) -> Option<String> {
         let pattern = format!(r#"{attr}="([^"]*)""#);
-        if let Ok(re) = Regex::new(&pattern) {
-            if let Some(captures) = re.captures(line) {
+        if let Ok(re) = Regex::new(&pattern)
+            && let Some(captures) = re.captures(line) {
                 return captures.get(1).map(|m| m.as_str().to_string());
             }
-        }
         None
     }
 

@@ -101,21 +101,19 @@ pub async fn list_channels(
         // Apply basic filtering (client-side for now)
         let mut filtered_channels = all_channels;
         
-        if let Some(search) = &params.search {
-            if !search.trim().is_empty() {
+        if let Some(search) = &params.search
+            && !search.trim().is_empty() {
                 let search_lower = search.trim().to_lowercase();
                 filtered_channels.retain(|ch| ch.channel_name.to_lowercase().contains(&search_lower));
             }
-        }
         
         // Apply group title filtering
-        if let Some(group) = &params.group {
-            if !group.trim().is_empty() {
+        if let Some(group) = &params.group
+            && !group.trim().is_empty() {
                 filtered_channels.retain(|ch| {
                     ch.group_title.as_ref().map(|g| g.eq_ignore_ascii_case(group.trim())).unwrap_or(false)
                 });
             }
-        }
         
         // Parse and apply source ID filtering (support both source_id and legacy proxy_id)
         let mut source_ids = Vec::new();
@@ -273,20 +271,18 @@ pub async fn get_proxy_channels(
         // Apply filtering
         let mut filtered_channels = source_channels;
         
-        if let Some(search) = &params.search {
-            if !search.trim().is_empty() {
+        if let Some(search) = &params.search
+            && !search.trim().is_empty() {
                 let search_lower = search.trim().to_lowercase();
                 filtered_channels.retain(|ch| ch.channel_name.to_lowercase().contains(&search_lower));
             }
-        }
         
-        if let Some(group) = &params.group {
-            if !group.trim().is_empty() {
+        if let Some(group) = &params.group
+            && !group.trim().is_empty() {
                 filtered_channels.retain(|ch| {
                     ch.group_title.as_ref().map(|g| g.eq_ignore_ascii_case(group.trim())).unwrap_or(false)
                 });
             }
-        }
 
         // Apply pagination 
         let total = filtered_channels.len() as u32;

@@ -224,14 +224,13 @@ impl ValidateQuery for StreamSourceFilterParams {
     fn validate(&self) -> Result<(), Self::Error> {
         let mut errors = Vec::new();
 
-        if let Some(ref source_type) = self.source_type {
-            if !["m3u", "xtream"].contains(&source_type.to_lowercase().as_str()) {
+        if let Some(ref source_type) = self.source_type
+            && !["m3u", "xtream"].contains(&source_type.to_lowercase().as_str()) {
                 errors.push(ValidationErrorResponse {
                     field: "source_type".to_string(),
                     message: "Source type must be 'm3u' or 'xtream'".to_string(),
                 });
             }
-        }
 
         if errors.is_empty() {
             Ok(())
@@ -284,14 +283,13 @@ impl ValidateQuery for EpgSourceFilterParams {
     fn validate(&self) -> Result<(), Self::Error> {
         let mut errors = Vec::new();
 
-        if let Some(ref source_type) = self.source_type {
-            if !["xmltv", "xtream"].contains(&source_type.to_lowercase().as_str()) {
+        if let Some(ref source_type) = self.source_type
+            && !["xmltv", "xtream"].contains(&source_type.to_lowercase().as_str()) {
                 errors.push(ValidationErrorResponse {
                     field: "source_type".to_string(),
                     message: "Source type must be 'xmltv' or 'xtream'".to_string(),
                 });
             }
-        }
 
         if errors.is_empty() {
             Ok(())

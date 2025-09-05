@@ -16,7 +16,6 @@ use uuid::Uuid;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::metrics::MetricsLogger;
 use crate::models::relay::*;
 use crate::proxy::session_tracker::ClientInfo;
 use crate::services::cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient};
@@ -128,7 +127,6 @@ impl Drop for RelayStream {
 /// Generic FFmpeg process wrapper that can handle any FFmpeg configuration
 pub struct FFmpegProcessWrapper {
     temp_manager: SandboxedManager,
-    metrics: Arc<MetricsLogger>,
     hwaccel_capabilities: HwAccelCapabilities,
     buffer_config: BufferConfig,
     stream_prober: Option<StreamProber>,
@@ -137,7 +135,7 @@ pub struct FFmpegProcessWrapper {
 }
 
 impl FFmpegProcessWrapper {
-    pub fn new(temp_manager: SandboxedManager, metrics: Arc<MetricsLogger>, hwaccel_capabilities: HwAccelCapabilities, buffer_config: BufferConfig, stream_prober: Option<StreamProber>, ffmpeg_command: String) -> Self {
+    pub fn new(temp_manager: SandboxedManager, hwaccel_capabilities: HwAccelCapabilities, buffer_config: BufferConfig, stream_prober: Option<StreamProber>, ffmpeg_command: String) -> Self {
         // Create FFmpegCommandBuilder with its own stream prober instance
         // For now, we'll create a separate prober if one was provided
         let command_builder_prober = if stream_prober.is_some() {
@@ -150,7 +148,6 @@ impl FFmpegProcessWrapper {
         
         Self {
             temp_manager,
-            metrics,
             hwaccel_capabilities,
             buffer_config,
             stream_prober,
@@ -297,7 +294,6 @@ impl FFmpegProcessWrapper {
         // Start monitoring stderr for errors with message accumulation
         if let Some(stderr) = child.stderr.take() {
             let config_id = config.config.id;
-            let _metrics = self.metrics.clone();
             let error_count_clone = error_count.clone();
             let health_monitor_clone = health_monitor.clone();
             let error_fallback_clone = error_fallback.clone();
@@ -411,7 +407,6 @@ impl FFmpegProcessWrapper {
             config: config.clone(),
             child,
             temp_manager: self.temp_manager.clone(),
-            metrics: self.metrics.clone(),
             start_time: Instant::now(),
             client_count: AtomicU32::new(0),
             last_activity: Instant::now(),
@@ -575,7 +570,6 @@ pub struct FFmpegProcess {
     pub config: ResolvedRelayConfig,
     pub child: tokio::process::Child,
     pub temp_manager: SandboxedManager,
-    pub metrics: Arc<MetricsLogger>,
     pub start_time: Instant,
     pub client_count: AtomicU32,
     pub last_activity: Instant,
@@ -661,7 +655,6 @@ impl FFmpegProcess {
         let remaining = self.client_count.fetch_sub(1, Ordering::Relaxed).saturating_sub(1);
         if remaining == 0 {
             // Log that all clients have disconnected
-            let _metrics = self.metrics.clone();
         }
         remaining
     }

@@ -12,6 +12,12 @@ use super::circuit_breaker::{
 #[derive(Debug)]
 pub struct NoOpCircuitBreaker;
 
+impl Default for NoOpCircuitBreaker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NoOpCircuitBreaker {
     pub fn new() -> Self {
         Self

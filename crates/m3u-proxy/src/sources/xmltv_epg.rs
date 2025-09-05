@@ -243,15 +243,13 @@ impl EpgSourceHandler for XmltvEpgHandler {
         
         // Try to get some basic info from the source
         if let Ok(response) = self.http_client.inner_client().head(&source.url).send().await {
-            if let Some(content_type) = response.headers().get("content-type") {
-                if let Ok(ct_str) = content_type.to_str() {
-                    info.insert("content_type".to_string(), ct_str.to_string());
-                }
+            if let Some(content_type) = response.headers().get("content-type")
+                && let Ok(ct_str) = content_type.to_str() {
+                info.insert("content_type".to_string(), ct_str.to_string());
             }
-            if let Some(content_length) = response.headers().get("content-length") {
-                if let Ok(cl_str) = content_length.to_str() {
-                    info.insert("content_length".to_string(), cl_str.to_string());
-                }
+            if let Some(content_length) = response.headers().get("content-length")
+                && let Ok(cl_str) = content_length.to_str() {
+                info.insert("content_length".to_string(), cl_str.to_string());
             }
         }
 

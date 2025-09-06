@@ -1,0 +1,169 @@
+---
+# Secret for PostgreSQL credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: m3u-proxy-db-secret
+  namespace: your-namespace
+type: Opaque
+stringData:
+  username: "m3u_proxy"
+  password: "your-secure-password-here"
+  database: "m3u_proxy"
+---
+# ConfigMap for m3u-proxy environment variables
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: m3u-proxy-config
+  namespace: your-namespace
+data:
+  M3U_PROXY_WEB__BASE_URL: "https://your-domain.com"
+---
+# PostgreSQL Cluster using Postgres Operator (CloudNativePG)
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: m3u-proxy-postgres
+  namespace: your-namespace
+spec:
+  instances: 1
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"
+      effective_cache_size: "1GB"
+  bootstrap:
+    initdb:
+      database: m3u_proxy
+      owner: m3u_proxy
+      secret:
+        name: m3u-proxy-db-secret
+  storage:
+    size: 10Gi
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+---
+# Deployment for m3u-proxy
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: m3u-proxy
+  namespace: your-namespace
+  labels:
+    name: m3u-proxy
+    app.kubernetes.io/name: m3u-proxy
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      name: m3u-proxy
+  template:
+    metadata:
+      labels:
+        name: m3u-proxy
+        app.kubernetes.io/name: m3u-proxy
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        fsGroup: 65532
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: m3u-proxy
+          image: ghcr.io/jmylchreest/m3u-proxy:latest
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+          resources:
+            limits:
+              memory: 2Gi
+            requests:
+              memory: 512Mi
+              cpu: 250m
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: m3u-proxy-db-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: m3u-proxy-db-secret
+                  key: password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: m3u-proxy-db-secret
+                  key: database
+            - name: M3U_PROXY_DATABASE__URL
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@m3u-proxy-postgres-rw:5432/$(POSTGRES_DB)"
+          envFrom:
+            - configMapRef:
+                name: m3u-proxy-config
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: m3u-proxy-data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: m3u-proxy-data
+          emptyDir: {}
+---
+# Service for m3u-proxy
+apiVersion: v1
+kind: Service
+metadata:
+  name: m3u-proxy
+  namespace: your-namespace
+  labels:
+    name: m3u-proxy
+spec:
+  selector:
+    app.kubernetes.io/name: m3u-proxy
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: http
+      name: web
+---
+# Ingress for external access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: m3u-proxy
+  namespace: your-namespace
+spec:
+  rules:
+    - host: your-domain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: m3u-proxy
+                port:
+                  name: web

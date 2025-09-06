@@ -88,3 +88,5 @@ pip-delete-this-directory.txt
 # MCP (Model Context Protocol) artifacts
 *mcp*
 *.mcp
+
+k8s-deployment.yaml

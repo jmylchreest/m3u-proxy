@@ -201,6 +201,7 @@ Interactive Swagger UI at: `/docs` (when running)
 
 ### Current Development
 - [ ] Add support for manipulation of EPG data in data-mapping and filters
+- [ ] Implement EPG-based data mapping/filtering in generation pipeline (similar to how M3U channels support rule-based filtering and transformation, EPG programs should support channel-specific mapping rules and filtering)
 - [ ] Add support for manual stream sources (custom local streams, literal manual list)
 - [ ] Add OpenTelemetry integration with automatic request/response tracing
 - [ ] Implement Prometheus metrics endpoint (`/metrics`) for monitoring stream counts, response times, errors

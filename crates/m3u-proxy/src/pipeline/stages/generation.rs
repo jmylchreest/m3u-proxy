@@ -21,6 +21,7 @@ use crate::services::progress_service::ProgressManager;
 struct ChannelInfo {
     stream_display_names: BTreeSet<String>,     // From M3U channels (by tvg_id)
     logo_url: Option<String>,                   // Logo from first detected channel
+    group_title: Option<String>,                // Group title from channel for category fallback
 }
 
 /// Generation stage - streams to temporary files in pipeline storage
@@ -173,6 +174,7 @@ impl GenerationStage {
                 let entry = channel_map.entry(tvg_id.clone()).or_insert_with(|| ChannelInfo {
                     stream_display_names: BTreeSet::new(),
                     logo_url: None,
+                    group_title: None,
                 });
                 
                 // Add stream display names (channel_name and tvg_name)
@@ -185,6 +187,11 @@ impl GenerationStage {
                 // Set logo from first detected channel
                 if entry.logo_url.is_none() {
                     entry.logo_url = numbered_channel.channel.tvg_logo.clone();
+                }
+                
+                // Set group_title from first detected channel
+                if entry.group_title.is_none() {
+                    entry.group_title = numbered_channel.channel.group_title.clone();
                 }
             }
         }
@@ -372,11 +379,19 @@ impl GenerationStage {
                     program_line.push_str(&format!("    <desc>{}</desc>\n", quick_xml::escape::escape(description)));
                 }
             
-            // Add optional XMLTV metadata fields if available
-            if let Some(category) = program.program_category.as_ref()
-                .filter(|c| !c.is_empty()) {
-                    program_line.push_str(&format!("    <category>{}</category>\n", quick_xml::escape::escape(category)));
-                }
+            // Add category with priority: program_category > channel_group_title > null
+            let category = program.program_category.as_ref()
+                .filter(|c| !c.is_empty())
+                .or_else(|| {
+                    // Fallback to channel group_title if no program category
+                    channel_map.get(&program.channel_id)
+                        .and_then(|info| info.group_title.as_ref())
+                        .filter(|c| !c.is_empty())
+                });
+
+            if let Some(cat) = category {
+                program_line.push_str(&format!("    <category>{}</category>\n", quick_xml::escape::escape(cat)));
+            }
             
             // Add subtitles as sub-title
             if let Some(subtitles) = program.subtitles.as_ref()
@@ -385,13 +400,11 @@ impl GenerationStage {
                 }
             
             // Add episode numbering if available (XMLTV format: season.episode.part/total)
-            if let (Some(season), Some(episode)) = (program.season_num.as_ref(), program.episode_num.as_ref()) {
-                if let (Ok(s), Ok(e)) = (season.parse::<i32>(), episode.parse::<i32>()) {
-                    if s > 0 && e > 0 {
-                        program_line.push_str(&format!("    <episode-num system=\"xmltv_ns\">.{}.{}/1</episode-num>\n", s - 1, e - 1));
-                    }
+            if let (Some(season), Some(episode)) = (program.season_num.as_ref(), program.episode_num.as_ref())
+                && let (Ok(s), Ok(e)) = (season.parse::<i32>(), episode.parse::<i32>())
+                && s > 0 && e > 0 {
+                    program_line.push_str(&format!("    <episode-num system=\"xmltv_ns\">.{}.{}/1</episode-num>\n", s - 1, e - 1));
                 }
-            }
             
             // Add language if specified
             if let Some(language) = program.language.as_ref()

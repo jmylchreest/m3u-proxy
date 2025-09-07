@@ -361,7 +361,7 @@ impl WebServer {
             )
             .route(
                 "/data-mapping/reorder",
-                post(api::reorder_data_mapping_rules),
+                post(api::reorder_data_mapping_rules).put(api::reorder_data_mapping_rules),
             )
             .route("/data-mapping/fields/stream", get(api::get_data_mapping_stream_fields))
             .route("/data-mapping/fields/epg", get(api::get_data_mapping_epg_fields))

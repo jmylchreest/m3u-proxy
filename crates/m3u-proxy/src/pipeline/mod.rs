@@ -24,7 +24,7 @@ pub mod error;
 pub use core::{PipelineBuilder, PipelineConfig, PipelineOrchestrator, PipelineOrchestratorFactory};
 pub use engines::{
     DataMappingEngine, ChannelDataMappingEngine, ProgramDataMappingEngine, 
-    RuleProcessor, RuleResult, FieldModification, DataMappingTestService, DataMappingTestResult,
+    RuleProcessor, RuleResult, FieldModification, DataMappingTestService, DataMappingTestResult, EpgDataMappingTestService, EpgDataMappingTestResult, EpgProgramTestResult,
     RuleValidationResult, PipelineStageType, StageValidator,
     DataMappingValidator, FilteringValidator, NumberingValidator, GenerationValidator,
     ValidationFactory, RuleValidationService

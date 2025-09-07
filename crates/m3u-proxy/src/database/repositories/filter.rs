@@ -4,7 +4,7 @@
 //! that works across SQLite, PostgreSQL, and MySQL databases.
 
 use anyhow::Result;
-use sea_orm::{DatabaseConnection, EntityTrait, QueryOrder, ActiveModelTrait, Set, QueryFilter, ColumnTrait, PaginatorTrait};
+use sea_orm::{DatabaseConnection, EntityTrait, QueryOrder, ActiveModelTrait, Set, QueryFilter, ColumnTrait, PaginatorTrait, QuerySelect};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -285,8 +285,8 @@ impl FilterSeaOrmRepository {
         use crate::utils::regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
         
         // Parse the expression first to check if it's valid
-        let parser = crate::expression_parser::ExpressionParser::new()
-            .with_fields(vec![
+        let fields = match source_type {
+            crate::models::FilterSourceType::Stream => vec![
                 "tvg_id".to_string(),
                 "tvg_name".to_string(),
                 "tvg_logo".to_string(),
@@ -294,7 +294,23 @@ impl FilterSeaOrmRepository {
                 "group_title".to_string(),
                 "channel_name".to_string(),
                 "stream_url".to_string(),
-            ]);
+            ],
+            crate::models::FilterSourceType::Epg => vec![
+                "channel_id".to_string(),
+                "program_title".to_string(),
+                "program_description".to_string(),
+                "program_category".to_string(),
+                "start_time".to_string(),
+                "end_time".to_string(),
+                "language".to_string(),
+                "rating".to_string(),
+                "episode_num".to_string(),
+                "season_num".to_string(),
+            ],
+        };
+        
+        let parser = crate::expression_parser::ExpressionParser::new()
+            .with_fields(fields);
         
         match parser.parse(pattern) {
             Err(e) => {
@@ -439,10 +455,58 @@ impl FilterSeaOrmRepository {
                 Ok(channels)
             }
             crate::models::FilterSourceType::Epg => {
-                // EPG filtering would require different logic and epg_programs table
-                // For now, return empty list
-                Ok(Vec::new())
+                // Get EPG programs from database for testing
+                self.get_epg_programs_for_testing(source_id).await
             }
         }
+    }
+    
+    /// Get EPG programs for filter testing with source validation
+    async fn get_epg_programs_for_testing(
+        &self,
+        source_id: Option<Uuid>,
+    ) -> Result<Vec<crate::models::Channel>> {
+        use crate::entities::{epg_programs, prelude::EpgPrograms};
+        
+        // EPG programs need to be converted to a compatible format for filter testing
+        // For now, we'll create mock Channel objects from EPG programs
+        let epg_programs_query = if let Some(source_id) = source_id {
+            EpgPrograms::find().filter(epg_programs::Column::SourceId.eq(source_id))
+        } else {
+            EpgPrograms::find()
+        };
+
+        let epg_program_models = epg_programs_query
+            .limit(100) // Limit for testing performance
+            .all(&*self.connection)
+            .await?;
+        
+        let mut channels = Vec::new();
+        
+        // Convert EPG programs to Channel format for filter testing
+        // This is a temporary approach - ideally we'd have separate EPG filter testing
+        for model in epg_program_models {
+            channels.push(crate::models::Channel {
+                id: model.id,
+                source_id: model.source_id,
+                tvg_id: Some(model.channel_id.clone()),
+                tvg_name: None,
+                tvg_chno: None,
+                tvg_logo: model.program_icon,
+                tvg_shift: None,
+                group_title: model.program_category,
+                channel_name: model.program_title,
+                stream_url: format!("epg://program/{}", model.id), // Mock URL
+                video_codec: None,
+                audio_codec: None,
+                resolution: None,
+                probe_method: None,
+                last_probed_at: None,
+                created_at: model.created_at,
+                updated_at: model.updated_at,
+            });
+        }
+        
+        Ok(channels)
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.2.3-dev.5.gfc0486b"
+version = "0.2.3-dev.8.g66407ca"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"

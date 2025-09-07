@@ -8,8 +8,8 @@ use crate::services::progress_service::ProgressManager;
 #[allow(unused_imports)]
 use crate::pipeline::services::helper_traits;
 use tracing::{info, error, debug, trace, warn};
-use crate::pipeline::engines::{DataMappingEngine, ChannelDataMappingEngine, StreamRuleProcessor, EpgProgram, EngineResult};
-use crate::pipeline::engines::rule_processor::RegexEvaluator;
+use crate::pipeline::engines::{DataMappingEngine, ChannelDataMappingEngine, ProgramDataMappingEngine, StreamRuleProcessor, EpgProgram, EngineResult};
+use crate::pipeline::engines::rule_processor::{RegexEvaluator, EpgRuleProcessor};
 use crate::utils::human_format::format_duration_precise;
 use crate::utils::regex_preprocessor::RegexPreprocessor;
 use sandboxed_file_manager::SandboxedManager;
@@ -517,6 +517,7 @@ impl DataMappingStage {
             .all(&*self.db_connection)
             .await?;
         
+        let epg_rules_count = epg_rules.len();
         let program_count = if epg_rules.is_empty() {
             info!("No EPG data mapping rules found, processing EPG programs for helpers only");
             
@@ -564,21 +565,53 @@ impl DataMappingStage {
             
             count
         } else {
-            info!("Found {} EPG data mapping rules, implementing rule processing...", epg_rules.len());
-            
-            // TODO: Implement actual EPG data mapping rules processing
-            // For now, serialize with helper processing until EPG rule engine is ready
-            warn!("EPG data mapping rules found but processing not yet implemented, applying helper processing only");
-            
+            info!("Found {} EPG data mapping rules, processing EPG programs with rules", epg_rules_count);
+
+            // Set up EPG data mapping engine (reuse existing ProgramDataMappingEngine)
+            let mut engine = ProgramDataMappingEngine::new(uuid::Uuid::nil()); // EPG rules aren't source-specific
+            let mut rule_stats: HashMap<String, (String, usize, usize, std::time::Duration)> = HashMap::new();
+
+            // Add rule processors to the engine  
+            for rule in epg_rules {
+                if let Some(expression) = rule.expression {
+                    let rule_id_str = rule.id.to_string();
+                    let _regex_evaluator = RegexEvaluator::new(self.regex_preprocessor.clone());
+                    let processor = EpgRuleProcessor::new(
+                        rule_id_str.clone(),
+                        rule.name.clone(), 
+                        expression,
+                    );
+                    engine.add_rule_processor(processor);
+                    rule_stats.insert(rule_id_str, (rule.name, 0, 0, std::time::Duration::ZERO));
+                }
+            }
+
+            // Process EPG programs with rules
             let programs = self.serialize_epg_programs_from_database().await?;
-            let count = programs.len();
-            
-            // Process programs through helper processor if available
+            let engine_result = engine.process_records(programs)?;
+
+            // Update statistics
+            for (rule_id, rule_results) in &engine_result.rule_results {
+                if let Some((rule_name, applied_count, processed_count, total_time)) = rule_stats.get_mut(rule_id) {
+                    *processed_count = rule_results.len();
+                    *applied_count = rule_results.iter().filter(|r| r.rule_applied).count();
+                    *total_time = rule_results.iter().map(|r| r.execution_time).sum();
+                    
+                    info!("Rule '{}' applied to {}/{} EPG programs in {}", 
+                          rule_name, applied_count, processed_count, 
+                          format_duration_precise(*total_time));
+                }
+            }
+
+            info!("EPG data mapping engine processed {} programs, {} total modified", 
+                  engine_result.total_processed, engine_result.total_modified);
+
+            // Apply helper processing after rule processing if available
             let processed_programs = if let Some(ref helper_processor) = self.helper_processor {
                 let mut processed = Vec::new();
                 let mut helper_modifications = 0;
                 
-                for program in programs {
+                for program in engine_result.processed_records {
                     if helper_processor.record_needs_processing(&program) {
                         match helper_processor.process_record(program.clone()).await {
                             Ok((processed_program, modifications)) => {
@@ -605,13 +638,13 @@ impl DataMappingStage {
                 
                 processed
             } else {
-                programs
+                engine_result.processed_records
             };
             
             // Write processed programs to file
             self.write_programs_to_file(&processed_programs, &output_file_path).await?;
             
-            count
+            processed_programs.len()
         };
         
         let stage_duration = stage_start.elapsed();
@@ -637,7 +670,7 @@ impl DataMappingStage {
         )
         .with_record_count(program_count)
         .with_metadata("stage_duration_ms".to_string(), serde_json::Value::Number(serde_json::Number::from(stage_duration.as_millis() as u64)))
-        .with_metadata("epg_rules_found".to_string(), serde_json::Value::Number(serde_json::Number::from(epg_rules.len())));
+        .with_metadata("epg_rules_found".to_string(), serde_json::Value::Number(serde_json::Number::from(epg_rules_count)));
         
         let artifact = if let Some(size) = file_size_bytes {
             artifact.with_file_size(size)
@@ -655,12 +688,17 @@ impl DataMappingStage {
         info!("Serializing EPG programs from database using SeaORM approach");
         
         // Get all EPG programs using SeaORM (ordered by start_time)
+        // NOTE: We need all programs in memory because the generation stage filters
+        // them against M3U channels and needs to iterate through all programs
         let epg_models = EpgPrograms::find()
             .order_by_asc(epg_programs::Column::StartTime)
             .all(&*self.db_connection)
             .await?;
         
-        let mut all_programs = Vec::new();
+        let total_programs = epg_models.len();
+        info!("Found {} EPG programs to process", total_programs);
+        
+        let mut all_programs = Vec::with_capacity(total_programs);
         let mut batch_programs = Vec::new();
         const BATCH_SIZE: usize = EPG_PROGRAMS_BATCH_SIZE;
         let mut processed_count = 0;
@@ -675,23 +713,11 @@ impl DataMappingStage {
                 // Move batch to final collection and clear batch memory
                 all_programs.append(&mut batch_programs);
                 
-                // Log progress periodically
-                if processed_count % EPG_PROGRESS_LOG_INTERVAL == 0 {
-                    debug!("Processed {} EPG programs so far", processed_count);
-                    
-                    // Calculate progress in 50-95% range based on processed count
-                    // Note: We don't know total count in advance, so use a reasonable estimate
-                    // For progress reporting, assume we're making steady progress through the range
-                    let estimated_progress = if processed_count < 10000 {
-                        50.0 + (processed_count as f64 / 10000.0) * 20.0  // 50-70% for first 10k
-                    } else if processed_count < 50000 {
-                        70.0 + ((processed_count - 10000) as f64 / 40000.0) * 15.0  // 70-85% for 10k-50k
-                    } else {
-                        85.0 + ((processed_count - 50000) as f64 / 50000.0) * 10.0  // 85-95% for 50k+
-                    }.min(95.0);
-                    
-                    let progress_message = format!("Processing EPG programs: {processed_count} processed");
-                    self.report_progress(estimated_progress, &progress_message).await;
+                // Log progress periodically with real percentage
+                if processed_count % EPG_PROGRESS_LOG_INTERVAL == 0 && total_programs > 0 {
+                    let progress = 15.0 + (processed_count as f64 / total_programs as f64) * 80.0; // 15-95% range
+                    let progress_message = format!("Processing EPG programs: {}/{} processed", processed_count, total_programs);
+                    self.report_progress(progress, &progress_message).await;
                 }
             }
         }
@@ -765,6 +791,7 @@ impl DataMappingStage {
         let program = EpgProgram {
             id: model.id.to_string(),
             channel_id: model.channel_id.clone(),
+            channel_name: model.channel_name.clone(),
             title: model.program_title.clone(),
             description: model.program_description.clone(),
             program_icon: model.program_icon.clone(),

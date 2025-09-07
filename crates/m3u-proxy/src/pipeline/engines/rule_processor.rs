@@ -736,23 +736,59 @@ pub struct EpgRuleProcessor {
     pub rule_id: String,
     pub rule_name: String,
     pub expression: String,
+    pub parsed_expression: Option<crate::models::ExtendedExpression>,
 }
 
 impl EpgRuleProcessor {
     pub fn new(rule_id: String, rule_name: String, expression: String) -> Self {
+        // Parse expression once during initialization (same pattern as StreamRuleProcessor)
+        let parsed_expression = if expression.trim().is_empty() {
+            None
+        } else {
+            let epg_fields = vec![
+                "id".to_string(),
+                "channel_id".to_string(),
+                "title".to_string(),
+                "program_title".to_string(),
+                "description".to_string(),
+                "program_icon".to_string(),
+                "program_category".to_string(),
+                "subtitles".to_string(),
+                "episode_num".to_string(),
+                "season_num".to_string(),
+                "language".to_string(),
+                "rating".to_string(),
+                "aspect_ratio".to_string(),
+            ];
+            
+            let parser = ExpressionParser::new().with_fields(epg_fields);
+            match parser.parse_extended(&expression) {
+                Ok(parsed) => {
+                    trace!("Successfully pre-parsed EPG expression for rule {}", rule_id);
+                    Some(parsed)
+                },
+                Err(e) => {
+                    warn!("Failed to pre-parse EPG expression for rule {}: {}", rule_id, e);
+                    None
+                }
+            }
+        };
+
         Self {
             rule_id,
             rule_name,
             expression,
+            parsed_expression,
         }
     }
 }
 
 // For EPG programs - expanded to support all XMLTV fields for rule processing and data mapping
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EpgProgram {
     pub id: String,
     pub channel_id: String,
+    pub channel_name: String,
     pub title: String,
     pub description: Option<String>,
     pub program_icon: Option<String>,
@@ -776,15 +812,29 @@ impl RuleProcessor<EpgProgram> for EpgRuleProcessor {
     fn process_record(&mut self, record: EpgProgram) -> Result<(EpgProgram, RuleResult), Box<dyn std::error::Error>> {
         let start = std::time::Instant::now();
         
-        // Return the record unchanged - rule processing is handled by data mapping and filtering stages
+        // Evaluate expression using cached parsed expression (same pattern as StreamRuleProcessor)
+        let (modified_record, field_modifications) = match self.evaluate_expression(&record) {
+            Ok((modified, modifications)) => (modified, modifications),
+            Err(e) => {
+                return Ok((record, RuleResult {
+                    rule_applied: false,
+                    field_modifications: vec![],
+                    execution_time: start.elapsed(),
+                    error: Some(e.to_string()),
+                }));
+            }
+        };
+        
+        let rule_applied = !field_modifications.is_empty();
+        
         let result = RuleResult {
-            rule_applied: false,
-            field_modifications: vec![],
+            rule_applied,
+            field_modifications,
             execution_time: start.elapsed(),
             error: None,
         };
         
-        Ok((record, result))
+        Ok((modified_record, result))
     }
     
     fn get_rule_name(&self) -> &str {
@@ -793,5 +843,497 @@ impl RuleProcessor<EpgProgram> for EpgRuleProcessor {
     
     fn get_rule_id(&self) -> &str {
         &self.rule_id
+    }
+}
+
+impl EpgRuleProcessor {
+    /// Evaluate the expression against an EPG program record using the cached parsed expression
+    fn evaluate_expression(&self, record: &EpgProgram) -> Result<(EpgProgram, Vec<FieldModification>), Box<dyn std::error::Error>> {
+        let mut modified_record = record.clone();
+        let mut modifications = Vec::new();
+        
+        // Use cached parsed expression (same pattern as StreamRuleProcessor)
+        let parsed_expression = match &self.parsed_expression {
+            Some(expr) => expr,
+            None => {
+                trace!("EPG Rule {} has no valid parsed expression, skipping", self.rule_id);
+                return Ok((modified_record, modifications));
+            }
+        };
+        
+        trace!("Evaluating EPG rule {} against program", self.rule_id);
+        
+        // Evaluate the parsed expression (same structure as StreamRuleProcessor)
+        match parsed_expression {
+            ExtendedExpression::ConditionWithActions { condition, actions } => {
+                // Check if we need captures (only for regex operations)
+                let needs_captures = self.condition_tree_needs_captures(condition);
+                
+                if needs_captures {
+                    // Use captures version for regex-based conditions
+                    let (condition_result, captures) = self.evaluate_condition_tree_with_captures(condition, record)?;
+                    
+                    trace!("EPG Rule {} condition evaluation result: {} captures: {:?}", self.rule_id, condition_result, captures);
+                    
+                    if condition_result {
+                        trace!("EPG Rule {} condition matched, applying {} actions with captures", self.rule_id, actions.len());
+                        for action in actions {
+                            if let Some(modification) = self.apply_parsed_action_with_captures(action, &mut modified_record, &record.title, &captures)? {
+                                trace!("EPG Rule {} applied action: {} {:?} -> {:?}", 
+                                       self.rule_id, &modification.field_name, 
+                                       &modification.modification_type, &modification.new_value);
+                                modifications.push(modification);
+                            }
+                        }
+                    } else {
+                        trace!("EPG Rule {} condition did not match", self.rule_id);
+                    }
+                } else {
+                    // Use simpler/faster version for non-regex conditions
+                    let condition_result = self.evaluate_condition_tree(condition, record)?;
+                    trace!("EPG Rule {} condition evaluation result: {} (fast path)", self.rule_id, condition_result);
+                    
+                    if condition_result {
+                        trace!("EPG Rule {} condition matched, applying {} actions (fast path)", self.rule_id, actions.len());
+                        for action in actions {
+                            if let Some(modification) = self.apply_parsed_action(action, &mut modified_record, &record.title)? {
+                                trace!("EPG Rule {} applied action: {} {:?} -> {:?}", 
+                                       self.rule_id, &modification.field_name, 
+                                       &modification.modification_type, &modification.new_value);
+                                modifications.push(modification);
+                            }
+                        }
+                    } else {
+                        trace!("EPG Rule {} condition did not match", self.rule_id);
+                    }
+                }
+            }
+            ExtendedExpression::ConditionOnly(condition) => {
+                // Just evaluate condition - no actions to apply
+                let _matches = self.evaluate_condition_tree(condition, record)?;
+                // No modifications for condition-only expressions
+            }
+            ExtendedExpression::ConditionalActionGroups(groups) => {
+                // Process each conditional action group
+                for group in groups {
+                    let needs_captures = self.condition_tree_needs_captures(&group.conditions);
+                    
+                    if needs_captures {
+                        let (condition_result, group_captures) = self.evaluate_condition_tree_with_captures(&group.conditions, record)?;
+                        if condition_result {
+                            for action in &group.actions {
+                                if let Some(modification) = self.apply_parsed_action_with_captures(action, &mut modified_record, &record.title, &group_captures)? {
+                                    modifications.push(modification);
+                                }
+                            }
+                        }
+                    } else {
+                        let condition_result = self.evaluate_condition_tree(&group.conditions, record)?;
+                        if condition_result {
+                            for action in &group.actions {
+                                if let Some(modification) = self.apply_parsed_action(action, &mut modified_record, &record.title)? {
+                                    modifications.push(modification);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok((modified_record, modifications))
+    }
+    
+    /// Evaluate a condition tree (parsed expression structure)
+    fn evaluate_condition_tree(&self, condition: &crate::models::ConditionTree, record: &EpgProgram) -> Result<bool, Box<dyn std::error::Error>> {
+        self.evaluate_condition_node(&condition.root, record)
+    }
+    
+    /// Evaluate a condition tree and return captures from regex matches
+    fn evaluate_condition_tree_with_captures(&self, condition: &crate::models::ConditionTree, record: &EpgProgram) -> RegexCaptureResult {
+        self.evaluate_condition_node_with_captures(&condition.root, record)
+    }
+    
+    /// Check if a condition tree contains regex operators that need capture groups
+    fn condition_tree_needs_captures(&self, condition: &crate::models::ConditionTree) -> bool {
+        Self::condition_node_needs_captures(&condition.root)
+    }
+    
+    /// Check if a condition node contains regex operators recursively
+    fn condition_node_needs_captures(node: &crate::models::ConditionNode) -> bool {
+        use crate::models::FilterOperator;
+        
+        match node {
+            crate::models::ConditionNode::Condition { operator, .. } => {
+                matches!(operator, FilterOperator::Matches | FilterOperator::NotMatches)
+            }
+            crate::models::ConditionNode::Group { children, .. } => {
+                children.iter().any(Self::condition_node_needs_captures)
+            }
+        }
+    }
+    
+    /// Evaluate a condition node recursively  
+    fn evaluate_condition_node(&self, node: &crate::models::ConditionNode, record: &EpgProgram) -> Result<bool, Box<dyn std::error::Error>> {
+        self.evaluate_condition_node_with_captures(node, record).map(|(result, _)| result)
+    }
+
+    /// Evaluate a condition node and return captures for regex matches
+    fn evaluate_condition_node_with_captures(&self, node: &crate::models::ConditionNode, record: &EpgProgram) -> RegexCaptureResult {
+        use crate::models::{LogicalOperator, FilterOperator};
+        
+        match node {
+            crate::models::ConditionNode::Condition { field, operator, value, .. } => {
+                let field_value = self.get_field_value(field, record)?;
+                let field_value_str = field_value.unwrap_or_default();
+                
+                trace!("Evaluating EPG condition: field='{}' operator='{:?}' value='{}' field_value='{}'", 
+                       field, operator, value, field_value_str);
+                
+                let (matches, captures) = match operator {
+                    FilterOperator::Equals => (field_value_str.eq_ignore_ascii_case(value), None),
+                    FilterOperator::NotEquals => (!field_value_str.eq_ignore_ascii_case(value), None),
+                    FilterOperator::Contains => (field_value_str.to_lowercase().contains(&value.to_lowercase()), None),
+                    FilterOperator::NotContains => (!field_value_str.to_lowercase().contains(&value.to_lowercase()), None),
+                    FilterOperator::StartsWith => (field_value_str.to_lowercase().starts_with(&value.to_lowercase()), None),
+                    FilterOperator::NotStartsWith => (!field_value_str.to_lowercase().starts_with(&value.to_lowercase()), None),
+                    FilterOperator::EndsWith => (field_value_str.to_lowercase().ends_with(&value.to_lowercase()), None),
+                    FilterOperator::NotEndsWith => (!field_value_str.to_lowercase().ends_with(&value.to_lowercase()), None),
+                    FilterOperator::Matches => {
+                        match Regex::new(value) {
+                            Ok(regex) => {
+                                if let Some(caps) = regex.captures(&field_value_str) {
+                                    let capture_strings: Vec<String> = caps.iter()
+                                        .map(|m| m.map_or("".to_string(), |m| m.as_str().to_string()))
+                                        .collect();
+                                    (true, Some(capture_strings))
+                                } else {
+                                    (false, None)
+                                }
+                            },
+                            Err(e) => {
+                                warn!("Invalid regex pattern '{}': {}, falling back to contains", value, e);
+                                (field_value_str.contains(value), None)
+                            }
+                        }
+                    },
+                    FilterOperator::NotMatches => {
+                        match Regex::new(value) {
+                            Ok(regex) => (!regex.is_match(&field_value_str), None),
+                            Err(_) => (!field_value_str.contains(value), None)
+                        }
+                    }
+                    // For EPG programs, these comparison operators may not be relevant in most cases
+                    // but we'll provide basic string comparison fallbacks
+                    FilterOperator::GreaterThan => (field_value_str > *value, None),
+                    FilterOperator::LessThan => (field_value_str < *value, None),
+                    FilterOperator::GreaterThanOrEqual => (field_value_str >= *value, None),
+                    FilterOperator::LessThanOrEqual => (field_value_str <= *value, None),
+                };
+                
+                trace!("EPG condition result: {}", matches);
+                Ok((matches, captures))
+            }
+            crate::models::ConditionNode::Group { operator, children } => {
+                let mut group_result = match operator {
+                    LogicalOperator::And => true,  // Start true for AND
+                    LogicalOperator::Or => false,  // Start false for OR
+                };
+                let mut group_captures: Option<Vec<String>> = None;
+                
+                for child in children {
+                    let (child_result, child_captures) = self.evaluate_condition_node_with_captures(child, record)?;
+                    
+                    // Collect captures from first matching child (for capture group substitution)
+                    if child_captures.is_some() && group_captures.is_none() {
+                        group_captures = child_captures;
+                    }
+                    
+                    match operator {
+                        LogicalOperator::And => {
+                            group_result = group_result && child_result;
+                            if !group_result {
+                                break; // Short-circuit AND
+                            }
+                        }
+                        LogicalOperator::Or => {
+                            group_result = group_result || child_result;
+                            if group_result {
+                                break; // Short-circuit OR
+                            }
+                        }
+                    }
+                }
+                
+                Ok((group_result, group_captures))
+            }
+        }
+    }
+    
+    /// Get field value from EPG program record
+    fn get_field_value(&self, field_name: &str, record: &EpgProgram) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        let result = match field_name {
+            "id" => Some(record.id.clone()),
+            "channel_id" => Some(record.channel_id.clone()),
+            "channel_name" => Some(record.channel_name.clone()),
+            "title" | "program_title" => Some(record.title.clone()),
+            "description" => record.description.clone(),
+            "program_icon" => record.program_icon.clone(),
+            "program_category" => record.program_category.clone(),
+            "subtitles" => record.subtitles.clone(),
+            "episode_num" => record.episode_num.clone(),
+            "season_num" => record.season_num.clone(),
+            "language" => record.language.clone(),
+            "rating" => record.rating.clone(),
+            "aspect_ratio" => record.aspect_ratio.clone(),
+            _ => return Err(anyhow::anyhow!("Unknown EPG field: {}", field_name).into()),
+        };
+        
+        Ok(result)
+    }
+    
+    /// Apply parsed action without capture groups
+    fn apply_parsed_action(&self, action: &crate::models::Action, record: &mut EpgProgram, _context: &str) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
+        let old_value = self.get_field_value(&action.field, record)?;
+        
+        let modification_type = match action.operator {
+            ActionOperator::Set => ModificationType::Set,
+            ActionOperator::SetIfEmpty => {
+                if old_value.is_some() && !old_value.as_ref().unwrap().is_empty() {
+                    return Ok(None); // Don't modify if field has a value
+                }
+                ModificationType::SetIfEmpty
+            },
+            ActionOperator::Append => ModificationType::Append,
+            ActionOperator::Remove => ModificationType::Remove,
+            ActionOperator::Delete => ModificationType::Delete,
+        };
+        
+        match &action.operator {
+            ActionOperator::Set | ActionOperator::SetIfEmpty => {
+                match &action.value {
+                    crate::models::ActionValue::Literal(new_value) => {
+                        self.set_field_value(&action.field, new_value, record)?;
+                        
+                        Ok(Some(FieldModification {
+                            field_name: action.field.clone(),
+                            old_value: old_value.clone(),
+                            new_value: Some(new_value.clone()),
+                            modification_type,
+                        }))
+                    },
+                    crate::models::ActionValue::Null => {
+                        // Set field to None/empty
+                        self.set_field_value(&action.field, "", record)?;
+                        
+                        Ok(Some(FieldModification {
+                            field_name: action.field.clone(),
+                            old_value: old_value.clone(),
+                            new_value: None,
+                            modification_type,
+                        }))
+                    },
+                    _ => {
+                        trace!("Unsupported action value type for EPG rule {}", self.rule_id);
+                        Ok(None)
+                    }
+                }
+            }
+            ActionOperator::Append => {
+                match &action.value {
+                    crate::models::ActionValue::Literal(append_value) => {
+                        let current_value = old_value.as_deref().unwrap_or("");
+                        let new_value = if current_value.is_empty() {
+                            append_value.clone()
+                        } else {
+                            format!("{} {}", current_value, append_value)
+                        };
+                        
+                        self.set_field_value(&action.field, &new_value, record)?;
+                        
+                        Ok(Some(FieldModification {
+                            field_name: action.field.clone(),
+                            old_value: old_value.clone(),
+                            new_value: Some(new_value),
+                            modification_type,
+                        }))
+                    },
+                    _ => Ok(None)
+                }
+            }
+            ActionOperator::Remove => {
+                // For EPG, remove means clear the field
+                self.set_field_value(&action.field, "", record)?;
+                
+                Ok(Some(FieldModification {
+                    field_name: action.field.clone(),
+                    old_value: old_value.clone(),
+                    new_value: None,
+                    modification_type,
+                }))
+            }
+            ActionOperator::Delete => {
+                // Delete means set to None
+                self.set_field_value(&action.field, "", record)?;
+                
+                Ok(Some(FieldModification {
+                    field_name: action.field.clone(),
+                    old_value: old_value.clone(),
+                    new_value: None,
+                    modification_type,
+                }))
+            }
+        }
+    }
+    
+    /// Apply parsed action with capture groups
+    fn apply_parsed_action_with_captures(&self, action: &crate::models::Action, record: &mut EpgProgram, context: &str, captures: &Option<Vec<String>>) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
+        let old_value = self.get_field_value(&action.field, record)?;
+        
+        let modification_type = match action.operator {
+            ActionOperator::Set => ModificationType::Set,
+            ActionOperator::SetIfEmpty => {
+                if old_value.is_some() && !old_value.as_ref().unwrap().is_empty() {
+                    return Ok(None); // Don't modify if field has a value
+                }
+                ModificationType::SetIfEmpty
+            },
+            ActionOperator::Append => ModificationType::Append,
+            ActionOperator::Remove => ModificationType::Remove,
+            ActionOperator::Delete => ModificationType::Delete,
+        };
+        
+        match &action.operator {
+            ActionOperator::Set | ActionOperator::SetIfEmpty => {
+                match &action.value {
+                    crate::models::ActionValue::Literal(new_value) => {
+                        // Process capture group substitutions
+                        let processed_value = self.substitute_capture_groups(new_value, captures);
+                        self.set_field_value(&action.field, &processed_value, record)?;
+                        
+                        Ok(Some(FieldModification {
+                            field_name: action.field.clone(),
+                            old_value: old_value.clone(),
+                            new_value: Some(processed_value),
+                            modification_type,
+                        }))
+                    },
+                    crate::models::ActionValue::Null => {
+                        // Set field to None/empty
+                        self.apply_parsed_action(&crate::models::Action {
+                            field: action.field.clone(),
+                            operator: action.operator.clone(),
+                            value: crate::models::ActionValue::Null,
+                        }, record, context)
+                    },
+                    _ => Ok(None)
+                }
+            }
+            _ => {
+                // For other operators, fall back to non-capture version
+                self.apply_parsed_action(action, record, context)
+            }
+        }
+    }
+    
+    /// Substitute capture groups in a string 
+    fn substitute_capture_groups(&self, input: &str, captures: &Option<Vec<String>>) -> String {
+        if let Some(capture_list) = captures {
+            let mut result = input.to_string();
+            
+            // Replace $1, $2, $3, etc. with captured groups
+            for (i, capture) in capture_list.iter().enumerate().skip(1) {
+                let placeholder = format!("${}", i);
+                result = result.replace(&placeholder, capture);
+            }
+            
+            result
+        } else {
+            input.to_string()
+        }
+    }
+    
+    /// Set field value in EPG program record
+    fn set_field_value(&self, field_name: &str, value: &str, record: &mut EpgProgram) -> Result<(), Box<dyn std::error::Error>> {
+        match field_name {
+            "id" => {
+                record.id = value.to_string();
+            }
+            "channel_id" => {
+                record.channel_id = value.to_string();
+            }
+            "channel_name" => {
+                record.channel_name = value.to_string();
+            }
+            "title" | "program_title" => {
+                record.title = value.to_string();
+            }
+            "description" => {
+                if value.is_empty() {
+                    record.description = None;
+                } else {
+                    record.description = Some(value.to_string());
+                }
+            }
+            "program_icon" => {
+                if value.is_empty() {
+                    record.program_icon = None;
+                } else {
+                    record.program_icon = Some(value.to_string());
+                }
+            }
+            "program_category" => {
+                if value.is_empty() {
+                    record.program_category = None;
+                } else {
+                    record.program_category = Some(value.to_string());
+                }
+            }
+            "subtitles" => {
+                if value.is_empty() {
+                    record.subtitles = None;
+                } else {
+                    record.subtitles = Some(value.to_string());
+                }
+            }
+            "episode_num" => {
+                if value.is_empty() {
+                    record.episode_num = None;
+                } else {
+                    record.episode_num = Some(value.to_string());
+                }
+            }
+            "season_num" => {
+                if value.is_empty() {
+                    record.season_num = None;
+                } else {
+                    record.season_num = Some(value.to_string());
+                }
+            }
+            "language" => {
+                if value.is_empty() {
+                    record.language = None;
+                } else {
+                    record.language = Some(value.to_string());
+                }
+            }
+            "rating" => {
+                if value.is_empty() {
+                    record.rating = None;
+                } else {
+                    record.rating = Some(value.to_string());
+                }
+            }
+            "aspect_ratio" => {
+                if value.is_empty() {
+                    record.aspect_ratio = None;
+                } else {
+                    record.aspect_ratio = Some(value.to_string());
+                }
+            }
+            _ => return Err(anyhow::anyhow!("Unknown EPG field: {}", field_name).into()),
+        }
+        
+        Ok(())
     }
 }

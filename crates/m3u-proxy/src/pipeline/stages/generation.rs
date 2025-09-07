@@ -1,20 +1,69 @@
 use anyhow::Result;
 use sandboxed_file_manager::SandboxedManager;
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter, QueryOrder};
 use std::collections::{HashMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::models::{NumberedChannel, ChannelNumberAssignmentType};
+use crate::models::{NumberedChannel, ChannelNumberAssignmentType, FilterSourceType};
 use crate::pipeline::engines::rule_processor::EpgProgram;
+use crate::pipeline::engines::filter_processor::{EpgFilterProcessor, RegexEvaluator, FilteringEngine};
 use crate::pipeline::models::{PipelineArtifact, ArtifactType, ContentType, ProcessingStage};
 use crate::pipeline::traits::{PipelineStage, ProgressAware};
 use crate::pipeline::error::PipelineError;
 use crate::services::progress_service::ProgressManager;
+use crate::utils::regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
+use crate::entities::prelude::*;
 
+/// Progress update interval for combined progress reporting
+const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Helper for tracking combined progress across channels and programs
+struct ProgressTracker {
+    processed_units: usize,
+    total_work_units: usize,
+    last_update: Instant,
+}
+
+impl ProgressTracker {
+    fn new(total_work_units: usize) -> Self {
+        Self {
+            processed_units: 0,
+            total_work_units,
+            last_update: Instant::now(),
+        }
+    }
+    
+    /// Update progress and optionally report if enough time has passed
+    async fn update<T>(&mut self, stage: &T, force_update: bool) 
+    where T: ProgressAware 
+    {
+        self.processed_units += 1;
+        
+        let should_update = force_update || 
+            (self.last_update.elapsed() >= PROGRESS_UPDATE_INTERVAL) ||
+            (self.processed_units == self.total_work_units);
+            
+        if should_update {
+            let progress_pct = (self.processed_units as f64 / self.total_work_units as f64) * 100.0;
+            let remaining = self.total_work_units.saturating_sub(self.processed_units);
+            
+            if let Some(pm) = stage.get_progress_manager()
+                && let Some(updater) = pm.get_stage_updater("generation").await {
+                    updater.update_progress(
+                        progress_pct, 
+                        &format!("Processing channels and programs ({}/{}, {} remaining)", 
+                                self.processed_units, self.total_work_units, remaining)
+                    ).await;
+                }
+            
+            self.last_update = Instant::now();
+        }
+    }
+}
 
 /// Optimized channel info for M3U generation (removed unused fields)
 #[derive(Debug)]
@@ -33,11 +82,12 @@ pub struct GenerationStage {
     
     base_url: String,
     progress_manager: Option<Arc<ProgressManager>>,
+    db_connection: Arc<DatabaseConnection>,
 }
 
 impl GenerationStage {
     pub async fn new(
-        _db_connection: Arc<DatabaseConnection>,
+        db_connection: Arc<DatabaseConnection>,
         pipeline_file_manager: SandboxedManager,  // Pipeline temporary storage
         pipeline_execution_prefix: String,
         proxy_id: Uuid,
@@ -50,6 +100,7 @@ impl GenerationStage {
             proxy_id,
             base_url,
             progress_manager,
+            db_connection,
         })
     }
     
@@ -66,6 +117,48 @@ impl GenerationStage {
         self.progress_manager = Some(progress_manager);
     }
     
+    /// Load EPG filters for this proxy
+    async fn load_epg_filters(&self) -> Result<FilteringEngine<EpgProgram>> {
+        // Load filters for this proxy that are EPG-type and active
+        let proxy_filters = ProxyFilters::find()
+            .filter(crate::entities::proxy_filters::Column::ProxyId.eq(self.proxy_id))
+            .filter(crate::entities::proxy_filters::Column::IsActive.eq(true))
+            .order_by_asc(crate::entities::proxy_filters::Column::PriorityOrder)
+            .find_with_related(Filters)
+            .all(&*self.db_connection)
+            .await?;
+
+        let mut engine = FilteringEngine::new();
+        let regex_config = RegexPreprocessorConfig::default();
+        let regex_preprocessor = RegexPreprocessor::new(regex_config);
+
+        for (_proxy_filter, filters) in proxy_filters {
+            for filter in filters {
+                if filter.source_type == FilterSourceType::Epg {
+                    let regex_evaluator = RegexEvaluator::new(regex_preprocessor.clone());
+                    
+                    match EpgFilterProcessor::new(
+                        filter.id.to_string(),
+                        filter.name.clone(),
+                        filter.is_inverse,
+                        &filter.expression,
+                        regex_evaluator,
+                    ) {
+                        Ok(processor) => {
+                            info!("Loaded EPG filter: {} ({})", filter.name, filter.id);
+                            engine.add_filter_processor(Box::new(processor));
+                        }
+                        Err(e) => {
+                            warn!("Failed to load EPG filter {} ({}): {}", filter.name, filter.id, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(engine)
+    }
+
     /// Generate temporary M3U and XMLTV files for atomic publishing
     pub async fn process_channels_and_programs(
         &self,
@@ -74,9 +167,15 @@ impl GenerationStage {
     ) -> Result<Vec<PipelineArtifact>> {
         let process_start = Instant::now();
         
+        // Calculate total work units for combined progress reporting
+        let total_channels = numbered_channels.len();
+        let total_programs = epg_programs.len();
+        let total_work_units = total_channels + total_programs;
+        let mut progress_tracker = ProgressTracker::new(total_work_units);
+        
         info!(
-            "Generation stage: proxy_id={} channels={} programs={} streaming_to_temp_files=true",
-            self.proxy_id, numbered_channels.len(), epg_programs.len()
+            "Generation stage: proxy_id={} channels={} programs={} total_work_units={} streaming_to_temp_files=true",
+            self.proxy_id, numbered_channels.len(), epg_programs.len(), total_work_units
         );
 
         // Build M3U channel map (no EPG channel data needed)
@@ -94,7 +193,7 @@ impl GenerationStage {
         self.report_progress(15.0, "Generating M3U playlist").await;
         let m3u_gen_start = std::time::Instant::now();
         let temp_m3u_file = format!("{}_temp.m3u8", self.pipeline_execution_prefix);
-        let m3u_bytes = self.generate_m3u_streaming(&numbered_channels, &temp_m3u_file).await?;
+        let m3u_bytes = self.generate_m3u_streaming(&numbered_channels, &temp_m3u_file, &mut progress_tracker).await?;
         let m3u_gen_duration = m3u_gen_start.elapsed();
         info!(
             "M3U generation completed: duration={} file={} size={}KB channels_written={}",
@@ -106,7 +205,7 @@ impl GenerationStage {
         self.report_progress(40.0, "Generating XMLTV EPG guide").await;
         let xmltv_gen_start = std::time::Instant::now();
         let temp_xmltv_file = format!("{}_temp.xmltv", self.pipeline_execution_prefix);
-        let xmltv_bytes = self.generate_xmltv_streaming(&channel_map, &epg_programs, &temp_xmltv_file).await?;
+        let xmltv_bytes = self.generate_xmltv_streaming(&channel_map, &epg_programs, &temp_xmltv_file, &mut progress_tracker).await?;
         let xmltv_gen_duration = xmltv_gen_start.elapsed();
         info!(
             "XMLTV generation completed: duration={} file={} size={}KB filtered_by_m3u_channels=true",
@@ -211,6 +310,7 @@ impl GenerationStage {
         &self,
         numbered_channels: &[NumberedChannel],
         temp_file_path: &str,
+        progress_tracker: &mut ProgressTracker,
     ) -> Result<u64> {
         let m3u_start = Instant::now();
         
@@ -227,6 +327,10 @@ impl GenerationStage {
         
         for numbered_channel in numbered_channels {
             let channel = &numbered_channel.channel;
+            
+            // Update combined progress
+            progress_tracker.update(self, false).await;
+            
             // Build EXTINF line with conditional attributes
             let mut extinf_line = "#EXTINF:-1".to_string();
             
@@ -304,11 +408,15 @@ impl GenerationStage {
         channel_map: &HashMap<String, ChannelInfo>,
         epg_programs: &[EpgProgram],
         temp_file_path: &str,
+        progress_tracker: &mut ProgressTracker,
     ) -> Result<u64> {
         let xmltv_start = Instant::now();
         
+        // Load EPG filters for this proxy
+        let mut epg_filter_engine = self.load_epg_filters().await?;
+        
         let mut programs_written = 0;
-        let mut programs_filtered = 0;
+        let programs_filtered = 0;
         
         // Using manual XML generation with proper escaping (works correctly)
         
@@ -356,11 +464,39 @@ impl GenerationStage {
             bytes_written += channel_line.len() as u64;
         }
         
-        // Write program data (only for M3U channels that exist in channel_map)
+        // Write program data (only for M3U channels that exist in channel_map and pass EPG filters)
+        let mut programs_filtered_by_channel = 0;
+        let mut programs_filtered_by_epg_rules = 0;
+        
         for program in epg_programs {
+            // Update combined progress
+            progress_tracker.update(self, false).await;
+            
             // CRITICAL: Only include programs for channels that exist in M3U
             if !channel_map.contains_key(&program.channel_id) {
-                programs_filtered += 1;
+                programs_filtered_by_channel += 1;
+                continue;
+            }
+            
+            // Apply EPG filters if any are configured
+            let mut include_program = true;
+            if epg_filter_engine.has_filters() {
+                match epg_filter_engine.should_include(program) {
+                    Ok(should_include) => {
+                        if !should_include {
+                            programs_filtered_by_epg_rules += 1;
+                            include_program = false;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("EPG filter evaluation error for program {}: {}", program.id, e);
+                        programs_filtered_by_epg_rules += 1;
+                        include_program = false;
+                    }
+                }
+            }
+            
+            if !include_program {
                 continue;
             }
             
@@ -439,9 +575,10 @@ impl GenerationStage {
         writer.flush().await?;
         drop(writer);
         
+        let total_programs_filtered = programs_filtered_by_channel + programs_filtered_by_epg_rules;
         debug!(
-            "Program filtering completed: total_programs={} programs_written={} programs_filtered_out={}",
-            epg_programs.len(), programs_written, programs_filtered
+            "Program filtering completed: total_programs={} programs_written={} programs_filtered_out={} (by_channel={}, by_epg_filters={})",
+            epg_programs.len(), programs_written, total_programs_filtered, programs_filtered_by_channel, programs_filtered_by_epg_rules
         );
         
         // Free XMLTV streaming memory

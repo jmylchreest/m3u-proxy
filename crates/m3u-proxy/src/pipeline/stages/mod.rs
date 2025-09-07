@@ -3,6 +3,8 @@ pub mod filtering;
 pub mod logo_caching;
 pub mod numbering;
 pub mod generation;
+#[cfg(test)]
+pub mod generation_tests;
 pub mod publish_content;
 pub mod cleanup;
 

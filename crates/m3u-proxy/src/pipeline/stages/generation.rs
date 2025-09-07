@@ -312,11 +312,16 @@ impl GenerationStage {
         
         let mut bytes_written = 0u64;
         
-        // Write XMLTV header
-        let header = r#"<?xml version="1.0" encoding="UTF-8"?>
+        // Write XMLTV header with proper attributes for Jellyfin compatibility
+        let now = chrono::Utc::now();
+        let date_str = now.format("%d/%m/%Y %H:%M:%S").to_string();
+        let header = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE tv SYSTEM "xmltv.dtd">
-<tv generator-info-name="m3u-proxy">
-"#;
+<tv date="{}" source-info-url="https://github.com/jmylchreest/m3u-proxy" source-info-name="m3u-proxy" generator-info-name="m3u-proxy" generator-info-url="https://github.com/jmylchreest/m3u-proxy">
+"#,
+            date_str
+        );
         writer.write_all(header.as_bytes()).await?;
         bytes_written += header.len() as u64;
         
@@ -362,9 +367,48 @@ impl GenerationStage {
             
             program_line.push_str(&format!("    <title>{}</title>\n", quick_xml::escape::escape(&program.title)));
             
-            if let Some(ref description) = program.description
-                && !description.is_empty() {
+            if let Some(description) = program.description.as_ref()
+                .filter(|d| !d.is_empty()) {
                     program_line.push_str(&format!("    <desc>{}</desc>\n", quick_xml::escape::escape(description)));
+                }
+            
+            // Add optional XMLTV metadata fields if available
+            if let Some(category) = program.program_category.as_ref()
+                .filter(|c| !c.is_empty()) {
+                    program_line.push_str(&format!("    <category>{}</category>\n", quick_xml::escape::escape(category)));
+                }
+            
+            // Add subtitles as sub-title
+            if let Some(subtitles) = program.subtitles.as_ref()
+                .filter(|s| !s.is_empty()) {
+                    program_line.push_str(&format!("    <sub-title>{}</sub-title>\n", quick_xml::escape::escape(subtitles)));
+                }
+            
+            // Add episode numbering if available (XMLTV format: season.episode.part/total)
+            if let (Some(season), Some(episode)) = (program.season_num.as_ref(), program.episode_num.as_ref()) {
+                if let (Ok(s), Ok(e)) = (season.parse::<i32>(), episode.parse::<i32>()) {
+                    if s > 0 && e > 0 {
+                        program_line.push_str(&format!("    <episode-num system=\"xmltv_ns\">.{}.{}/1</episode-num>\n", s - 1, e - 1));
+                    }
+                }
+            }
+            
+            // Add language if specified
+            if let Some(language) = program.language.as_ref()
+                .filter(|l| !l.is_empty()) {
+                    program_line.push_str(&format!("    <language>{}</language>\n", quick_xml::escape::escape(language)));
+                }
+            
+            // Add rating if available
+            if let Some(rating) = program.rating.as_ref()
+                .filter(|r| !r.is_empty()) {
+                    program_line.push_str(&format!("    <rating system=\"MPAA\"><value>{}</value></rating>\n", quick_xml::escape::escape(rating)));
+                }
+            
+            // Add program icon if available
+            if let Some(icon_url) = program.program_icon.as_ref()
+                .filter(|i| !i.is_empty()) {
+                    program_line.push_str(&format!("    <icon src=\"{}\"/>\n", quick_xml::escape::escape(icon_url)));
                 }
             
             program_line.push_str("  </programme>\n");

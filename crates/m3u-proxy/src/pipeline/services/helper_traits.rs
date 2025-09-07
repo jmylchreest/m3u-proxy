@@ -93,6 +93,23 @@ impl HelperDetectable for PipelineEpgProgram {
             }
         }
         
+        // Check new extended fields for helpers
+        if let Some(category) = &self.program_category {
+            for processor in processors {
+                if processor.contains_helper(category) {
+                    return true;
+                }
+            }
+        }
+        
+        if let Some(subtitles) = &self.subtitles {
+            for processor in processors {
+                if processor.contains_helper(subtitles) {
+                    return true;
+                }
+            }
+        }
+        
         false
     }
 }
@@ -115,6 +132,49 @@ impl HelperProcessable for PipelineEpgProgram {
             });
         }
         
+        // Add extended XMLTV fields
+        if let Some(category) = &self.program_category {
+            fields.push(HelperField {
+                name: "program_category".to_string(),
+                value: Some(category.clone()),
+            });
+        }
+        
+        if let Some(subtitles) = &self.subtitles {
+            fields.push(HelperField {
+                name: "subtitles".to_string(),
+                value: Some(subtitles.clone()),
+            });
+        }
+        
+        if let Some(episode_num) = &self.episode_num {
+            fields.push(HelperField {
+                name: "episode_num".to_string(),
+                value: Some(episode_num.clone()),
+            });
+        }
+        
+        if let Some(season_num) = &self.season_num {
+            fields.push(HelperField {
+                name: "season_num".to_string(),
+                value: Some(season_num.clone()),
+            });
+        }
+        
+        if let Some(language) = &self.language {
+            fields.push(HelperField {
+                name: "language".to_string(),
+                value: Some(language.clone()),
+            });
+        }
+        
+        if let Some(rating) = &self.rating {
+            fields.push(HelperField {
+                name: "rating".to_string(),
+                value: Some(rating.clone()),
+            });
+        }
+        
         fields
     }
     
@@ -128,6 +188,24 @@ impl HelperProcessable for PipelineEpgProgram {
                 }
                 "description" => {
                     self.description = field.value;
+                }
+                "program_category" => {
+                    self.program_category = field.value;
+                }
+                "subtitles" => {
+                    self.subtitles = field.value;
+                }
+                "episode_num" => {
+                    self.episode_num = field.value;
+                }
+                "season_num" => {
+                    self.season_num = field.value;
+                }
+                "language" => {
+                    self.language = field.value;
+                }
+                "rating" => {
+                    self.rating = field.value;
                 }
                 _ => {
                     // Unknown field, ignore

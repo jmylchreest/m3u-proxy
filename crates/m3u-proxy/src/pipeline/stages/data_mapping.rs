@@ -760,7 +760,7 @@ impl DataMappingStage {
         Ok(rule)
     }
 
-    /// Create EpgProgram from SeaORM model
+    /// Create EpgProgram from SeaORM model with extended XMLTV fields
     fn create_epg_program_from_model(&self, model: &crate::entities::epg_programs::Model) -> Result<EpgProgram, anyhow::Error> {
         let program = EpgProgram {
             id: model.id.to_string(),
@@ -770,6 +770,14 @@ impl DataMappingStage {
             program_icon: model.program_icon.clone(),
             start_time: model.start_time,
             end_time: model.end_time,
+            // Extended XMLTV fields for rich metadata support
+            program_category: model.program_category.clone(),
+            subtitles: model.subtitles.clone(),
+            episode_num: model.episode_num.clone(),
+            season_num: model.season_num.clone(),
+            language: model.language.clone(),
+            rating: model.rating.clone(),
+            aspect_ratio: model.aspect_ratio.clone(),
         };
         Ok(program)
     }

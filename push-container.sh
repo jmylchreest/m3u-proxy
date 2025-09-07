@@ -44,8 +44,9 @@ EXAMPLES:
 NOTES:
     - You must be logged in to the registry before running this script
     - Images are expected to already be built locally (run build-container.sh first)
-    - For release versions: pushes VERSION and 'latest' tags
-    - For snapshot versions: pushes VERSION and 'snapshot' tags
+    - For release versions: pushes VERSION, 'latest', and 'release' tags
+    - For snapshot versions: pushes VERSION, 'latest', and 'snapshot' tags
+    - All builds get 'latest' tag for consistency
 EOF
 }
 
@@ -154,16 +155,17 @@ fi
 # Check for both localhost/ prefixed and non-prefixed images (Podman vs Docker)
 SOURCE_IMAGE_TAG="${IMAGE_NAME}:${VERSION}"
 LOCALHOST_SOURCE_IMAGE_TAG="localhost/${IMAGE_NAME}:${VERSION}"
-if echo "$VERSION" | grep -q "snapshot"; then
+if echo "$VERSION" | grep -q -E "dev\.|snapshot"; then
     ADDITIONAL_TAG="snapshot"
-    echo "Detected snapshot version - will push as 'snapshot' tag"
+    echo "Detected snapshot version - will push 'latest' and 'snapshot' tags"
 else
-    ADDITIONAL_TAG="latest"
-    echo "Detected release version - will push as 'latest' tag"
+    ADDITIONAL_TAG="release"
+    echo "Detected release version - will push 'latest' and 'release' tags"
 fi
 
-# Define target tags
+# Define target tags (all builds get :latest + version + additional tag)
 VERSIONED_TARGET="${REGISTRY}:${VERSION}"
+LATEST_TARGET="${REGISTRY}:latest"
 ADDITIONAL_TARGET="${REGISTRY}:${ADDITIONAL_TAG}"
 
 # Verify source images exist locally
@@ -183,7 +185,21 @@ else
     exit 1
 fi
 
-# Check if additional source tag exists (e.g., m3u-proxy:latest or m3u-proxy:snapshot)
+# Check if latest source tag exists (e.g., m3u-proxy:latest)
+SOURCE_LATEST_TAG="${IMAGE_NAME}:latest"
+LOCALHOST_SOURCE_LATEST_TAG="localhost/${IMAGE_NAME}:latest"
+HAS_LATEST_SOURCE=false
+ACTUAL_SOURCE_LATEST_TAG=""
+
+if "${CONTAINER_RUNTIME}" images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${SOURCE_LATEST_TAG}$"; then
+    ACTUAL_SOURCE_LATEST_TAG="${SOURCE_LATEST_TAG}"
+    HAS_LATEST_SOURCE=true
+elif "${CONTAINER_RUNTIME}" images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${LOCALHOST_SOURCE_LATEST_TAG}$"; then
+    ACTUAL_SOURCE_LATEST_TAG="${LOCALHOST_SOURCE_LATEST_TAG}"
+    HAS_LATEST_SOURCE=true
+fi
+
+# Check if additional source tag exists (e.g., m3u-proxy:snapshot or m3u-proxy:release)
 SOURCE_ADDITIONAL_TAG="${IMAGE_NAME}:${ADDITIONAL_TAG}"
 LOCALHOST_SOURCE_ADDITIONAL_TAG="localhost/${IMAGE_NAME}:${ADDITIONAL_TAG}"
 HAS_ADDITIONAL_SOURCE=false
@@ -203,11 +219,15 @@ echo "  Registry: ${REGISTRY}"
 echo "  Version: ${VERSION}"
 echo "  Source Images:"
 echo "    - ${ACTUAL_SOURCE_IMAGE_TAG}"
+if [[ "$HAS_LATEST_SOURCE" == true ]]; then
+    echo "    - ${ACTUAL_SOURCE_LATEST_TAG}"
+fi
 if [[ "$HAS_ADDITIONAL_SOURCE" == true ]]; then
     echo "    - ${ACTUAL_SOURCE_ADDITIONAL_TAG}"
 fi
 echo "  Target Images:"
 echo "    - ${VERSIONED_TARGET}"
+echo "    - ${LATEST_TARGET}"
 echo "    - ${ADDITIONAL_TARGET}"
 echo ""
 
@@ -216,6 +236,11 @@ if [[ "$DRY_RUN" == true ]]; then
     echo ""
     echo "# Tag images for registry"
     echo "${CONTAINER_RUNTIME} tag ${ACTUAL_SOURCE_IMAGE_TAG} ${VERSIONED_TARGET}"
+    if [[ "$HAS_LATEST_SOURCE" == true ]]; then
+        echo "${CONTAINER_RUNTIME} tag ${ACTUAL_SOURCE_LATEST_TAG} ${LATEST_TARGET}"
+    else
+        echo "${CONTAINER_RUNTIME} tag ${ACTUAL_SOURCE_IMAGE_TAG} ${LATEST_TARGET}"
+    fi
     if [[ "$HAS_ADDITIONAL_SOURCE" == true ]]; then
         echo "${CONTAINER_RUNTIME} tag ${ACTUAL_SOURCE_ADDITIONAL_TAG} ${ADDITIONAL_TARGET}"
     else
@@ -224,6 +249,7 @@ if [[ "$DRY_RUN" == true ]]; then
     echo ""
     echo "# Push images to registry"
     echo "${CONTAINER_RUNTIME} push ${VERSIONED_TARGET}"
+    echo "${CONTAINER_RUNTIME} push ${LATEST_TARGET}"
     echo "${CONTAINER_RUNTIME} push ${ADDITIONAL_TARGET}"
     echo ""
     echo "DRY RUN - No actual changes made"
@@ -234,8 +260,22 @@ fi
 echo "Tagging images for registry..."
 echo "  ${ACTUAL_SOURCE_IMAGE_TAG} → ${VERSIONED_TARGET}"
 if ! "${CONTAINER_RUNTIME}" tag "${ACTUAL_SOURCE_IMAGE_TAG}" "${VERSIONED_TARGET}"; then
-    echo "Error: Failed to tag image for registry"
+    echo "Error: Failed to tag versioned image for registry"
     exit 1
+fi
+
+if [[ "$HAS_LATEST_SOURCE" == true ]]; then
+    echo "  ${ACTUAL_SOURCE_LATEST_TAG} → ${LATEST_TARGET}"
+    if ! "${CONTAINER_RUNTIME}" tag "${ACTUAL_SOURCE_LATEST_TAG}" "${LATEST_TARGET}"; then
+        echo "Error: Failed to tag latest image for registry"
+        exit 1
+    fi
+else
+    echo "  ${ACTUAL_SOURCE_IMAGE_TAG} → ${LATEST_TARGET}"
+    if ! "${CONTAINER_RUNTIME}" tag "${ACTUAL_SOURCE_IMAGE_TAG}" "${LATEST_TARGET}"; then
+        echo "Error: Failed to tag latest image for registry"
+        exit 1
+    fi
 fi
 
 if [[ "$HAS_ADDITIONAL_SOURCE" == true ]]; then
@@ -261,6 +301,12 @@ if ! "${CONTAINER_RUNTIME}" push "${VERSIONED_TARGET}"; then
     exit 1
 fi
 
+echo "  Pushing ${LATEST_TARGET}..."
+if ! "${CONTAINER_RUNTIME}" push "${LATEST_TARGET}"; then
+    echo "Error: Failed to push latest tag image"
+    exit 1
+fi
+
 echo "  Pushing ${ADDITIONAL_TARGET}..."
 if ! "${CONTAINER_RUNTIME}" push "${ADDITIONAL_TARGET}"; then
     echo "Error: Failed to push additional tag image"
@@ -272,14 +318,18 @@ echo "✅ Container push completed successfully!"
 echo ""
 echo "Images pushed:"
 echo "  📦 ${VERSIONED_TARGET}"
+echo "  📦 ${LATEST_TARGET}"
 echo "  📦 ${ADDITIONAL_TARGET}"
 echo ""
 echo "Usage examples:"
 echo "  # Pull the specific version"
 echo "  ${CONTAINER_RUNTIME} pull ${VERSIONED_TARGET}"
 echo ""
+echo "  # Pull the latest version (always available)"
+echo "  ${CONTAINER_RUNTIME} pull ${LATEST_TARGET}"
+echo ""
 echo "  # Pull the ${ADDITIONAL_TAG} version"
 echo "  ${CONTAINER_RUNTIME} pull ${ADDITIONAL_TARGET}"
 echo ""
-echo "  # Run the container"
-echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 -v \$(pwd)/data:/app/data ${ADDITIONAL_TARGET}"
+echo "  # Run the container (latest recommended)"
+echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 -v \$(pwd)/data:/app/data ${LATEST_TARGET}"

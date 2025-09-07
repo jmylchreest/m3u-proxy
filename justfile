@@ -371,13 +371,16 @@ build-dev: build-frontend copy-frontend build-backend
     @echo "Development build finished!"
 
 # Build container image (supports podman, docker, buildah, nerdctl)
+# Tags: :latest (always), :release (tagged releases), :snapshot (dev builds)
 build-container:
     @echo "Building container using external script with runtime detection..."
+    @echo "Tagging strategy: :latest + (:release for tagged releases | :snapshot for dev builds)"
     @echo "Ensuring npm dependencies are up to date..."
     cd frontend && npm install && cd ..
     ./build-container.sh
 
 # Push container image to registry (supports podman, docker, nerdctl)
+# Pushes all three tags: version, :latest, and (:release | :snapshot)
 push-container registry="":
     @echo "Pushing container to registry using external script with runtime detection..."
     #!/usr/bin/env bash

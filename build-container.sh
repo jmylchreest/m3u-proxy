@@ -86,15 +86,19 @@ TARGET_STAGE="runtime"
 BASE_TAG="m3u-proxy"
 IMAGE_TAG="${BASE_TAG}:${APP_VERSION}"
 
-# Determine additional tag based on version type
-if echo "$APP_VERSION" | grep -q "snapshot"; then
+# Determine additional tags based on version type
+# Always tag with :latest, plus :release for tagged releases or :snapshot for dev builds
+IMAGE_TAG_LATEST="${BASE_TAG}:latest"
+if echo "$APP_VERSION" | grep -q -E "dev\.|snapshot"; then
+    # Development/snapshot build: :latest + :snapshot + version
     IMAGE_TAG_ADDITIONAL="${BASE_TAG}:snapshot"
     echo "  Target: $TARGET_STAGE"
-    echo "  Tags: $IMAGE_TAG, $IMAGE_TAG_ADDITIONAL (snapshot build)"
+    echo "  Tags: $IMAGE_TAG, $IMAGE_TAG_LATEST, $IMAGE_TAG_ADDITIONAL (snapshot build)"
 else
-    IMAGE_TAG_ADDITIONAL="${BASE_TAG}:latest"
+    # Tagged release build: :latest + :release + version
+    IMAGE_TAG_ADDITIONAL="${BASE_TAG}:release"
     echo "  Target: $TARGET_STAGE"
-    echo "  Tags: $IMAGE_TAG, $IMAGE_TAG_ADDITIONAL (release build)"
+    echo "  Tags: $IMAGE_TAG, $IMAGE_TAG_LATEST, $IMAGE_TAG_ADDITIONAL (release build)"
 fi
 
 # Build command arguments
@@ -105,6 +109,7 @@ BUILD_ARGS=(
     --build-arg "LINUXSERVER_FFMPEG_VERSION=${LINUXSERVER_FFMPEG_VERSION}"
     --build-arg "APP_VERSION=${APP_VERSION}"
     --tag "$IMAGE_TAG"
+    --tag "$IMAGE_TAG_LATEST"
     --tag "$IMAGE_TAG_ADDITIONAL"
     --label "version=${APP_VERSION}"
     --label "build-date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -124,22 +129,22 @@ fi
 echo ""
 
 echo "LinuxServer FFmpeg container build completed successfully!"
-echo "Built images: $IMAGE_TAG, $IMAGE_TAG_ADDITIONAL"
+echo "Built images: $IMAGE_TAG, $IMAGE_TAG_LATEST, $IMAGE_TAG_ADDITIONAL"
 
 # Show run commands
 echo ""
 echo "Basic usage:"
-echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 -v \$(pwd)/data:/app/data -v \$(pwd)/config:/app/config ${IMAGE_TAG_ADDITIONAL}"
+echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 -v \$(pwd)/data:/app/data -v \$(pwd)/config:/app/config ${IMAGE_TAG_LATEST}"
 echo ""
 echo "With GPU hardware acceleration:"
-echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 --device=/dev/dri:/dev/dri --group-add \$(getent group render | cut -d: -f3) -v \$(pwd)/data:/app/data -v \$(pwd)/config:/app/config ${IMAGE_TAG_ADDITIONAL}"
+echo "  ${CONTAINER_RUNTIME} run -p 8080:8080 --device=/dev/dri:/dev/dri --group-add \$(getent group render | cut -d: -f3) -v \$(pwd)/data:/app/data -v \$(pwd)/config:/app/config ${IMAGE_TAG_LATEST}"
 echo ""
 echo "Note: If localhost doesn't work in browser (resolves to IPv6), use:"
 echo "  Access via: http://127.0.0.1:8080"
 echo "  Or bind to both: -p 127.0.0.1:8080:8080 -p '[::1]:8080:8080'"
 echo ""
 echo "Test GPU capabilities:"
-echo "  ${CONTAINER_RUNTIME} run --rm --device=/dev/dri:/dev/dri --group-add \$(getent group render | cut -d: -f3) --entrypoint=/usr/local/bin/ffmpeg ${IMAGE_TAG_ADDITIONAL} -hwaccels"
+echo "  ${CONTAINER_RUNTIME} run --rm --device=/dev/dri:/dev/dri --group-add \$(getent group render | cut -d: -f3) --entrypoint=/usr/local/bin/ffmpeg ${IMAGE_TAG_LATEST} -hwaccels"
 
 echo ""
 echo "Container image size:"

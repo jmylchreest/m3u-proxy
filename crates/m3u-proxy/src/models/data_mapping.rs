@@ -66,11 +66,22 @@ pub struct EpgMappingFields;
 impl EpgMappingFields {
     pub fn available_fields() -> Vec<&'static str> {
         vec![
+            // Core EPG fields
             "channel_id",
-            "channel_name",
+            "channel_name", 
             "channel_logo",
             "channel_group",
-            "language",
+            "title",                    // Program title
+            "description",              // Program description
+            "program_icon",             // Program icon/thumbnail
+            // Extended XMLTV metadata fields
+            "program_category",         // <category> - program category
+            "subtitles",               // <sub-title> - episode subtitle  
+            "episode_num",             // Episode number for <episode-num>
+            "season_num",              // Season number for <episode-num>
+            "language",                // <language> - program language
+            "rating",                  // <rating> - content rating
+            "aspect_ratio",            // Video aspect ratio metadata
         ]
     }
 
@@ -145,6 +156,7 @@ impl DataMappingFieldInfo {
                 },
             ],
             DataMappingSourceType::Epg => vec![
+                // Core EPG fields
                 DataMappingFieldInfo {
                     field_name: "channel_id".to_string(),
                     display_name: "Channel ID".to_string(),
@@ -174,8 +186,72 @@ impl DataMappingFieldInfo {
                     source_type: DataMappingSourceType::Epg,
                 },
                 DataMappingFieldInfo {
+                    field_name: "title".to_string(),
+                    display_name: "Program Title".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: false,
+                    source_type: DataMappingSourceType::Epg,
+                },
+                DataMappingFieldInfo {
+                    field_name: "description".to_string(),
+                    display_name: "Program Description".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: DataMappingSourceType::Epg,
+                },
+                DataMappingFieldInfo {
+                    field_name: "program_icon".to_string(),
+                    display_name: "Program Icon".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: DataMappingSourceType::Epg,
+                },
+                // Extended XMLTV metadata fields
+                DataMappingFieldInfo {
+                    field_name: "program_category".to_string(),
+                    display_name: "Program Category".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: DataMappingSourceType::Epg,
+                },
+                DataMappingFieldInfo {
+                    field_name: "subtitles".to_string(),
+                    display_name: "Episode Subtitle".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: DataMappingSourceType::Epg,
+                },
+                DataMappingFieldInfo {
+                    field_name: "episode_num".to_string(),
+                    display_name: "Episode Number".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: DataMappingSourceType::Epg,
+                },
+                DataMappingFieldInfo {
+                    field_name: "season_num".to_string(),
+                    display_name: "Season Number".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: DataMappingSourceType::Epg,
+                },
+                DataMappingFieldInfo {
                     field_name: "language".to_string(),
-                    display_name: "Language".to_string(),
+                    display_name: "Program Language".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: DataMappingSourceType::Epg,
+                },
+                DataMappingFieldInfo {
+                    field_name: "rating".to_string(),
+                    display_name: "Content Rating".to_string(),
+                    field_type: "string".to_string(),
+                    nullable: true,
+                    source_type: DataMappingSourceType::Epg,
+                },
+                DataMappingFieldInfo {
+                    field_name: "aspect_ratio".to_string(),
+                    display_name: "Aspect Ratio".to_string(),
                     field_type: "string".to_string(),
                     nullable: true,
                     source_type: DataMappingSourceType::Epg,

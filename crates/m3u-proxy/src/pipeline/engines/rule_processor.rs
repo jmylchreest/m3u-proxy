@@ -748,7 +748,7 @@ impl EpgRuleProcessor {
     }
 }
 
-// For EPG programs - we'll need to define this type or use existing one
+// For EPG programs - expanded to support all XMLTV fields for rule processing and data mapping
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgProgram {
     pub id: String,
@@ -762,6 +762,14 @@ pub struct EpgProgram {
     #[serde(serialize_with = "crate::utils::datetime::serialize_datetime")]
     #[serde(deserialize_with = "crate::utils::datetime::deserialize_datetime")]
     pub end_time: DateTime<Utc>,
+    // Extended XMLTV fields for rich metadata support and rule processing
+    pub program_category: Option<String>,      // <category>
+    pub subtitles: Option<String>,             // <sub-title> (episode subtitle)
+    pub episode_num: Option<String>,           // Episode number for <episode-num>
+    pub season_num: Option<String>,            // Season number for <episode-num>
+    pub language: Option<String>,              // <language>
+    pub rating: Option<String>,                // <rating>
+    pub aspect_ratio: Option<String>,          // Video aspect ratio metadata
 }
 
 impl RuleProcessor<EpgProgram> for EpgRuleProcessor {

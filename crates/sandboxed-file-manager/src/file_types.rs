@@ -135,11 +135,10 @@ impl FileTypeValidator {
                     extension: detected_type.extension().to_string(),
                     detection_method: DetectionMethod::MagicNumber,
                 });
-            } else {
-                return Err(SandboxedFileError::UnsupportedContentType {
-                    content_type: mime_type.to_string(),
-                });
             }
+            return Err(SandboxedFileError::UnsupportedContentType {
+                content_type: mime_type.to_string(),
+            });
         }
 
         // If magic detection fails, the file type is unknown

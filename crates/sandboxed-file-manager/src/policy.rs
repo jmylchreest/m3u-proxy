@@ -94,8 +94,8 @@ impl CleanupPolicy {
         match retention_secs {
             0..=3600 => Duration::from_secs(60), // <= 1 hour: check every minute
             3601..=86400 => Duration::from_secs(600), // <= 1 day: check every 10 minutes
-            86401..=604800 => Duration::from_secs(3600), // <= 7 days: check every hour
-            604801..=2592000 => Duration::from_secs(14400), // <= 30 days: check every 4 hours
+            86401..=604_800 => Duration::from_secs(3600), // <= 7 days: check every hour
+            604_801..=2_592_000 => Duration::from_secs(14400), // <= 30 days: check every 4 hours
             _ => Duration::from_secs(43200), // > 30 days: check every 12 hours
         }
     }

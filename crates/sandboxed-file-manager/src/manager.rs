@@ -637,9 +637,8 @@ impl SandboxedManager {
                 if atime_utc > year_2000 && atime_utc < far_future {
                     tracing::debug!("Using filesystem atime: {}", atime_utc);
                     return Some(atime_utc);
-                } else {
-                    tracing::debug!("Filesystem atime seems invalid: {}, ignoring", atime_utc);
                 }
+                tracing::debug!("Filesystem atime seems invalid: {}, ignoring", atime_utc);
             }
         }
 

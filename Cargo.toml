@@ -14,7 +14,7 @@ sandboxed-file-manager = { path = "crates/sandboxed-file-manager" }
 
 # Shared dependencies for the workspace
 anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4.42", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.47", features = ["full"] }
 tracing = "0.1"

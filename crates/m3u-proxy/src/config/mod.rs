@@ -25,6 +25,7 @@ pub struct Config {
     pub security: Option<SecurityConfig>,
     pub features: Option<FeaturesConfig>,
     pub circuitbreaker: Option<CircuitBreakerConfig>,
+    pub job_scheduling: Option<JobSchedulingConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -694,6 +695,47 @@ pub struct BufferConfig {
     pub max_file_spill_size: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct JobSchedulingConfig {
+    /// Global maximum number of concurrent jobs (default: 4)
+    #[serde(default = "default_global_max_jobs")]
+    pub global_max_jobs: usize,
+    
+    /// Maximum concurrent stream ingestion jobs (default: 1)
+    #[serde(default = "default_stream_ingestion_limit")]
+    pub stream_ingestion_limit: usize,
+    
+    /// Maximum concurrent EPG ingestion jobs (default: 1)  
+    #[serde(default = "default_epg_ingestion_limit")]
+    pub epg_ingestion_limit: usize,
+    
+    /// Maximum concurrent proxy regeneration jobs (default: 2)
+    #[serde(default = "default_proxy_regeneration_limit")]
+    pub proxy_regeneration_limit: usize,
+    
+    /// Maximum concurrent maintenance jobs (default: 1)
+    #[serde(default = "default_maintenance_limit")]
+    pub maintenance_limit: usize,
+}
+
+impl Default for JobSchedulingConfig {
+    fn default() -> Self {
+        Self {
+            global_max_jobs: default_global_max_jobs(),
+            stream_ingestion_limit: default_stream_ingestion_limit(),
+            epg_ingestion_limit: default_epg_ingestion_limit(),
+            proxy_regeneration_limit: default_proxy_regeneration_limit(),
+            maintenance_limit: default_maintenance_limit(),
+        }
+    }
+}
+
+fn default_global_max_jobs() -> usize { 3 }
+fn default_stream_ingestion_limit() -> usize { 1 }
+fn default_epg_ingestion_limit() -> usize { 1 }
+fn default_proxy_regeneration_limit() -> usize { 1 }
+fn default_maintenance_limit() -> usize { 1 }
+
 fn default_max_buffer_size() -> usize { 50 * 1024 * 1024 }  // 50MB
 fn default_max_chunks() -> usize { 1000 }
 fn default_chunk_timeout_seconds() -> u64 { 60 }
@@ -763,6 +805,7 @@ impl Default for Config {
             }),
             features: Some(FeaturesConfig::default()),
             circuitbreaker: Some(CircuitBreakerConfig::default()),
+            job_scheduling: Some(JobSchedulingConfig::default()),
         }
     }
 }

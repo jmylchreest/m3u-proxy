@@ -3,8 +3,8 @@
 //! Provides utilities to generate realistic but fictional channel names, broadcaster names,
 //! and other test data to avoid using real brand names in tests and documentation.
 
-use rand::seq::SliceRandom;
-use rand::Rng;
+use rand::seq::IndexedRandom;
+use rand::{Rng, rng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -54,7 +54,7 @@ impl SampleDataGenerator {
         let data = Self::load_embedded_data();
         Self {
             data,
-            rng: rand::thread_rng(),
+            rng: rng(),
         }
     }
 
@@ -195,7 +195,7 @@ impl SampleDataGenerator {
         
         (0..count)
             .map(|i| {
-                let channel_name = if self.rng.gen_bool(timeshift_probability) {
+                let channel_name = if self.rng.random_bool(timeshift_probability) {
                     self.generate_timeshift_channel(category)
                 } else {
                     self.generate_channel_name(category)

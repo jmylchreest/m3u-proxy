@@ -3,7 +3,7 @@
 //! This provides a database-agnostic repository for EPG Source operations using SeaORM.
 
 use anyhow::Result;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, ColumnTrait, QueryFilter, PaginatorTrait};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, ColumnTrait, QueryFilter, PaginatorTrait, QueryOrder};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -63,7 +63,9 @@ impl EpgSourceSeaOrmRepository {
 
     /// Find all EPG sources
     pub async fn find_all(&self) -> Result<Vec<EpgSource>> {
-        let models = EpgSources::find().all(&*self.connection).await?;
+        let models = EpgSources::find()
+            .order_by_asc(epg_sources::Column::Name)
+            .all(&*self.connection).await?;
         
         let mut sources = Vec::new();
         for model in models {
@@ -92,6 +94,7 @@ impl EpgSourceSeaOrmRepository {
     pub async fn find_active(&self) -> Result<Vec<EpgSource>> {
         let models = EpgSources::find()
             .filter(epg_sources::Column::IsActive.eq(true))
+            .order_by_asc(epg_sources::Column::Name)
             .all(&*self.connection)
             .await?;
         
@@ -186,7 +189,10 @@ impl EpgSourceSeaOrmRepository {
         active_model.url = Set(request.url);
         active_model.update_cron = Set(request.update_cron);
         active_model.username = Set(request.username);
-        active_model.password = Set(request.password);
+        // Only update password if one is provided
+        if request.password.is_some() {
+            active_model.password = Set(request.password);
+        }
         active_model.original_timezone = Set(request.timezone);
         active_model.time_offset = Set(Some(request.time_offset.unwrap_or_else(|| "+00:00".to_string())));
         active_model.is_active = Set(request.is_active);
@@ -249,9 +255,16 @@ impl EpgSourceSeaOrmRepository {
         
         match Schedule::from_str(cron_expr) {
             Ok(schedule) => {
+                let now = Utc::now();
                 if let Some(last_ingested) = last_ingested_at {
                     // Find next update after last ingestion
-                    schedule.after(&last_ingested).next()
+                    let next_after_ingestion = schedule.after(&last_ingested).next();
+                    
+                    // If the calculated next time is in the past, calculate from now instead
+                    match next_after_ingestion {
+                        Some(next_time) if next_time > now => Some(next_time),
+                        _ => schedule.upcoming(Utc).next(),
+                    }
                 } else {
                     // Never ingested - get next update from now
                     schedule.upcoming(Utc).next()

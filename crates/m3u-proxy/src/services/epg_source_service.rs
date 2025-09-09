@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::database::Database;
 use crate::models::{EpgSource, EpgSourceCreateRequest, EpgSourceUpdateRequest};
@@ -614,10 +614,14 @@ impl EpgSourceService {
             }
             
             // Update the source's last_ingested_at timestamp
-            if let Err(e) = self.epg_source_repo.update_last_ingested_at(&source.id).await {
-                warn!("Failed to update last_ingested_at for EPG source '{}': {}", source.name, e);
-            } else {
-                debug!("Updated last_ingested_at for EPG source '{}'", source.name);
+            info!("Attempting to update last_ingested_at for EPG source '{}'", source.name);
+            match self.epg_source_repo.update_last_ingested_at(&source.id).await {
+                Ok(updated_timestamp) => {
+                    info!("Successfully updated last_ingested_at for EPG source '{}' to {}", source.name, updated_timestamp.to_rfc3339());
+                }
+                Err(e) => {
+                    error!("Failed to update last_ingested_at for EPG source '{}': {}", source.name, e);
+                }
             }
             
             // Invalidate cache since we updated EPG programs - this triggers proxy auto-regeneration

@@ -5,8 +5,6 @@ use opentelemetry::{
     KeyValue,
 };
 use opentelemetry_sdk::metrics::SdkMeterProvider;
-use prometheus::Registry;
-use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
@@ -14,7 +12,8 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct AppObservability {
     pub meter: Meter,
-    pub prometheus_registry: Arc<Registry>,
+    // Note: Prometheus registry removed due to opentelemetry-prometheus incompatibility
+    // Metrics are now exported via OTLP to external collectors like Prometheus
     
     // Pre-built common metrics instruments
     pub client_connections: Counter<u64>,
@@ -59,20 +58,12 @@ pub struct AppObservability {
 impl AppObservability {
     /// Initialize observability based on environment configuration
     pub fn new(service_name: &str) -> Result<Self> {
-        // Create Prometheus registry
-        let prometheus_registry = Registry::new();
-        
-        // Create OpenTelemetry Prometheus exporter using the registry
-        let exporter = opentelemetry_prometheus::exporter()
-            .with_registry(prometheus_registry.clone())
-            .build()?;
-
-        // Create meter provider with the Prometheus exporter
+        // Create a simple meter provider without Prometheus exporter
+        // Metrics will be exported via OTLP to external systems
         let provider = SdkMeterProvider::builder()
-            .with_reader(exporter)
             .build();
         
-        // Set as the global provider so our metrics go to both OTLP AND Prometheus
+        // Set as the global provider
         global::set_meter_provider(provider.clone());
 
         // Create meter from our provider (using static string for OpenTelemetry requirement)
@@ -81,12 +72,12 @@ impl AppObservability {
         // Initialize tracing if OTLP endpoint is configured
         if let Ok(otlp_endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
             Self::init_tracing(&otlp_endpoint, service_name.to_owned())?;
-            info!("OpenTelemetry configured: Prometheus export + OTLP tracing to {}", otlp_endpoint);
+            info!("OpenTelemetry configured: OTLP tracing to {}", otlp_endpoint);
         } else {
-            info!("OpenTelemetry configured: Prometheus export (OTLP endpoint not configured - tracing disabled)");
+            info!("OpenTelemetry configured: Local metrics only (OTLP endpoint not configured)");
         }
 
-        let observability = Self::build_with_instruments(meter, Arc::new(prometheus_registry));
+        let observability = Self::build_with_instruments(meter);
         
         Ok(observability)
     }
@@ -100,7 +91,7 @@ impl AppObservability {
     }
     
     /// Build observability with pre-configured instruments
-    fn build_with_instruments(meter: Meter, prometheus_registry: Arc<Registry>) -> Self {
+    fn build_with_instruments(meter: Meter) -> Self {
         // Client/Connection metrics
         let client_connections = meter
             .u64_counter("client_connections_total")
@@ -245,7 +236,6 @@ impl AppObservability {
         
         Self {
             meter,
-            prometheus_registry,
             client_connections,
             active_clients,
             bytes_sent,

@@ -390,6 +390,8 @@ impl ProxyRegenerationService {
             // Wait for the delay, but check for shutdown signal
             if service_clone.wait_with_cancellation(Duration::from_secs(delay_seconds)).await {
                 debug!("Proxy {} regeneration cancelled due to shutdown", proxy_id);
+                // Remove from pending regenerations since task was cancelled
+                service_clone.pending_regenerations.lock().await.remove(&proxy_id);
                 return;
             }
             
@@ -419,6 +421,9 @@ impl ProxyRegenerationService {
                 service_clone.queued_proxies.lock().await.remove(&proxy_id);
                 error!("Failed to queue automatic regeneration for proxy {} after delay: {}", proxy_id, e);
             }
+            
+            // Remove from pending regenerations since delay task is complete
+            service_clone.pending_regenerations.lock().await.remove(&proxy_id);
         });
 
         pending.insert(proxy_id, handle);

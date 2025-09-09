@@ -620,9 +620,22 @@ pub async fn refresh_stream_source(
                     // Trigger proxy auto-regeneration after successful manual refresh
                     state.proxy_regeneration_service.queue_affected_proxies_coordinated(uuid, "stream").await;
                     
-                    // Emit scheduler event for manual refresh trigger
-                    if let Some(ref scheduler_tx) = state.scheduler_event_tx {
-                        let _ = scheduler_tx.send(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(uuid));
+                    // Enqueue stream source refresh job directly to queue
+                    let job = crate::job_scheduling::types::ScheduledJob::new(
+                        crate::job_scheduling::types::JobType::StreamIngestion(uuid),
+                        crate::job_scheduling::types::JobPriority::High, // High priority for manual triggers
+                    );
+                    
+                    match state.job_queue.enqueue(job).await {
+                        Ok(true) => {
+                            tracing::info!("Enqueued stream ingestion job for {}", uuid);
+                        }
+                        Ok(false) => {
+                            tracing::debug!("Stream source {} ingestion already queued", uuid);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to enqueue stream ingestion for {}: {}", uuid, e);
+                        }
                     }
                     
                     ok(serde_json::json!({

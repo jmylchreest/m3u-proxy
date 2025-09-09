@@ -3,9 +3,7 @@ use axum::{
     http::StatusCode,
     response::{Json, IntoResponse},
 };
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -207,52 +205,44 @@ pub async fn get_epg_source_progress(
     )
 )]
 pub async fn regenerate_proxy(
-    Path(proxy_id): Path<Uuid>,
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+    Path(proxy_id): Path<Uuid>,
+) -> Result<axum::Json<serde_json::Value>, axum::http::StatusCode> {
     info!("Queuing proxy {} for background regeneration", proxy_id);
-    
-    // CRITICAL FIX: Check for duplicate API requests to prevent race conditions
-    {
-        let mut active_requests = state.active_regeneration_requests.lock().await;
-        if active_requests.contains(&proxy_id) {
-            warn!("Duplicate regeneration API request for proxy {} - rejecting", proxy_id);
-            return Ok(Json(serde_json::json!({
-                "success": false,
-                "message": "A regeneration request for this proxy is already being processed",
-                "proxy_id": proxy_id,
-                "status": "duplicate_request"
-            })));
-        }
-        // Reserve this proxy ID to prevent other requests
-        active_requests.insert(proxy_id);
-    }
-    
-    // Create a cleanup guard to ensure we always remove the proxy ID from active requests
-    let _cleanup_guard = RequestCleanupGuard {
-        proxy_id,
-        active_requests: state.active_regeneration_requests.clone(),
-    };
     
     // Verify the proxy exists first
     match state.database.get_stream_proxy(proxy_id).await {
         Ok(Some(proxy)) => {
-            // Queue the proxy for manual regeneration using background processing
-            match state.proxy_regeneration_service.queue_manual_regeneration(proxy_id).await {
+            // First attempt to queue the proxy for manual regeneration
+            // Convert result immediately to avoid Send issues with Box<dyn StdError>
+            let queue_result = match state.proxy_regeneration_service.queue_manual_regeneration(proxy_id).await {
+                Ok(()) => Ok(()),
+                Err(e) => Err(e.to_string()), // Convert to String immediately
+            };
+            
+            match queue_result {
                 Ok(_) => {
-                    // Emit scheduler event for immediate processing
-                    if let Some(ref scheduler_tx) = state.scheduler_event_tx {
-                        let _ = scheduler_tx.send(
-                            crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(proxy_id)
-                        );
+                    // Now enqueue the job in the job queue
+                    let job = crate::job_scheduling::types::ScheduledJob::new(
+                        crate::job_scheduling::types::JobType::ProxyRegeneration(proxy_id),
+                        crate::job_scheduling::types::JobPriority::High, // High priority for manual triggers
+                    );
+                    
+                    match state.job_queue.enqueue(job).await {
+                        Ok(true) => {
+                            tracing::info!("Enqueued proxy regeneration job for {}", proxy_id);
+                        }
+                        Ok(false) => {
+                            tracing::debug!("Proxy {} regeneration already queued", proxy_id);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to enqueue proxy regeneration for {}: {}", proxy_id, e);
+                        }
                     }
                     
                     info!("Proxy '{}' queued for background regeneration", proxy.name);
                     
-                    // _cleanup_guard will automatically clean up when function returns
-                    // The service-level deduplication will handle actual regeneration conflicts
-                    
-                    Ok(Json(serde_json::json!({
+                    Ok(axum::Json(serde_json::json!({
                         "success": true,
                         "message": format!("Proxy '{}' queued for regeneration", proxy.name),
                         "queue_id": format!("universal-{}", proxy_id), // Use consistent queue_id format
@@ -261,30 +251,25 @@ pub async fn regenerate_proxy(
                         "queued_at": chrono::Utc::now()
                     })))
                 }
-                Err(e) => {
-                    error!("Failed to queue proxy {} for regeneration: {}", proxy_id, e);
-                    // Check if it's an operation in progress error by checking the error message
-                    let error_msg = e.to_string();
+                Err(error_msg) => {
+                    error!("Failed to queue proxy {} for regeneration: {}", proxy_id, error_msg);
+                    // error_msg is already a String
                     if error_msg.contains("Operation already in progress") || 
                        error_msg.contains("already actively regenerating") ||
                        error_msg.contains("already being processed") {
-                        // _cleanup_guard will automatically clean up when function returns
-                        return Err(StatusCode::CONFLICT);
+                        return Err(axum::http::StatusCode::CONFLICT);
                     }
-                    // _cleanup_guard will automatically clean up when function returns
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                    Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
                 }
             }
         }
         Ok(None) => {
             error!("Proxy {} not found", proxy_id);
-            // _cleanup_guard will automatically clean up when function returns
-            Err(StatusCode::NOT_FOUND)
+            Err(axum::http::StatusCode::NOT_FOUND)
         }
         Err(e) => {
             error!("Failed to get proxy {}: {}", proxy_id, e);
-            // _cleanup_guard will automatically clean up when function returns
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }
@@ -2371,7 +2356,6 @@ async fn apply_data_mapping_rules_impl(
             // EPG mapping implementation
             let mut all_preview_programs = Vec::new();
             let mut total_programs = 0;
-            let mut combined_performance_data: std::collections::HashMap<uuid::Uuid, u64> = std::collections::HashMap::new();
             
             // Process all sources
             let epg_program_repo = crate::database::repositories::EpgProgramSeaOrmRepository::new(state.database.connection().clone());
@@ -3479,9 +3463,22 @@ pub async fn refresh_epg_source_unified(
                     // Trigger proxy auto-regeneration after successful manual refresh
                     state.proxy_regeneration_service.queue_affected_proxies_coordinated(id, "epg").await;
                     
-                    // Emit scheduler event for manual refresh trigger
-                    if let Some(ref scheduler_tx) = state.scheduler_event_tx {
-                        let _ = scheduler_tx.send(crate::ingestor::scheduler::SchedulerEvent::ManualRefreshTriggered(id));
+                    // Enqueue EPG source refresh job directly to queue
+                    let job = crate::job_scheduling::types::ScheduledJob::new(
+                        crate::job_scheduling::types::JobType::EpgIngestion(id),
+                        crate::job_scheduling::types::JobPriority::High, // High priority for manual triggers
+                    );
+                    
+                    match state.job_queue.enqueue(job).await {
+                        Ok(true) => {
+                            tracing::info!("Enqueued EPG ingestion job for {}", id);
+                        }
+                        Ok(false) => {
+                            tracing::debug!("EPG source {} ingestion already queued", id);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to enqueue EPG ingestion for {}: {}", id, e);
+                        }
                     }
                     
                     Ok(Json(serde_json::json!({
@@ -4257,25 +4254,6 @@ pub async fn get_popular_channels(
     Ok(Json(Vec::new()))
 }
 
-/// CONCURRENCY FIX: Cleanup guard to ensure API request deduplication is properly cleaned up
-struct RequestCleanupGuard {
-    proxy_id: Uuid,
-    active_requests: Arc<Mutex<HashSet<Uuid>>>,
-}
-
-impl Drop for RequestCleanupGuard {
-    fn drop(&mut self) {
-        let proxy_id = self.proxy_id;
-        let active_requests = self.active_requests.clone();
-        
-        // Spawn a cleanup task since Drop can't be async
-        tokio::spawn(async move {
-            let mut requests = active_requests.lock().await;
-            requests.remove(&proxy_id);
-            tracing::debug!("Cleaned up API regeneration request tracking for proxy {}", proxy_id);
-        });
-    }
-}
 
 
 /// Get available fields based on validation context using FilterRepository
@@ -4520,7 +4498,7 @@ async fn preview_data_mapping_expression_sync(
             };
 
             let mut total_programs = 0;
-            let mut affected_programs = 0;
+            let affected_programs;
             let mut sample_changes = Vec::new();
             
             // Convert database EPG programs to EpgProgram struct for processing

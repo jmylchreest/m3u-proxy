@@ -595,10 +595,14 @@ impl StreamSourceService {
         }
         
         // Update the source's last_ingested_at timestamp
-        if let Err(e) = self.stream_source_repo.update_last_ingested_at(&source.id).await {
-            warn!("Failed to update last_ingested_at for stream source '{}': {}", source.name, e);
-        } else {
-            info!("Updated last_ingested_at for stream source '{}'", source.name);
+        info!("Attempting to update last_ingested_at for stream source '{}'", source.name);
+        match self.stream_source_repo.update_last_ingested_at(&source.id).await {
+            Ok(updated_timestamp) => {
+                info!("Successfully updated last_ingested_at for stream source '{}' to {}", source.name, updated_timestamp.to_rfc3339());
+            }
+            Err(e) => {
+                error!("Failed to update last_ingested_at for stream source '{}': {}", source.name, e);
+            }
         }
         
         // Invalidate cache since we updated channels

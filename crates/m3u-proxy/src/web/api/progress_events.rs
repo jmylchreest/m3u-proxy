@@ -142,9 +142,12 @@ pub async fn progress_events_stream(
             .event("heartbeat")
             .data("connected"));
             
-        // Listen for real-time updates
+        // Listen for real-time updates with graceful shutdown support
         loop {
-            match receiver.recv().await {
+            tokio::select! {
+                // Handle progress updates
+                recv_result = receiver.recv() => {
+                    match recv_result {
                 Ok(progress) => {
                     // Only log meaningful state changes to reduce log noise
                     if matches!(progress.state, crate::services::progress_service::UniversalState::Completed | 
@@ -236,13 +239,26 @@ pub async fn progress_events_stream(
                             error!("Failed to serialize progress event: {}", e);
                         }
                     }
+                        }
+                        Err(e) => {
+                            error!("Error receiving progress update: {}", e);
+                            break;
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!("Error receiving progress update: {}", e);
-                    break;
+                // Handle graceful shutdown - add a small delay to prevent busy-waiting
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                    // Check if we should continue - if the receiver is closed, we should stop
+                    if receiver.is_closed() {
+                        debug!("Progress service receiver closed, terminating SSE stream");
+                        break;
+                    }
+                    // Otherwise continue the loop
                 }
             }
         }
+        
+        debug!("SSE progress events stream terminated");
     };
 
     Sse::new(stream)

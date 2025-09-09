@@ -231,11 +231,14 @@ async fn get_scheduler_health(state: &crate::web::AppState) -> crate::web::respo
     // Get active ingestions from state manager
     let active_ingestions = get_active_ingestion_count(&state.state_manager).await;
     
+    // Get active proxy regenerations count
+    let active_regenerations = get_active_regeneration_count(&state.proxy_regeneration_service).await;
+    
     // Get last cache refresh time from progress service
     let last_cache_refresh = get_last_cache_refresh_time(&state.progress_service).await;
     
-    // Determine scheduler status based on available data
-    let status = if active_ingestions > 0 {
+    // Determine scheduler status based on available data - include proxy regenerations
+    let status = if active_ingestions > 0 || active_regenerations > 0 {
         "running".to_string()
     } else if stream_sources_count > 0 || epg_sources_count > 0 {
         "idle".to_string()
@@ -252,6 +255,7 @@ async fn get_scheduler_health(state: &crate::web::AppState) -> crate::web::respo
         next_scheduled_times,
         last_cache_refresh,
         active_ingestions,
+        active_regenerations,
     }
 }
 
@@ -328,6 +332,21 @@ async fn get_active_ingestion_count(state_manager: &crate::ingestor::IngestionSt
     // Check if any ingestions are currently active
     match state_manager.has_active_ingestions().await {
         Ok(is_active) => if is_active { 1 } else { 0 },
+        Err(_) => 0, // Default to 0 if unable to determine
+    }
+}
+
+/// Get active proxy regeneration count from proxy regeneration service
+async fn get_active_regeneration_count(proxy_regeneration_service: &crate::services::proxy_regeneration::ProxyRegenerationService) -> u32 {
+    // Get queue status and extract active regeneration count
+    match proxy_regeneration_service.get_queue_status().await {
+        Ok(status_json) => {
+            // Parse the JSON response to extract active_regenerations count
+            status_json.get("active_regenerations")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(0)
+        }
         Err(_) => 0, // Default to 0 if unable to determine
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.2.3-dev.8.g66407ca"
+version = "0.2.3-dev.10.g6bd1733"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"
@@ -38,13 +38,13 @@ async-stream = "0.3"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["macros", "multipart"] }
 base64 = "0.22.1"
-chrono = { version = "0.4.41", features = ["serde"] }
+chrono = { version = "0.4.42", features = ["serde"] }
 chrono-tz = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 cron = "0.15"
 env_logger = "0.11"
 quick-xml = { version = "0.38", features = ["serialize"] }
-rand = "0.8"
+rand = "0.9"
 regex = "1.11"
 rust-embed = "8.7"
 reqwest = { version = "0.12", features = [
@@ -90,24 +90,21 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json", "registry"] }
 
 # OpenTelemetry observability stack
-opentelemetry = { version = "0.29", features = ["metrics", "trace"] }
-opentelemetry_sdk = { version = "0.29", features = ["metrics", "trace", "rt-tokio"] }
+opentelemetry = { version = "0.30", features = ["metrics", "trace"] }
+opentelemetry_sdk = { version = "0.30", features = ["metrics", "trace", "rt-tokio"] }
 opentelemetry-otlp = { version = "0.30", features = ["metrics", "trace", "tokio"] }
 opentelemetry-appender-tracing = "0.30"
 tracing-opentelemetry = "0.31"
 axum-tracing-opentelemetry = "0.30"
 tower-otel-http-metrics = "0.16"
-# Prometheus metrics endpoint
-prometheus = "0.14"
-axum-prometheus = "0.7"
-opentelemetry-prometheus = "0.29"
+# Prometheus metrics via OTLP exporter (prometheus dependency removed due to incompatibility)
 uuid = { version = "1.18", features = ["v4", "serde"] }
 bytes = "1.10"
 tempfile = "3.21"
 futures = "0.3"
 futures-util = "0.3"
 humantime = "2.2"
-image = { version = "0.25", default-features = false, features = [
+image = { version = "0.25.8", default-features = false, features = [
     "png",
     "jpeg",
     "gif",
@@ -135,7 +132,7 @@ criterion = { version = "0.7", features = ["html_reports"] }
 rstest = "0.26"
 serial_test = "3.2"
 mockall = "0.13"
-axum-test = "18.0"
+axum-test = "18.1"
 
 # Additional test utilities
 test-log = "0.2"

@@ -1149,6 +1149,9 @@ impl ProgressService {
     /// Check if there are any active database operations in progress
     /// This is used by the scheduler to determine if it's safe to shut down
     pub async fn has_active_database_operations(&self) -> bool {
+        // First clean up completed operations to avoid false positives
+        self.cleanup_completed().await;
+        
         let storage = self.storage.read().await;
         
         for progress in storage.values() {
@@ -1164,12 +1167,13 @@ impl ProgressService {
                     for stage in &progress.stages {
                         if matches!(stage.state, UniversalState::Saving | UniversalState::Processing) 
                             && stage.percentage < 100.0 {
-                            tracing::debug!(
-                                "Found active database operation: {} - stage '{}' at {}% ({})",
+                            tracing::info!(
+                                "Found active database operation during shutdown check: {} - stage '{}' at {}% ({}) - overall_complete: {}",
                                 progress.operation_name,
                                 stage.name,
                                 stage.percentage,
-                                stage.stage_step
+                                stage.stage_step,
+                                progress.is_complete()
                             );
                             return true;
                         }

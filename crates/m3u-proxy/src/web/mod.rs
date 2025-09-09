@@ -40,6 +40,7 @@ use crate::{
     data_mapping::DataMappingService,
     database::Database,
     ingestor::{IngestionStateManager, scheduler::{CacheInvalidationSender, SchedulerEvent}},
+    job_scheduling::{job_scheduler::JobScheduler, job_queue::JobQueue, job_queue_runner::JobQueueRunner},
     logo_assets::{LogoAssetService, LogoAssetStorage},
     observability::AppObservability,
     runtime_settings::RuntimeSettingsStore,
@@ -92,6 +93,9 @@ pub struct WebServerBuilder {
     pub runtime_settings_store: Arc<RuntimeSettingsStore>,
     pub circuit_breaker_manager: Option<std::sync::Arc<crate::services::CircuitBreakerManager>>,
     pub observability: Arc<AppObservability>,
+    pub job_scheduler: Arc<JobScheduler>,
+    pub job_queue: Arc<JobQueue>,
+    pub job_queue_runner: Arc<JobQueueRunner>,
 }
 
 impl WebServerBuilder {
@@ -154,6 +158,9 @@ impl WebServer {
             temp_file_manager: builder.temp_file_manager,
             observability: builder.observability.clone(),
             scheduler_event_tx: None,
+            job_scheduler: builder.job_scheduler,
+            job_queue: builder.job_queue,
+            job_queue_runner: builder.job_queue_runner,
             logo_cache_scanner,
             session_tracker: std::sync::Arc::new(
                 crate::proxy::session_tracker::SessionTracker::default(),
@@ -186,8 +193,6 @@ impl WebServer {
             .route("/health", get(handlers::health::health_check))
             .route("/ready", get(handlers::health::readiness_check))
             .route("/live", get(handlers::health::liveness_check))
-            // Prometheus metrics endpoint
-            .route("/metrics", get(handlers::metrics::prometheus_metrics))
             // OpenAPI documentation
             .merge(Self::openapi_routes())
             // API v1 routes
@@ -401,6 +406,9 @@ impl WebServer {
             .route("/settings", get(api::settings::get_settings))
             .route("/settings", put(api::settings::update_settings))
             .route("/settings/info", get(api::settings::get_settings_info))
+            // Job scheduling settings endpoints
+            .route("/settings/job-scheduling", get(api::settings::get_job_scheduling_config))
+            .route("/settings/job-scheduling", put(api::settings::update_job_scheduling_config))
             // Feature flags endpoints
             .route("/features", get(handlers::features::get_features)
                 .put(handlers::features::update_features))
@@ -533,6 +541,9 @@ pub struct AppState {
     pub temp_file_manager: SandboxedManager,
     pub observability: Arc<AppObservability>,
     pub scheduler_event_tx: Option<mpsc::UnboundedSender<SchedulerEvent>>,
+    pub job_scheduler: Arc<JobScheduler>,
+    pub job_queue: Arc<JobQueue>,
+    pub job_queue_runner: Arc<JobQueueRunner>,
     pub logo_cache_scanner: Option<crate::services::logo_cache_scanner::LogoCacheScanner>,
     pub session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
     pub relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,

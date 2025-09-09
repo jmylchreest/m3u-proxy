@@ -6,6 +6,7 @@ pub mod entities;
 pub mod errors;
 pub mod expression_parser;
 pub mod ingestor;
+pub mod job_scheduling;
 pub mod logo_assets;
 pub mod models;
 pub mod observability;

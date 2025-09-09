@@ -308,6 +308,7 @@ pub struct SchedulerHealth {
     pub next_scheduled_times: Vec<NextScheduledTime>,
     pub last_cache_refresh: chrono::DateTime<chrono::Utc>,
     pub active_ingestions: u32,
+    pub active_regenerations: u32,
 }
 
 /// Count of scheduled sources by type

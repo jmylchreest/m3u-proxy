@@ -98,9 +98,7 @@ impl StreamFilterProcessor {
                     Some(condition_tree)
                 },
                 Err(e) => {
-                    warn!("Failed to parse filter expression filter_id={} filter_name={} error={} expression={}", 
-                          filter_id, filter_name, e, resolved_expression);
-                    None
+                    return Err(format!("Failed to parse filter expression: {}", e).into());
                 }
             }
         };
@@ -254,8 +252,8 @@ impl FilterProcessor<crate::models::Channel> for StreamFilterProcessor {
             // Inverse/exclude filter: if condition matches, this should be excluded
             (false, condition_result)
         } else {
-            // Include filter: if condition matches, this should be included
-            (condition_result, false)
+            // Include filter: if condition matches, this should be included; otherwise excluded
+            (condition_result, !condition_result)
         };
         
         Ok(FilterResult {
@@ -718,6 +716,7 @@ mod tests {
         EpgProgram {
             id: format!("prog_{}", title.to_lowercase().replace(' ', "_")),
             channel_id: channel_id.to_string(),
+            channel_name: format!("Channel {}", channel_id), // Add channel_name field
             title: title.to_string(),
             description: Some(format!("Description for {}", title)),
             program_icon: None,

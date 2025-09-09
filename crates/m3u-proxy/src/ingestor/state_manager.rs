@@ -332,7 +332,7 @@ impl IngestionStateManager {
     pub async fn has_active_ingestions(&self) -> Result<bool, Box<dyn std::error::Error>> {
         let states = self.states.read().await;
         
-        for (_source_id, progress) in states.iter() {
+        for (source_id, progress) in states.iter() {
             match progress.state {
                 crate::models::IngestionState::Idle 
                 | crate::models::IngestionState::Completed 
@@ -346,6 +346,8 @@ impl IngestionStateManager {
                 | crate::models::IngestionState::Saving
                 | crate::models::IngestionState::Processing => {
                     // These are active ingestion states
+                    tracing::info!("Found active ingestion: source_id={}, state={:?}, updated={:?}", 
+                        source_id, progress.state, progress.updated_at);
                     return Ok(true);
                 }
             }

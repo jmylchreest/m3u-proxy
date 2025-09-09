@@ -391,7 +391,13 @@ function EditEpgSourceSheet({
     e.preventDefault()
     if (!source) return
     
-    await onUpdateSource(source.id, formData)
+    // Filter out empty password to preserve existing password
+    const updateData = { ...formData }
+    if (!updateData.password || updateData.password.trim() === '') {
+      delete updateData.password
+    }
+    
+    await onUpdateSource(source.id, updateData)
     if (!error) {
       onOpenChange(false)
     }

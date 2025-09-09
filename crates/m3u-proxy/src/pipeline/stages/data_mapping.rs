@@ -651,6 +651,8 @@ impl DataMappingStage {
         info!("EPG programs processing completed: total_programs={} stage_duration={}", 
               program_count, format_duration_precise(stage_duration));
         
+        // Note: EPG rule stats are logged within the EPG processing scope above
+        
         // Get file size
         let file_size_bytes = if let Ok(content) = self.file_manager.read(&output_file_path).await {
             Some(content.len() as u64)

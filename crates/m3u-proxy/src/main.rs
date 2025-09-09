@@ -12,8 +12,9 @@ use m3u_proxy::{
     database::{Database, repositories::{StreamProxySeaOrmRepository, EpgSourceSeaOrmRepository, StreamSourceSeaOrmRepository, ChannelSeaOrmRepository}},
     ingestor::{
         IngestionStateManager,
-        scheduler::{SchedulerService, create_cache_invalidation_channel},
+        scheduler::create_cache_invalidation_channel,
     },
+    job_scheduling::{JobQueue, JobScheduler, JobQueueRunner, JobExecutor},
     logo_assets::{LogoAssetService, LogoAssetStorage},
     services::{ProxyRegenerationService, StreamSourceBusinessService, EpgSourceService, UrlLinkingService},
     utils::{
@@ -260,7 +261,7 @@ async fn main() -> Result<()> {
     let mut logo_asset_service = LogoAssetService::new(database.connection().clone(), logo_asset_storage.clone(), &http_client_factory).await;
 
     // Create cache invalidation channel for scheduler
-    let (cache_invalidation_tx, cache_invalidation_rx) = create_cache_invalidation_channel();
+    let (cache_invalidation_tx, _cache_invalidation_rx) = create_cache_invalidation_channel();
 
     tracing::debug!("Logo asset service and storage initialized");
 
@@ -407,18 +408,27 @@ async fn main() -> Result<()> {
         ).with_observability(observability.clone()))
     };
 
-    // Create scheduler service now that proxy regeneration service exists
-    let scheduler = SchedulerService::with_http_client_factory(
-        progress_service.clone(),
-        database.clone(),
+    // Create new job scheduling system
+    let job_queue = Arc::new(JobQueue::new());
+    let job_scheduler = Arc::new(JobScheduler::new(job_queue.clone(), database.clone()));
+    let job_executor = Arc::new(JobExecutor::new(
         stream_source_service.clone(),
         epg_source_service.clone(),
-        config.ingestion.run_missed_immediately,
-        Some(cache_invalidation_rx),
-        Some(proxy_regeneration_service.clone()),
-        http_client_factory.clone(),
-    );
-    info!("Scheduler service initialized");
+        Arc::new(proxy_regeneration_service.clone()),
+        database.clone(),
+        config.clone(),
+        temp_file_manager.clone(),
+        Arc::new(http_client_factory.clone()),
+        progress_service.clone(),
+    ));
+    let job_queue_runner = Arc::new(JobQueueRunner::new(
+        job_queue.clone(),
+        job_executor.clone(),
+        job_scheduler.clone(),
+        &config.job_scheduling.clone().unwrap_or_default(),
+    ));
+    info!("Job scheduling system initialized");
+
 
     // Initialize relay manager with shared system (SeaORM)
     let relay_manager = std::sync::Arc::new(
@@ -462,6 +472,9 @@ async fn main() -> Result<()> {
             runtime_settings_store: runtime_settings_arc.clone(),
             circuit_breaker_manager: Some(circuit_breaker_manager.clone()),
             observability: observability.clone(),
+            job_scheduler: job_scheduler.clone(),
+            job_queue: job_queue.clone(),
+            job_queue_runner: job_queue_runner.clone(),
         },
     )
     .await?;
@@ -476,14 +489,15 @@ async fn main() -> Result<()> {
         web_server.port()
     );
 
-    // Create cancellation token for coordinated shutdown of all services
-    let cancellation_token = tokio_util::sync::CancellationToken::new();
+    // Create separate cancellation tokens for web server and background services
+    let web_server_cancellation_token = tokio_util::sync::CancellationToken::new();
+    let scheduler_cancellation_token = tokio_util::sync::CancellationToken::new();
     
     // Clone services for shutdown handling before they get moved
     let shutdown_proxy_service = proxy_regeneration_service.clone();
     
     // Set up signal handlers for graceful shutdown with force-kill capability
-    let shutdown_token = cancellation_token.clone();
+    let shutdown_scheduler_token = scheduler_cancellation_token.clone();
     let shutdown_state_manager = state_manager.clone();
     tokio::spawn(async move {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -509,13 +523,28 @@ async fn main() -> Result<()> {
             }
             
             // Cancel all active ingestions first
-            shutdown_state_manager.cancel_all_ingestions().await;
+            let cancelled_ingestions = shutdown_state_manager.cancel_all_ingestions().await;
+            tracing::info!("Cancelled {} active ingestion(s)", cancelled_ingestions);
+            
+            // Check proxy service status before shutdown
+            let active_regenerations = shutdown_proxy_service.get_active_regeneration_count().await;
+            if let Ok(queue_status) = shutdown_proxy_service.get_queue_status().await {
+                tracing::info!("Proxy regeneration status before shutdown: {} active regenerations, queue: {}", 
+                              active_regenerations, queue_status);
+            } else {
+                tracing::info!("Proxy regeneration status before shutdown: {} active regenerations", active_regenerations);
+            }
             
             // Shutdown proxy regeneration service to cancel pending delays
             shutdown_proxy_service.shutdown();
+            shutdown_proxy_service.cancel_all_pending().await;
             
-            // Cancel all background services
-            shutdown_token.cancel();
+            // Check proxy service status after shutdown signal
+            let active_regenerations_after = shutdown_proxy_service.get_active_regeneration_count().await;
+            tracing::info!("Proxy regeneration status after shutdown signal: {} active regenerations", active_regenerations_after);
+            
+            // Cancel scheduler services first (but keep web server running)
+            shutdown_scheduler_token.cancel();
             
             // Set up force-kill handler for additional signals
             let signal_count_clone = signal_count.clone();
@@ -552,13 +581,28 @@ async fn main() -> Result<()> {
             tracing::info!("Received Ctrl+C, initiating graceful shutdown of all services");
             
             // Cancel all active ingestions first
-            shutdown_state_manager.cancel_all_ingestions().await;
+            let cancelled_ingestions = shutdown_state_manager.cancel_all_ingestions().await;
+            tracing::info!("Cancelled {} active ingestion(s)", cancelled_ingestions);
+            
+            // Check proxy service status before shutdown
+            let active_regenerations = shutdown_proxy_service.get_active_regeneration_count().await;
+            if let Ok(queue_status) = shutdown_proxy_service.get_queue_status().await {
+                tracing::info!("Proxy regeneration status before shutdown: {} active regenerations, queue: {}", 
+                              active_regenerations, queue_status);
+            } else {
+                tracing::info!("Proxy regeneration status before shutdown: {} active regenerations", active_regenerations);
+            }
             
             // Shutdown proxy regeneration service to cancel pending delays
             shutdown_proxy_service.shutdown();
+            shutdown_proxy_service.cancel_all_pending().await;
             
-            // Cancel all background services
-            shutdown_token.cancel();
+            // Check proxy service status after shutdown signal
+            let active_regenerations_after = shutdown_proxy_service.get_active_regeneration_count().await;
+            tracing::info!("Proxy regeneration status after shutdown signal: {} active regenerations", active_regenerations_after);
+            
+            // Cancel scheduler services first (but keep web server running)
+            shutdown_scheduler_token.cancel();
             
             // Set up force-kill handler for additional Ctrl+C
             let signal_count_clone = signal_count.clone();
@@ -585,7 +629,7 @@ async fn main() -> Result<()> {
     let _bind_addr = format!("{}:{}", web_server.host(), web_server.port());
 
     // Start the web server in a separate task
-    let web_server_token = cancellation_token.clone();
+    let web_server_token = web_server_cancellation_token.clone();
     let server_handle = tokio::spawn(async move {
         // This will signal immediately when bind succeeds/fails, then block until shutdown
         if let Err(e) = web_server.serve_with_cancellation(server_ready_tx, Some(web_server_token)).await {
@@ -611,39 +655,133 @@ async fn main() -> Result<()> {
     // Now start the background services after the web server is listening
     // Note: Proxy regeneration is handled by scheduler completion handlers, no background polling needed
 
-    info!("Starting scheduler service");
-    let scheduler_token = cancellation_token.clone();
+    info!("Starting job scheduling services");
+    
+    // Start job scheduler service
+    let scheduler_token = scheduler_cancellation_token.clone();
+    let job_scheduler_clone = job_scheduler.clone();
     let scheduler_handle = tokio::spawn(async move {
-        if let Err(e) = scheduler.start_with_cancellation(Some(scheduler_token)).await {
-            tracing::error!("Scheduler service failed: {}", e);
+        if let Err(e) = job_scheduler_clone.run(scheduler_token).await {
+            tracing::error!("Job scheduler service failed: {}", e);
+        }
+    });
+    
+    // Start job queue runner service  
+    let runner_token = scheduler_cancellation_token.clone();
+    let queue_runner_handle = tokio::spawn(async move {
+        if let Err(e) = job_queue_runner.run(runner_token).await {
+            tracing::error!("Job queue runner service failed: {}", e);
         }
     });
 
     info!("All services started successfully");
 
-    // Wait for either server completion or cancellation signal
-    tokio::select! {
-        result = server_handle => {
-            if let Err(e) = result {
-                tracing::error!("Web server task failed: {}", e);
+    // Wait for scheduler cancellation signal
+    scheduler_cancellation_token.cancelled().await;
+    tracing::info!("Scheduler cancellation signal received, waiting for background services to shut down");
+    
+    // Give both services time to shut down gracefully, with extra time for database operations
+    // Database operations like EPG ingestion can take several minutes and must complete
+    // to avoid partial state corruption
+    let shutdown_monitoring = {
+        let proxy_service_monitor = proxy_regeneration_service.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            let start_time = std::time::Instant::now();
+            
+            loop {
+                interval.tick().await;
+                
+                let active_regens = proxy_service_monitor.get_active_regeneration_count().await;
+                let elapsed = start_time.elapsed().as_secs();
+                
+                if active_regens > 0 {
+                    tracing::info!("Shutdown monitor: {} active proxy regenerations still running after {}s", 
+                                  active_regens, elapsed);
+                    
+                    if let Ok(queue_status) = proxy_service_monitor.get_queue_status().await {
+                        tracing::debug!("Proxy queue status: {}", queue_status);
+                    }
+                } else if elapsed > 30 {
+                    // Log every 30s if no active regenerations
+                    tracing::info!("Shutdown monitor: No active proxy regenerations after {}s", elapsed);
+                    break;
+                }
+                
+                if elapsed > 290 { // Stop monitoring 10s before timeout
+                    tracing::warn!("Shutdown monitor: Approaching 5-minute timeout with {} active regenerations", 
+                                  active_regens);
+                    break;
+                }
             }
+        })
+    };
+    
+    let shutdown_timeout = tokio::time::timeout(
+        std::time::Duration::from_secs(300), // 5 minutes for database consistency
+        async move {
+            let scheduler_result = scheduler_handle.await;
+            let runner_result = queue_runner_handle.await;
+            (scheduler_result, runner_result)
         }
-        _ = cancellation_token.cancelled() => {
-            tracing::info!("Cancellation signal received, waiting for services to shut down");
-            
-            // Give services time to shut down gracefully, with extra time for database operations
-            // Database operations like EPG ingestion can take several minutes and must complete
-            // to avoid partial state corruption
-            let shutdown_timeout = tokio::time::timeout(
-                std::time::Duration::from_secs(300), // 5 minutes for database consistency
-                scheduler_handle
-            );
-            
-            match shutdown_timeout.await {
-                Ok(Ok(())) => tracing::info!("All background services shut down gracefully"),
-                Ok(Err(e)) => tracing::warn!("Background service error during shutdown: {}", e),
-                Err(_) => tracing::warn!("Background services did not shut down within timeout"),
+    );
+    
+    match shutdown_timeout.await {
+        Ok((Ok(()), Ok(()))) => {
+            tracing::info!("Job scheduling services shut down gracefully");
+            // Stop monitoring task
+            shutdown_monitoring.abort();
+        },
+        Ok((scheduler_result, runner_result)) => {
+            if let Err(e) = scheduler_result {
+                tracing::warn!("Job scheduler error during shutdown: {}", e);
             }
+            if let Err(e) = runner_result {
+                tracing::warn!("Job queue runner error during shutdown: {}", e);
+            }
+            // Stop monitoring task
+            shutdown_monitoring.abort();
+        },
+        Err(_) => {
+            tracing::warn!("Job scheduling services did not shut down within timeout");
+            // Stop monitoring task and get final status
+            shutdown_monitoring.abort();
+            let final_active_regens = proxy_regeneration_service.get_active_regeneration_count().await;
+            if final_active_regens > 0 {
+                tracing::warn!("Final status: {} proxy regenerations were still active at timeout", final_active_regens);
+                if let Ok(final_status) = proxy_regeneration_service.get_queue_status().await {
+                    tracing::warn!("Final proxy queue status: {}", final_status);
+                }
+            }
+        },
+    }
+    
+    // Now that background operations are complete, shut down the web server
+    tracing::info!("Background operations complete - shutting down web server");
+    
+    // All critical background services are shut down, so we can terminate the web server
+    // without waiting for SSE connections to close gracefully
+    web_server_cancellation_token.cancel();
+    tracing::info!("Web server cancellation token activated");
+    
+    // Give it a brief moment to respond to cancellation
+    let shutdown_start = std::time::Instant::now();
+    let web_server_timeout = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        server_handle
+    );
+    
+    match web_server_timeout.await {
+        Ok(Ok(())) => {
+            let duration = shutdown_start.elapsed();
+            tracing::info!("Web server shut down after {:?}", duration);
+        },
+        Ok(Err(e)) => {
+            tracing::info!("Web server terminated with error: {}", e);
+        },
+        Err(_) => {
+            let elapsed = shutdown_start.elapsed();
+            tracing::info!("Web server shutdown timeout after {:?} - SSE connections closed", elapsed);
         }
     }
 

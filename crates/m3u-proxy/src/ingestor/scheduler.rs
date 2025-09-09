@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio::time::{sleep_until, Instant, Duration};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use super::IngestorService;
@@ -201,66 +201,97 @@ impl SchedulerService {
         
         // Process any missed sources immediately
         if !missed_sources.is_empty() {
-            debug!("Processing {} missed source(s) immediately", missed_sources.len());
+            info!("Processing {} missed source(s) immediately", missed_sources.len());
             for source in missed_sources {
-                debug!("Starting immediate ingestion for missed {} source: {}", source.source_type(), source.name());
                 self.process_source_update(source).await;
             }
         }
 
-        // Take the event receiver
-        let mut event_rx = self.event_rx.take().expect("Event receiver should be available");
+        // Take the event receiver - critical fix to prevent silent panics
+        let mut event_rx = match self.event_rx.take() {
+            Some(rx) => rx,
+            None => {
+                error!("Event receiver is None - scheduler may have been started multiple times");
+                return Err(anyhow::anyhow!("Event receiver is not available - scheduler may have been started multiple times"));
+            }
+        };
+        
+        info!("Scheduler entering main event loop");
 
         loop {
             let next_wake_time = self.calculate_next_wake_time().await;
-            debug!("Next scheduler wake time: {:?}", next_wake_time);
 
             tokio::select! {
                 // Wake up for scheduled events based on intelligent calculation
                 _ = sleep_until(next_wake_time) => {
-                    trace!("Scheduler wake-up for scheduled events");
                     if let Err(e) = self.process_scheduled_events().await {
                         error!("Error processing scheduled events: {}", e);
                     }
                 }
                 
                 // React to immediate events
-                Some(event) = event_rx.recv() => {
-                    trace!("Received scheduler event: {:?}", event);
-                    if let Err(e) = self.handle_event(event).await {
-                        error!("Error handling scheduler event: {}", e);
+                event_result = event_rx.recv() => {
+                    match event_result {
+                        Some(event) => {
+                            if let Err(e) = self.handle_event(event).await {
+                                error!("Error handling scheduler event: {}", e);
+                            }
+                        }
+                        None => {
+                            error!("Event receiver closed unexpectedly");
+                            return Err(anyhow::anyhow!("Event receiver was closed unexpectedly"));
+                        }
                     }
                 }
                 
                 // Legacy cache invalidation support
                 _ = self.receive_cache_invalidation(), if self.cache_invalidation_rx.is_some() => {
-                    debug!("Received cache invalidation signal");
                     if let Err(e) = self.refresh_cache().await {
                         error!("Failed to refresh cache after invalidation: {}", e);
                     }
                 }
                 
-                // Graceful shutdown support
+                // Graceful shutdown support  
                 _ = async {
-                    if let Some(token) = &cancellation_token {
-                        token.cancelled().await;
-                    } else {
-                        std::future::pending::<()>().await;
+                    match &cancellation_token {
+                        Some(token) => {
+                            token.cancelled().await;
+                        }
+                        None => {
+                            // Create a future that will never complete
+                            loop {
+                                tokio::time::sleep(Duration::from_secs(u64::MAX)).await;
+                            }
+                        }
                     }
                 } => {
                     info!("Scheduler received cancellation signal, checking for active database operations");
                     
                     // Check if there are active ingestions that need to complete
-                    // CRITICAL FIX: Use enhanced method that also checks ProgressService
                     let state_manager = self.ingestor.get_state_manager();
                     let progress_service = self.ingestor.get_progress_service();
-                    let has_active = match state_manager.has_active_ingestions_enhanced(Some(progress_service)).await {
-                        Ok(result) => result,
+                    
+                    // Check traditional ingestion state tracking
+                    let has_traditional_active = match state_manager.has_active_ingestions().await {
+                        Ok(result) => {
+                            if result {
+                                info!("Found active traditional ingestion states during shutdown check");
+                            }
+                            result
+                        },
                         Err(e) => {
-                            warn!("Failed to check active ingestions: {} - proceeding with shutdown", e);
-                            false // Assume no active operations if we can't check
+                            warn!("Failed to check traditional ingestions: {} - assuming none active", e);
+                            false
                         }
                     };
+                    
+                    // Check progress service for active database operations
+                    let has_progress_active = progress_service.has_active_database_operations().await;
+                    if has_progress_active {
+                        info!("Found active database operations in progress service during shutdown check");
+                    }
+                    
+                    let has_active = has_traditional_active || has_progress_active;
                     
                     if has_active {
                         info!("Active database operations detected - waiting for completion to prevent data corruption");
@@ -286,7 +317,7 @@ impl SchedulerService {
                         info!("No active database operations - scheduler shutting down immediately");
                     }
                     
-                    break Ok(());
+                    return Ok(());
                 }
             }
         }
@@ -302,8 +333,6 @@ impl SchedulerService {
     }
 
     async fn refresh_cache(&self) -> Result<()> {
-        debug!("Refreshing scheduler cache from database");
-
         // Load both stream and EPG sources using SeaORM repositories
         let stream_sources = self.stream_source_repo.find_all().await
             .map_err(|e| anyhow::anyhow!("Failed to get stream sources: {}", e))?;
@@ -315,11 +344,16 @@ impl SchedulerService {
         let mut cache = self.cached_sources.write().await;
         cache.clear();
 
+        let mut active_stream_count = 0;
+        let mut active_epg_count = 0;
+
         // Process stream sources
         for source in stream_sources {
             if !source.is_active {
                 continue;
             }
+
+            active_stream_count += 1;
 
             let schedule = match Schedule::from_str(&source.update_cron) {
                 Ok(s) => Some(s),
@@ -349,6 +383,8 @@ impl SchedulerService {
                 continue;
             }
 
+            active_epg_count += 1;
+
             let schedule = match Schedule::from_str(&source.update_cron) {
                 Ok(s) => Some(s),
                 Err(e) => {
@@ -372,9 +408,9 @@ impl SchedulerService {
         }
 
         *self.last_cache_refresh.write().await = now;
-        debug!(
-            "Cached {} active sources with schedules (stream + EPG)",
-            cache.len()
+        info!(
+            "Cache refreshed: {} active sources total ({} stream, {} EPG)",
+            cache.len(), active_stream_count, active_epg_count
         );
         Ok(())
     }
@@ -395,7 +431,7 @@ impl SchedulerService {
 
             if let Some(schedule) = &cached_source.schedule
                 && let Some(next_time) = schedule.upcoming(Utc).next() {
-                    trace!(
+                    info!(
                         "Source '{}' (ID: {}, Type: {}) - Next scheduled update: {} (cron: {})",
                         source.name(),
                         source.id(),
@@ -410,18 +446,22 @@ impl SchedulerService {
                         && let Some(should_have_run) = schedule.after(&last_ingested).next()
                         && now >= should_have_run
                         && now.signed_duration_since(should_have_run).num_seconds() > 5 {
-                            trace!(
+                            info!(
                                 "Source '{}' (ID: {}) missed scheduled run at {} - will run immediately",
                                 source.name(),
                                 source.id(),
                                 should_have_run.format("%Y-%m-%d %H:%M:%S UTC")
                             );
-                            // Add to missed sources list for immediate processing
                             missed_sources.push(source.clone());
                         }
+                } else {
+                    warn!("Source '{}' has no valid schedule - will not be processed", source.name());
                 }
         }
 
+        if !missed_sources.is_empty() {
+            info!("Found {} missed sources to process immediately", missed_sources.len());
+        }
         Ok(missed_sources)
     }
 
@@ -444,31 +484,14 @@ impl SchedulerService {
             {
                 // If next_retry_after is None, the source is actively being processed
                 if processing_info.next_retry_after.is_none() {
-                    trace!(
-                        "Source '{}' is actively being processed (started at {}) - skipping scheduler run",
-                        source.name(),
-                        processing_info.started_at.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
                     continue; // Skip this source - actively processing
                 }
 
                 // Check if we're in backoff period
-                if let Some(retry_after) = processing_info.next_retry_after {
-                    if now < retry_after {
-                        trace!(
-                            "Source '{}' is still in backoff period until {}",
-                            source.name(),
-                            retry_after.format("%Y-%m-%d %H:%M:%S UTC")
-                        );
+                if let Some(retry_after) = processing_info.next_retry_after
+                    && now < retry_after {
                         continue; // Skip this source - still in backoff
-                    } else {
-                        trace!(
-                            "Source '{}' backoff period has expired (was until {}), checking schedule",
-                            source.name(),
-                            retry_after.format("%Y-%m-%d %H:%M:%S UTC")
-                        );
                     }
-                }
             }
 
             if let Some(schedule) = &cached_source.schedule {
@@ -480,10 +503,8 @@ impl SchedulerService {
                 ) {
                     Ok(should_update) => {
                         if should_update {
-                            trace!("Source '{}' will be processed", source.name());
+                            info!("Source '{}' should be processed now - adding to update queue", source.name());
                             sources_to_update.push(source.clone());
-                        } else {
-                            trace!("Source '{}' should not update (throttled)", source.name());
                         }
                     }
                     Err(e) => {
@@ -499,6 +520,10 @@ impl SchedulerService {
 
         // Release the write lock before processing
         drop(cache);
+
+        if !sources_to_update.is_empty() {
+            info!("Processing {} sources that need updating", sources_to_update.len());
+        }
 
         // Process sources that need updating
         for source in sources_to_update {
@@ -528,7 +553,6 @@ impl SchedulerService {
                 };
                 if let Some(linked_epg) = linked_epgs.into_iter().next() {
                     // Check if linked EPG was updated recently (within last 5 minutes)
-                    // Use scheduler cache to get more accurate timing
                     let should_refresh_linked = {
                         let cache = self.cached_sources.read().await;
                         if let Some(cached_epg) = cache.get(&linked_epg.id) {
@@ -544,16 +568,7 @@ impl SchedulerService {
                     };
                     
                     if should_refresh_linked {
-                        debug!(
-                            "Refreshing linked EPG source '{}' after stream source '{}' update",
-                            linked_epg.name, stream_source.name
-                        );
                         self.process_epg_source_update(&linked_epg).await;
-                    } else {
-                        trace!(
-                            "Skipping linked EPG source '{}' refresh - updated recently (within 5 minutes)",
-                            linked_epg.name
-                        );
                     }
                 }
             }
@@ -575,7 +590,6 @@ impl SchedulerService {
                 };
                 if let Some(linked_stream) = linked_streams.into_iter().next() {
                     // Check if linked stream was updated recently (within last 5 minutes)
-                    // Use scheduler cache to get more accurate timing
                     let should_refresh_linked = {
                         let cache = self.cached_sources.read().await;
                         if let Some(cached_stream) = cache.get(&linked_stream.id) {
@@ -591,16 +605,7 @@ impl SchedulerService {
                     };
                     
                     if should_refresh_linked {
-                        debug!(
-                            "Refreshing linked stream source '{}' after EPG source '{}' update",
-                            linked_stream.name, epg_source.name
-                        );
                         self.process_stream_source_update(&linked_stream).await;
-                    } else {
-                        trace!(
-                            "Skipping linked stream source '{}' refresh - updated recently (within 5 minutes)",
-                            linked_stream.name
-                        );
                     }
                 }
             }
@@ -639,7 +644,9 @@ impl SchedulerService {
             .refresh_with_progress_updater(source, progress_updater.as_ref())
             .await
         {
-            Ok(_channel_count) => {
+            Ok(channel_count) => {
+                info!("Successfully refreshed stream source '{}' - ingested {} channels", source.name, channel_count);
+                
                 // Update cached source data - the timestamp was already updated by the shared function
                 {
                     let mut cache = self.cached_sources.write().await;
@@ -650,10 +657,6 @@ impl SchedulerService {
                                 self.stream_source_repo.find_by_id(&source.id).await
                             {
                                 stream_src.last_ingested_at = updated_source.last_ingested_at;
-                                debug!(
-                                    "Updated cached last_ingested_at for stream source '{}' to {:?}",
-                                    source.name, updated_source.last_ingested_at
-                                );
                             }
                         }
                 }
@@ -661,7 +664,7 @@ impl SchedulerService {
                 // Calculate next update time
                 if let Ok(schedule) = Schedule::from_str(&source.update_cron)
                     && let Some(next_time) = schedule.upcoming(Utc).next() {
-                        debug!(
+                        info!(
                             "Scheduled refresh completed for stream source '{}' - Next update: {}",
                             source.name,
                             next_time.format("%Y-%m-%d %H:%M:%S UTC")
@@ -682,17 +685,14 @@ impl SchedulerService {
         if let Some(manager) = progress_manager {
             if success {
                 manager.complete().await;
-                debug!("Completed stream source ingestion progress for {}", source.name);
             } else {
                 manager.fail(&format!("Stream source ingestion failed for {}", source.name)).await;
-                debug!("Failed stream source ingestion progress for {}", source.name);
             }
         }
 
         // Trigger proxy auto-regeneration after successful stream source update
         if success
             && let Some(ref proxy_service) = self.proxy_regeneration_service {
-                // COORDINATION FIX: Use coordinated method to prevent scheduler-manual conflicts
                 proxy_service.queue_affected_proxies_coordinated(source.id, "stream").await;
             }
     }
@@ -729,7 +729,9 @@ impl SchedulerService {
             .ingest_programs_with_progress_updater(source, progress_updater.as_ref())
             .await
         {
-            Ok(_program_count) => {
+            Ok(program_count) => {
+                info!("Successfully refreshed EPG source '{}' - ingested {} programs", source.name, program_count);
+                
                 // Update cached source data - the timestamp was already updated by the shared function
                 {
                     let mut cache = self.cached_sources.write().await;
@@ -740,10 +742,6 @@ impl SchedulerService {
                                 self.epg_source_repo.find_by_id(&source.id).await
                             {
                                 epg_src.last_ingested_at = updated_source.last_ingested_at;
-                                debug!(
-                                    "Updated cached last_ingested_at for EPG source '{}' to {:?}",
-                                    source.name, updated_source.last_ingested_at
-                                );
                             }
                         }
                 }
@@ -751,7 +749,7 @@ impl SchedulerService {
                 // Calculate next update time
                 if let Ok(schedule) = Schedule::from_str(&source.update_cron)
                     && let Some(next_time) = schedule.upcoming(Utc).next() {
-                        debug!(
+                        info!(
                             "Scheduled refresh completed for EPG source '{}' - Next update: {}",
                             source.name,
                             next_time.format("%Y-%m-%d %H:%M:%S UTC")
@@ -772,17 +770,14 @@ impl SchedulerService {
         if let Some(manager) = progress_manager {
             if success {
                 manager.complete().await;
-                debug!("Completed EPG source ingestion progress for {}", source.name);
             } else {
                 manager.fail(&format!("EPG source ingestion failed for {}", source.name)).await;
-                debug!("Failed EPG source ingestion progress for {}", source.name);
             }
         }
 
         // Trigger proxy auto-regeneration after successful EPG source update
         if success
             && let Some(ref proxy_service) = self.proxy_regeneration_service {
-                // COORDINATION FIX: Use coordinated method to prevent scheduler-manual conflicts
                 proxy_service.queue_affected_proxies_coordinated(source.id, "epg").await;
             }
     }
@@ -807,39 +802,18 @@ impl SchedulerService {
             // This prevents immediate re-runs when an ingestion just completed
             let time_since_last_ingestion = now.signed_duration_since(last_ingested);
             if time_since_last_ingestion.num_minutes() < 5 {
-                trace!(
-                    "Source '{}' was ingested recently ({} minutes ago) - skipping to prevent immediate re-trigger",
-                    source.name(),
-                    time_since_last_ingestion.num_minutes()
-                );
                 return Ok(false);
             }
 
             // Find the next scheduled time after the last ingestion
             if let Some(next_time) = schedule.after(&last_ingested).next() {
                 let should_run = now >= next_time;
-                if should_run {
-                    trace!(
-                        "Source '{}' should update: last_ingested={}, next_time={}, now={}",
-                        source.name(),
-                        last_ingested.format("%Y-%m-%d %H:%M:%S UTC"),
-                        next_time.format("%Y-%m-%d %H:%M:%S UTC"),
-                        now.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
-                }
                 return Ok(should_run);
             }
         }
 
         // If never ingested, check if it's time for the first run
         let should_run_first_time = schedule.upcoming(Utc).next().is_some();
-        if should_run_first_time && source.last_ingested_at().is_none() {
-            trace!(
-                "Source '{}' has never been ingested and schedule is active - should run",
-                source.name()
-            );
-        }
-
         Ok(should_run_first_time && source.last_ingested_at().is_none())
     }
 
@@ -856,7 +830,6 @@ impl SchedulerService {
             // Skip sources in grace period
             if let Some(grace_until) = cached_source.grace_period_until
                 && now < grace_until {
-                    trace!("Source '{}' in grace period until {}", cached_source.source.name(), grace_until);
                     continue;
                 }
             
@@ -887,29 +860,39 @@ impl SchedulerService {
             }
             
             // Check cron schedule
-            if let Some(schedule) = &cached_source.schedule
-                && let Some(next_time) = schedule.upcoming(Utc).next() {
+            if let Some(schedule) = &cached_source.schedule {
+                if let Some(last_ingested) = cached_source.source.last_ingested_at() {
                     // Apply grace period check
-                    if let Some(last_ingested) = cached_source.source.last_ingested_at() {
-                        let time_since_last = now.signed_duration_since(last_ingested);
-                        if time_since_last.num_minutes() < 5 {
-                            // Still in grace period - skip this schedule
-                            continue;
-                        }
+                    let time_since_last = now.signed_duration_since(last_ingested);
+                    if time_since_last.num_minutes() < 5 {
+                        // Still in grace period - skip this schedule
+                        continue;
                     }
                     
+                    // Check if source is overdue (should have run after last ingestion)
+                    if let Some(should_have_run) = schedule.after(&last_ingested).next()
+                        && now >= should_have_run {
+                            // Source is overdue - schedule immediately
+                            upcoming_times.push(now);
+                            continue;
+                        }
+                }
+                
+                // Not overdue - calculate next future scheduled time
+                if let Some(next_time) = schedule.upcoming(Utc).next() {
                     upcoming_times.push(next_time);
                 }
+            }
         }
         
         // Find the earliest upcoming time
         let next_wake = upcoming_times.into_iter().min()
-            .unwrap_or_else(|| now + chrono::Duration::minutes(5)); // Default to 5 minutes if no schedules
+            .unwrap_or_else(|| now + chrono::Duration::minutes(5));
         
         // Convert to tokio Instant with reasonable bounds
         let sleep_duration = next_wake.signed_duration_since(now)
             .to_std()
-            .unwrap_or(std::time::Duration::from_secs(60))
+            .unwrap_or_else(|_| std::time::Duration::from_secs(60))
             .max(std::time::Duration::from_secs(1))     // Minimum 1 second
             .min(std::time::Duration::from_secs(300));  // Maximum 5 minutes
         
@@ -918,19 +901,16 @@ impl SchedulerService {
 
     /// Process events that are scheduled (cron-based or backoff expiry)
     async fn process_scheduled_events(&mut self) -> Result<()> {
-        
-        // Use the existing check_and_update_sources_from_cache logic but with better filtering
+        // Use the existing check_and_update_sources_from_cache logic
         if let Err(e) = self.check_and_update_sources_from_cache().await {
             error!("Error checking scheduled sources: {}", e);
         }
         
         // Check if we need to refresh cache (every 5 minutes)
-        if self.should_refresh_cache().await {
-            debug!("Refreshing scheduler cache (periodic refresh)");
-            if let Err(e) = self.refresh_cache().await {
+        if self.should_refresh_cache().await
+            && let Err(e) = self.refresh_cache().await {
                 error!("Failed to refresh cache: {}", e);
             }
-        }
         
         Ok(())
     }
@@ -939,7 +919,6 @@ impl SchedulerService {
     async fn handle_event(&mut self, event: SchedulerEvent) -> Result<()> {
         match event {
             SchedulerEvent::SourceCreated(source_id) => {
-                debug!("Handling source creation event for {}", source_id);
                 // Refresh cache to include new source
                 self.refresh_cache().await?;
                 
@@ -948,13 +927,11 @@ impl SchedulerService {
             }
             
             SchedulerEvent::SourceUpdated(source_id) => {
-                debug!("Handling source update event for {}", source_id);
                 // Refresh specific source in cache
                 self.refresh_single_source_in_cache(source_id).await?;
             }
             
             SchedulerEvent::SourceDeleted(source_id) => {
-                debug!("Handling source deletion event for {}", source_id);
                 // Remove from cache
                 let mut cache = self.cached_sources.write().await;
                 cache.remove(&source_id);
@@ -965,7 +942,6 @@ impl SchedulerService {
             }
             
             SchedulerEvent::ManualRefreshTriggered(source_id) => {
-                debug!("Handling manual refresh trigger for {}", source_id);
                 // Set grace period to prevent immediate re-scheduling after manual run
                 self.set_source_grace_period(source_id, chrono::Duration::minutes(5)).await;
                 
@@ -975,7 +951,6 @@ impl SchedulerService {
             }
             
             SchedulerEvent::BackoffExpired(source_id) => {
-                trace!("Handling backoff expiry for {}", source_id);
                 // Remove from active timers
                 let mut timers = self.active_backoff_timers.write().await;
                 timers.remove(&source_id);
@@ -984,12 +959,10 @@ impl SchedulerService {
             }
             
             SchedulerEvent::CacheInvalidation => {
-                debug!("Handling cache invalidation event");
                 self.refresh_cache().await?;
             }
             
             SchedulerEvent::Shutdown => {
-                debug!("Handling shutdown event");
                 return Err(anyhow::anyhow!("Scheduler shutdown requested"));
             }
         }
@@ -1004,7 +977,6 @@ impl SchedulerService {
         
         if let Some(cached_source) = cache.get_mut(&source_id) {
             cached_source.grace_period_until = Some(grace_until);
-            debug!("Set grace period for source '{}' until {}", cached_source.source.name(), grace_until);
         }
     }
 
@@ -1013,7 +985,6 @@ impl SchedulerService {
         // Fetch updated source from database using repositories
         if let Ok(Some(stream_source)) = self.stream_source_repo.find_by_id(&source_id).await {
             let schedulable_source = SchedulableSource::Stream(stream_source);
-            let source_name = schedulable_source.name().to_string(); // Store name before move
             
             // Parse schedule if available
             let schedule = Schedule::from_str(schedulable_source.update_cron()).ok();
@@ -1033,11 +1004,8 @@ impl SchedulerService {
                     grace_period_until: None,
                 });
             }
-            
-            debug!("Refreshed source '{}' in cache", source_name);
         } else if let Ok(Some(epg_source)) = self.epg_source_repo.find_by_id(&source_id).await {
             let schedulable_source = SchedulableSource::Epg(epg_source);
-            let source_name = schedulable_source.name().to_string(); // Store name before move
             
             // Parse schedule if available
             let schedule = Schedule::from_str(schedulable_source.update_cron()).ok();
@@ -1057,8 +1025,6 @@ impl SchedulerService {
                     grace_period_until: None,
                 });
             }
-            
-            debug!("Refreshed EPG source '{}' in cache", source_name);
         } else {
             warn!("Source {} not found in database during cache refresh", source_id);
         }
@@ -1102,8 +1068,6 @@ impl SchedulerService {
             // Send expiry event
             let _ = event_tx.send(SchedulerEvent::BackoffExpired(source_id));
         });
-        
-        trace!("Scheduled backoff expiry timer for source {} at {}", source_id, retry_after);
     }
 
     /// Get scheduler health information for the health endpoint
@@ -1151,6 +1115,7 @@ impl SchedulerService {
             next_scheduled_times,
             last_cache_refresh,
             active_ingestions,
+            active_regenerations: 0, // Not available in this legacy context
         }
     }
 }

@@ -103,7 +103,9 @@ impl ChannelSeaOrmRepository {
 
     /// Find all channels
     pub async fn find_all(&self) -> Result<Vec<Channel>> {
-        let models = Channels::find().all(&*self.connection).await?;
+        let models = Channels::find()
+            .order_by_asc(channels::Column::ChannelName)
+            .all(&*self.connection).await?;
         Ok(models.into_iter().map(|m| self.model_to_domain(m)).collect())
     }
 

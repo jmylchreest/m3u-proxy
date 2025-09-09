@@ -632,49 +632,63 @@ impl Migration {
     }
 
     async fn create_logo_assets_table(&self, manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-        manager
-            .create_table(
-                Table::create()
-                    .table(LogoAssets::Table)
-                    .if_not_exists()
-                    .col(self.create_id_column(manager, LogoAssets::Id).primary_key())
-                    .col(ColumnDef::new(LogoAssets::Name).string().not_null())
-                    .col(ColumnDef::new(LogoAssets::Description).string())
-                    .col(ColumnDef::new(LogoAssets::FileName).string().not_null().default(""))
-                    .col(ColumnDef::new(LogoAssets::FilePath).string().not_null())
-                    .col(ColumnDef::new(LogoAssets::FileHash).string().not_null().default(""))
-                    .col(ColumnDef::new(LogoAssets::FileSize).integer().not_null())
-                    .col(ColumnDef::new(LogoAssets::MimeType).string().not_null())
-                    .col(ColumnDef::new(LogoAssets::AssetType).string().not_null().default("original"))
-                    .col(ColumnDef::new(LogoAssets::SourceUrl).string())
-                    .col(ColumnDef::new(LogoAssets::Width).integer())
-                    .col(ColumnDef::new(LogoAssets::Height).integer())
-                    .col(ColumnDef::new(LogoAssets::ParentAssetId).uuid())
-                    .col(ColumnDef::new(LogoAssets::FormatType).string().not_null().default("original"))
-                    .col(
-                        ColumnDef::new(LogoAssets::IsSystem)
-                            .boolean()
-                            .not_null()
-                            .default(false),
-                    )
-                    .col(self.create_timestamp_column(manager, LogoAssets::CreatedAt))
-                    .col(self.create_timestamp_column(manager, LogoAssets::UpdatedAt))
-                    .to_owned(),
+        let mut table_create = Table::create()
+            .table(LogoAssets::Table)
+            .if_not_exists()
+            .col(self.create_id_column(manager, LogoAssets::Id).primary_key())
+            .col(ColumnDef::new(LogoAssets::Name).string().not_null())
+            .col(ColumnDef::new(LogoAssets::Description).string())
+            .col(ColumnDef::new(LogoAssets::FileName).string().not_null().default(""))
+            .col(ColumnDef::new(LogoAssets::FilePath).string().not_null())
+            .col(ColumnDef::new(LogoAssets::FileHash).string().not_null().default(""))
+            .col(ColumnDef::new(LogoAssets::FileSize).integer().not_null())
+            .col(ColumnDef::new(LogoAssets::MimeType).string().not_null())
+            .col(ColumnDef::new(LogoAssets::AssetType).string().not_null().default("original"))
+            .col(ColumnDef::new(LogoAssets::SourceUrl).string())
+            .col(ColumnDef::new(LogoAssets::Width).integer())
+            .col(ColumnDef::new(LogoAssets::Height).integer())
+            .col(ColumnDef::new(LogoAssets::ParentAssetId).uuid())
+            .col(ColumnDef::new(LogoAssets::FormatType).string().not_null().default("original"))
+            .col(
+                ColumnDef::new(LogoAssets::IsSystem)
+                    .boolean()
+                    .not_null()
+                    .default(false),
             )
-            .await?;
+            .col(self.create_timestamp_column(manager, LogoAssets::CreatedAt))
+            .col(self.create_timestamp_column(manager, LogoAssets::UpdatedAt))
+            .to_owned();
 
-        // Add foreign key constraint for parent_asset_id
-        manager
-            .create_foreign_key(
-                ForeignKey::create()
-                    .name("fk_logo_assets_parent")
-                    .from(LogoAssets::Table, LogoAssets::ParentAssetId)
-                    .to(LogoAssets::Table, LogoAssets::Id)
-                    .on_delete(ForeignKeyAction::SetNull)
-                    .on_update(ForeignKeyAction::NoAction)
-                    .to_owned(),
-            )
-            .await?;
+        // For SQLite, add foreign key constraint during table creation
+        if matches!(manager.get_database_backend(), sea_orm::DatabaseBackend::Sqlite) {
+            table_create = table_create
+                .foreign_key(
+                    ForeignKey::create()
+                        .name("fk_logo_assets_parent")
+                        .from(LogoAssets::Table, LogoAssets::ParentAssetId)
+                        .to(LogoAssets::Table, LogoAssets::Id)
+                        .on_delete(ForeignKeyAction::SetNull)
+                        .on_update(ForeignKeyAction::NoAction),
+                )
+                .to_owned();
+        }
+
+        manager.create_table(table_create).await?;
+
+        // For PostgreSQL/MySQL, add foreign key constraint after table creation
+        if !matches!(manager.get_database_backend(), sea_orm::DatabaseBackend::Sqlite) {
+            manager
+                .create_foreign_key(
+                    ForeignKey::create()
+                        .name("fk_logo_assets_parent")
+                        .from(LogoAssets::Table, LogoAssets::ParentAssetId)
+                        .to(LogoAssets::Table, LogoAssets::Id)
+                        .on_delete(ForeignKeyAction::SetNull)
+                        .on_update(ForeignKeyAction::NoAction)
+                        .to_owned(),
+                )
+                .await?;
+        }
 
         Ok(())
     }

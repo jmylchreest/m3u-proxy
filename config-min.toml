@@ -1,0 +1,17 @@
+[database]
+url = "sqlite://./data/m3u_proxy.db"
+
+[web]
+base_url = "http://localhost:8080"
+enable_request_logging = false
+
+[storage]
+uploaded_logo_path = "./data/logos/uploaded"
+cached_logo_path = "./data/logos/cached"
+m3u_path = "./data/m3u"
+temp_path = "./data/temp"
+temp_retention = "5m"
+
+
+[ingestion]
+run_missed_immediately = true

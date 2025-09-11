@@ -3,6 +3,7 @@
 use crate::database::repositories::StreamProxySeaOrmRepository;
 use crate::database::Database;
 use crate::services::{EpgSourceService, ProxyRegenerationService, StreamSourceBusinessService};
+use crate::services::logo_cache_maintenance::LogoCacheMaintenanceService;
 use crate::services::progress_service::{ProgressService, OperationType};
 use crate::config::Config;
 use anyhow::Result;
@@ -15,6 +16,7 @@ pub struct JobExecutor {
     stream_service: Arc<StreamSourceBusinessService>,
     epg_service: Arc<EpgSourceService>,
     proxy_regeneration_service: Arc<ProxyRegenerationService>,
+    logo_cache_maintenance_service: Arc<LogoCacheMaintenanceService>,
     proxy_repo: StreamProxySeaOrmRepository,
     database: Database,
     app_config: Config,
@@ -30,6 +32,7 @@ impl JobExecutor {
         stream_service: Arc<StreamSourceBusinessService>,
         epg_service: Arc<EpgSourceService>,
         proxy_regeneration_service: Arc<ProxyRegenerationService>,
+        logo_cache_maintenance_service: Arc<LogoCacheMaintenanceService>,
         database: Database,
         app_config: Config,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
@@ -40,6 +43,7 @@ impl JobExecutor {
             stream_service,
             epg_service,
             proxy_regeneration_service,
+            logo_cache_maintenance_service,
             proxy_repo: StreamProxySeaOrmRepository::new(database.connection().clone()),
             database: database.clone(),
             app_config,
@@ -161,6 +165,12 @@ impl JobExecutor {
             }
             "health_check" => {
                 self.health_check().await
+            }
+            "logo_cache_scan" => {
+                self.logo_cache_maintenance_service.execute_scan_job().await
+            }
+            "logo_cache_cleanup" => {
+                self.logo_cache_maintenance_service.execute_maintenance().await.map(|_| ())
             }
             _ => {
                 warn!("Unknown maintenance operation: {}", operation);

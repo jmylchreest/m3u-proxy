@@ -8,11 +8,13 @@ use tracing::info;
 use anyhow::Result;
 
 use crate::services::logo_cache::{LogoCacheService, MaintenanceStats};
-use crate::job_scheduling::types::JobType;
+use crate::job_scheduling::types::{JobType, JobPriority, ScheduledJob};
+use crate::job_scheduling::job_queue::JobQueue;
 
 /// Logo cache maintenance service
 pub struct LogoCacheMaintenanceService {
     logo_cache: Arc<LogoCacheService>,
+    job_queue: Option<Arc<JobQueue>>,
 }
 
 impl LogoCacheMaintenanceService {
@@ -22,7 +24,14 @@ impl LogoCacheMaintenanceService {
     ) -> Self {
         Self {
             logo_cache,
+            job_queue: None,
         }
+    }
+    
+    /// Set the job queue for background job scheduling
+    pub fn with_job_queue(mut self, job_queue: Arc<JobQueue>) -> Self {
+        self.job_queue = Some(job_queue);
+        self
     }
     
     /// Create a logo cache maintenance job type (for integration with job scheduler)
@@ -55,8 +64,30 @@ impl LogoCacheMaintenanceService {
     pub async fn initialize(&self) -> Result<()> {
         info!("Initializing logo cache maintenance service");
         
-        // Initialize the logo cache
+        // Initialize the logo cache (instant)
         self.logo_cache.initialize().await?;
+        
+        // Enqueue a background job to populate the cache
+        if let Some(job_queue) = &self.job_queue {
+            let scan_job = ScheduledJob::new(
+                JobType::Maintenance("logo_cache_scan".to_string()),
+                JobPriority::Maintenance
+            );
+            
+            match job_queue.enqueue(scan_job).await {
+                Ok(true) => {
+                    info!("Enqueued logo cache scan job for background processing");
+                }
+                Ok(false) => {
+                    info!("Logo cache scan job already queued, skipping duplicate");
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to enqueue logo cache scan job: {}", e);
+                }
+            }
+        } else {
+            info!("Job queue not available - logo cache will remain empty until manual scan");
+        }
         
         info!("Logo cache maintenance service initialized");
         Ok(())
@@ -70,6 +101,17 @@ impl LogoCacheMaintenanceService {
         self.logo_cache.scan_and_load_cache().await?;
         
         info!("Logo cache rescan completed - indices rebuilt from filesystem");
+        Ok(())
+    }
+    
+    /// Execute logo cache scan job (called by job scheduler)
+    pub async fn execute_scan_job(&self) -> Result<()> {
+        info!("Executing logo cache scan job");
+        
+        // Populate cache from filesystem
+        self.logo_cache.scan_and_load_cache().await?;
+        
+        info!("Logo cache scan job completed");
         Ok(())
     }
     

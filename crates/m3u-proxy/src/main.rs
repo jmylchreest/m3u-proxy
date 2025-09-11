@@ -408,13 +408,22 @@ async fn main() -> Result<()> {
         ).with_observability(observability.clone()))
     };
 
+    // Initialize logo cache service first (needed for job executor)
+    let logo_cache_service = Arc::new(LogoCacheService::new(logos_cached_file_manager.clone())?);
+
     // Create new job scheduling system
     let job_queue = Arc::new(JobQueue::new());
     let job_scheduler = Arc::new(JobScheduler::new(job_queue.clone(), database.clone()));
+    
+    let logo_cache_maintenance_service = Arc::new(LogoCacheMaintenanceService::new(
+        logo_cache_service.clone(),
+    ).with_job_queue(job_queue.clone()));
+    
     let job_executor = Arc::new(JobExecutor::new(
         stream_source_service.clone(),
         epg_source_service.clone(),
         Arc::new(proxy_regeneration_service.clone()),
+        logo_cache_maintenance_service.clone(),
         database.clone(),
         config.clone(),
         temp_file_manager.clone(),
@@ -428,12 +437,6 @@ async fn main() -> Result<()> {
         &config.job_scheduling.clone().unwrap_or_default(),
     ));
     info!("Job scheduling system initialized");
-
-    // Initialize logo cache service
-    let logo_cache_service = Arc::new(LogoCacheService::new(logos_cached_file_manager.clone())?);
-    let logo_cache_maintenance_service = Arc::new(LogoCacheMaintenanceService::new(
-        logo_cache_service.clone(),
-    ));
     
     // Initialize logo cache
     logo_cache_maintenance_service.initialize().await?;

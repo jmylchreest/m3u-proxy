@@ -67,7 +67,7 @@ impl LogoCacheMaintenanceService {
         info!("Starting logo cache rescan - rebuilding indices from filesystem");
         
         // Clear current cache indices and rebuild from filesystem
-        self.logo_cache.initialize().await?;
+        self.logo_cache.scan_and_load_cache().await?;
         
         info!("Logo cache rescan completed - indices rebuilt from filesystem");
         Ok(())

@@ -42,13 +42,32 @@ impl LogoCacheService {
         })
     }
     
-    /// Initialize cache by scanning existing files
+    /// Initialize cache service (lazy loading - no filesystem scan)
     pub async fn initialize(&self) -> Result<()> {
-        info!("Initializing logo cache service");
+        info!("Logo cache service initialized (lazy loading - filesystem scan will happen in background)");
+        Ok(())
+    }
+    
+    /// Scan and load existing cached logos from filesystem (for background jobs)
+    pub async fn scan_and_load_cache(&self) -> Result<()> {
+        info!("Starting logo cache filesystem scan");
         
         let start_time = std::time::Instant::now();
         let mut scanned_files = 0;
         let mut loaded_entries = 0;
+        
+        // Clear existing cache before reload
+        {
+            let mut cache = self.cache_index.write().await;
+            let mut channel_index = self.channel_name_index.write().await;
+            let mut group_index = self.channel_group_index.write().await;
+            let mut search_cache = self.search_string_cache.write().await;
+            
+            cache.clear();
+            channel_index.clear();
+            group_index.clear();
+            search_cache.clear();
+        }
         
         // Scan cache directory for existing logos using sandboxed file manager
         match self.logo_file_manager.list_files(".").await {
@@ -61,12 +80,17 @@ impl LogoCacheService {
                         continue;
                     }
                     
-                    // Get file size using sandboxed file manager
-                    if let Ok(file_data) = self.logo_file_manager.read(&file_name).await {
-                        let file_size = file_data.len() as u64;
-                        if let Ok(cache_entry) = self.create_entry_from_filesystem(&file_name, file_size).await {
-                            self.add_entry_to_indices(cache_entry).await;
-                            loaded_entries += 1;
+                    // Get file size using metadata instead of reading the whole file
+                    match self.logo_file_manager.metadata(&file_name).await {
+                        Ok(metadata) => {
+                            let file_size = metadata.len();
+                            if let Ok(cache_entry) = self.create_entry_from_filesystem(&file_name, file_size).await {
+                                self.add_entry_to_indices(cache_entry).await;
+                                loaded_entries += 1;
+                            }
+                        }
+                        Err(e) => {
+                            debug!("Failed to get metadata for {}: {}", file_name, e);
                         }
                     }
                 }
@@ -80,7 +104,7 @@ impl LogoCacheService {
         let memory_usage = self.estimate_memory_usage().await;
         
         info!(
-            "Logo cache initialized: {} entries from {} files in {:.2}s (memory: {:.1}MB)",
+            "Logo cache scan completed: {} entries from {} files in {:.2}s (memory: {:.1}MB)",
             loaded_entries,
             scanned_files,
             duration.as_secs_f64(),

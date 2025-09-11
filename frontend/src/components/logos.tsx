@@ -43,7 +43,8 @@ import {
   FileImage,
   Grid,
   List,
-  Table as TableIcon
+  Table as TableIcon,
+  RefreshCw
 } from "lucide-react"
 import { 
   LogoAsset,
@@ -61,6 +62,8 @@ interface LoadingState {
   upload: boolean;
   edit: boolean;
   delete: string | null;
+  rescan: boolean;
+  clear: boolean;
 }
 
 interface ErrorState {
@@ -69,6 +72,8 @@ interface ErrorState {
   upload: string | null;
   edit: string | null;
   action: string | null;
+  rescan: string | null;
+  clear: string | null;
 }
 
 function formatFileSize(bytes: number): string {
@@ -552,7 +557,7 @@ export function Logos() {
   const [allLogos, setAllLogos] = useState<LogoAsset[]>([])
   const [stats, setStats] = useState<LogoStats | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
-  const [includeCached, setIncludeCached] = useState(true)
+  const [logoFilter, setLogoFilter] = useState<'all' | 'uploaded' | 'cached'>('all')
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
@@ -567,12 +572,17 @@ export function Logos() {
   // Ref for infinite scroll trigger
   const loadMoreRef = useRef<HTMLDivElement>(null)
   
+  // Ref for search input to maintain focus during debounced searches
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  
   const [loading, setLoading] = useState<LoadingState>({
     logos: false,
     stats: false,
     upload: false,
     edit: false,
     delete: null,
+    rescan: false,
+    clear: false,
   })
   
   const [errors, setErrors] = useState<ErrorState>({
@@ -581,6 +591,8 @@ export function Logos() {
     upload: null,
     edit: null,
     action: null,
+    rescan: null,
+    clear: null,
   })
 
   // Debounced search term for API calls
@@ -592,14 +604,39 @@ export function Logos() {
     return () => clearTimeout(timer)
   }, [searchTerm])
 
+  // Track if user is actively typing to maintain focus
+  const [isTyping, setIsTyping] = useState(false)
+  
+  // Track typing state
+  useEffect(() => {
+    if (searchTerm !== debouncedSearchTerm) {
+      setIsTyping(true)
+    } else {
+      setIsTyping(false)
+    }
+  }, [searchTerm, debouncedSearchTerm])
+
+  // Maintain focus on search input when loading completes during typing
+  useEffect(() => {
+    if (!loading.logos && isTyping && searchInputRef.current && document.activeElement !== searchInputRef.current) {
+      // Restore focus and cursor position after API call completes
+      const cursorPosition = searchInputRef.current.selectionStart
+      searchInputRef.current.focus()
+      searchInputRef.current.setSelectionRange(cursorPosition || 0, cursorPosition || 0)
+    }
+  }, [loading.logos, isTyping])
+
   // Client-side filtering for fast local search
   const filteredLogos = useMemo(() => {
     let filtered = allLogos
 
-    // Filter by cached inclusion
-    if (!includeCached) {
+    // Filter by logo type
+    if (logoFilter === 'uploaded') {
       filtered = filtered.filter(logo => logo.asset_type !== 'cached')
+    } else if (logoFilter === 'cached') {
+      filtered = filtered.filter(logo => logo.asset_type === 'cached')
     }
+    // logoFilter === 'all' shows everything (no additional filtering)
 
     // Filter by search term (client-side for responsiveness)
     if (searchTerm.trim()) {
@@ -622,7 +659,7 @@ export function Logos() {
     }
 
     return filtered
-  }, [allLogos, searchTerm, includeCached])
+  }, [allLogos, searchTerm, logoFilter])
 
   const loadStats = useCallback(async () => {
     if (!isOnline) return
@@ -653,7 +690,7 @@ export function Logos() {
     }
   }, [isOnline])
 
-  const loadLogos = useCallback(async (page: number = 1, append: boolean = false) => {
+  const loadLogos = useCallback(async (page: number = 1, append: boolean = false, searchTerm?: string, filter?: string) => {
     if (!isOnline) return
     
     setLoading(prev => ({ ...prev, logos: true }))
@@ -663,8 +700,8 @@ export function Logos() {
       const response = await apiClient.getLogos({
         page,
         limit: 50, // Load more items per page for better UX
-        include_cached: includeCached,
-        search: debouncedSearchTerm || undefined
+        include_cached: (filter || logoFilter) !== 'uploaded', // Include cached unless filtering for uploaded only
+        search: searchTerm || undefined
       })
       
       if (append) {
@@ -709,23 +746,34 @@ export function Logos() {
     } finally {
       setLoading(prev => ({ ...prev, logos: false }))
     }
-  }, [isOnline, includeCached, debouncedSearchTerm, isInitialLoad])
+  }, [isOnline, logoFilter, isInitialLoad])
 
   // Load initial data
   useEffect(() => {
     loadStats()
   }, [loadStats])
 
+  // Handle initial load
   useEffect(() => {
-    loadLogos(1, false)
-    setCurrentPage(1)
-  }, [loadLogos])
+    if (isInitialLoad) {
+      loadLogos(1, false)
+      setCurrentPage(1)
+    }
+  }, [loadLogos, isInitialLoad])
+
+  // Handle search and filter changes
+  useEffect(() => {
+    if (!isInitialLoad) {
+      loadLogos(1, false, debouncedSearchTerm, logoFilter)
+      setCurrentPage(1)
+    }
+  }, [debouncedSearchTerm, logoFilter])
 
   const handleLoadMore = useCallback(() => {
     if (hasMore && !loading.logos) {
-      loadLogos(currentPage + 1, true)
+      loadLogos(currentPage + 1, true, debouncedSearchTerm, logoFilter)
     }
-  }, [hasMore, loading.logos, currentPage, loadLogos])
+  }, [hasMore, loading.logos, currentPage, loadLogos, debouncedSearchTerm, logoFilter])
 
   // Infinite scroll effect
   useEffect(() => {
@@ -818,6 +866,66 @@ export function Logos() {
     }
   }
 
+  const handleRescanCache = async () => {
+    setLoading(prev => ({ ...prev, rescan: true }))
+    setErrors(prev => ({ ...prev, rescan: null }))
+    
+    try {
+      const response = await apiClient.rescanLogoCache()
+      console.log('Logo cache rescan completed:', response)
+      
+      // Reload logos and stats after successful rescan
+      await loadLogos(1, false) // Reload first page
+      await loadStats() // Update stats
+      
+      // Show success message or handle response as needed
+      if (response.success) {
+        console.log('Cache rescan successful:', response.message)
+      }
+    } catch (error) {
+      const apiError = error as ApiError
+      setErrors(prev => ({ 
+        ...prev, 
+        rescan: `Failed to rescan cache: ${apiError.message}` 
+      }))
+      console.error('Rescan failed:', apiError)
+    } finally {
+      setLoading(prev => ({ ...prev, rescan: false }))
+    }
+  }
+
+  const handleClearCache = async () => {
+    if (!confirm('Are you sure you want to clear all cached logos? This action cannot be undone.')) {
+      return
+    }
+
+    setLoading(prev => ({ ...prev, clear: true }))
+    setErrors(prev => ({ ...prev, clear: null }))
+    
+    try {
+      const response = await apiClient.clearLogoCache()
+      console.log('Logo cache cleared:', response)
+      
+      // Reload logos and stats after successful clear
+      await loadLogos(1, false) // Reload first page
+      await loadStats() // Update stats
+      
+      // Show success message or handle response as needed
+      if (response.success) {
+        console.log('Cache clear successful:', response.message)
+      }
+    } catch (error) {
+      const apiError = error as ApiError
+      setErrors(prev => ({ 
+        ...prev, 
+        clear: `Failed to clear cache: ${apiError.message}` 
+      }))
+      console.error('Clear cache failed:', apiError)
+    } finally {
+      setLoading(prev => ({ ...prev, clear: false }))
+    }
+  }
+
   // Calculate total storage including filesystem cached
   const totalStorageUsed = (stats?.total_storage_used || 0) + (stats?.filesystem_cached_storage || 0)
   const totalCachedLogos = (stats?.total_cached_logos || 0) + (stats?.filesystem_cached_logos || 0)
@@ -840,6 +948,32 @@ export function Logos() {
           >
             <Plus className="h-4 w-4" />
             Upload Logo
+          </Button>
+          <Button 
+            onClick={handleRescanCache}
+            disabled={loading.rescan}
+            variant="outline"
+            className="gap-2"
+          >
+            {loading.rescan ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Rescan Cache
+          </Button>
+          <Button 
+            onClick={handleClearCache}
+            disabled={loading.clear}
+            variant="outline"
+            className="gap-2 text-destructive hover:text-destructive"
+          >
+            {loading.clear ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+            Clear Cache
           </Button>
         </div>
       </div>
@@ -875,6 +1009,44 @@ export function Logos() {
               size="sm" 
               className="ml-2"
               onClick={() => setErrors(prev => ({ ...prev, action: null }))}
+            >
+              Dismiss
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Rescan Error Alert */}
+      {errors.rescan && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Cache Rescan Error</AlertTitle>
+          <AlertDescription>
+            {errors.rescan}
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="ml-2"
+              onClick={() => setErrors(prev => ({ ...prev, rescan: null }))}
+            >
+              Dismiss
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Clear Cache Error Alert */}
+      {errors.clear && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Clear Cache Error</AlertTitle>
+          <AlertDescription>
+            {errors.clear}
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="ml-2"
+              onClick={() => setErrors(prev => ({ ...prev, clear: null }))}
             >
               Dismiss
             </Button>
@@ -979,25 +1151,26 @@ export function Logos() {
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
+                  ref={searchInputRef}
                   placeholder="Search logos by name, description, format..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-8"
-                  disabled={loading.logos}
                 />
               </div>
             </div>
             <Select
-              value={includeCached ? "include" : "exclude"}
-              onValueChange={(value) => setIncludeCached(value === "include")}
+              value={logoFilter}
+              onValueChange={(value) => setLogoFilter(value as 'all' | 'uploaded' | 'cached')}
               disabled={loading.logos}
             >
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder="Cached logos" />
+              <SelectTrigger className="w-full sm:w-[200px]">
+                <SelectValue placeholder="Logo types" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="include">Include Cached</SelectItem>
-                <SelectItem value="exclude">Exclude Cached</SelectItem>
+                <SelectItem value="all">Show All Types</SelectItem>
+                <SelectItem value="uploaded">Uploaded Only</SelectItem>
+                <SelectItem value="cached">Cached Only</SelectItem>
               </SelectContent>
             </Select>
             
@@ -1038,7 +1211,7 @@ export function Logos() {
           <CardTitle className="flex items-center justify-between">
             <span>
               Logos ({filteredLogos.length}
-              {searchTerm || !includeCached ? ` of ${totalCount}` : ""})
+              {searchTerm || logoFilter !== 'all' ? ` of ${totalCount}` : ""})
             </span>
             {loading.logos && <Loader2 className="h-4 w-4 animate-spin" />}
           </CardTitle>
@@ -1498,10 +1671,10 @@ export function Logos() {
                 <div className="text-center py-8">
                   <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground" />
                   <h3 className="mt-4 text-lg font-semibold">
-                    {searchTerm || !includeCached ? "No matching logos" : "No logos found"}
+                    {searchTerm || logoFilter !== 'all' ? "No matching logos" : "No logos found"}
                   </h3>
                   <p className="text-muted-foreground">
-                    {searchTerm || !includeCached 
+                    {searchTerm || logoFilter !== 'all' 
                       ? "Try adjusting your search or filter criteria."
                       : "Get started by uploading your first logo asset."
                     }

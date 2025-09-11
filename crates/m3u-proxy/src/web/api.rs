@@ -2461,12 +2461,12 @@ pub async fn list_logo_assets(
 ) -> Result<Json<crate::models::logo_asset::LogoAssetListResponse>, StatusCode> {
     let include_cached = params.include_cached.unwrap_or(true);
 
-    if include_cached && state.logo_cache_scanner.is_some() {
-        // Use enhanced listing with cached logos
+    if include_cached {
+        // Use enhanced listing with ultra-compact logo cache
         match list_logo_assets_with_cached(params, &state).await {
             Ok(response) => Ok(Json(response)),
             Err(e) => {
-                error!("Failed to list logo assets with cached: {}", e);
+                error!("Failed to list logo assets with logo cache: {}", e);
                 Err(StatusCode::INTERNAL_SERVER_ERROR)
             }
         }
@@ -2482,12 +2482,13 @@ pub async fn list_logo_assets(
     }
 }
 
-/// Enhanced logo listing that includes cached logos from filesystem
+/// Enhanced logo listing that includes cached logos from ultra-compact logo cache
 async fn list_logo_assets_with_cached(
     params: crate::models::logo_asset::LogoAssetListRequest,
     state: &AppState,
 ) -> Result<crate::models::logo_asset::LogoAssetListResponse, anyhow::Error> {
     use crate::models::logo_asset::*;
+    use crate::services::logo_cache::entry::LogoCacheQuery;
 
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(20);
@@ -2497,49 +2498,109 @@ async fn list_logo_assets_with_cached(
     let db_response = state.logo_asset_service.list_assets(params.clone(), &state.config.web.base_url).await?;
     let mut all_assets = db_response.assets;
 
-    // Add cached logos if scanner is available
-    if let Some(scanner) = &state.logo_cache_scanner {
+    // Add cached logos using ultra-compact logo cache service
+    {
+        let logo_cache_service = &state.logo_cache_service;
         debug!(
-            "Logo cache scanner available, searching for cached logos with query: {:?}",
+            "Logo cache service available, searching for cached logos with query: {:?}",
             search_query
         );
-        let cached_logos = scanner
-            .search_cached_logos(search_query, None)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to search cached logos: {}", e))?;
 
-        debug!("Found {} cached logos from scanner", cached_logos.len());
+        let cached_results = if let Some(search_term) = search_query {
+            // Create a search query for specific search terms
+            let query = LogoCacheQuery {
+                original_url: None,
+                channel_name: Some(search_term.to_string()),
+                channel_group: None,
+            };
+            logo_cache_service.search(&query).await
+        } else {
+            // For general listing, get all entries (limit to avoid overwhelming the API)
+            logo_cache_service.list_all(Some(1000)).await
+        };
 
-        // Convert cached logos to LogoAssetWithUrl format
-        let mut converted_count = 0;
-        for cached_logo in cached_logos {
-            let asset_like = cached_logo.to_logo_asset_like(&state.config.web.base_url);
+        match cached_results {
+            Ok(cached_results) => {
+                debug!("Found {} cached logos from logo cache service", cached_results.len());
 
-            // Convert JSON value to LogoAssetWithUrl
-            match serde_json::from_value::<LogoAssetWithUrl>(asset_like.clone()) {
-                Ok(mut logo_asset_with_url) => {
-                    // WORKAROUND: Ensure the ID is the cache_id, not a generated UUID
-                    logo_asset_with_url.asset.id = cached_logo.cache_id.clone();
+                // Convert cached results to LogoAssetWithUrl format
+                let mut converted_count = 0;
+                for cached_result in cached_results {
+                    // Use the filename without extension as cache_id (matches delete logic)
+                    let cache_id = std::path::Path::new(&cached_result.relative_path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&format!("cached-{}", cached_result.url_hash))
+                        .to_string();
+                    
+                    // Build the full URL for the cached logo using the cache_id (filename without extension)
+                    let cached_url = format!(
+                        "{}/api/v1/logos/cached/{}",
+                        state.config.web.base_url,
+                        cache_id
+                    );
+
+                    // Extract filename from relative path (strip .json extension if present)
+                    let image_path = cached_result.relative_path.strip_suffix(".json").unwrap_or(&cached_result.relative_path);
+                    let file_name = std::path::Path::new(image_path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    // Create LogoAssetWithUrl
+                    let logo_asset_with_url = LogoAssetWithUrl {
+                        asset: LogoAsset {
+                            id: cache_id.clone(),
+                            name: cached_result.matched_text.clone().unwrap_or(cache_id.clone()),
+                            file_name: file_name.clone(),
+                            description: Some(format!("Cached logo ({})", cached_result.relative_path)),
+                            file_path: cached_result.relative_path.clone(),
+                            file_size: cached_result.file_size as i64,
+                            mime_type: {
+                                // Determine MIME type from file extension
+                                let ext = std::path::Path::new(&file_name)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("");
+                                match ext.to_lowercase().as_str() {
+                                    "png" => "image/png",
+                                    "jpg" | "jpeg" => "image/jpeg",
+                                    "gif" => "image/gif",
+                                    "svg" => "image/svg+xml",
+                                    "webp" => "image/webp",
+                                    _ => "application/octet-stream",
+                                }.to_string()
+                            },
+                            asset_type: crate::models::logo_asset::LogoAssetType::Cached,
+                            source_url: None, // We don't have the original URL from the cache result
+                            width: cached_result.width,
+                            height: cached_result.height,
+                            parent_asset_id: None,
+                            format_type: crate::models::logo_asset::LogoFormatType::Original,
+                            created_at: chrono::DateTime::from_timestamp(cached_result.last_accessed as i64, 0)
+                                .unwrap_or_else(chrono::Utc::now),
+                            updated_at: chrono::DateTime::from_timestamp(cached_result.last_accessed as i64, 0)
+                                .unwrap_or_else(chrono::Utc::now),
+                        },
+                        url: cached_url,
+                    };
+
                     all_assets.push(logo_asset_with_url);
                     converted_count += 1;
                 }
-                Err(e) => {
-                    debug!(
-                        "Failed to convert cached logo to LogoAssetWithUrl: {}. JSON: {}",
-                        e, asset_like
-                    );
-                }
+                debug!(
+                    "Successfully converted {} cached logos to LogoAssetWithUrl",
+                    converted_count
+                );
+            }
+            Err(e) => {
+                warn!("Failed to search logo cache service: {}", e);
             }
         }
-        debug!(
-            "Successfully converted {} cached logos to LogoAssetWithUrl",
-            converted_count
-        );
-    } else {
-        debug!("No logo cache scanner available");
     }
 
-    // Apply search filter if provided (for database assets that might not have been filtered)
+    // Apply search filter if provided (for database assets and any cached assets without matched_text)
     if let Some(query) = search_query {
         let query_lower = query.to_lowercase();
         all_assets.retain(|asset| {
@@ -2895,6 +2956,45 @@ fn asset_matches_format(asset: &crate::models::logo_asset::LogoAsset, format: &s
     }
 }
 
+/// Detect MIME type from file data using magic numbers
+fn detect_mime_type_from_data(data: &[u8]) -> &'static str {
+    if data.len() < 8 {
+        return "application/octet-stream";
+    }
+    
+    // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+    if data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return "image/png";
+    }
+    
+    // JPEG signature: FF D8 FF
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "image/jpeg";
+    }
+    
+    // GIF signature: GIF87a or GIF89a
+    if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        return "image/gif";
+    }
+    
+    // WebP signature: RIFF....WEBP
+    if data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP" {
+        return "image/webp";
+    }
+    
+    // SVG signature: <?xml or <svg
+    if data.starts_with(b"<?xml") || data.starts_with(b"<svg") {
+        return "image/svg+xml";
+    }
+    
+    // BMP signature: BM
+    if data.starts_with(b"BM") {
+        return "image/bmp";
+    }
+    
+    "application/octet-stream"
+}
+
 async fn serve_asset(
     state: &AppState,
     asset: crate::models::logo_asset::LogoAsset,
@@ -2902,12 +3002,26 @@ async fn serve_asset(
     match state.logo_asset_storage.get_file(&asset.file_path).await {
         Ok(file_data) => {
             let mut headers = axum::http::HeaderMap::new();
+            
+            // Use magic number detection for more reliable MIME type detection
+            let detected_mime_type = detect_mime_type_from_data(&file_data);
+            
+            // Use detected MIME type, fall back to asset.mime_type, then to octet-stream
+            let final_mime_type = if detected_mime_type != "application/octet-stream" {
+                detected_mime_type
+            } else if !asset.mime_type.is_empty() {
+                // Try to parse the stored MIME type
+                match asset.mime_type.parse::<axum::http::HeaderValue>() {
+                    Ok(_) => &asset.mime_type,
+                    Err(_) => "application/octet-stream",
+                }
+            } else {
+                "application/octet-stream"
+            };
+            
             headers.insert(
                 axum::http::header::CONTENT_TYPE,
-                asset
-                    .mime_type
-                    .parse()
-                    .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
+                final_mime_type.parse().unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
             );
             headers.insert(
                 axum::http::header::CACHE_CONTROL,
@@ -3160,11 +3274,31 @@ pub async fn delete_logo_asset(
             Ok(_) => {
                 info!("Deleted cached logo: {}", filename);
                 deleted_any = true;
+                
+                // Remove from in-memory logo cache service as well using cache_id
+                let removed_from_cache = state.logo_cache_service.remove_by_cache_id(&id_str).await;
+                debug!("Removed from logo cache service: {} ({})", id_str, removed_from_cache);
             }
             Err(_) => {
                 // File doesn't exist or error deleting, continue trying other extensions
                 continue;
             }
+        }
+    }
+    
+    // Also try deleting the JSON metadata file
+    let json_filename = format!("{id_str}.json");
+    match state.logo_file_manager.remove_file(&json_filename).await {
+        Ok(_) => {
+            info!("Deleted cached logo metadata: {}", json_filename);
+            deleted_any = true;
+            
+            // Already removed from cache above when deleting the image file
+            debug!("Deleted JSON metadata file: {}", json_filename);
+        }
+        Err(_) => {
+            // JSON metadata file doesn't exist or error deleting, that's OK
+            debug!("No JSON metadata file found for: {}", id_str);
         }
     }
     
@@ -3664,21 +3798,21 @@ pub async fn search_logo_assets(
 ) -> Result<Json<crate::models::logo_asset::LogoAssetSearchResult>, StatusCode> {
     let include_cached = params.include_cached.unwrap_or(true); // Default to include cached
 
-    if include_cached && state.logo_cache_scanner.is_some() {
-        // Use the enhanced search with cached logos
+    if include_cached {
+        // Use the new logo cache service for enhanced search
         match state
             .logo_asset_service
-            .search_assets_with_cached(
+            .search_assets_with_logo_cache(
                 params,
                 &state.config.web.base_url,
-                state.logo_cache_scanner.as_ref(),
+                Some(&state.logo_cache_service),
                 include_cached,
             )
             .await
         {
             Ok(result) => Ok(Json(result)),
             Err(e) => {
-                error!("Failed to search logo assets with cached: {}", e);
+                error!("Failed to search logo assets with cache: {}", e);
                 Err(StatusCode::INTERNAL_SERVER_ERROR)
             }
         }
@@ -3790,7 +3924,7 @@ pub async fn get_logo_cache_stats(
 ) -> Result<Json<crate::models::logo_asset::LogoCacheStats>, StatusCode> {
     match state
         .logo_asset_service
-        .get_cache_stats_with_filesystem(state.logo_cache_scanner.as_ref())
+        .get_cache_stats_with_logo_cache(Some(&state.logo_cache_service))
         .await
     {
         Ok(stats) => Ok(Json(stats)),
@@ -3816,25 +3950,129 @@ pub async fn get_logo_cache_stats(
 pub async fn generate_cached_logo_metadata(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if let Some(scanner) = &state.logo_cache_scanner {
-        match state
-            .logo_asset_service
-            .ensure_cached_logo_metadata(scanner)
-            .await
-        {
-            Ok(generated_count) => Ok(Json(serde_json::json!({
-                "success": true,
-                "message": "Metadata generation completed",
-                "generated_count": generated_count
-            }))),
+    // Initialize the logo cache service (replaces metadata generation)
+    match state
+        .logo_asset_service
+        .initialize_logo_cache(&state.logo_cache_service)
+        .await
+    {
+        Ok(loaded_count) => Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "Logo cache initialized successfully",
+            "loaded_count": loaded_count
+        }))),
+        Err(e) => {
+            error!("Failed to initialize logo cache: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Trigger manual logo cache rescan and maintenance
+#[utoipa::path(
+    post,
+    path = "/logos/rescan",
+    tag = "logos",
+    summary = "Rescan logo cache",
+    description = "Trigger manual logo cache rescan and maintenance to populate missing metadata",
+    responses(
+        (status = 200, description = "Logo cache rescan completed successfully"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn rescan_logo_cache(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let maintenance_service = state.logo_cache_maintenance_service.clone();
+    let owner_id = uuid::Uuid::new_v4();
+    
+    // Create simple single-stage progress manager - similar to EPG ingestion pattern  
+    let progress_manager = match state.progress_service.create_staged_progress_manager(
+        owner_id, // Use UUID as owner ID like EPG uses source.id
+        "logo_cache".to_string(),
+        crate::services::progress_service::OperationType::Maintenance,
+        "Logo Cache Rescan".to_string(),
+    ).await {
+        Ok(manager) => {
+            // Add single stage like EPG does
+            let manager_with_stage = manager.add_stage("cache_rescan", "Cache Rescan").await;
+            Some((manager_with_stage, manager.get_stage_updater("cache_rescan").await))
+        },
+        Err(e) => {
+            warn!("Failed to create progress manager for logo cache rescan: {} - continuing without progress", e);
+            None
+        }
+    };
+    
+    let _progress_updater = progress_manager.as_ref().and_then(|(_, updater)| updater.as_ref());
+    
+    // Get operation ID from progress manager if available
+    let operation_id = if let Some((manager, _)) = &progress_manager {
+        manager.get_progress().await.id
+    } else {
+        owner_id
+    };
+    
+    // Start background task for rescan
+    tokio::spawn(async move {
+        match maintenance_service.execute_rescan().await {
+            Ok(()) => {
+                info!("Logo cache rescan completed successfully - indices rebuilt from filesystem");
+                
+                // Complete progress operation if it was created
+                if let Some((manager, _)) = progress_manager {
+                    manager.complete().await;
+                }
+            }
             Err(e) => {
-                error!("Failed to generate cached logo metadata: {}", e);
-                Err(StatusCode::INTERNAL_SERVER_ERROR)
+                error!("Failed to rescan logo cache: {}", e);
+                
+                // Mark progress as failed if it was created
+                if let Some((manager, _)) = progress_manager {
+                    manager.fail(&format!("Rescan failed: {}", e)).await;
+                }
             }
         }
-    } else {
-        error!("Logo cache scanner not available");
-        Err(StatusCode::SERVICE_UNAVAILABLE)
+    });
+    
+    // Return immediately with operation ID for tracking
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Logo cache rescan started in background",
+        "operation_id": operation_id.to_string(),
+        "owner_id": owner_id.to_string(),
+        "progress_url": format!("/api/v1/progress/events?operation_type=maintenance&owner_id={}", owner_id)
+    })))
+}
+
+/// Clear all cached logos
+#[utoipa::path(
+    delete,
+    path = "/logos/clear-cache",
+    tag = "logos",
+    summary = "Clear all cached logos",
+    description = "Remove all cached logo files and clear memory indices. This action is irreversible.",
+    responses(
+        (status = 200, description = "Cache cleared successfully"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn clear_logo_cache(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.logo_cache_service.clear_all_cache().await {
+        Ok(deleted_count) => {
+            info!("Logo cache cleared: {} entries removed", deleted_count);
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": format!("Successfully cleared {} cached logos", deleted_count),
+                "deleted_count": deleted_count
+            })))
+        }
+        Err(e) => {
+            error!("Failed to clear logo cache: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
 

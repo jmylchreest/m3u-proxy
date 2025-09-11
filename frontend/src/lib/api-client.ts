@@ -658,6 +658,20 @@ class ApiClient {
     })
   }
 
+  // Rescan logo cache
+  async rescanLogoCache(): Promise<any> {
+    return this.request(`${API_CONFIG.endpoints.logos}/rescan`, {
+      method: 'POST'
+    })
+  }
+
+  // Clear logo cache
+  async clearLogoCache(): Promise<any> {
+    return this.request(`${API_CONFIG.endpoints.logos}/clear-cache`, {
+      method: 'DELETE'
+    })
+  }
+
   // Health check
   async healthCheck(): Promise<any> {
     return this.request<any>(API_CONFIG.endpoints.health)

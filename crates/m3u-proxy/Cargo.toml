@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.2.3"
+version = "0.2.4-dev.1.g636e166"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"
@@ -123,6 +123,7 @@ infer = "0.19"
 flate2 = { version = "1.1", optional = true }
 bzip2 = { version = "0.6", optional = true }
 xz2 = { version = "0.1", optional = true }
+lru = "0.16.1"
 
 [dev-dependencies]
 # Testing framework and utilities

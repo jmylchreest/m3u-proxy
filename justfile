@@ -149,6 +149,14 @@ set-version version *force="":
 
     echo "Version set to: $VERSION"
 
+# Tag a new release with automatic version bumping
+# Usage: just tag-release [major|minor]
+# Without args: patch bump (0.2.3 -> 0.2.4)
+# With major: major bump (0.2.3 -> 1.0.0)  
+# With minor: minor bump (0.2.3 -> 0.3.0)
+tag-release bump="patch":
+    @./scripts/tag-release.sh {{bump}}
+
 # Run all tests (Rust and Next.js)
 test:
     @echo "Running Rust tests..."
@@ -377,7 +385,7 @@ build-container:
     @echo "Tagging strategy: :latest + (:release for tagged releases | :snapshot for dev builds)"
     @echo "Ensuring npm dependencies are up to date..."
     cd frontend && npm install && cd ..
-    ./build-container.sh
+    ./scripts/build-container.sh
 
 # Push container image to registry (supports podman, docker, nerdctl)
 # Pushes all three tags: version, :latest, and (:release | :snapshot)
@@ -385,7 +393,7 @@ push-container registry="":
     @echo "Pushing container to registry using external script with runtime detection..."
     #!/usr/bin/env bash
     set -euo pipefail
-    ./push-container.sh "{{registry}}"
+    ./scripts/push-container.sh "{{registry}}"
 
 # Format all code (Rust and frontend)
 fmt:
@@ -491,7 +499,7 @@ build-container-versioned:
     cd "$PROJECT_ROOT"
 
     # Run the container build with version as argument
-    ./build-container.sh "$VERSION"
+    ./scripts/build-container.sh "$VERSION"
 
 # Push container with proper version tagging
 push-container-versioned registry="":
@@ -504,7 +512,7 @@ push-container-versioned registry="":
 
     # Run the container push with version and optional registry
     if [ -z "{{registry}}" ]; then
-        ./push-container.sh --version "$VERSION"
+        ./scripts/push-container.sh --version "$VERSION"
     else
-        ./push-container.sh --version "$VERSION" "{{registry}}"
+        ./scripts/push-container.sh --version "$VERSION" "{{registry}}"
     fi

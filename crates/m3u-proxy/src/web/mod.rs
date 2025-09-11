@@ -25,7 +25,7 @@
 use anyhow::Result;
 use axum::{
     Router,
-    routing::{get, post, put},
+    routing::{get, post, put, delete},
 };
 use std::net::SocketAddr;
 use std::collections::HashSet;
@@ -96,6 +96,8 @@ pub struct WebServerBuilder {
     pub job_scheduler: Arc<JobScheduler>,
     pub job_queue: Arc<JobQueue>,
     pub job_queue_runner: Arc<JobQueueRunner>,
+    pub logo_cache_service: Arc<crate::services::logo_cache::LogoCacheService>,
+    pub logo_cache_maintenance_service: Arc<crate::services::logo_cache_maintenance::LogoCacheMaintenanceService>,
 }
 
 impl WebServerBuilder {
@@ -114,13 +116,7 @@ impl WebServer {
     async fn new_from_builder(builder: WebServerBuilder) -> Result<Self> {
         tracing::info!("WebServer using native pipeline");
 
-        let logo_cache_scanner = {
-            // Use proper file manager separation: cached vs uploaded
-            Some(crate::services::logo_cache_scanner::LogoCacheScanner::new(
-                builder.logos_cached_file_manager.clone(), // For logos cached from URLs
-                builder.temp_file_manager.clone(),          // For manually uploaded logos
-            ))
-        };
+        // The new LogoCacheService is already available in the builder
 
         let source_linking_service = {
             use crate::database::repositories::{StreamSourceSeaOrmRepository, EpgSourceSeaOrmRepository};
@@ -161,7 +157,7 @@ impl WebServer {
             job_scheduler: builder.job_scheduler,
             job_queue: builder.job_queue,
             job_queue_runner: builder.job_queue_runner,
-            logo_cache_scanner,
+            // logo_cache_scanner removed - replaced by logo_cache_service
             session_tracker: std::sync::Arc::new(
                 crate::proxy::session_tracker::SessionTracker::default(),
             ),
@@ -178,6 +174,8 @@ impl WebServer {
             start_time: chrono::Utc::now(),
             runtime_settings_store: builder.runtime_settings_store,
             circuit_breaker_manager: builder.circuit_breaker_manager,
+            logo_cache_service: builder.logo_cache_service,
+            logo_cache_maintenance_service: builder.logo_cache_maintenance_service,
         })
         .await;
 
@@ -193,6 +191,7 @@ impl WebServer {
             .route("/health", get(handlers::health::health_check))
             .route("/ready", get(handlers::health::readiness_check))
             .route("/live", get(handlers::health::liveness_check))
+            .route("/debug/logo-cache", get(handlers::health::logo_cache_debug))
             // OpenAPI documentation
             .merge(Self::openapi_routes())
             // API v1 routes
@@ -327,6 +326,8 @@ impl WebServer {
                 "/logos/generate-metadata",
                 post(api::generate_cached_logo_metadata),
             )
+            .route("/logos/rescan", post(api::rescan_logo_cache))
+            .route("/logos/clear-cache", delete(api::clear_logo_cache))
             // Cached logo endpoint (uses sandboxed file manager, no database)
             .route("/logos/cached/{cache_id}", get(api::get_cached_logo_asset))
             // Expression validation (generalized endpoints)
@@ -544,7 +545,7 @@ pub struct AppState {
     pub job_scheduler: Arc<JobScheduler>,
     pub job_queue: Arc<JobQueue>,
     pub job_queue_runner: Arc<JobQueueRunner>,
-    pub logo_cache_scanner: Option<crate::services::logo_cache_scanner::LogoCacheScanner>,
+    // logo_cache_scanner removed - functionality replaced by logo_cache_service
     pub session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
     pub relay_manager: std::sync::Arc<crate::services::relay_manager::RelayManager>,
     pub relay_config_resolver: crate::services::relay_config_resolver::RelayConfigResolver,
@@ -565,6 +566,10 @@ pub struct AppState {
     pub runtime_settings_store: Arc<RuntimeSettingsStore>,
     /// Circuit breaker manager for resilience patterns
     pub circuit_breaker_manager: Option<std::sync::Arc<crate::services::CircuitBreakerManager>>,
+    /// Logo cache service for ultra-compact indexing
+    pub logo_cache_service: Arc<crate::services::logo_cache::LogoCacheService>,
+    /// Logo cache maintenance service
+    pub logo_cache_maintenance_service: Arc<crate::services::logo_cache_maintenance::LogoCacheMaintenanceService>,
 }
 
 impl AppState {}

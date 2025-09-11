@@ -14,6 +14,7 @@ use crate::web::{
     responses::ok,
     utils::log_request,
 };
+use serde_json::json;
 
 /// Health check endpoint with comprehensive system status
 ///
@@ -674,4 +675,84 @@ pub async fn check_hardware_acceleration() -> (bool, crate::web::responses::Deta
         codecs,
         support_matrix,
     })
+}
+
+/// Logo cache debug endpoint
+///
+/// Returns detailed logo cache statistics including memory usage, entry counts,
+/// and cache performance metrics
+#[utoipa::path(
+    get,
+    path = "/debug/logo-cache",
+    tag = "debug",
+    summary = "Logo cache debug info",
+    description = "Debug endpoint showing logo cache statistics and performance metrics",
+    responses(
+        (status = 200, description = "Logo cache debug information"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn logo_cache_debug(
+    State(state): State<AppState>,
+    context: RequestContext,
+) -> impl IntoResponse {
+    log_request(
+        &axum::http::Method::GET,
+        &"/debug/logo-cache".parse().unwrap(),
+        &context,
+    );
+
+    // Get logo cache statistics
+    let cache_stats = match state.logo_cache_maintenance_service.get_cache_stats().await {
+        Ok(stats) => stats,
+        Err(e) => {
+            return axum::response::Json(json!({
+                "error": format!("Failed to get cache stats: {}", e)
+            })).into_response();
+        }
+    };
+
+    // Calculate memory efficiency
+    let bytes_per_entry = if cache_stats.total_entries > 0 {
+        cache_stats.memory_usage_bytes / cache_stats.total_entries
+    } else {
+        0
+    };
+
+    // Format sizes in human-readable format
+    let memory_usage_mb = cache_stats.memory_usage_bytes as f64 / 1024.0 / 1024.0;
+    let storage_usage_mb = cache_stats.storage_usage_bytes as f64 / 1024.0 / 1024.0;
+
+    let debug_info = json!({
+        "logo_cache": {
+            "total_entries": cache_stats.total_entries,
+            "memory_usage": {
+                "bytes": cache_stats.memory_usage_bytes,
+                "megabytes": format!("{:.2}", memory_usage_mb),
+                "bytes_per_entry": bytes_per_entry,
+                "avg_entry_size_bytes": cache_stats.avg_entry_size_bytes
+            },
+            "storage_usage": {
+                "bytes": cache_stats.storage_usage_bytes,
+                "megabytes": format!("{:.2}", storage_usage_mb)
+            },
+            "efficiency": {
+                "hash_based_indexing": true,
+                "smart_dimension_encoding": "12-bit with variable precision",
+                "memory_vs_string_storage": format!("~{}x more efficient", 
+                    if cache_stats.total_entries > 0 { 
+                        std::cmp::max(1, (cache_stats.total_entries * 200) / cache_stats.memory_usage_bytes) 
+                    } else { 
+                        1 
+                    }
+                )
+            },
+            "last_updated": chrono::Utc::now().to_rfc3339(),
+            "cache_directory": state.config.storage.cached_logo_path,
+            "max_size_mb": 1024, // Hardcoded default: 1GB cache size limit
+            "max_age_days": 30 // Hardcoded default: 30 days cache age limit
+        }
+    });
+
+    axum::response::Json(debug_info).into_response()
 }

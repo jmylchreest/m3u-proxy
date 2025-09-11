@@ -43,7 +43,9 @@ pub mod error_fallback;
 pub mod ffmpeg_command_builder;
 pub mod ffmpeg_wrapper;
 pub mod file_categories;
-pub mod logo_cache_scanner;
+// logo_cache_scanner module removed - replaced by logo_cache service
+pub mod logo_cache;
+pub mod logo_cache_maintenance;
 pub mod progress_service;
 pub mod proxy_regeneration;
 pub mod relay_config_resolver;

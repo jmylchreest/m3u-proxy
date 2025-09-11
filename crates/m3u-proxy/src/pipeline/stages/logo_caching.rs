@@ -299,7 +299,12 @@ impl LogoCachingStage {
                                     channel.channel_name, logo_url, cache_id);
                             }
                             
-                            match self.logo_service.cache_logo_from_url_with_size_tracking(logo_url).await {
+                            match self.logo_service.cache_logo_from_url_with_metadata_and_size_tracking(
+                                logo_url,
+                                Some(channel.channel_name.clone()),
+                                channel.group_title.clone(),
+                                None, // No extra fields
+                            ).await {
                                 Ok((returned_cache_id, bytes_transferred)) => {
                                     let new_url = self.logo_service.get_cached_logo_url(&returned_cache_id, &self.config.base_url);
                                     channel.tvg_logo = Some(new_url.clone());
@@ -610,7 +615,12 @@ impl LogoCachingStage {
                 match url_type {
                     LogoUrlType::RemoteUrl => {
                         trace!("Caching remote program icon: {}", program_icon_url);
-                        match self.logo_service.cache_logo_from_url_with_size_tracking(&program_icon_url).await {
+                        match self.logo_service.cache_logo_from_url_with_metadata_and_size_tracking(
+                            &program_icon_url,
+                            Some(program.title.clone()), // Use program title as "name"
+                            None, // No category field in EpgProgram
+                            None, // No extra fields
+                        ).await {
                             Ok((cache_id, bytes_transferred)) => {
                                 let cached_url = self.logo_service.get_cached_logo_url(&cache_id, &self.config.base_url);
                                 program.program_icon = Some(cached_url);

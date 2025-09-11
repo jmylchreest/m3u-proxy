@@ -16,7 +16,7 @@ use m3u_proxy::{
     },
     job_scheduling::{JobQueue, JobScheduler, JobQueueRunner, JobExecutor},
     logo_assets::{LogoAssetService, LogoAssetStorage},
-    services::{ProxyRegenerationService, StreamSourceBusinessService, EpgSourceService, UrlLinkingService},
+    services::{ProxyRegenerationService, StreamSourceBusinessService, EpgSourceService, UrlLinkingService, logo_cache::{LogoCacheService}, logo_cache_maintenance::LogoCacheMaintenanceService},
     utils::{
         SystemManager,
     },
@@ -429,6 +429,15 @@ async fn main() -> Result<()> {
     ));
     info!("Job scheduling system initialized");
 
+    // Initialize logo cache service
+    let logo_cache_service = Arc::new(LogoCacheService::new(logos_cached_file_manager.clone())?);
+    let logo_cache_maintenance_service = Arc::new(LogoCacheMaintenanceService::new(
+        logo_cache_service.clone(),
+    ));
+    
+    // Initialize logo cache
+    logo_cache_maintenance_service.initialize().await?;
+    info!("Logo cache system initialized");
 
     // Initialize relay manager with shared system (SeaORM)
     let relay_manager = std::sync::Arc::new(
@@ -475,6 +484,8 @@ async fn main() -> Result<()> {
             job_scheduler: job_scheduler.clone(),
             job_queue: job_queue.clone(),
             job_queue_runner: job_queue_runner.clone(),
+            logo_cache_service: logo_cache_service.clone(),
+            logo_cache_maintenance_service: logo_cache_maintenance_service.clone(),
         },
     )
     .await?;

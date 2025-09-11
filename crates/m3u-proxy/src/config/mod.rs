@@ -16,9 +16,13 @@ use defaults::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_database_config")]
     pub database: DatabaseConfig,
+    #[serde(default)]
     pub web: WebConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default = "default_ingestion_config")]
     pub ingestion: IngestionConfig,
     pub data_mapping_engine: Option<DataMappingEngineConfig>,
     pub relay: Option<RelayConfig>,
@@ -157,7 +161,7 @@ pub struct WebConfig {
     pub user_agent: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     #[serde(default = "default_m3u_path")]
     pub m3u_path: PathBuf,
@@ -191,6 +195,26 @@ pub struct StorageConfig {
     #[serde(default = "default_pipeline_cleanup_interval")]
     pub pipeline_cleanup_interval: String,
 
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            m3u_path: default_m3u_path(),
+            m3u_retention: default_m3u_retention(),
+            m3u_cleanup_interval: default_m3u_cleanup_interval(),
+            uploaded_logo_path: default_uploaded_logo_path(),
+            cached_logo_path: default_cached_logo_path(),
+            cached_logo_retention: default_cached_logo_retention(),
+            cached_logo_cleanup_interval: default_cached_logo_cleanup_interval(),
+            temp_path: default_temp_path(),
+            temp_retention: default_temp_retention(),
+            temp_cleanup_interval: default_temp_cleanup_interval(),
+            pipeline_path: default_pipeline_path(),
+            pipeline_retention: default_pipeline_retention(),
+            pipeline_cleanup_interval: default_pipeline_cleanup_interval(),
+        }
+    }
 }
 
 
@@ -317,6 +341,7 @@ fn default_cached_logo_cleanup_interval() -> String {
     "12h".to_string()
 }
 
+
 fn default_temp_retention() -> String {
     "5m".to_string()
 }
@@ -344,6 +369,21 @@ fn default_run_missed_immediately() -> bool {
 
 fn default_use_new_source_handlers() -> bool {
     true // Default to new source handlers
+}
+
+fn default_database_config() -> DatabaseConfig {
+    DatabaseConfig {
+        url: DEFAULT_DATABASE_URL.to_string(),
+        max_connections: Some(DEFAULT_MAX_CONNECTIONS),
+        batch_sizes: Some(DatabaseBatchConfig::default()),
+        sqlite: SqliteConfig::default(),
+        postgresql: PostgreSqlConfig::default(),
+        mysql: MySqlConfig::default(),
+    }
+}
+
+fn default_ingestion_config() -> IngestionConfig {
+    IngestionConfig::default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

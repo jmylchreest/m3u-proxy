@@ -29,7 +29,9 @@ import {
   Check,
   Shield,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Image,
+  Hash
 } from "lucide-react"
 import { 
   AreaChart, 
@@ -163,6 +165,192 @@ function getStatusIcon(status: string | undefined | null) {
     default:
       return <AlertCircle className="h-4 w-4 text-muted-foreground" />
   }
+}
+
+interface LogoCacheData {
+  logo_cache: {
+    total_entries: number;
+    memory_usage: {
+      bytes: number;
+      megabytes: string;
+      bytes_per_entry: number;
+      avg_entry_size_bytes: number;
+    };
+    storage_usage: {
+      bytes: number;
+      megabytes: string;
+    };
+    efficiency: {
+      hash_based_indexing: boolean;
+      smart_dimension_encoding: string;
+      memory_vs_string_storage: string;
+    };
+    last_updated: string;
+    cache_directory: string;
+    max_size_mb?: number | null;
+    max_age_days?: number | null;
+  };
+}
+
+function LogoCacheCard() {
+  const [cacheData, setCacheData] = useState<LogoCacheData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchCacheData = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    
+    try {
+      const backendUrl = getBackendUrl()
+      const response = await fetch(`${backendUrl}/debug/logo-cache`)
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+      
+      const data: LogoCacheData = await response.json()
+      setCacheData(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchCacheData()
+    
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(fetchCacheData, 30000)
+    return () => clearInterval(interval)
+  }, [fetchCacheData])
+
+  const formatNumber = (num: number): string => {
+    if (num >= 1000000) {
+      return `${(num / 1000000).toFixed(1)}M`
+    } else if (num >= 1000) {
+      return `${(num / 1000).toFixed(1)}K`
+    } else {
+      return num.toString()
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Image className="h-5 w-5" />
+          Logo Cache
+          {loading && <RefreshCw className="h-4 w-4 animate-spin" />}
+        </CardTitle>
+        <CardDescription>
+          Ultra-compact logo indexing with hash-based matching
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {error && (
+          <div className="flex items-center gap-2 text-destructive">
+            <XCircle className="h-4 w-4" />
+            <span className="text-sm">Error: {error}</span>
+          </div>
+        )}
+        
+        {cacheData && (
+          <>
+            {/* Status and Overview */}
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-4 w-4 text-green-500" />
+              <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100">
+                Active
+              </Badge>
+              <Badge variant="outline" className="ml-auto">
+                {formatNumber(cacheData.logo_cache.total_entries)} entries
+              </Badge>
+            </div>
+
+            {/* Performance Metrics */}
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium text-muted-foreground">Performance</h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Memory:</span>
+                  <span className="font-medium">{cacheData.logo_cache.memory_usage.megabytes} MB</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Per Entry:</span>
+                  <span className="font-medium">{cacheData.logo_cache.memory_usage.bytes_per_entry}B</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Storage:</span>
+                  <span className="font-medium">{cacheData.logo_cache.storage_usage.megabytes} MB</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Efficiency:</span>
+                  <span className="font-medium text-green-600">{cacheData.logo_cache.efficiency.memory_vs_string_storage}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Technology Features */}
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium text-muted-foreground">Technology</h4>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <Hash className="h-3 w-3 text-green-500" />
+                  <span>Hash-based indexing (no string storage)</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <Gauge className="h-3 w-3 text-blue-500" />
+                  <span>{cacheData.logo_cache.efficiency.smart_dimension_encoding}</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <MemoryStick className="h-3 w-3 text-purple-500" />
+                  <span>LRU caching for search results only</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Configuration */}
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium text-muted-foreground">Configuration</h4>
+              <div className="grid grid-cols-1 gap-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Size Limit:</span>
+                  <span className="font-medium">
+                    {cacheData.logo_cache.max_size_mb ? `${cacheData.logo_cache.max_size_mb} MB` : 'Unlimited'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Age Limit:</span>
+                  <span className="font-medium">
+                    {cacheData.logo_cache.max_age_days ? `${cacheData.logo_cache.max_age_days} days` : 'Unlimited'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Directory:</span>
+                  <span className="font-medium text-xs font-mono">{cacheData.logo_cache.cache_directory}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Last Updated:</span>
+                  <span className="font-medium text-xs">
+                    {new Date(cacheData.logo_cache.last_updated).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+        
+        {!cacheData && !loading && (
+          <div className="text-center py-4 text-muted-foreground">
+            <Image className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            <p className="text-xs">Logo cache data not available</p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 export function Debug() {
@@ -1073,6 +1261,9 @@ export function Debug() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Logo Cache Component */}
+          <LogoCacheCard />
 
           {/* FFmpeg Information */}
           <Card>

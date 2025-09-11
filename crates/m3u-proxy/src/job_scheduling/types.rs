@@ -18,6 +18,8 @@ pub enum JobPriority {
     Low = 3,
     /// Background maintenance tasks
     Maintenance = 4,
+    /// Exclusive jobs that only run when queue is empty (logo cache maintenance)
+    Exclusive = 5,
 }
 
 impl PartialOrd for JobPriority {
@@ -176,6 +178,7 @@ mod tests {
         assert!(JobPriority::High < JobPriority::Normal);
         assert!(JobPriority::Normal < JobPriority::Low);
         assert!(JobPriority::Low < JobPriority::Maintenance);
+        assert!(JobPriority::Maintenance < JobPriority::Exclusive);
     }
 
     #[test]

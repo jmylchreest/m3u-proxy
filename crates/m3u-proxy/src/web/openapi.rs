@@ -185,6 +185,7 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::get_logo_asset_with_formats,
         crate::web::api::get_logo_asset_format,
         crate::web::api::generate_cached_logo_metadata,
+        crate::web::api::rescan_logo_cache,
         crate::web::api::get_cached_logo_asset,
         
         // Filter endpoints

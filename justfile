@@ -141,10 +141,18 @@ set-version version *force="":
     sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package.json
     rm -f frontend/package.json.bak
 
-    # Update frontend package-lock.json version (both root and packages section)
+    # Update frontend package-lock.json version (only root-level versions, not dependencies)
     if [ -f frontend/package-lock.json ]; then
-        sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package-lock.json
-        rm -f frontend/package-lock.json.bak
+        # Create a safer update using jq if available, otherwise use targeted sed
+        if command -v jq >/dev/null 2>&1; then
+            # Use jq for precise JSON manipulation
+            jq --arg version "$VERSION" '.version = $version | .packages."".version = $version' frontend/package-lock.json > frontend/package-lock.json.tmp && mv frontend/package-lock.json.tmp frontend/package-lock.json
+        else
+            # Fallback to targeted sed (only update the first few lines where root version appears)
+            sed -i.bak '1,20 { s/^  "version": ".*"/  "version": "'"$VERSION"'"/; }' frontend/package-lock.json
+            sed -i.bak '/^  "packages": {$/,/^    "": {$/ { /^      "version": ".*"$/ { s/^      "version": ".*"/      "version": "'"$VERSION"'"/; } }' frontend/package-lock.json
+            rm -f frontend/package-lock.json.bak
+        fi
     fi
 
     echo "Version set to: $VERSION"

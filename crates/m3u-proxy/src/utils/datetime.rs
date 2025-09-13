@@ -76,7 +76,9 @@ pub struct DateTimeParser;
 impl DateTimeParser {
     /// Parse datetime from any supported source type (String, &str, or DateTime<Utc>)
     /// This is the recommended function to use for maximum flexibility
-    pub fn parse_from_any<T: FlexibleDateTimeSource>(input: T) -> Result<DateTime<Utc>, DateTimeError> {
+    pub fn parse_from_any<T: FlexibleDateTimeSource>(
+        input: T,
+    ) -> Result<DateTime<Utc>, DateTimeError> {
         input.to_datetime_flexible()
     }
 
@@ -117,9 +119,10 @@ impl DateTimeParser {
 
         // Try parsing as Unix timestamp first (fastest check)
         if let Ok(epoch) = trimmed.parse::<i64>()
-            && let Some(dt) = DateTime::from_timestamp(epoch, 0) {
-                return Ok(dt);
-            }
+            && let Some(dt) = DateTime::from_timestamp(epoch, 0)
+        {
+            return Ok(dt);
+        }
 
         // Try RFC3339 first (most common for APIs)
         if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
@@ -410,18 +413,27 @@ mod tests {
     #[test]
     fn test_parse_from_any() {
         let expected = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
-        
+
         // Test with DateTime<Utc> type
         assert_eq!(DateTimeParser::parse_from_any(expected).unwrap(), expected);
-        
+
         // Test with String
         let datetime_string = "2023-01-01T12:00:00Z".to_string();
-        assert_eq!(DateTimeParser::parse_from_any(datetime_string).unwrap(), expected);
-        
+        assert_eq!(
+            DateTimeParser::parse_from_any(datetime_string).unwrap(),
+            expected
+        );
+
         // Test with &str
-        assert_eq!(DateTimeParser::parse_from_any("2023-01-01T12:00:00Z").unwrap(), expected);
-        
+        assert_eq!(
+            DateTimeParser::parse_from_any("2023-01-01T12:00:00Z").unwrap(),
+            expected
+        );
+
         // Test with SQLite format
-        assert_eq!(DateTimeParser::parse_from_any("2023-01-01 12:00:00").unwrap(), expected);
+        assert_eq!(
+            DateTimeParser::parse_from_any("2023-01-01 12:00:00").unwrap(),
+            expected
+        );
     }
 }

@@ -4,12 +4,14 @@
 //! that works across SQLite, PostgreSQL, and MySQL databases.
 
 use anyhow::Result;
-use sea_orm::{DatabaseConnection, EntityTrait, QueryOrder, ActiveModelTrait, Set};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, QueryOrder, Set};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::entities::{data_mapping_rules, prelude::*};
-use crate::models::data_mapping::{DataMappingRule, DataMappingRuleCreateRequest, DataMappingRuleUpdateRequest};
+use crate::models::data_mapping::{
+    DataMappingRule, DataMappingRuleCreateRequest, DataMappingRuleUpdateRequest,
+};
 
 /// SeaORM-based DataMappingRule repository
 #[derive(Clone)]
@@ -56,7 +58,9 @@ impl DataMappingRuleSeaOrmRepository {
 
     /// Find data mapping rule by ID
     pub async fn find_by_id(&self, id: &Uuid) -> Result<Option<DataMappingRule>> {
-        let model = DataMappingRules::find_by_id(*id).one(&*self.connection).await?;
+        let model = DataMappingRules::find_by_id(*id)
+            .one(&*self.connection)
+            .await?;
         match model {
             Some(m) => Ok(Some(DataMappingRule {
                 id: m.id,
@@ -69,7 +73,7 @@ impl DataMappingRuleSeaOrmRepository {
                 created_at: m.created_at,
                 updated_at: m.updated_at,
             })),
-            None => Ok(None)
+            None => Ok(None),
         }
     }
 
@@ -98,14 +102,18 @@ impl DataMappingRuleSeaOrmRepository {
     }
 
     /// Update data mapping rule
-    pub async fn update(&self, id: &Uuid, request: DataMappingRuleUpdateRequest) -> Result<DataMappingRule> {
+    pub async fn update(
+        &self,
+        id: &Uuid,
+        request: DataMappingRuleUpdateRequest,
+    ) -> Result<DataMappingRule> {
         let model = DataMappingRules::find_by_id(*id)
             .one(&*self.connection)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Data mapping rule not found"))?;
 
         let mut active_model: data_mapping_rules::ActiveModel = model.into();
-        
+
         if let Some(name) = request.name {
             active_model.name = Set(name);
         }
@@ -140,11 +148,12 @@ impl DataMappingRuleSeaOrmRepository {
 
     /// Delete data mapping rule
     pub async fn delete(&self, id: &Uuid) -> Result<()> {
-        let result = DataMappingRules::delete_by_id(*id).exec(&*self.connection).await?;
+        let result = DataMappingRules::delete_by_id(*id)
+            .exec(&*self.connection)
+            .await?;
         if result.rows_affected == 0 {
             return Err(anyhow::anyhow!("Data mapping rule not found"));
         }
         Ok(())
     }
-
 }

@@ -1,5 +1,5 @@
-use crate::utils::datetime::DateTimeParser;
 use super::artifacts::ArtifactRegistry;
+use crate::utils::datetime::DateTimeParser;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -63,7 +63,7 @@ impl PipelineExecution {
     pub fn new(proxy_id: Uuid) -> Self {
         let execution_id = Uuid::new_v4();
         let execution_prefix = format!("pipeline_{}", execution_id.simple());
-        
+
         Self {
             id: execution_id,
             execution_prefix,
@@ -76,7 +76,7 @@ impl PipelineExecution {
             error_message: None,
         }
     }
-    
+
     pub fn add_stage(&mut self, stage_name: String) {
         let stage = PipelineStageExecution {
             name: stage_name.clone(),
@@ -89,15 +89,20 @@ impl PipelineExecution {
         };
         self.stages.insert(stage_name, stage);
     }
-    
+
     pub fn start_stage(&mut self, stage_name: &str) {
         if let Some(stage) = self.stages.get_mut(stage_name) {
             stage.status = StageStatus::Running;
             stage.started_at = Some(DateTimeParser::now_utc());
         }
     }
-    
-    pub fn complete_stage(&mut self, stage_name: &str, output_artifacts: Vec<String>, metrics: HashMap<String, serde_json::Value>) {
+
+    pub fn complete_stage(
+        &mut self,
+        stage_name: &str,
+        output_artifacts: Vec<String>,
+        metrics: HashMap<String, serde_json::Value>,
+    ) {
         if let Some(stage) = self.stages.get_mut(stage_name) {
             stage.status = StageStatus::Completed;
             stage.completed_at = Some(DateTimeParser::now_utc());
@@ -105,32 +110,43 @@ impl PipelineExecution {
             stage.metrics = metrics;
         }
     }
-    
+
     /// Complete a stage with pipeline artifacts
-    pub fn complete_stage_with_artifacts(&mut self, stage_name: &str, artifacts: Vec<super::artifacts::PipelineArtifact>, metrics: HashMap<String, serde_json::Value>) {
+    pub fn complete_stage_with_artifacts(
+        &mut self,
+        stage_name: &str,
+        artifacts: Vec<super::artifacts::PipelineArtifact>,
+        metrics: HashMap<String, serde_json::Value>,
+    ) {
         let mut artifact_ids = Vec::new();
-        
+
         // Register artifacts and collect their IDs
         for artifact in artifacts {
             let artifact_id = artifact.id.clone();
             self.artifacts.register(artifact);
             artifact_ids.push(artifact_id);
         }
-        
+
         // Complete the stage with artifact IDs
         self.complete_stage(stage_name, artifact_ids, metrics);
     }
-    
+
     /// Get artifacts produced by a specific stage
-    pub fn get_stage_artifacts(&self, stage_name: &str) -> Vec<&super::artifacts::PipelineArtifact> {
+    pub fn get_stage_artifacts(
+        &self,
+        stage_name: &str,
+    ) -> Vec<&super::artifacts::PipelineArtifact> {
         self.artifacts.get_by_stage(stage_name)
     }
-    
+
     /// Get artifacts of a specific type
-    pub fn get_artifacts_by_type(&self, artifact_type: &super::artifacts::ArtifactType) -> Vec<&super::artifacts::PipelineArtifact> {
+    pub fn get_artifacts_by_type(
+        &self,
+        artifact_type: &super::artifacts::ArtifactType,
+    ) -> Vec<&super::artifacts::PipelineArtifact> {
         self.artifacts.get_by_type(artifact_type)
     }
-    
+
     pub fn fail_stage(&mut self, stage_name: &str, error_message: String) {
         if let Some(stage) = self.stages.get_mut(stage_name) {
             stage.status = StageStatus::Failed;
@@ -138,12 +154,12 @@ impl PipelineExecution {
             stage.error_message = Some(error_message);
         }
     }
-    
+
     pub fn complete(&mut self) {
         self.status = PipelineStatus::Completed;
         self.completed_at = Some(DateTimeParser::now_utc());
     }
-    
+
     pub fn fail(&mut self, error_message: String) {
         self.status = PipelineStatus::Failed;
         self.completed_at = Some(DateTimeParser::now_utc());

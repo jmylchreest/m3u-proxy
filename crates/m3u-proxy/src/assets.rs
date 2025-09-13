@@ -188,18 +188,20 @@ mod tests {
             .filter(|f| f.contains(".css"))
             .collect();
         if !css_files.is_empty()
-            && let Some(css_file) = StaticAssets::get_asset(&css_files[0]) {
-                let content = String::from_utf8_lossy(&css_file.data);
-                assert!(!content.is_empty(), "CSS files should have content");
-            }
+            && let Some(css_file) = StaticAssets::get_asset(&css_files[0])
+        {
+            let content = String::from_utf8_lossy(&css_file.data);
+            assert!(!content.is_empty(), "CSS files should have content");
+        }
 
         // Test that we have some JS content (Next.js JS files have dynamic names)
         let js_files: Vec<_> = StaticAssets::iter().filter(|f| f.contains(".js")).collect();
         if !js_files.is_empty()
-            && let Some(js_file) = StaticAssets::get_asset(&js_files[0]) {
-                let content = String::from_utf8_lossy(&js_file.data);
-                assert!(!content.is_empty(), "JS files should have content");
-            }
+            && let Some(js_file) = StaticAssets::get_asset(&js_files[0])
+        {
+            let content = String::from_utf8_lossy(&js_file.data);
+            assert!(!content.is_empty(), "JS files should have content");
+        }
 
         // Test relay page content (may be at different paths in Next.js builds)
         if let Some(relay_html) = StaticAssets::get_asset("static/admin/relays/index.html") {
@@ -207,7 +209,9 @@ mod tests {
             // The relay page may show different content based on backend availability
             // Check for either relay-specific content or the general UI structure
             assert!(
-                content.contains("relay") || content.contains("M3U Proxy") || content.contains("Backend"),
+                content.contains("relay")
+                    || content.contains("M3U Proxy")
+                    || content.contains("Backend"),
                 "relay.html should contain relay-related or UI content"
             );
             assert!(

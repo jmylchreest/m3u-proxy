@@ -51,12 +51,12 @@
 //! }
 //! ```
 
-pub mod traits;
-pub mod m3u;
-pub mod xtream;
-pub mod xmltv_epg;
-pub mod xtream_epg;
 pub mod factory;
+pub mod m3u;
+pub mod traits;
+pub mod xmltv_epg;
+pub mod xtream;
+pub mod xtream_epg;
 
-pub use traits::*;
 pub use factory::SourceHandlerFactory;
+pub use traits::*;

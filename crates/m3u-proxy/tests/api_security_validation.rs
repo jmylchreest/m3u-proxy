@@ -11,7 +11,10 @@
 //! - Malicious input handling
 
 use anyhow::Result;
-use sea_orm::{DatabaseConnection, DatabaseTransaction, QueryFilter, ColumnTrait, ConnectionTrait, Statement, DatabaseBackend, FromQueryResult};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction,
+    FromQueryResult, QueryFilter, Statement,
+};
 use uuid::Uuid;
 
 use m3u_proxy::{
@@ -24,14 +27,15 @@ use m3u_proxy::{
 async fn create_seaorm_test_database() -> Result<std::sync::Arc<DatabaseConnection>> {
     use sea_orm::*;
     use std::sync::Arc;
-    
+
     let connection = sea_orm::Database::connect("sqlite::memory:").await?;
     let arc_connection = Arc::new(connection);
-    
+
     // Create minimal table structure for testing (avoiding migration foreign key issues)
-    arc_connection.execute(Statement::from_string(
-        DatabaseBackend::Sqlite,
-        r#"
+    arc_connection
+        .execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            r#"
         CREATE TABLE stream_sources (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -48,14 +52,19 @@ async fn create_seaorm_test_database() -> Result<std::sync::Arc<DatabaseConnecti
             last_ingested_at TEXT,
             is_active INTEGER NOT NULL DEFAULT 1
         );
-        "#.to_string()
-    )).await?;
-    
+        "#
+            .to_string(),
+        ))
+        .await?;
+
     Ok(arc_connection)
 }
 
 /// SeaORM repository helper - Creates repository with test database
-async fn create_seaorm_test_repository() -> Result<(StreamSourceSeaOrmRepository, std::sync::Arc<DatabaseConnection>)> {
+async fn create_seaorm_test_repository() -> Result<(
+    StreamSourceSeaOrmRepository,
+    std::sync::Arc<DatabaseConnection>,
+)> {
     let connection = create_seaorm_test_database().await?;
     let repository = StreamSourceSeaOrmRepository::new(connection.clone());
     Ok((repository, connection))
@@ -63,9 +72,9 @@ async fn create_seaorm_test_repository() -> Result<(StreamSourceSeaOrmRepository
 
 /// SeaORM security test helper - Execute parameterized query safely
 async fn execute_parameterized_query(
-    connection: &DatabaseConnection, 
-    sql: &str, 
-    params: Vec<sea_orm::Value>
+    connection: &DatabaseConnection,
+    sql: &str,
+    params: Vec<sea_orm::Value>,
 ) -> Result<()> {
     let stmt = Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, params);
     connection.execute(stmt).await?;
@@ -74,9 +83,9 @@ async fn execute_parameterized_query(
 
 /// SeaORM security test helper - Execute parameterized query safely within a transaction
 async fn execute_parameterized_query_tx(
-    txn: &DatabaseTransaction, 
-    sql: &str, 
-    params: Vec<sea_orm::Value>
+    txn: &DatabaseTransaction,
+    sql: &str,
+    params: Vec<sea_orm::Value>,
 ) -> Result<()> {
     let stmt = Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, params);
     txn.execute(stmt).await?;
@@ -86,11 +95,11 @@ async fn execute_parameterized_query_tx(
 /// SeaORM security test helper - Execute parameterized query with single result
 async fn query_one_parameterized<T>(
     connection: &DatabaseConnection,
-    sql: &str, 
-    params: Vec<sea_orm::Value>
-) -> Result<Option<T>> 
+    sql: &str,
+    params: Vec<sea_orm::Value>,
+) -> Result<Option<T>>
 where
-    T: FromQueryResult
+    T: FromQueryResult,
 {
     let stmt = Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, params);
     let result = T::find_by_statement(stmt).one(connection).await?;
@@ -100,11 +109,11 @@ where
 /// SeaORM security test helper - Execute parameterized query with single result within a transaction
 async fn query_one_parameterized_tx<T>(
     txn: &DatabaseTransaction,
-    sql: &str, 
-    params: Vec<sea_orm::Value>
-) -> Result<Option<T>> 
+    sql: &str,
+    params: Vec<sea_orm::Value>,
+) -> Result<Option<T>>
 where
-    T: FromQueryResult
+    T: FromQueryResult,
 {
     let stmt = Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, params);
     let result = T::find_by_statement(stmt).one(txn).await?;
@@ -112,15 +121,16 @@ where
 }
 
 /// SeaORM transaction helper - Execute operations in transaction for security testing
-async fn execute_in_transaction<F, R>(
-    connection: &DatabaseConnection,
-    operation: F
-) -> Result<R>
+async fn execute_in_transaction<F, R>(connection: &DatabaseConnection, operation: F) -> Result<R>
 where
-    F: for<'c> FnOnce(&'c sea_orm::DatabaseTransaction) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + 'c>>,
+    F: for<'c> FnOnce(
+        &'c sea_orm::DatabaseTransaction,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<R>> + Send + 'c>,
+    >,
 {
     use sea_orm::TransactionTrait;
-    
+
     let txn = connection.begin().await?;
     let result = operation(&txn).await?;
     txn.commit().await?;
@@ -131,10 +141,10 @@ where
 async fn create_test_sources_bulk(
     repository: &StreamSourceSeaOrmRepository,
     count: usize,
-    name_prefix: &str
+    name_prefix: &str,
 ) -> Result<Vec<StreamSource>> {
     let mut sources = Vec::new();
-    
+
     for i in 1..=count {
         let request = StreamSourceCreateRequest {
             name: format!("{} {}", name_prefix, i),
@@ -147,43 +157,46 @@ async fn create_test_sources_bulk(
             field_map: None,
             ignore_channel_numbers: false,
         };
-        
+
         let source = repository.create(request).await?;
         sources.push(source);
     }
-    
+
     Ok(sources)
 }
 
 /// SeaORM entity query helper - Demonstrates type-safe querying
 async fn find_sources_by_name_pattern(
     connection: &DatabaseConnection,
-    pattern: &str
+    pattern: &str,
 ) -> Result<Vec<StreamSource>> {
     use sea_orm::EntityTrait;
-    
+
     let models = StreamSources::find()
         .filter(stream_sources::Column::Name.contains(pattern))
         .filter(stream_sources::Column::IsActive.eq(true))
         .all(connection)
         .await?;
 
-    Ok(models.into_iter().map(|m| StreamSource {
-        id: m.id,
-        name: m.name,
-        source_type: m.source_type,
-        url: m.url,
-        max_concurrent_streams: m.max_concurrent_streams,
-        update_cron: m.update_cron,
-        username: m.username,
-        password: m.password,
-        field_map: m.field_map,
-        ignore_channel_numbers: m.ignore_channel_numbers,
-        created_at: m.created_at,
-        updated_at: m.updated_at,
-        last_ingested_at: m.last_ingested_at,
-        is_active: m.is_active,
-    }).collect())
+    Ok(models
+        .into_iter()
+        .map(|m| StreamSource {
+            id: m.id,
+            name: m.name,
+            source_type: m.source_type,
+            url: m.url,
+            max_concurrent_streams: m.max_concurrent_streams,
+            update_cron: m.update_cron,
+            username: m.username,
+            password: m.password,
+            field_map: m.field_map,
+            ignore_channel_numbers: m.ignore_channel_numbers,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+            last_ingested_at: m.last_ingested_at,
+            is_active: m.is_active,
+        })
+        .collect())
 }
 
 /// Common malicious payloads for testing input validation
@@ -193,22 +206,18 @@ const MALICIOUS_PAYLOADS: &[&str] = &[
     "' OR '1'='1",
     "' UNION SELECT * FROM sqlite_master --",
     "admin'/*",
-    
     // XSS attempts
     "<script>alert('xss')</script>",
     "javascript:alert('xss')",
     "<img src=x onerror=alert('xss')>",
     "';alert('xss');//",
-    
     // Path traversal
     "../../../etc/passwd",
     "..\\..\\..\\windows\\system32\\config\\sam",
-    
     // Command injection
     "; rm -rf /",
     "| cat /etc/passwd",
     "&& rm -rf /",
-    
     // Large payloads for DoS testing
     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", // Unicode DoS
@@ -237,17 +246,17 @@ async fn test_seaorm_repository_input_validation_stream_sources() {
         };
 
         let result = repo.create(create_request).await;
-        
+
         match result {
             Ok(source) => {
                 // If creation succeeded, malicious input should be stored safely
                 assert_eq!(source.name, payload);
-                
+
                 // Verify we can retrieve it safely using SeaORM
                 let retrieved = repo.find_by_id(&source.id).await.unwrap();
                 assert!(retrieved.is_some());
                 assert_eq!(retrieved.unwrap().name, payload);
-                
+
                 // Clean up using SeaORM
                 let _ = repo.delete(&source.id).await;
             }
@@ -273,12 +282,13 @@ async fn test_seaorm_parameterized_query_safety() {
             #[allow(dead_code)]
             count: i64,
         }
-        
+
         let count_result = query_one_parameterized::<CountResult>(
             &connection,
             "SELECT COUNT(*) as count FROM stream_sources WHERE name = ?",
-            vec![payload.into()]
-        ).await;
+            vec![payload.into()],
+        )
+        .await;
 
         match count_result {
             Ok(_) => {
@@ -319,23 +329,26 @@ async fn test_seaorm_parameterized_query_safety() {
                 struct NameResult {
                     name: String,
                 }
-                
+
                 let verify_result = query_one_parameterized::<NameResult>(
                     &connection,
                     "SELECT name FROM stream_sources WHERE id = ?",
-                    vec![test_id.to_string().into()]
-                ).await.unwrap();
-                
+                    vec![test_id.to_string().into()],
+                )
+                .await
+                .unwrap();
+
                 if let Some(row) = verify_result {
                     assert_eq!(row.name, payload); // Should be stored exactly as provided
                 }
-                
+
                 // Clean up using SeaORM
                 let _ = execute_parameterized_query(
                     &connection,
                     "DELETE FROM stream_sources WHERE id = ?",
-                    vec![test_id.to_string().into()]
-                ).await;
+                    vec![test_id.to_string().into()],
+                )
+                .await;
             }
             Err(e) => {
                 // If failed, should be due to constraints, not SQL injection
@@ -346,7 +359,7 @@ async fn test_seaorm_parameterized_query_safety() {
     }
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_seaorm_like_queries_sql_injection_prevention() {
     let connection = create_seaorm_test_database().await.unwrap();
 
@@ -385,12 +398,13 @@ async fn test_seaorm_like_queries_sql_injection_prevention() {
                 #[allow(dead_code)]
                 count: i64,
             }
-            
+
             let result = query_one_parameterized::<LikeCountResult>(
                 &connection,
                 "SELECT COUNT(*) as count FROM stream_sources WHERE name LIKE ?",
-                vec![pattern.into()]
-            ).await;
+                vec![pattern.into()],
+            )
+            .await;
 
             match result {
                 Ok(_) => {
@@ -412,7 +426,7 @@ async fn test_uuid_validation_prevents_injection() {
         let result = Uuid::parse_str(payload);
         assert!(result.is_err(), "Should reject malicious UUID: {payload}");
     }
-    
+
     // Valid UUIDs should pass
     let valid_uuid = Uuid::new_v4();
     assert!(Uuid::parse_str(&valid_uuid.to_string()).is_ok());
@@ -429,16 +443,17 @@ async fn test_seaorm_database_error_handling_security() {
         #[allow(dead_code)]
         count: i64,
     }
-    
+
     let result = query_one_parameterized::<ErrorTestResult>(
         &connection,
         "SELECT COUNT(*) FROM stream_sources WHERE id = ?",
-        vec!["not-a-valid-uuid-format".into()]
-    ).await;
+        vec!["not-a-valid-uuid-format".into()],
+    )
+    .await;
 
     if let Err(error) = result {
         let error_msg = format!("{error}");
-        
+
         // Should not expose sensitive internal details
         assert!(!error_msg.to_lowercase().contains("password"));
         assert!(!error_msg.to_lowercase().contains("secret"));
@@ -474,13 +489,15 @@ async fn test_seaorm_unicode_and_encoding_handling() {
         };
 
         let result = repo.create(create_request).await;
-        
+
         match result {
             Ok(source) => {
                 // Verify Unicode is preserved correctly with SeaORM
-                assert_eq!(source.name, channel_name, 
-                    "Unicode should be preserved for test: {test_name}");
-                
+                assert_eq!(
+                    source.name, channel_name,
+                    "Unicode should be preserved for test: {test_name}"
+                );
+
                 // Clean up using SeaORM
                 let _ = repo.delete(&source.id).await;
             }
@@ -500,13 +517,14 @@ async fn test_seaorm_advanced_security_patterns() {
     let (repo, connection) = create_seaorm_test_repository().await.unwrap();
 
     // Test 1: Transaction-based security with rollback on malicious input
-    for &payload in &MALICIOUS_PAYLOADS[0..3] { // Test subset for performance
+    for &payload in &MALICIOUS_PAYLOADS[0..3] {
+        // Test subset for performance
         let result = execute_in_transaction(&connection, |txn| {
             Box::pin(async move {
                 // Simulate a multi-step operation that should be atomic
                 let test_id = Uuid::new_v4();
                 let now = chrono::Utc::now();
-                
+
                 // Step 1: Insert with potential malicious data
                 execute_parameterized_query_tx(
                     txn,
@@ -529,7 +547,7 @@ async fn test_seaorm_advanced_security_patterns() {
                 struct VerifyResult {
                     name: String,
                 }
-                
+
                 let verify = query_one_parameterized_tx::<VerifyResult>(
                     txn,
                     "SELECT name FROM stream_sources WHERE id = ?",
@@ -559,11 +577,13 @@ async fn test_seaorm_advanced_security_patterns() {
     }
 
     // Test 2: Type-safe entity queries with malicious search patterns
-    let test_sources = create_test_sources_bulk(&repo, 5, "TestPattern").await.unwrap();
-    
+    let test_sources = create_test_sources_bulk(&repo, 5, "TestPattern")
+        .await
+        .unwrap();
+
     for &payload in &MALICIOUS_PAYLOADS[0..5] {
         let search_result = find_sources_by_name_pattern(&connection, payload).await;
-        
+
         match search_result {
             Ok(sources) => {
                 // Should return safely filtered results without SQL injection
@@ -593,21 +613,22 @@ async fn test_seaorm_advanced_security_patterns() {
         let complex_result = query_one_parameterized::<ComplexQueryResult>(
             &connection,
             r#"
-            SELECT id, name, url 
-            FROM stream_sources 
-            WHERE (name LIKE ? OR url LIKE ?) 
-            AND source_type = ? 
+            SELECT id, name, url
+            FROM stream_sources
+            WHERE (name LIKE ? OR url LIKE ?)
+            AND source_type = ?
             AND is_active = ?
-            ORDER BY created_at DESC 
+            ORDER BY created_at DESC
             LIMIT 1
             "#,
             vec![
                 format!("%{}%", payload).into(),
                 format!("%{}%", payload).into(),
                 "m3u".into(),
-                true.into()
-            ]
-        ).await;
+                true.into(),
+            ],
+        )
+        .await;
 
         match complex_result {
             Ok(_) => {
@@ -630,16 +651,16 @@ async fn test_seaorm_advanced_security_patterns() {
 #[tokio::test]
 async fn test_seaorm_concurrent_security_operations() {
     use tokio::task::JoinSet;
-    
+
     let (repo, _connection) = create_seaorm_test_repository().await.unwrap();
-    
+
     // Test concurrent operations with potentially malicious input
     let mut join_set = JoinSet::new();
-    
+
     for (i, &payload) in MALICIOUS_PAYLOADS.iter().take(5).enumerate() {
         let repo_clone = repo.clone();
         let payload_owned = payload.to_string();
-        
+
         join_set.spawn(async move {
             let create_request = StreamSourceCreateRequest {
                 name: format!("Concurrent {} - {}", i, payload_owned),
@@ -658,7 +679,7 @@ async fn test_seaorm_concurrent_security_operations() {
                     // Verify concurrent creation succeeded
                     let found = repo_clone.find_by_id(&source.id).await.unwrap();
                     assert!(found.is_some());
-                    
+
                     // Clean up
                     let _ = repo_clone.delete(&source.id).await;
                     Ok(source.id)
@@ -672,11 +693,11 @@ async fn test_seaorm_concurrent_security_operations() {
             }
         });
     }
-    
+
     // Wait for all concurrent operations to complete
     let mut success_count = 0;
     let mut error_count = 0;
-    
+
     while let Some(result) = join_set.join_next().await {
         match result {
             Ok(Ok(_)) => success_count += 1,
@@ -684,9 +705,11 @@ async fn test_seaorm_concurrent_security_operations() {
             Err(e) => panic!("Task panicked: {e}"),
         }
     }
-    
+
     // All operations should complete without SQL injection errors
     assert!(success_count + error_count == 5);
-    println!("Concurrent operations: {} succeeded, {} had validation errors", success_count, error_count);
+    println!(
+        "Concurrent operations: {} succeeded, {} had validation errors",
+        success_count, error_count
+    );
 }
-

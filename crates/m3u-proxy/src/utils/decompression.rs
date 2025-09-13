@@ -1,9 +1,17 @@
-#[cfg(any(feature = "compression-gzip", feature = "compression-bzip2", feature = "compression-xz"))]
-use std::io::Read;
-#[cfg(any(feature = "compression-gzip", feature = "compression-bzip2", feature = "compression-xz"))]
+#[cfg(any(
+    feature = "compression-gzip",
+    feature = "compression-bzip2",
+    feature = "compression-xz"
+))]
 use anyhow::Context;
 use anyhow::Result;
 use bytes::Bytes;
+#[cfg(any(
+    feature = "compression-gzip",
+    feature = "compression-bzip2",
+    feature = "compression-xz"
+))]
+use std::io::Read;
 
 // Conditional imports based on enabled features
 #[cfg(feature = "compression-gzip")]
@@ -51,7 +59,7 @@ impl DecompressionService {
     /// Decompress data based on detected format
     pub fn decompress(data: Bytes) -> Result<Vec<u8>> {
         let format = Self::detect_compression_format(&data);
-        
+
         match format {
             #[cfg(feature = "compression-gzip")]
             CompressionFormat::Gzip => Self::decompress_gzip(data),
@@ -95,18 +103,17 @@ impl DecompressionService {
             .context("Failed to decompress xz data")?;
         Ok(decompressed)
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
-    
-    #[cfg(feature = "compression-gzip")]
-    use flate2::write::GzEncoder;
+
     #[cfg(feature = "compression-gzip")]
     use flate2::Compression;
+    #[cfg(feature = "compression-gzip")]
+    use flate2::write::GzEncoder;
 
     #[test]
     fn test_detect_uncompressed() {
@@ -119,16 +126,16 @@ mod tests {
     #[cfg(feature = "compression-gzip")]
     fn test_detect_and_decompress_gzip() {
         let original_data = b"Hello, world!";
-        
+
         // Compress data
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(original_data).unwrap();
         let compressed = encoder.finish().unwrap();
-        
+
         // Detect format
         let format = DecompressionService::detect_compression_format(&compressed);
         assert_eq!(format, CompressionFormat::Gzip);
-        
+
         // Decompress
         let decompressed = DecompressionService::decompress(Bytes::from(compressed)).unwrap();
         assert_eq!(decompressed, original_data);

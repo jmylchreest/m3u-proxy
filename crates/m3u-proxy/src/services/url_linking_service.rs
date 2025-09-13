@@ -4,15 +4,14 @@
 //! using SeaORM repositories, replacing the complex legacy UrlLinkingRepository.
 
 use anyhow::Result;
-use tracing::{info, debug};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::{
     database::repositories::{
-        stream_source::StreamSourceSeaOrmRepository,
-        epg_source::EpgSourceSeaOrmRepository,
+        epg_source::EpgSourceSeaOrmRepository, stream_source::StreamSourceSeaOrmRepository,
     },
-    models::{StreamSource, EpgSource, StreamSourceType, EpgSourceType},
+    models::{EpgSource, EpgSourceType, StreamSource, StreamSourceType},
 };
 
 /// Clean SeaORM-based URL linking service for automatic source relationship management
@@ -34,14 +33,17 @@ impl UrlLinkingService {
     }
 
     /// Find stream sources with the same URL as the given EPG source
-    pub async fn find_linked_stream_sources(&self, epg_source: &EpgSource) -> Result<Vec<StreamSource>> {
+    pub async fn find_linked_stream_sources(
+        &self,
+        epg_source: &EpgSource,
+    ) -> Result<Vec<StreamSource>> {
         if epg_source.source_type != EpgSourceType::Xtream {
             return Ok(Vec::new());
         }
 
         // Get all active stream sources
         let all_sources = self.stream_source_repo.find_active().await?;
-        
+
         // Filter for Xtream sources with same URL but different ID
         let linked_sources = all_sources
             .into_iter()
@@ -57,14 +59,17 @@ impl UrlLinkingService {
     }
 
     /// Find EPG sources with the same URL as the given stream source
-    pub async fn find_linked_epg_sources(&self, stream_source: &StreamSource) -> Result<Vec<EpgSource>> {
+    pub async fn find_linked_epg_sources(
+        &self,
+        stream_source: &StreamSource,
+    ) -> Result<Vec<EpgSource>> {
         if stream_source.source_type != StreamSourceType::Xtream {
             return Ok(Vec::new());
         }
 
         // Get all active EPG sources
         let all_sources = self.epg_source_repo.find_active().await?;
-        
+
         // Filter for Xtream sources with same URL but different ID
         let linked_sources = all_sources
             .into_iter()
@@ -80,7 +85,10 @@ impl UrlLinkingService {
     }
 
     /// Auto-populate EPG source credentials from linked stream sources (URL-based)
-    pub async fn auto_populate_epg_credentials(&self, epg_source_id: Uuid) -> Result<Option<EpgSource>> {
+    pub async fn auto_populate_epg_credentials(
+        &self,
+        epg_source_id: Uuid,
+    ) -> Result<Option<EpgSource>> {
         // Get the EPG source
         let epg_source = match self.epg_source_repo.find_by_id(&epg_source_id).await? {
             Some(source) => source,
@@ -88,17 +96,20 @@ impl UrlLinkingService {
         };
 
         // Only handle Xtream sources without credentials
-        if epg_source.source_type != EpgSourceType::Xtream 
-            || (epg_source.username.is_some() && epg_source.password.is_some()) {
+        if epg_source.source_type != EpgSourceType::Xtream
+            || (epg_source.username.is_some() && epg_source.password.is_some())
+        {
             return Ok(Some(epg_source));
         }
 
         // Find linked stream sources
         let linked_stream_sources = self.find_linked_stream_sources(&epg_source).await?;
-        
+
         // Look for a stream source with credentials
         for stream_source in &linked_stream_sources {
-            if let (Some(username), Some(password)) = (&stream_source.username, &stream_source.password) {
+            if let (Some(username), Some(password)) =
+                (&stream_source.username, &stream_source.password)
+            {
                 // Update EPG source with credentials from stream source
                 let update_request = crate::models::EpgSourceUpdateRequest {
                     name: epg_source.name.clone(),
@@ -113,7 +124,10 @@ impl UrlLinkingService {
                     update_linked: false, // Don't create circular updates
                 };
 
-                let updated_epg = self.epg_source_repo.update(&epg_source_id, update_request).await?;
+                let updated_epg = self
+                    .epg_source_repo
+                    .update(&epg_source_id, update_request)
+                    .await?;
 
                 info!(
                     "Auto-populated EPG source '{}' credentials from linked stream source '{}'",
@@ -154,7 +168,7 @@ impl UrlLinkingService {
 
                 // Update linked EPG sources
                 let linked_epg_sources = self.find_linked_epg_sources(&stream_source).await?;
-                
+
                 for epg_source in linked_epg_sources {
                     let mut needs_update = false;
                     let mut update_request = crate::models::EpgSourceUpdateRequest {
@@ -171,29 +185,45 @@ impl UrlLinkingService {
                     };
 
                     if let Some(update_url) = url
-                        && epg_source.url != **update_url {
-                            update_request.url = update_url.clone();
-                            needs_update = true;
-                        }
+                        && epg_source.url != **update_url
+                    {
+                        update_request.url = update_url.clone();
+                        needs_update = true;
+                    }
 
                     if let Some(update_username) = username
-                        && !update_username.is_empty() && epg_source.username.as_deref() != Some(update_username) {
-                            update_request.username = Some(update_username.clone());
-                            needs_update = true;
-                            debug!("Username will be updated for linked EPG source '{}'", epg_source.name);
-                        }
+                        && !update_username.is_empty()
+                        && epg_source.username.as_deref() != Some(update_username)
+                    {
+                        update_request.username = Some(update_username.clone());
+                        needs_update = true;
+                        debug!(
+                            "Username will be updated for linked EPG source '{}'",
+                            epg_source.name
+                        );
+                    }
 
                     if let Some(update_password) = password
-                        && !update_password.is_empty() && epg_source.password.as_deref() != Some(update_password) {
-                            update_request.password = Some(update_password.clone());
-                            needs_update = true;
-                            debug!("Password will be updated for linked EPG source '{}'", epg_source.name);
-                        }
+                        && !update_password.is_empty()
+                        && epg_source.password.as_deref() != Some(update_password)
+                    {
+                        update_request.password = Some(update_password.clone());
+                        needs_update = true;
+                        debug!(
+                            "Password will be updated for linked EPG source '{}'",
+                            epg_source.name
+                        );
+                    }
 
                     if needs_update {
-                        self.epg_source_repo.update(&epg_source.id, update_request).await?;
+                        self.epg_source_repo
+                            .update(&epg_source.id, update_request)
+                            .await?;
                         updated_count += 1;
-                        info!("Updated linked EPG source '{}' to match stream source changes", epg_source.name);
+                        info!(
+                            "Updated linked EPG source '{}' to match stream source changes",
+                            epg_source.name
+                        );
                     }
                 }
             }
@@ -206,7 +236,7 @@ impl UrlLinkingService {
 
                 // Update linked stream sources
                 let linked_stream_sources = self.find_linked_stream_sources(&epg_source).await?;
-                
+
                 for stream_source in linked_stream_sources {
                     let mut needs_update = false;
                     let mut update_request = crate::models::StreamSourceUpdateRequest {
@@ -224,34 +254,53 @@ impl UrlLinkingService {
                     };
 
                     if let Some(update_url) = url
-                        && stream_source.url != **update_url {
-                            update_request.url = update_url.clone();
-                            needs_update = true;
-                        }
+                        && stream_source.url != **update_url
+                    {
+                        update_request.url = update_url.clone();
+                        needs_update = true;
+                    }
 
                     if let Some(update_username) = username
-                        && !update_username.is_empty() && stream_source.username.as_deref() != Some(update_username) {
-                            update_request.username = Some(update_username.clone());
-                            needs_update = true;
-                            debug!("Username will be updated for linked stream source '{}'", stream_source.name);
-                        }
+                        && !update_username.is_empty()
+                        && stream_source.username.as_deref() != Some(update_username)
+                    {
+                        update_request.username = Some(update_username.clone());
+                        needs_update = true;
+                        debug!(
+                            "Username will be updated for linked stream source '{}'",
+                            stream_source.name
+                        );
+                    }
 
                     if let Some(update_password) = password
-                        && !update_password.is_empty() && stream_source.password.as_deref() != Some(update_password) {
-                            update_request.password = Some(update_password.clone());
-                            needs_update = true;
-                            debug!("Password will be updated for linked stream source '{}'", stream_source.name);
-                        }
+                        && !update_password.is_empty()
+                        && stream_source.password.as_deref() != Some(update_password)
+                    {
+                        update_request.password = Some(update_password.clone());
+                        needs_update = true;
+                        debug!(
+                            "Password will be updated for linked stream source '{}'",
+                            stream_source.name
+                        );
+                    }
 
                     if needs_update {
-                        self.stream_source_repo.update(&stream_source.id, update_request).await?;
+                        self.stream_source_repo
+                            .update(&stream_source.id, update_request)
+                            .await?;
                         updated_count += 1;
-                        info!("Updated linked stream source '{}' to match EPG source changes", stream_source.name);
+                        info!(
+                            "Updated linked stream source '{}' to match EPG source changes",
+                            stream_source.name
+                        );
                     }
                 }
             }
             _ => {
-                debug!("Unknown source type '{}', skipping linked updates", source_type);
+                debug!(
+                    "Unknown source type '{}', skipping linked updates",
+                    source_type
+                );
             }
         }
 

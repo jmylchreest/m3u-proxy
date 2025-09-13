@@ -1,10 +1,10 @@
-use std::future::Future;
 use async_trait::async_trait;
+use std::future::Future;
 use tracing::warn;
 
 use super::circuit_breaker::{
-    CircuitBreaker, CircuitBreakerError, CircuitBreakerResult, 
-    CircuitBreakerState, CircuitBreakerStats
+    CircuitBreaker, CircuitBreakerError, CircuitBreakerResult, CircuitBreakerState,
+    CircuitBreakerStats,
 };
 
 /// No-Op circuit breaker that always allows operations through
@@ -33,7 +33,7 @@ impl CircuitBreaker for NoOpCircuitBreaker {
         T: Send,
     {
         let start_time = std::time::Instant::now();
-        
+
         // Execute operation without any circuit breaker logic
         match operation().await {
             Ok(result) => CircuitBreakerResult {

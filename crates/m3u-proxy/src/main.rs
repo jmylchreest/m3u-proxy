@@ -1,25 +1,29 @@
 use anyhow::Result;
 use clap::Parser;
+use serde_json::Value;
 use std::{sync::Arc, time::Duration};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use serde_json::Value;
 
 // Use the library instead of redeclaring modules
 use m3u_proxy::{
     config::Config,
     data_mapping::DataMappingService,
-    database::{Database, repositories::{StreamProxySeaOrmRepository, EpgSourceSeaOrmRepository, StreamSourceSeaOrmRepository, ChannelSeaOrmRepository}},
-    ingestor::{
-        IngestionStateManager,
-        scheduler::create_cache_invalidation_channel,
+    database::{
+        Database,
+        repositories::{
+            ChannelSeaOrmRepository, EpgSourceSeaOrmRepository, StreamProxySeaOrmRepository,
+            StreamSourceSeaOrmRepository,
+        },
     },
-    job_scheduling::{JobQueue, JobScheduler, JobQueueRunner, JobExecutor},
+    ingestor::{IngestionStateManager, scheduler::create_cache_invalidation_channel},
+    job_scheduling::{JobExecutor, JobQueue, JobQueueRunner, JobScheduler},
     logo_assets::{LogoAssetService, LogoAssetStorage},
-    services::{ProxyRegenerationService, StreamSourceBusinessService, EpgSourceService, UrlLinkingService, logo_cache::{LogoCacheService}, logo_cache_maintenance::LogoCacheMaintenanceService},
-    utils::{
-        SystemManager,
+    services::{
+        EpgSourceService, ProxyRegenerationService, StreamSourceBusinessService, UrlLinkingService,
+        logo_cache::LogoCacheService, logo_cache_maintenance::LogoCacheMaintenanceService,
     },
+    utils::SystemManager,
     web::WebServer,
 };
 // use std::{collections::HashMap, sync::Arc};
@@ -38,24 +42,27 @@ fn print_version_info() {
     println!("{}", env!("CARGO_PKG_DESCRIPTION"));
     println!();
     println!("Build Information:");
-    println!("  Target: {}-{}", std::env::consts::ARCH, std::env::consts::OS);
+    println!(
+        "  Target: {}-{}",
+        std::env::consts::ARCH,
+        std::env::consts::OS
+    );
     if let Ok(rustc_version) = std::env::var("RUSTC_VERSION") {
         println!("  Rust: {rustc_version}");
     }
     println!();
     println!("Software Bill of Materials:");
-    
+
     match get_dependencies() {
         Ok(sbom) => {
             let mut dependencies = Vec::new();
-            
+
             // Parse SPDX JSON format
             if let Some(packages) = sbom["packages"].as_array() {
                 for package in packages {
-                    if let (Some(name), Some(version)) = (
-                        package["name"].as_str(),
-                        package["versionInfo"].as_str()
-                    ) {
+                    if let (Some(name), Some(version)) =
+                        (package["name"].as_str(), package["versionInfo"].as_str())
+                    {
                         // Skip our own package and path dependencies
                         if name != env!("CARGO_PKG_NAME") && !version.contains("path+") {
                             dependencies.push((name.to_string(), version.to_string()));
@@ -63,10 +70,10 @@ fn print_version_info() {
                     }
                 }
             }
-            
+
             // Sort dependencies alphabetically for consistent output
             dependencies.sort_by(|a, b| a.0.cmp(&b.0));
-            
+
             if dependencies.is_empty() {
                 println!("  (No external components found in SBOM)");
             } else {
@@ -79,7 +86,7 @@ fn print_version_info() {
             println!("  (Unable to read SBOM data)");
         }
     }
-    
+
     println!();
     println!("Repository: {}", env!("CARGO_PKG_REPOSITORY"));
     println!("License: {}", env!("CARGO_PKG_LICENSE"));
@@ -113,8 +120,6 @@ struct Cli {
     #[arg(short = 'l', long, default_value = "info")]
     log_level: String,
 
-
-
     /// Print version information including dependency versions
     #[arg(short = 'v', long)]
     version: bool,
@@ -136,41 +141,45 @@ async fn main() -> Result<()> {
     } else {
         format!("m3u_proxy={}", cli.log_level)
     };
-    
+
     // Set up log capture layer for SSE streaming
-    let (log_capture_layer, log_broadcaster) = m3u_proxy::utils::log_capture::setup_log_capture_with_subscriber();
-    
+    let (log_capture_layer, log_broadcaster) =
+        m3u_proxy::utils::log_capture::setup_log_capture_with_subscriber();
+
     // Set up reloadable tracing filter for runtime log level changes
-    let initial_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| log_filter.into());
+    let initial_filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| log_filter.into());
     let (filter_layer, reload_handle) = tracing_subscriber::reload::Layer::new(initial_filter);
-    
+
     tracing_subscriber::registry()
         .with(filter_layer)
         .with(tracing_subscriber::fmt::layer())
         .with(log_capture_layer) // Add log capture for SSE streaming
         .init();
-    
+
     // Create runtime settings store with tracing reload capability
-    let runtime_settings_store = m3u_proxy::runtime_settings::RuntimeSettingsStore::with_tracing_reload(reload_handle);
+    let runtime_settings_store =
+        m3u_proxy::runtime_settings::RuntimeSettingsStore::with_tracing_reload(reload_handle);
     let runtime_settings_arc = std::sync::Arc::new(runtime_settings_store);
 
-
     info!("Starting M3U Proxy Service v{}", env!("CARGO_PKG_VERSION"));
-    
+
     // Test log capture is working
     info!("Log capture initialized for SSE streaming");
-
 
     // Load configuration from specified file
     let mut config = Config::load_from_file(&cli.config)?;
     info!("Configuration loaded from: {}", cli.config);
 
     // Initialize feature flags from config in runtime store
-    runtime_settings_arc.initialize_feature_flags_from_config(&config).await;
-    
+    runtime_settings_arc
+        .initialize_feature_flags_from_config(&config)
+        .await;
+
     // Initialize request logging setting from config
-    runtime_settings_arc.update_request_logging(config.web.enable_request_logging).await;
+    runtime_settings_arc
+        .update_request_logging(config.web.enable_request_logging)
+        .await;
 
     // Override config with CLI arguments
     if let Some(host) = cli.host {
@@ -188,25 +197,41 @@ async fn main() -> Result<()> {
     // Initialize circuit breaker manager (always enabled with defaults if not configured)
     let circuit_breaker_manager = {
         let mut cb_config = config.circuitbreaker.clone().unwrap_or_default();
-        
+
         // Override profile defaults for logo fetching service to be very lenient
         if !cb_config.profiles.contains_key("logo_fetch") {
             let logo_profile = m3u_proxy::config::CircuitBreakerProfileConfig {
                 implementation_type: "simple".to_string(),
-                failure_threshold: 10,  // Very high threshold - lots of 404s are expected
+                failure_threshold: 10, // Very high threshold - lots of 404s are expected
                 operation_timeout: "10s".to_string(), // Longer timeout for logo downloads
                 reset_timeout: "1m".to_string(), // Reasonable reset time for logos
-                success_threshold: 3, // Need more successes to close circuit
-                acceptable_status_codes: vec!["2xx".to_string(), "3xx".to_string(), "404".to_string()], // 404s are acceptable for logos
+                success_threshold: 3,  // Need more successes to close circuit
+                acceptable_status_codes: vec![
+                    "2xx".to_string(),
+                    "3xx".to_string(),
+                    "404".to_string(),
+                ], // 404s are acceptable for logos
             };
-            cb_config.profiles.insert("logo_fetch".to_string(), logo_profile);
-            info!("Added default logo_fetch circuit breaker profile (lenient configuration with 404 acceptable)");
+            cb_config
+                .profiles
+                .insert("logo_fetch".to_string(), logo_profile);
+            info!(
+                "Added default logo_fetch circuit breaker profile (lenient configuration with 404 acceptable)"
+            );
         }
-        
-        let manager = std::sync::Arc::new(m3u_proxy::services::CircuitBreakerManager::new(cb_config.clone()));
-        info!("Circuit breaker manager initialized with {} profiles (using {} global settings)", 
-              cb_config.profiles.len(),
-              if config.circuitbreaker.is_some() { "configured" } else { "default" });
+
+        let manager = std::sync::Arc::new(m3u_proxy::services::CircuitBreakerManager::new(
+            cb_config.clone(),
+        ));
+        info!(
+            "Circuit breaker manager initialized with {} profiles (using {} global settings)",
+            cb_config.profiles.len(),
+            if config.circuitbreaker.is_some() {
+                "configured"
+            } else {
+                "default"
+            }
+        );
         manager
     };
 
@@ -221,7 +246,10 @@ async fn main() -> Result<()> {
     let database = match Database::new(&config.database, &config.ingestion).await {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("Failed to initialize database at '{}': {}", config.database.url, e);
+            eprintln!(
+                "Failed to initialize database at '{}': {}",
+                config.database.url, e
+            );
             eprintln!("This could be due to:");
             eprintln!("  - Invalid database URL format");
             eprintln!("  - Missing parent directory for SQLite database file");
@@ -230,26 +258,26 @@ async fn main() -> Result<()> {
             std::process::exit(1);
         }
     };
-    
+
     if let Err(e) = database.migrate().await {
         eprintln!("Failed to run database migrations: {}", e);
         eprintln!("This could indicate database corruption or incompatible schema versions.");
         std::process::exit(1);
     }
-    
+
     info!("Database connection established and migrations applied");
 
     // Create state manager for ingestion progress tracking
     let state_manager = std::sync::Arc::new(IngestionStateManager::new());
     tracing::debug!("Ingestion state manager initialized");
-    
+
     // Create universal progress service
     let progress_service = std::sync::Arc::new(
-        m3u_proxy::services::progress_service::ProgressService::new(state_manager.clone())
+        m3u_proxy::services::progress_service::ProgressService::new(state_manager.clone()),
     );
     tracing::debug!("Universal progress service initialized");
 
-    // Initialize data mapping service 
+    // Initialize data mapping service
     let data_mapping_service = DataMappingService::new(database.connection().clone());
     tracing::debug!("Data mapping service initialized");
 
@@ -258,7 +286,12 @@ async fn main() -> Result<()> {
         config.storage.uploaded_logo_path.clone(),
         config.storage.cached_logo_path.clone(),
     );
-    let mut logo_asset_service = LogoAssetService::new(database.connection().clone(), logo_asset_storage.clone(), &http_client_factory).await;
+    let mut logo_asset_service = LogoAssetService::new(
+        database.connection().clone(),
+        logo_asset_storage.clone(),
+        &http_client_factory,
+    )
+    .await;
 
     // Create cache invalidation channel for scheduler
     let (cache_invalidation_tx, _cache_invalidation_rx) = create_cache_invalidation_channel();
@@ -278,9 +311,11 @@ async fn main() -> Result<()> {
     let temp_path = config.storage.temp_path.as_deref().unwrap_or("./data/temp");
     let temp_file_manager = SandboxedManager::builder()
         .base_directory(temp_path)
-        .cleanup_policy(CleanupPolicy::new()
-            .remove_after(parse_duration(&config.storage.temp_retention)?)
-            .time_match(TimeMatch::LastAccess))
+        .cleanup_policy(
+            CleanupPolicy::new()
+                .remove_after(parse_duration(&config.storage.temp_retention)?)
+                .time_match(TimeMatch::LastAccess),
+        )
         .cleanup_interval(parse_duration(&config.storage.temp_cleanup_interval)?)
         .build()
         .await?;
@@ -288,9 +323,11 @@ async fn main() -> Result<()> {
     // Create proxy output file manager using storage config
     let proxy_output_file_manager = SandboxedManager::builder()
         .base_directory(&config.storage.m3u_path)
-        .cleanup_policy(CleanupPolicy::new()
-            .remove_after(parse_duration(&config.storage.m3u_retention)?)
-            .time_match(TimeMatch::Modified))
+        .cleanup_policy(
+            CleanupPolicy::new()
+                .remove_after(parse_duration(&config.storage.m3u_retention)?)
+                .time_match(TimeMatch::Modified),
+        )
         .cleanup_interval(parse_duration(&config.storage.m3u_cleanup_interval)?)
         .build()
         .await?;
@@ -298,19 +335,25 @@ async fn main() -> Result<()> {
     // Create cached logo file manager using storage config
     let logos_cached_file_manager = SandboxedManager::builder()
         .base_directory(&config.storage.cached_logo_path)
-        .cleanup_policy(CleanupPolicy::new()
-            .remove_after(parse_duration(&config.storage.cached_logo_retention)?)
-            .time_match(TimeMatch::LastAccess))
-        .cleanup_interval(parse_duration(&config.storage.cached_logo_cleanup_interval)?)
+        .cleanup_policy(
+            CleanupPolicy::new()
+                .remove_after(parse_duration(&config.storage.cached_logo_retention)?)
+                .time_match(TimeMatch::LastAccess),
+        )
+        .cleanup_interval(parse_duration(
+            &config.storage.cached_logo_cleanup_interval,
+        )?)
         .build()
         .await?;
 
     // Create pipeline file manager with dedicated directory for pipeline intermediate files
     let pipeline_file_manager = SandboxedManager::builder()
         .base_directory(&config.storage.pipeline_path)
-        .cleanup_policy(CleanupPolicy::new()
-            .remove_after(parse_duration(&config.storage.pipeline_retention)?)
-            .time_match(TimeMatch::LastAccess))
+        .cleanup_policy(
+            CleanupPolicy::new()
+                .remove_after(parse_duration(&config.storage.pipeline_retention)?)
+                .time_match(TimeMatch::LastAccess),
+        )
         .cleanup_interval(parse_duration(&config.storage.pipeline_cleanup_interval)?)
         .build()
         .await?;
@@ -321,9 +364,7 @@ async fn main() -> Result<()> {
     info!("Sandboxed file managers initialized with configured retention policies:");
     info!(
         "  temp: {} retention, cleanup every {}, path: {:?}",
-        config.storage.temp_retention,
-        config.storage.temp_cleanup_interval,
-        temp_path
+        config.storage.temp_retention, config.storage.temp_cleanup_interval, temp_path
     );
     info!(
         "  pipeline: {} retention, cleanup every {}, path: {:?}",
@@ -333,9 +374,7 @@ async fn main() -> Result<()> {
     );
     info!(
         "  m3u_proxy_output: {} retention, cleanup every {}, path: {:?}",
-        config.storage.m3u_retention,
-        config.storage.m3u_cleanup_interval,
-        config.storage.m3u_path
+        config.storage.m3u_retention, config.storage.m3u_cleanup_interval, config.storage.m3u_path
     );
     info!(
         "  logos_cached: {} retention, cleanup every {}, path: {:?}",
@@ -355,7 +394,7 @@ async fn main() -> Result<()> {
     // Initialize observability system
     let observability = std::sync::Arc::new(
         m3u_proxy::observability::AppObservability::new("m3u-proxy")
-            .expect("Failed to initialize observability")
+            .expect("Failed to initialize observability"),
     );
     info!("Observability system initialized");
 
@@ -368,19 +407,22 @@ async fn main() -> Result<()> {
             None,
             pipeline_file_manager.clone(),
             progress_service.clone(), // Pass ProgressService to create ProgressManagers
-            state_manager.clone(), // Pass IngestionStateManager to check for active operations
+            state_manager.clone(),    // Pass IngestionStateManager to check for active operations
             Arc::new(http_client_factory.clone()), // Pass HttpClientFactory for circuit breaker support
-        ).with_observability(observability.clone())
+        )
+        .with_observability(observability.clone())
     };
     info!("Proxy regeneration service initialized with in-memory state");
 
     // Create shared services for both web server and scheduler
     let epg_source_service = {
         let epg_source_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());
-        let stream_source_repo_for_url = StreamSourceSeaOrmRepository::new(database.connection().clone());
+        let stream_source_repo_for_url =
+            StreamSourceSeaOrmRepository::new(database.connection().clone());
         let epg_source_repo_for_url = EpgSourceSeaOrmRepository::new(database.connection().clone());
-        let url_linking_service = UrlLinkingService::new(stream_source_repo_for_url, epg_source_repo_for_url);
-        
+        let url_linking_service =
+            UrlLinkingService::new(stream_source_repo_for_url, epg_source_repo_for_url);
+
         std::sync::Arc::new(EpgSourceService::new(
             database.clone(),
             epg_source_repo,
@@ -393,19 +435,24 @@ async fn main() -> Result<()> {
     let stream_source_service = {
         let stream_source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
         let channel_repo = ChannelSeaOrmRepository::new(database.connection().clone());
-        let stream_source_repo_for_url = StreamSourceSeaOrmRepository::new(database.connection().clone());
+        let stream_source_repo_for_url =
+            StreamSourceSeaOrmRepository::new(database.connection().clone());
         let epg_source_repo_for_url = EpgSourceSeaOrmRepository::new(database.connection().clone());
         let epg_source_repo_for_service = epg_source_repo_for_url.clone();
-        let url_linking_service = UrlLinkingService::new(stream_source_repo_for_url, epg_source_repo_for_url);
-        
-        std::sync::Arc::new(StreamSourceBusinessService::with_http_client_factory(
-            stream_source_repo,
-            channel_repo,
-            epg_source_repo_for_service,
-            url_linking_service,
-            cache_invalidation_tx.clone(),
-            http_client_factory.clone(),
-        ).with_observability(observability.clone()))
+        let url_linking_service =
+            UrlLinkingService::new(stream_source_repo_for_url, epg_source_repo_for_url);
+
+        std::sync::Arc::new(
+            StreamSourceBusinessService::with_http_client_factory(
+                stream_source_repo,
+                channel_repo,
+                epg_source_repo_for_service,
+                url_linking_service,
+                cache_invalidation_tx.clone(),
+                http_client_factory.clone(),
+            )
+            .with_observability(observability.clone()),
+        )
     };
 
     // Initialize logo cache service first (needed for job executor)
@@ -414,11 +461,12 @@ async fn main() -> Result<()> {
     // Create new job scheduling system
     let job_queue = Arc::new(JobQueue::new());
     let job_scheduler = Arc::new(JobScheduler::new(job_queue.clone(), database.clone()));
-    
-    let logo_cache_maintenance_service = Arc::new(LogoCacheMaintenanceService::new(
-        logo_cache_service.clone(),
-    ).with_job_queue(job_queue.clone()));
-    
+
+    let logo_cache_maintenance_service = Arc::new(
+        LogoCacheMaintenanceService::new(logo_cache_service.clone())
+            .with_job_queue(job_queue.clone()),
+    );
+
     let job_executor = Arc::new(JobExecutor::new(
         stream_source_service.clone(),
         epg_source_service.clone(),
@@ -437,7 +485,7 @@ async fn main() -> Result<()> {
         &config.job_scheduling.clone().unwrap_or_default(),
     ));
     info!("Job scheduling system initialized");
-    
+
     // Initialize logo cache
     logo_cache_maintenance_service.initialize().await?;
     info!("Logo cache system initialized");
@@ -455,44 +503,43 @@ async fn main() -> Result<()> {
     info!("Relay manager initialized with shared system monitoring");
 
     // Initialize relay configuration resolver with SeaORM
-    let relay_repository = m3u_proxy::database::repositories::relay::RelaySeaOrmRepository::new(database.connection().clone());
+    let relay_repository = m3u_proxy::database::repositories::relay::RelaySeaOrmRepository::new(
+        database.connection().clone(),
+    );
     let relay_config_resolver = m3u_proxy::services::RelayConfigResolver::new(relay_repository);
     info!("Relay configuration resolver initialized");
 
-
-    let mut web_server = WebServer::new(
-        m3u_proxy::web::WebServerBuilder {
-            config,
-            database,
-            state_manager: (*state_manager).clone(),
-            cache_invalidation_tx,
-            data_mapping_service,
-            logo_asset_service,
-            logo_asset_storage,
-            proxy_regeneration_service: proxy_regeneration_service.clone(),
-            temp_file_manager: temp_file_manager.clone(),
-            pipeline_file_manager,
-            logos_cached_file_manager,
-            proxy_output_file_manager,
-            relay_manager,
-            relay_config_resolver,
-            system: system_manager.get_system(),
-            progress_service: progress_service.clone(),
-            stream_source_service: stream_source_service.clone(),
-            epg_source_service: epg_source_service.clone(),
-            log_broadcaster,
-            runtime_settings_store: runtime_settings_arc.clone(),
-            circuit_breaker_manager: Some(circuit_breaker_manager.clone()),
-            observability: observability.clone(),
-            job_scheduler: job_scheduler.clone(),
-            job_queue: job_queue.clone(),
-            job_queue_runner: job_queue_runner.clone(),
-            logo_cache_service: logo_cache_service.clone(),
-            logo_cache_maintenance_service: logo_cache_maintenance_service.clone(),
-        },
-    )
+    let mut web_server = WebServer::new(m3u_proxy::web::WebServerBuilder {
+        config,
+        database,
+        state_manager: (*state_manager).clone(),
+        cache_invalidation_tx,
+        data_mapping_service,
+        logo_asset_service,
+        logo_asset_storage,
+        proxy_regeneration_service: proxy_regeneration_service.clone(),
+        temp_file_manager: temp_file_manager.clone(),
+        pipeline_file_manager,
+        logos_cached_file_manager,
+        proxy_output_file_manager,
+        relay_manager,
+        relay_config_resolver,
+        system: system_manager.get_system(),
+        progress_service: progress_service.clone(),
+        stream_source_service: stream_source_service.clone(),
+        epg_source_service: epg_source_service.clone(),
+        log_broadcaster,
+        runtime_settings_store: runtime_settings_arc.clone(),
+        circuit_breaker_manager: Some(circuit_breaker_manager.clone()),
+        observability: observability.clone(),
+        job_scheduler: job_scheduler.clone(),
+        job_queue: job_queue.clone(),
+        job_queue_runner: job_queue_runner.clone(),
+        logo_cache_service: logo_cache_service.clone(),
+        logo_cache_maintenance_service: logo_cache_maintenance_service.clone(),
+    })
     .await?;
-    
+
     // RACE CONDITION FIX: Wire up the API request tracker to prevent duplicates
     // between manual API requests and background auto-regeneration
     web_server.wire_duplicate_protection().await;
@@ -506,26 +553,28 @@ async fn main() -> Result<()> {
     // Create separate cancellation tokens for web server and background services
     let web_server_cancellation_token = tokio_util::sync::CancellationToken::new();
     let scheduler_cancellation_token = tokio_util::sync::CancellationToken::new();
-    
+
     // Clone services for shutdown handling before they get moved
     let shutdown_proxy_service = proxy_regeneration_service.clone();
-    
+
     // Set up signal handlers for graceful shutdown with force-kill capability
     let shutdown_scheduler_token = scheduler_cancellation_token.clone();
     let shutdown_state_manager = state_manager.clone();
     tokio::spawn(async move {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
         let signal_count = Arc::new(AtomicUsize::new(0));
         const FORCE_KILL_THRESHOLD: usize = 3;
-        
+
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
-            let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-            let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
-            
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+            let mut sigint =
+                signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+
             // First signal - initiate graceful shutdown
             tokio::select! {
                 _ = sigterm.recv() => {
@@ -535,31 +584,41 @@ async fn main() -> Result<()> {
                     tracing::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown of all services");
                 }
             }
-            
+
             // Cancel all active ingestions first
             let cancelled_ingestions = shutdown_state_manager.cancel_all_ingestions().await;
             tracing::info!("Cancelled {} active ingestion(s)", cancelled_ingestions);
-            
+
             // Check proxy service status before shutdown
             let active_regenerations = shutdown_proxy_service.get_active_regeneration_count().await;
             if let Ok(queue_status) = shutdown_proxy_service.get_queue_status().await {
-                tracing::info!("Proxy regeneration status before shutdown: {} active regenerations, queue: {}", 
-                              active_regenerations, queue_status);
+                tracing::info!(
+                    "Proxy regeneration status before shutdown: {} active regenerations, queue: {}",
+                    active_regenerations,
+                    queue_status
+                );
             } else {
-                tracing::info!("Proxy regeneration status before shutdown: {} active regenerations", active_regenerations);
+                tracing::info!(
+                    "Proxy regeneration status before shutdown: {} active regenerations",
+                    active_regenerations
+                );
             }
-            
+
             // Shutdown proxy regeneration service to cancel pending delays
             shutdown_proxy_service.shutdown();
             shutdown_proxy_service.cancel_all_pending().await;
-            
+
             // Check proxy service status after shutdown signal
-            let active_regenerations_after = shutdown_proxy_service.get_active_regeneration_count().await;
-            tracing::info!("Proxy regeneration status after shutdown signal: {} active regenerations", active_regenerations_after);
-            
+            let active_regenerations_after =
+                shutdown_proxy_service.get_active_regeneration_count().await;
+            tracing::info!(
+                "Proxy regeneration status after shutdown signal: {} active regenerations",
+                active_regenerations_after
+            );
+
             // Cancel scheduler services first (but keep web server running)
             shutdown_scheduler_token.cancel();
-            
+
             // Set up force-kill handler for additional signals
             let signal_count_clone = signal_count.clone();
             tokio::spawn(async move {
@@ -587,37 +646,49 @@ async fn main() -> Result<()> {
                 }
             });
         }
-        
+
         #[cfg(not(unix))]
         {
             use tokio::signal;
-            signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+            signal::ctrl_c()
+                .await
+                .expect("failed to install Ctrl+C handler");
             tracing::info!("Received Ctrl+C, initiating graceful shutdown of all services");
-            
+
             // Cancel all active ingestions first
             let cancelled_ingestions = shutdown_state_manager.cancel_all_ingestions().await;
             tracing::info!("Cancelled {} active ingestion(s)", cancelled_ingestions);
-            
+
             // Check proxy service status before shutdown
             let active_regenerations = shutdown_proxy_service.get_active_regeneration_count().await;
             if let Ok(queue_status) = shutdown_proxy_service.get_queue_status().await {
-                tracing::info!("Proxy regeneration status before shutdown: {} active regenerations, queue: {}", 
-                              active_regenerations, queue_status);
+                tracing::info!(
+                    "Proxy regeneration status before shutdown: {} active regenerations, queue: {}",
+                    active_regenerations,
+                    queue_status
+                );
             } else {
-                tracing::info!("Proxy regeneration status before shutdown: {} active regenerations", active_regenerations);
+                tracing::info!(
+                    "Proxy regeneration status before shutdown: {} active regenerations",
+                    active_regenerations
+                );
             }
-            
+
             // Shutdown proxy regeneration service to cancel pending delays
             shutdown_proxy_service.shutdown();
             shutdown_proxy_service.cancel_all_pending().await;
-            
+
             // Check proxy service status after shutdown signal
-            let active_regenerations_after = shutdown_proxy_service.get_active_regeneration_count().await;
-            tracing::info!("Proxy regeneration status after shutdown signal: {} active regenerations", active_regenerations_after);
-            
+            let active_regenerations_after =
+                shutdown_proxy_service.get_active_regeneration_count().await;
+            tracing::info!(
+                "Proxy regeneration status after shutdown signal: {} active regenerations",
+                active_regenerations_after
+            );
+
             // Cancel scheduler services first (but keep web server running)
             shutdown_scheduler_token.cancel();
-            
+
             // Set up force-kill handler for additional Ctrl+C
             let signal_count_clone = signal_count.clone();
             tokio::spawn(async move {
@@ -625,10 +696,18 @@ async fn main() -> Result<()> {
                     if signal::ctrl_c().await.is_ok() {
                         let count = signal_count_clone.fetch_add(1, Ordering::SeqCst) + 1;
                         if count >= FORCE_KILL_THRESHOLD {
-                            tracing::warn!("Received {} Ctrl+C signals - force killing application", count + 1);
+                            tracing::warn!(
+                                "Received {} Ctrl+C signals - force killing application",
+                                count + 1
+                            );
                             std::process::exit(1);
                         } else {
-                            tracing::warn!("Received additional Ctrl+C ({}/{}), send {} more to force kill", count + 1, FORCE_KILL_THRESHOLD + 1, FORCE_KILL_THRESHOLD - count);
+                            tracing::warn!(
+                                "Received additional Ctrl+C ({}/{}), send {} more to force kill",
+                                count + 1,
+                                FORCE_KILL_THRESHOLD + 1,
+                                FORCE_KILL_THRESHOLD - count
+                            );
                         }
                     }
                 }
@@ -646,7 +725,10 @@ async fn main() -> Result<()> {
     let web_server_token = web_server_cancellation_token.clone();
     let server_handle = tokio::spawn(async move {
         // This will signal immediately when bind succeeds/fails, then block until shutdown
-        if let Err(e) = web_server.serve_with_cancellation(server_ready_tx, Some(web_server_token)).await {
+        if let Err(e) = web_server
+            .serve_with_cancellation(server_ready_tx, Some(web_server_token))
+            .await
+        {
             tracing::error!("Web server failed: {}", e);
         }
     });
@@ -670,7 +752,7 @@ async fn main() -> Result<()> {
     // Note: Proxy regeneration is handled by scheduler completion handlers, no background polling needed
 
     info!("Starting job scheduling services");
-    
+
     // Start job scheduler service
     let scheduler_token = scheduler_cancellation_token.clone();
     let job_scheduler_clone = job_scheduler.clone();
@@ -679,8 +761,8 @@ async fn main() -> Result<()> {
             tracing::error!("Job scheduler service failed: {}", e);
         }
     });
-    
-    // Start job queue runner service  
+
+    // Start job queue runner service
     let runner_token = scheduler_cancellation_token.clone();
     let queue_runner_handle = tokio::spawn(async move {
         if let Err(e) = job_queue_runner.run(runner_token).await {
@@ -692,8 +774,10 @@ async fn main() -> Result<()> {
 
     // Wait for scheduler cancellation signal
     scheduler_cancellation_token.cancelled().await;
-    tracing::info!("Scheduler cancellation signal received, waiting for background services to shut down");
-    
+    tracing::info!(
+        "Scheduler cancellation signal received, waiting for background services to shut down"
+    );
+
     // Give both services time to shut down gracefully, with extra time for database operations
     // Database operations like EPG ingestion can take several minutes and must complete
     // to avoid partial state corruption
@@ -702,50 +786,59 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
             let start_time = std::time::Instant::now();
-            
+
             loop {
                 interval.tick().await;
-                
+
                 let active_regens = proxy_service_monitor.get_active_regeneration_count().await;
                 let elapsed = start_time.elapsed().as_secs();
-                
+
                 if active_regens > 0 {
-                    tracing::info!("Shutdown monitor: {} active proxy regenerations still running after {}s", 
-                                  active_regens, elapsed);
-                    
+                    tracing::info!(
+                        "Shutdown monitor: {} active proxy regenerations still running after {}s",
+                        active_regens,
+                        elapsed
+                    );
+
                     if let Ok(queue_status) = proxy_service_monitor.get_queue_status().await {
                         tracing::debug!("Proxy queue status: {}", queue_status);
                     }
                 } else if elapsed > 30 {
                     // Log every 30s if no active regenerations
-                    tracing::info!("Shutdown monitor: No active proxy regenerations after {}s", elapsed);
+                    tracing::info!(
+                        "Shutdown monitor: No active proxy regenerations after {}s",
+                        elapsed
+                    );
                     break;
                 }
-                
-                if elapsed > 290 { // Stop monitoring 10s before timeout
-                    tracing::warn!("Shutdown monitor: Approaching 5-minute timeout with {} active regenerations", 
-                                  active_regens);
+
+                if elapsed > 290 {
+                    // Stop monitoring 10s before timeout
+                    tracing::warn!(
+                        "Shutdown monitor: Approaching 5-minute timeout with {} active regenerations",
+                        active_regens
+                    );
                     break;
                 }
             }
         })
     };
-    
+
     let shutdown_timeout = tokio::time::timeout(
         std::time::Duration::from_secs(300), // 5 minutes for database consistency
         async move {
             let scheduler_result = scheduler_handle.await;
             let runner_result = queue_runner_handle.await;
             (scheduler_result, runner_result)
-        }
+        },
     );
-    
+
     match shutdown_timeout.await {
         Ok((Ok(()), Ok(()))) => {
             tracing::info!("Job scheduling services shut down gracefully");
             // Stop monitoring task
             shutdown_monitoring.abort();
-        },
+        }
         Ok((scheduler_result, runner_result)) => {
             if let Err(e) = scheduler_result {
                 tracing::warn!("Job scheduler error during shutdown: {}", e);
@@ -755,47 +848,52 @@ async fn main() -> Result<()> {
             }
             // Stop monitoring task
             shutdown_monitoring.abort();
-        },
+        }
         Err(_) => {
             tracing::warn!("Job scheduling services did not shut down within timeout");
             // Stop monitoring task and get final status
             shutdown_monitoring.abort();
-            let final_active_regens = proxy_regeneration_service.get_active_regeneration_count().await;
+            let final_active_regens = proxy_regeneration_service
+                .get_active_regeneration_count()
+                .await;
             if final_active_regens > 0 {
-                tracing::warn!("Final status: {} proxy regenerations were still active at timeout", final_active_regens);
+                tracing::warn!(
+                    "Final status: {} proxy regenerations were still active at timeout",
+                    final_active_regens
+                );
                 if let Ok(final_status) = proxy_regeneration_service.get_queue_status().await {
                     tracing::warn!("Final proxy queue status: {}", final_status);
                 }
             }
-        },
+        }
     }
-    
+
     // Now that background operations are complete, shut down the web server
     tracing::info!("Background operations complete - shutting down web server");
-    
+
     // All critical background services are shut down, so we can terminate the web server
     // without waiting for SSE connections to close gracefully
     web_server_cancellation_token.cancel();
     tracing::info!("Web server cancellation token activated");
-    
+
     // Give it a brief moment to respond to cancellation
     let shutdown_start = std::time::Instant::now();
-    let web_server_timeout = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        server_handle
-    );
-    
+    let web_server_timeout = tokio::time::timeout(std::time::Duration::from_secs(2), server_handle);
+
     match web_server_timeout.await {
         Ok(Ok(())) => {
             let duration = shutdown_start.elapsed();
             tracing::info!("Web server shut down after {:?}", duration);
-        },
+        }
         Ok(Err(e)) => {
             tracing::info!("Web server terminated with error: {}", e);
-        },
+        }
         Err(_) => {
             let elapsed = shutdown_start.elapsed();
-            tracing::info!("Web server shutdown timeout after {:?} - SSE connections closed", elapsed);
+            tracing::info!(
+                "Web server shutdown timeout after {:?} - SSE connections closed",
+                elapsed
+            );
         }
     }
 

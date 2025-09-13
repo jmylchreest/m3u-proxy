@@ -1,22 +1,24 @@
 use anyhow::Result;
 use sandboxed_file_manager::SandboxedManager;
-use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter, QueryOrder};
-use std::collections::{HashMap, BTreeSet};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::models::{NumberedChannel, ChannelNumberAssignmentType, FilterSourceType};
+use crate::entities::prelude::*;
+use crate::models::{ChannelNumberAssignmentType, FilterSourceType, NumberedChannel};
+use crate::pipeline::engines::filter_processor::{
+    EpgFilterProcessor, FilteringEngine, RegexEvaluator,
+};
 use crate::pipeline::engines::rule_processor::EpgProgram;
-use crate::pipeline::engines::filter_processor::{EpgFilterProcessor, RegexEvaluator, FilteringEngine};
-use crate::pipeline::models::{PipelineArtifact, ArtifactType, ContentType, ProcessingStage};
-use crate::pipeline::traits::{PipelineStage, ProgressAware};
 use crate::pipeline::error::PipelineError;
+use crate::pipeline::models::{ArtifactType, ContentType, PipelineArtifact, ProcessingStage};
+use crate::pipeline::traits::{PipelineStage, ProgressAware};
 use crate::services::progress_service::ProgressManager;
 use crate::utils::regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
-use crate::entities::prelude::*;
 
 /// Progress update interval for combined progress reporting
 const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_secs(5);
@@ -36,30 +38,36 @@ impl ProgressTracker {
             last_update: Instant::now(),
         }
     }
-    
+
     /// Update progress and optionally report if enough time has passed
-    async fn update<T>(&mut self, stage: &T, force_update: bool) 
-    where T: ProgressAware 
+    async fn update<T>(&mut self, stage: &T, force_update: bool)
+    where
+        T: ProgressAware,
     {
         self.processed_units += 1;
-        
-        let should_update = force_update || 
-            (self.last_update.elapsed() >= PROGRESS_UPDATE_INTERVAL) ||
-            (self.processed_units == self.total_work_units);
-            
+
+        let should_update = force_update
+            || (self.last_update.elapsed() >= PROGRESS_UPDATE_INTERVAL)
+            || (self.processed_units == self.total_work_units);
+
         if should_update {
             let progress_pct = (self.processed_units as f64 / self.total_work_units as f64) * 100.0;
             let remaining = self.total_work_units.saturating_sub(self.processed_units);
-            
+
             if let Some(pm) = stage.get_progress_manager()
-                && let Some(updater) = pm.get_stage_updater("generation").await {
-                    updater.update_progress(
-                        progress_pct, 
-                        &format!("Processing channels and programs ({}/{}, {} remaining)", 
-                                self.processed_units, self.total_work_units, remaining)
-                    ).await;
-                }
-            
+                && let Some(updater) = pm.get_stage_updater("generation").await
+            {
+                updater
+                    .update_progress(
+                        progress_pct,
+                        &format!(
+                            "Processing channels and programs ({}/{}, {} remaining)",
+                            self.processed_units, self.total_work_units, remaining
+                        ),
+                    )
+                    .await;
+            }
+
             self.last_update = Instant::now();
         }
     }
@@ -68,18 +76,18 @@ impl ProgressTracker {
 /// Optimized channel info for M3U generation (removed unused fields)
 #[derive(Debug)]
 struct ChannelInfo {
-    stream_display_names: BTreeSet<String>,     // From M3U channels (by tvg_id)
-    logo_url: Option<String>,                   // Logo from first detected channel
-    group_title: Option<String>,                // Group title from channel for category fallback
+    stream_display_names: BTreeSet<String>, // From M3U channels (by tvg_id)
+    logo_url: Option<String>,               // Logo from first detected channel
+    group_title: Option<String>,            // Group title from channel for category fallback
 }
 
 /// Generation stage - streams to temporary files in pipeline storage
 /// Files will be atomically published by the publish_content stage
 pub struct GenerationStage {
-    pipeline_file_manager: SandboxedManager,  // Pipeline temporary storage
+    pipeline_file_manager: SandboxedManager, // Pipeline temporary storage
     pipeline_execution_prefix: String,
     proxy_id: Uuid,
-    
+
     base_url: String,
     progress_manager: Option<Arc<ProgressManager>>,
     db_connection: Arc<DatabaseConnection>,
@@ -88,7 +96,7 @@ pub struct GenerationStage {
 impl GenerationStage {
     pub async fn new(
         db_connection: Arc<DatabaseConnection>,
-        pipeline_file_manager: SandboxedManager,  // Pipeline temporary storage
+        pipeline_file_manager: SandboxedManager, // Pipeline temporary storage
         pipeline_execution_prefix: String,
         proxy_id: Uuid,
         base_url: String,
@@ -103,20 +111,21 @@ impl GenerationStage {
             db_connection,
         })
     }
-    
+
     /// Helper method for reporting progress
     async fn report_progress(&self, percentage: f64, message: &str) {
         if let Some(pm) = &self.progress_manager
-            && let Some(updater) = pm.get_stage_updater("generation").await {
-                updater.update_progress(percentage, message).await;
-            }
+            && let Some(updater) = pm.get_stage_updater("generation").await
+        {
+            updater.update_progress(percentage, message).await;
+        }
     }
-    
+
     /// Set the progress manager for this stage
     pub fn set_progress_manager(&mut self, progress_manager: Arc<ProgressManager>) {
         self.progress_manager = Some(progress_manager);
     }
-    
+
     /// Load EPG filters for this proxy
     async fn load_epg_filters(&self) -> Result<FilteringEngine<EpgProgram>> {
         // Load filters for this proxy that are EPG-type and active
@@ -136,7 +145,7 @@ impl GenerationStage {
             for filter in filters {
                 if filter.source_type == FilterSourceType::Epg {
                     let regex_evaluator = RegexEvaluator::new(regex_preprocessor.clone());
-                    
+
                     match EpgFilterProcessor::new(
                         filter.id.to_string(),
                         filter.name.clone(),
@@ -149,7 +158,10 @@ impl GenerationStage {
                             engine.add_filter_processor(Box::new(processor));
                         }
                         Err(e) => {
-                            warn!("Failed to load EPG filter {} ({}): {}", filter.name, filter.id, e);
+                            warn!(
+                                "Failed to load EPG filter {} ({}): {}",
+                                filter.name, filter.id, e
+                            );
                         }
                     }
                 }
@@ -166,16 +178,19 @@ impl GenerationStage {
         epg_programs: Vec<EpgProgram>,
     ) -> Result<Vec<PipelineArtifact>> {
         let process_start = Instant::now();
-        
+
         // Calculate total work units for combined progress reporting
         let total_channels = numbered_channels.len();
         let total_programs = epg_programs.len();
         let total_work_units = total_channels + total_programs;
         let mut progress_tracker = ProgressTracker::new(total_work_units);
-        
+
         info!(
             "Generation stage: proxy_id={} channels={} programs={} total_work_units={} streaming_to_temp_files=true",
-            self.proxy_id, numbered_channels.len(), epg_programs.len(), total_work_units
+            self.proxy_id,
+            numbered_channels.len(),
+            epg_programs.len(),
+            total_work_units
         );
 
         // Build M3U channel map (no EPG channel data needed)
@@ -188,34 +203,48 @@ impl GenerationStage {
             crate::utils::human_format::format_duration_precise(channel_map_duration),
             channel_map.len()
         );
-        
+
         // Generate temporary M3U file (5-40% range)
         self.report_progress(15.0, "Generating M3U playlist").await;
         let m3u_gen_start = std::time::Instant::now();
         let temp_m3u_file = format!("{}_temp.m3u8", self.pipeline_execution_prefix);
-        let m3u_bytes = self.generate_m3u_streaming(&numbered_channels, &temp_m3u_file, &mut progress_tracker).await?;
+        let m3u_bytes = self
+            .generate_m3u_streaming(&numbered_channels, &temp_m3u_file, &mut progress_tracker)
+            .await?;
         let m3u_gen_duration = m3u_gen_start.elapsed();
         info!(
             "M3U generation completed: duration={} file={} size={}KB channels_written={}",
             crate::utils::human_format::format_duration_precise(m3u_gen_duration),
-            temp_m3u_file, m3u_bytes / 1024, numbered_channels.len()
+            temp_m3u_file,
+            m3u_bytes / 1024,
+            numbered_channels.len()
         );
-        
+
         // Generate temporary XMLTV file with M3U channel filtering (40-95% range)
-        self.report_progress(40.0, "Generating XMLTV EPG guide").await;
+        self.report_progress(40.0, "Generating XMLTV EPG guide")
+            .await;
         let xmltv_gen_start = std::time::Instant::now();
         let temp_xmltv_file = format!("{}_temp.xmltv", self.pipeline_execution_prefix);
-        let xmltv_bytes = self.generate_xmltv_streaming(&channel_map, &epg_programs, &temp_xmltv_file, &mut progress_tracker).await?;
+        let xmltv_bytes = self
+            .generate_xmltv_streaming(
+                &channel_map,
+                &epg_programs,
+                &temp_xmltv_file,
+                &mut progress_tracker,
+            )
+            .await?;
         let xmltv_gen_duration = xmltv_gen_start.elapsed();
         info!(
             "XMLTV generation completed: duration={} file={} size={}KB filtered_by_m3u_channels=true",
             crate::utils::human_format::format_duration_precise(xmltv_gen_duration),
-            temp_xmltv_file, xmltv_bytes / 1024
+            temp_xmltv_file,
+            xmltv_bytes / 1024
         );
-        
-        self.report_progress(90.0, "Finalizing generated files").await;
+
+        self.report_progress(90.0, "Finalizing generated files")
+            .await;
         let total_duration = process_start.elapsed();
-        
+
         // Create pipeline artifacts for publish_content stage
         let m3u_artifact = PipelineArtifact::new(
             ArtifactType::new(ContentType::M3uPlaylist, ProcessingStage::Generated),
@@ -225,7 +254,10 @@ impl GenerationStage {
         .with_record_count(numbered_channels.len())
         .with_file_size(m3u_bytes)
         .with_metadata("proxy_id".to_string(), self.proxy_id.to_string().into())
-        .with_metadata("target_filename".to_string(), format!("{}.m3u8", self.proxy_id).into());
+        .with_metadata(
+            "target_filename".to_string(),
+            format!("{}.m3u8", self.proxy_id).into(),
+        );
 
         let xmltv_artifact = PipelineArtifact::new(
             ArtifactType::new(ContentType::XmltvGuide, ProcessingStage::Generated),
@@ -235,8 +267,11 @@ impl GenerationStage {
         .with_record_count(epg_programs.len())
         .with_file_size(xmltv_bytes)
         .with_metadata("proxy_id".to_string(), self.proxy_id.to_string().into())
-        .with_metadata("target_filename".to_string(), format!("{}.xmltv", self.proxy_id).into());
-        
+        .with_metadata(
+            "target_filename".to_string(),
+            format!("{}.xmltv", self.proxy_id).into(),
+        );
+
         info!(
             "Generation stage completed: total_duration={} channel_map_duration={} m3u_duration={} xmltv_duration={} channels_processed={} programs_processed={} artifacts_created={} m3u_size={}KB xmltv_size={}KB",
             crate::utils::human_format::format_duration_precise(total_duration),
@@ -266,45 +301,50 @@ impl GenerationStage {
     ) -> Result<HashMap<String, ChannelInfo>> {
         let build_start = Instant::now();
         let mut channel_map = HashMap::new();
-        
+
         // Collect stream channel info from M3U (source of truth)
         for numbered_channel in numbered_channels {
             if let Some(ref tvg_id) = numbered_channel.channel.tvg_id {
-                let entry = channel_map.entry(tvg_id.clone()).or_insert_with(|| ChannelInfo {
-                    stream_display_names: BTreeSet::new(),
-                    logo_url: None,
-                    group_title: None,
-                });
-                
+                let entry = channel_map
+                    .entry(tvg_id.clone())
+                    .or_insert_with(|| ChannelInfo {
+                        stream_display_names: BTreeSet::new(),
+                        logo_url: None,
+                        group_title: None,
+                    });
+
                 // Add stream display names (channel_name and tvg_name)
-                entry.stream_display_names.insert(numbered_channel.channel.channel_name.clone());
+                entry
+                    .stream_display_names
+                    .insert(numbered_channel.channel.channel_name.clone());
                 if let Some(ref tvg_name) = numbered_channel.channel.tvg_name
-                    && !tvg_name.is_empty() {
-                        entry.stream_display_names.insert(tvg_name.clone());
-                    }
-                
+                    && !tvg_name.is_empty()
+                {
+                    entry.stream_display_names.insert(tvg_name.clone());
+                }
+
                 // Set logo from first detected channel
                 if entry.logo_url.is_none() {
                     entry.logo_url = numbered_channel.channel.tvg_logo.clone();
                 }
-                
+
                 // Set group_title from first detected channel
                 if entry.group_title.is_none() {
                     entry.group_title = numbered_channel.channel.group_title.clone();
                 }
             }
         }
-        
+
         debug!(
             "M3U channel map built: stream_channels={} mapped_channels={} duration={} (database_first_mode=true)",
             numbered_channels.len(),
             channel_map.len(),
             crate::utils::human_format::format_duration_precise(build_start.elapsed())
         );
-        
+
         Ok(channel_map)
     }
-    
+
     /// Generate M3U content streaming to temporary file
     async fn generate_m3u_streaming(
         &self,
@@ -313,64 +353,72 @@ impl GenerationStage {
         progress_tracker: &mut ProgressTracker,
     ) -> Result<u64> {
         let m3u_start = Instant::now();
-        
+
         // Create file writer
-        let file = self.pipeline_file_manager.create(temp_file_path).await
+        let file = self
+            .pipeline_file_manager
+            .create(temp_file_path)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create temp M3U file: {}", e))?;
         let mut writer = tokio::io::BufWriter::new(file);
-        
+
         // Write M3U header
         writer.write_all(b"#EXTM3U\n").await?;
-        
+
         let mut bytes_written = 7u64; // "#EXTM3U\n"
         let mut channels_written = 0;
-        
+
         for numbered_channel in numbered_channels {
             let channel = &numbered_channel.channel;
-            
+
             // Update combined progress
             progress_tracker.update(self, false).await;
-            
+
             // Build EXTINF line with conditional attributes
             let mut extinf_line = "#EXTINF:-1".to_string();
-            
+
             // Add tvg-id if present
             if let Some(ref tvg_id) = channel.tvg_id
-                && !tvg_id.is_empty() {
-                    extinf_line.push_str(&format!(" tvg-id=\"{tvg_id}\""));
-                }
-            
+                && !tvg_id.is_empty()
+            {
+                extinf_line.push_str(&format!(" tvg-id=\"{tvg_id}\""));
+            }
+
             // Add tvg-name if present
             if let Some(ref tvg_name) = channel.tvg_name
-                && !tvg_name.is_empty() {
-                    extinf_line.push_str(&format!(" tvg-name=\"{tvg_name}\""));
-                }
-            
+                && !tvg_name.is_empty()
+            {
+                extinf_line.push_str(&format!(" tvg-name=\"{tvg_name}\""));
+            }
+
             // Add tvg-logo if present
             if let Some(ref tvg_logo) = channel.tvg_logo
-                && !tvg_logo.is_empty() {
-                    extinf_line.push_str(&format!(" tvg-logo=\"{tvg_logo}\""));
-                }
-            
+                && !tvg_logo.is_empty()
+            {
+                extinf_line.push_str(&format!(" tvg-logo=\"{tvg_logo}\""));
+            }
+
             // Add group-title if present
             if let Some(ref group_title) = channel.group_title
-                && !group_title.is_empty() {
-                    extinf_line.push_str(&format!(" group-title=\"{group_title}\""));
-                }
-            
+                && !group_title.is_empty()
+            {
+                extinf_line.push_str(&format!(" group-title=\"{group_title}\""));
+            }
+
             // Add tvg-chno if present
             if let Some(ref tvg_chno) = channel.tvg_chno
-                && !tvg_chno.is_empty() {
-                    extinf_line.push_str(&format!(" tvg-chno=\"{tvg_chno}\""));
-                }
-            
+                && !tvg_chno.is_empty()
+            {
+                extinf_line.push_str(&format!(" tvg-chno=\"{tvg_chno}\""));
+            }
+
             // Add channel name and newline
             extinf_line.push_str(&format!(",{}\n", channel.channel_name));
-            
+
             // Write EXTINF line
             writer.write_all(extinf_line.as_bytes()).await?;
             bytes_written += extinf_line.len() as u64;
-            
+
             // Write proxy stream URL instead of original URL
             // This allows the proxy to capture metrics and implement relays
             let proxy_stream_url = format!(
@@ -382,26 +430,26 @@ impl GenerationStage {
             let stream_line = format!("{proxy_stream_url}\n");
             writer.write_all(stream_line.as_bytes()).await?;
             bytes_written += stream_line.len() as u64;
-            
+
             channels_written += 1;
         }
-        
+
         writer.flush().await?;
         drop(writer);
-        
+
         // Free M3U streaming memory
         debug!("Freed M3U streaming writer and buffers");
-        
+
         info!(
             "M3U streaming completed: channels={} bytes={} duration={}",
             channels_written,
             bytes_written,
             crate::utils::human_format::format_duration_precise(m3u_start.elapsed())
         );
-        
+
         Ok(bytes_written)
     }
-    
+
     /// Generate XMLTV content using proper serialization to temporary file
     async fn generate_xmltv_streaming(
         &self,
@@ -411,22 +459,25 @@ impl GenerationStage {
         progress_tracker: &mut ProgressTracker,
     ) -> Result<u64> {
         let xmltv_start = Instant::now();
-        
+
         // Load EPG filters for this proxy
         let mut epg_filter_engine = self.load_epg_filters().await?;
-        
+
         let mut programs_written = 0;
         let programs_filtered = 0;
-        
+
         // Using manual XML generation with proper escaping (works correctly)
-        
+
         // Create file writer
-        let file = self.pipeline_file_manager.create(temp_file_path).await
+        let file = self
+            .pipeline_file_manager
+            .create(temp_file_path)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create temp XMLTV file: {}", e))?;
         let mut writer = tokio::io::BufWriter::new(file);
-        
+
         let mut bytes_written = 0u64;
-        
+
         // Write XMLTV header with proper attributes for Jellyfin compatibility
         let now = chrono::Utc::now();
         let date_str = now.format("%d/%m/%Y %H:%M:%S").to_string();
@@ -439,45 +490,60 @@ impl GenerationStage {
         );
         writer.write_all(header.as_bytes()).await?;
         bytes_written += header.len() as u64;
-        
+
         // Write channel definitions (only M3U channels - database-first approach)
         for (channel_id, channel_info) in channel_map {
             // Use stream display names (M3U channels are source of truth)
             let display_name = if !channel_info.stream_display_names.is_empty() {
-                channel_info.stream_display_names.iter().next().unwrap().clone()
+                channel_info
+                    .stream_display_names
+                    .iter()
+                    .next()
+                    .unwrap()
+                    .clone()
             } else {
                 channel_id.clone()
             };
-            
-            let mut channel_line = format!("  <channel id=\"{}\">\n", quick_xml::escape::escape(channel_id));
-            channel_line.push_str(&format!("    <display-name>{}</display-name>\n", quick_xml::escape::escape(&display_name)));
-            
+
+            let mut channel_line = format!(
+                "  <channel id=\"{}\">\n",
+                quick_xml::escape::escape(channel_id)
+            );
+            channel_line.push_str(&format!(
+                "    <display-name>{}</display-name>\n",
+                quick_xml::escape::escape(&display_name)
+            ));
+
             // Add logo if present
             if let Some(ref logo_url) = channel_info.logo_url
-                && !logo_url.is_empty() {
-                    channel_line.push_str(&format!("    <icon src=\"{}\"/>\n", quick_xml::escape::escape(logo_url)));
-                }
-            
+                && !logo_url.is_empty()
+            {
+                channel_line.push_str(&format!(
+                    "    <icon src=\"{}\"/>\n",
+                    quick_xml::escape::escape(logo_url)
+                ));
+            }
+
             channel_line.push_str("  </channel>\n");
-            
+
             writer.write_all(channel_line.as_bytes()).await?;
             bytes_written += channel_line.len() as u64;
         }
-        
+
         // Write program data (only for M3U channels that exist in channel_map and pass EPG filters)
         let mut programs_filtered_by_channel = 0;
         let mut programs_filtered_by_epg_rules = 0;
-        
+
         for program in epg_programs {
             // Update combined progress
             progress_tracker.update(self, false).await;
-            
+
             // CRITICAL: Only include programs for channels that exist in M3U
             if !channel_map.contains_key(&program.channel_id) {
                 programs_filtered_by_channel += 1;
                 continue;
             }
-            
+
             // Apply EPG filters if any are configured
             let mut include_program = true;
             if epg_filter_engine.has_filters() {
@@ -489,101 +555,136 @@ impl GenerationStage {
                         }
                     }
                     Err(e) => {
-                        warn!("EPG filter evaluation error for program {}: {}", program.id, e);
+                        warn!(
+                            "EPG filter evaluation error for program {}: {}",
+                            program.id, e
+                        );
                         programs_filtered_by_epg_rules += 1;
                         include_program = false;
                     }
                 }
             }
-            
+
             if !include_program {
                 continue;
             }
-            
+
             let start_time = program.start_time.format("%Y%m%d%H%M%S %z");
             let stop_time = program.end_time.format("%Y%m%d%H%M%S %z");
-            
+
             let mut program_line = format!(
                 "  <programme start=\"{}\" stop=\"{}\" channel=\"{}\">\n",
-                start_time, stop_time, quick_xml::escape::escape(&program.channel_id)
+                start_time,
+                stop_time,
+                quick_xml::escape::escape(&program.channel_id)
             );
-            
-            program_line.push_str(&format!("    <title>{}</title>\n", quick_xml::escape::escape(&program.title)));
-            
-            if let Some(description) = program.description.as_ref()
-                .filter(|d| !d.is_empty()) {
-                    program_line.push_str(&format!("    <desc>{}</desc>\n", quick_xml::escape::escape(description)));
-                }
-            
+
+            program_line.push_str(&format!(
+                "    <title>{}</title>\n",
+                quick_xml::escape::escape(&program.title)
+            ));
+
+            if let Some(description) = program.description.as_ref().filter(|d| !d.is_empty()) {
+                program_line.push_str(&format!(
+                    "    <desc>{}</desc>\n",
+                    quick_xml::escape::escape(description)
+                ));
+            }
+
             // Add category with priority: program_category > channel_group_title > null
-            let category = program.program_category.as_ref()
+            let category = program
+                .program_category
+                .as_ref()
                 .filter(|c| !c.is_empty())
                 .or_else(|| {
                     // Fallback to channel group_title if no program category
-                    channel_map.get(&program.channel_id)
+                    channel_map
+                        .get(&program.channel_id)
                         .and_then(|info| info.group_title.as_ref())
                         .filter(|c| !c.is_empty())
                 });
 
             if let Some(cat) = category {
-                program_line.push_str(&format!("    <category>{}</category>\n", quick_xml::escape::escape(cat)));
+                program_line.push_str(&format!(
+                    "    <category>{}</category>\n",
+                    quick_xml::escape::escape(cat)
+                ));
             }
-            
+
             // Add subtitles as sub-title
-            if let Some(subtitles) = program.subtitles.as_ref()
-                .filter(|s| !s.is_empty()) {
-                    program_line.push_str(&format!("    <sub-title>{}</sub-title>\n", quick_xml::escape::escape(subtitles)));
-                }
-            
+            if let Some(subtitles) = program.subtitles.as_ref().filter(|s| !s.is_empty()) {
+                program_line.push_str(&format!(
+                    "    <sub-title>{}</sub-title>\n",
+                    quick_xml::escape::escape(subtitles)
+                ));
+            }
+
             // Add episode numbering if available (XMLTV format: season.episode.part/total)
-            if let (Some(season), Some(episode)) = (program.season_num.as_ref(), program.episode_num.as_ref())
+            if let (Some(season), Some(episode)) =
+                (program.season_num.as_ref(), program.episode_num.as_ref())
                 && let (Ok(s), Ok(e)) = (season.parse::<i32>(), episode.parse::<i32>())
-                && s > 0 && e > 0 {
-                    program_line.push_str(&format!("    <episode-num system=\"xmltv_ns\">.{}.{}/1</episode-num>\n", s - 1, e - 1));
-                }
-            
+                && s > 0
+                && e > 0
+            {
+                program_line.push_str(&format!(
+                    "    <episode-num system=\"xmltv_ns\">.{}.{}/1</episode-num>\n",
+                    s - 1,
+                    e - 1
+                ));
+            }
+
             // Add language if specified
-            if let Some(language) = program.language.as_ref()
-                .filter(|l| !l.is_empty()) {
-                    program_line.push_str(&format!("    <language>{}</language>\n", quick_xml::escape::escape(language)));
-                }
-            
+            if let Some(language) = program.language.as_ref().filter(|l| !l.is_empty()) {
+                program_line.push_str(&format!(
+                    "    <language>{}</language>\n",
+                    quick_xml::escape::escape(language)
+                ));
+            }
+
             // Add rating if available
-            if let Some(rating) = program.rating.as_ref()
-                .filter(|r| !r.is_empty()) {
-                    program_line.push_str(&format!("    <rating system=\"MPAA\"><value>{}</value></rating>\n", quick_xml::escape::escape(rating)));
-                }
-            
+            if let Some(rating) = program.rating.as_ref().filter(|r| !r.is_empty()) {
+                program_line.push_str(&format!(
+                    "    <rating system=\"MPAA\"><value>{}</value></rating>\n",
+                    quick_xml::escape::escape(rating)
+                ));
+            }
+
             // Add program icon if available
-            if let Some(icon_url) = program.program_icon.as_ref()
-                .filter(|i| !i.is_empty()) {
-                    program_line.push_str(&format!("    <icon src=\"{}\"/>\n", quick_xml::escape::escape(icon_url)));
-                }
-            
+            if let Some(icon_url) = program.program_icon.as_ref().filter(|i| !i.is_empty()) {
+                program_line.push_str(&format!(
+                    "    <icon src=\"{}\"/>\n",
+                    quick_xml::escape::escape(icon_url)
+                ));
+            }
+
             program_line.push_str("  </programme>\n");
-            
+
             writer.write_all(program_line.as_bytes()).await?;
             bytes_written += program_line.len() as u64;
             programs_written += 1;
         }
-        
+
         // Write XMLTV footer
         let footer = "</tv>\n";
         writer.write_all(footer.as_bytes()).await?;
         bytes_written += footer.len() as u64;
-        
+
         writer.flush().await?;
         drop(writer);
-        
+
         let total_programs_filtered = programs_filtered_by_channel + programs_filtered_by_epg_rules;
         debug!(
             "Program filtering completed: total_programs={} programs_written={} programs_filtered_out={} (by_channel={}, by_epg_filters={})",
-            epg_programs.len(), programs_written, total_programs_filtered, programs_filtered_by_channel, programs_filtered_by_epg_rules
+            epg_programs.len(),
+            programs_written,
+            total_programs_filtered,
+            programs_filtered_by_channel,
+            programs_filtered_by_epg_rules
         );
-        
+
         // Free XMLTV streaming memory
         debug!("Freed XMLTV streaming writer and buffers");
-        
+
         info!(
             "XMLTV streaming completed: channels={} programs={} programs_filtered={} bytes={} duration={} (database_first=true using_quick_xml_escape=true)",
             channel_map.len(),
@@ -592,34 +693,45 @@ impl GenerationStage {
             bytes_written,
             crate::utils::human_format::format_duration_precise(xmltv_start.elapsed())
         );
-        
+
         Ok(bytes_written)
     }
-    
+
     // Removed fetch_epg_display_names - no longer needed in database-first approach
     // EPG channel data is not stored, only programs are ingested
 
-    
-
-    
     /// Load artifacts from input for pipeline execution
-    async fn load_artifacts_from_input(&self, input_artifacts: Vec<PipelineArtifact>) -> Result<(Vec<NumberedChannel>, Vec<EpgProgram>), PipelineError> {
+    async fn load_artifacts_from_input(
+        &self,
+        input_artifacts: Vec<PipelineArtifact>,
+    ) -> Result<(Vec<NumberedChannel>, Vec<EpgProgram>), PipelineError> {
         let mut numbered_channels = Vec::new();
         let mut epg_programs = Vec::new();
-        
+
         for artifact in input_artifacts {
             match artifact.artifact_type.content {
                 ContentType::Channels => {
                     // Read channels from JSONL file and convert to NumberedChannel
-                    let content = self.pipeline_file_manager.read_to_string(&artifact.file_path).await
-                        .map_err(|e| PipelineError::stage_error("generation", format!("Failed to read channels file {}: {}", artifact.file_path, e)))?;
-                    
+                    let content = self
+                        .pipeline_file_manager
+                        .read_to_string(&artifact.file_path)
+                        .await
+                        .map_err(|e| {
+                            PipelineError::stage_error(
+                                "generation",
+                                format!(
+                                    "Failed to read channels file {}: {}",
+                                    artifact.file_path, e
+                                ),
+                            )
+                        })?;
+
                     // Parse JSONL format (one JSON object per line)
                     for (line_num, line) in content.lines().enumerate() {
                         if line.trim().is_empty() {
                             continue;
                         }
-                        
+
                         match serde_json::from_str::<crate::models::Channel>(line) {
                             Ok(channel) => {
                                 let numbered_channel = NumberedChannel {
@@ -630,48 +742,75 @@ impl GenerationStage {
                                 numbered_channels.push(numbered_channel);
                             }
                             Err(e) => {
-                                warn!("Failed to parse channel at line {}: {} - Error: {}", line_num + 1, line, e);
+                                warn!(
+                                    "Failed to parse channel at line {}: {} - Error: {}",
+                                    line_num + 1,
+                                    line,
+                                    e
+                                );
                             }
                         }
                     }
                 }
                 ContentType::EpgPrograms => {
                     // Read EPG programs from JSONL file
-                    let content = self.pipeline_file_manager.read_to_string(&artifact.file_path).await
-                        .map_err(|e| PipelineError::stage_error("generation", format!("Failed to read EPG programs file {}: {}", artifact.file_path, e)))?;
-                    
+                    let content = self
+                        .pipeline_file_manager
+                        .read_to_string(&artifact.file_path)
+                        .await
+                        .map_err(|e| {
+                            PipelineError::stage_error(
+                                "generation",
+                                format!(
+                                    "Failed to read EPG programs file {}: {}",
+                                    artifact.file_path, e
+                                ),
+                            )
+                        })?;
+
                     for (line_num, line) in content.lines().enumerate() {
                         if line.trim().is_empty() {
                             continue;
                         }
-                        
+
                         match serde_json::from_str::<EpgProgram>(line) {
                             Ok(program) => epg_programs.push(program),
                             Err(e) => {
-                                warn!("Failed to parse EPG program at line {}: {} - Error: {}", line_num + 1, line, e);
+                                warn!(
+                                    "Failed to parse EPG program at line {}: {} - Error: {}",
+                                    line_num + 1,
+                                    line,
+                                    e
+                                );
                             }
                         }
                     }
                 }
                 _ => {
-                    debug!("Skipping artifact of type {:?} in generation stage", artifact.artifact_type.content);
+                    debug!(
+                        "Skipping artifact of type {:?} in generation stage",
+                        artifact.artifact_type.content
+                    );
                 }
             }
         }
-        
+
         info!(
             "Loaded artifacts: {} numbered channels, {} EPG programs",
             numbered_channels.len(),
             epg_programs.len()
         );
-        
+
         Ok((numbered_channels, epg_programs))
     }
 
     /// Clean up temporary files and resources
     pub fn cleanup(self) -> Result<()> {
         // The SandboxedManager will clean up its temporary files when dropped
-        debug!("Generation stage cleanup completed for execution: {}", self.pipeline_execution_prefix);
+        debug!(
+            "Generation stage cleanup completed for execution: {}",
+            self.pipeline_execution_prefix
+        );
         Ok(())
     }
 }
@@ -684,35 +823,45 @@ impl ProgressAware for GenerationStage {
 
 #[async_trait::async_trait]
 impl PipelineStage for GenerationStage {
-    async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError> {
-        info!("Generation stage starting with {} input artifacts", input.len());
-        
+    async fn execute(
+        &mut self,
+        input: Vec<PipelineArtifact>,
+    ) -> Result<Vec<PipelineArtifact>, PipelineError> {
+        info!(
+            "Generation stage starting with {} input artifacts",
+            input.len()
+        );
+
         self.report_progress(5.0, "Loading generation data").await;
-        
+
         // Load data from input artifacts
         let (numbered_channels, epg_programs) = self.load_artifacts_from_input(input).await?;
-        
+
         // Generate the files (for now, create a dummy logo service)
-        let artifacts = self.process_channels_and_programs(numbered_channels, epg_programs).await
-            .map_err(|e| PipelineError::stage_error("generation", format!("Generation failed: {e}")))?;
-        
+        let artifacts = self
+            .process_channels_and_programs(numbered_channels, epg_programs)
+            .await
+            .map_err(|e| {
+                PipelineError::stage_error("generation", format!("Generation failed: {e}"))
+            })?;
+
         self.report_progress(100.0, "Generation completed").await;
-        
+
         Ok(artifacts)
     }
-    
+
     fn stage_id(&self) -> &'static str {
         "generation"
     }
-    
+
     fn stage_name(&self) -> &'static str {
         "Generation"
     }
-    
+
     async fn cleanup(&mut self) -> Result<(), PipelineError> {
         Ok(())
     }
-    
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

@@ -1,8 +1,8 @@
 //! Compact logo cache entry structure with hash-based channel matching
 
+use super::dimension_encoder::DimensionEncoder;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use super::dimension_encoder::DimensionEncoder;
 
 /// Ultra-compact logo cache entry optimized for minimal memory usage
 #[derive(Debug, Clone)]
@@ -50,36 +50,43 @@ impl LogoCacheEntry {
                 .as_secs(),
         }
     }
-    
+
     /// Fast string hashing using DefaultHasher
     fn hash_string(s: &str) -> u64 {
         let mut hasher = DefaultHasher::new();
         s.hash(&mut hasher);
         hasher.finish()
     }
-    
+
     /// Check if entry matches search criteria
-    pub fn matches_search(&self, query_url_hash: Option<u64>, query_name_hash: Option<u64>, query_group_hash: Option<u64>) -> bool {
+    pub fn matches_search(
+        &self,
+        query_url_hash: Option<u64>,
+        query_name_hash: Option<u64>,
+        query_group_hash: Option<u64>,
+    ) -> bool {
         // URL hash match (highest priority)
         if let Some(url_hash) = query_url_hash {
             return self.url_hash == url_hash;
         }
-        
+
         // Channel name match
         if let (Some(query_hash), Some(entry_hash)) = (query_name_hash, self.channel_name_hash)
-            && entry_hash == query_hash {
-                return true;
-            }
-        
+            && entry_hash == query_hash
+        {
+            return true;
+        }
+
         // Channel group match (lowest priority)
         if let (Some(query_hash), Some(entry_hash)) = (query_group_hash, self.channel_group_hash)
-            && entry_hash == query_hash {
-                return true;
-            }
-        
+            && entry_hash == query_hash
+        {
+            return true;
+        }
+
         false
     }
-    
+
     /// Update last accessed timestamp
     pub fn touch(&mut self) {
         self.last_accessed = std::time::SystemTime::now()
@@ -87,7 +94,7 @@ impl LogoCacheEntry {
             .unwrap_or_default()
             .as_secs();
     }
-    
+
     /// Get decoded dimensions
     pub fn get_dimensions(&self) -> (Option<i32>, Option<i32>) {
         (
@@ -95,7 +102,7 @@ impl LogoCacheEntry {
             DimensionEncoder::decode(self.encoded_height),
         )
     }
-    
+
     /// Estimate memory usage of this entry in bytes
     pub fn memory_usage(&self) -> usize {
         std::mem::size_of::<Self>() + self.relative_path.capacity()
@@ -118,7 +125,7 @@ impl LogoCacheQuery {
             channel_group: None,
         }
     }
-    
+
     pub fn from_channel(name: &str, group: Option<&str>) -> Self {
         Self {
             original_url: None,
@@ -126,13 +133,19 @@ impl LogoCacheQuery {
             channel_group: group.map(str::to_string),
         }
     }
-    
+
     /// Convert to hash-based query for fast matching
     pub fn to_hashes(&self) -> (Option<u64>, Option<u64>, Option<u64>) {
         (
-            self.original_url.as_ref().map(|s| LogoCacheEntry::hash_string(s)),
-            self.channel_name.as_ref().map(|s| LogoCacheEntry::hash_string(s)),
-            self.channel_group.as_ref().map(|s| LogoCacheEntry::hash_string(s)),
+            self.original_url
+                .as_ref()
+                .map(|s| LogoCacheEntry::hash_string(s)),
+            self.channel_name
+                .as_ref()
+                .map(|s| LogoCacheEntry::hash_string(s)),
+            self.channel_group
+                .as_ref()
+                .map(|s| LogoCacheEntry::hash_string(s)),
         )
     }
 }
@@ -140,7 +153,7 @@ impl LogoCacheQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_entry_creation() {
         let entry = LogoCacheEntry::new(
@@ -152,7 +165,7 @@ mod tests {
             1024,
             "channel1_64x64.png".to_string(),
         );
-        
+
         assert!(entry.url_hash != 0);
         assert!(entry.channel_name_hash.is_some());
         assert!(entry.channel_group_hash.is_some());
@@ -161,55 +174,60 @@ mod tests {
         assert_eq!(entry.file_size, 1024);
         assert_eq!(entry.relative_path, "channel1_64x64.png");
     }
-    
+
     #[test]
     fn test_search_matching() {
         let entry = LogoCacheEntry::new(
             "http://example.com/logo.png",
             Some("Channel 1"),
             Some("News"),
-            Some(64), Some(64),
+            Some(64),
+            Some(64),
             1024,
             "test.png".to_string(),
         );
-        
+
         // URL match
         let url_hash = LogoCacheEntry::hash_string("http://example.com/logo.png");
         assert!(entry.matches_search(Some(url_hash), None, None));
-        
+
         // Channel name match
         let name_hash = LogoCacheEntry::hash_string("Channel 1");
         assert!(entry.matches_search(None, Some(name_hash), None));
-        
+
         // Channel group match
         let group_hash = LogoCacheEntry::hash_string("News");
         assert!(entry.matches_search(None, None, Some(group_hash)));
-        
+
         // No match
         let wrong_hash = LogoCacheEntry::hash_string("wrong");
         assert!(!entry.matches_search(Some(wrong_hash), None, None));
     }
-    
+
     #[test]
     fn test_memory_efficiency() {
         let entry = LogoCacheEntry::new(
             "http://example.com/very/long/url/path/to/logo.png",
             Some("Very Long Channel Name Here"),
             Some("Very Long Group Name Here"),
-            Some(1920), Some(1080),
+            Some(1920),
+            Some(1080),
             524288, // 512KB
             "cached_logo.png".to_string(),
         );
-        
+
         // Memory usage should be significantly less than storing full strings
         let memory_usage = entry.memory_usage();
-        let string_storage = "http://example.com/very/long/url/path/to/logo.png".len() +
-                           "Very Long Channel Name Here".len() +
-                           "Very Long Group Name Here".len();
-        
+        let string_storage = "http://example.com/very/long/url/path/to/logo.png".len()
+            + "Very Long Channel Name Here".len()
+            + "Very Long Group Name Here".len();
+
         println!("Hash-based entry: {} bytes", memory_usage);
-        println!("String storage would be: {} bytes", string_storage + entry.relative_path.len());
-        
+        println!(
+            "String storage would be: {} bytes",
+            string_storage + entry.relative_path.len()
+        );
+
         // The entry should use much less memory than string storage
         assert!(memory_usage < string_storage + 100); // Allow for struct overhead
     }

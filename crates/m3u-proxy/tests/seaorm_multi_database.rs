@@ -1,11 +1,11 @@
 //! Multi-database testing for SeaORM implementation
 //!
-//! This test verifies that our SeaORM implementation works correctly across 
+//! This test verifies that our SeaORM implementation works correctly across
 //! SQLite, PostgreSQL, and MySQL databases.
 
 use anyhow::Result;
 use m3u_proxy::{
-    config::{DatabaseConfig, IngestionConfig, SqliteConfig, PostgreSqlConfig, MySqlConfig},
+    config::{DatabaseConfig, IngestionConfig, MySqlConfig, PostgreSqlConfig, SqliteConfig},
     database::Database,
 };
 
@@ -22,10 +22,10 @@ async fn test_seaorm_multi_database_connectivity() -> Result<()> {
         postgresql: PostgreSqlConfig::default(),
         mysql: MySqlConfig::default(),
     };
-    
+
     let ingestion_config = IngestionConfig::default();
     Database::new(&sqlite_config, &ingestion_config).await?;
-    
+
     // Skip migrations for SQLite to avoid foreign key constraint issues in tests
     // For PostgreSQL and MySQL, migrations will still run to test real behavior
     println!("[SUCCESS] SQLite connection successful (migrations skipped to avoid FK constraints)");
@@ -40,14 +40,17 @@ async fn test_seaorm_multi_database_connectivity() -> Result<()> {
         postgresql: PostgreSqlConfig::default(),
         mysql: MySqlConfig::default(),
     };
-    
+
     match Database::new(&postgres_config, &ingestion_config).await {
         Ok(postgres_db) => {
             postgres_db.migrate().await?;
             println!("[SUCCESS] PostgreSQL connection and migration successful");
         }
         Err(e) => {
-            println!("[WARNING] PostgreSQL connection failed (container might not be running): {}", e);
+            println!(
+                "[WARNING] PostgreSQL connection failed (container might not be running): {}",
+                e
+            );
         }
     }
 
@@ -61,14 +64,17 @@ async fn test_seaorm_multi_database_connectivity() -> Result<()> {
         postgresql: PostgreSqlConfig::default(),
         mysql: MySqlConfig::default(),
     };
-    
+
     match Database::new(&mysql_config, &ingestion_config).await {
         Ok(mysql_db) => {
             mysql_db.migrate().await?;
             println!("[SUCCESS] MySQL connection and migration successful");
         }
         Err(e) => {
-            println!("[WARNING] MySQL connection failed (container might not be running): {}", e);
+            println!(
+                "[WARNING] MySQL connection failed (container might not be running): {}",
+                e
+            );
         }
     }
 

@@ -6,13 +6,13 @@
 
 use std::sync::Arc;
 
-use crate::errors::AppResult;
-use crate::models::{StreamSourceType, EpgSourceType};
-use super::traits::{FullSourceHandler, EpgSourceHandler, FullEpgSourceHandler};
 use super::m3u::M3uSourceHandler;
-use super::xtream::XtreamSourceHandler;
+use super::traits::{EpgSourceHandler, FullEpgSourceHandler, FullSourceHandler};
 use super::xmltv_epg::XmltvEpgHandler;
+use super::xtream::XtreamSourceHandler;
 use super::xtream_epg::XtreamEpgHandler;
+use crate::errors::AppResult;
+use crate::models::{EpgSourceType, StreamSourceType};
 
 /// Factory for creating source handlers
 ///
@@ -56,7 +56,7 @@ impl SourceHandlerFactory {
     /// Returns an error if the source type is not supported
     pub async fn create_handler(
         source_type: &StreamSourceType,
-        http_client_factory: &crate::utils::HttpClientFactory
+        http_client_factory: &crate::utils::HttpClientFactory,
     ) -> AppResult<Arc<dyn FullSourceHandler>> {
         match source_type {
             StreamSourceType::M3u => {
@@ -70,10 +70,6 @@ impl SourceHandlerFactory {
         }
     }
 
-
-
-
-
     /// Check if a source type is supported
     ///
     /// # Arguments  
@@ -82,14 +78,19 @@ impl SourceHandlerFactory {
     /// # Returns
     /// True if the source type has a registered handler, false otherwise
     pub fn is_supported(source_type: &StreamSourceType) -> bool {
-        matches!(source_type, StreamSourceType::M3u | StreamSourceType::Xtream)
+        matches!(
+            source_type,
+            StreamSourceType::M3u | StreamSourceType::Xtream
+        )
     }
 
     /// Get handler capabilities summary for a source type
     ///
     /// This method provides information about what capabilities a handler supports
     /// without actually creating the handler instance.
-    pub fn get_handler_capabilities(source_type: &StreamSourceType) -> AppResult<super::traits::SourceHandlerSummary> {
+    pub fn get_handler_capabilities(
+        source_type: &StreamSourceType,
+    ) -> AppResult<super::traits::SourceHandlerSummary> {
         match source_type {
             StreamSourceType::M3u => Ok(super::traits::SourceHandlerSummary {
                 source_type: StreamSourceType::M3u,
@@ -123,7 +124,7 @@ impl SourceHandlerFactory {
     /// Returns an error if the EPG source type is not supported
     pub async fn create_epg_handler(
         epg_source_type: &EpgSourceType,
-        http_client_factory: &crate::utils::HttpClientFactory
+        http_client_factory: &crate::utils::HttpClientFactory,
     ) -> AppResult<Arc<dyn FullEpgSourceHandler>> {
         match epg_source_type {
             EpgSourceType::Xmltv => {
@@ -143,7 +144,7 @@ impl SourceHandlerFactory {
     /// useful for validation and capability checking without full ingestion support.
     pub async fn create_basic_epg_handler(
         epg_source_type: &EpgSourceType,
-        http_client_factory: &crate::utils::HttpClientFactory
+        http_client_factory: &crate::utils::HttpClientFactory,
     ) -> AppResult<Arc<dyn EpgSourceHandler>> {
         match epg_source_type {
             EpgSourceType::Xmltv => {
@@ -156,10 +157,7 @@ impl SourceHandlerFactory {
             }
         }
     }
-
-
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -169,12 +167,16 @@ mod tests {
     async fn test_factory_supports_all_types() {
         use crate::utils::HttpClientFactory;
         use std::time::Duration;
-        
+
         let factory = HttpClientFactory::new(None, Duration::from_secs(5));
-        
+
         for source_type in [StreamSourceType::M3u, StreamSourceType::Xtream] {
             assert!(SourceHandlerFactory::is_supported(&source_type));
-            assert!(SourceHandlerFactory::create_handler(&source_type, &factory).await.is_ok());
+            assert!(
+                SourceHandlerFactory::create_handler(&source_type, &factory)
+                    .await
+                    .is_ok()
+            );
         }
     }
 
@@ -182,13 +184,17 @@ mod tests {
     async fn test_factory_basic_functionality() {
         use crate::utils::HttpClientFactory;
         use std::time::Duration;
-        
+
         let factory = HttpClientFactory::new(None, Duration::from_secs(5));
-        
+
         // Test that factory can create handlers for all supported types
         for source_type in [StreamSourceType::M3u, StreamSourceType::Xtream] {
             assert!(SourceHandlerFactory::is_supported(&source_type));
-            assert!(SourceHandlerFactory::create_handler(&source_type, &factory).await.is_ok());
+            assert!(
+                SourceHandlerFactory::create_handler(&source_type, &factory)
+                    .await
+                    .is_ok()
+            );
             assert!(SourceHandlerFactory::get_handler_capabilities(&source_type).is_ok());
         }
     }
@@ -197,11 +203,15 @@ mod tests {
     async fn test_epg_factory_functionality() {
         use crate::utils::HttpClientFactory;
         use std::time::Duration;
-        
-        // Test EPG factory methods  
+
+        // Test EPG factory methods
         let factory = HttpClientFactory::new(None, Duration::from_secs(5));
         for epg_type in [EpgSourceType::Xmltv, EpgSourceType::Xtream] {
-            assert!(SourceHandlerFactory::create_epg_handler(&epg_type, &factory).await.is_ok());
+            assert!(
+                SourceHandlerFactory::create_epg_handler(&epg_type, &factory)
+                    .await
+                    .is_ok()
+            );
         }
     }
 }

@@ -8,17 +8,14 @@ use crate::{
     config::{Config, StorageConfig},
     logo_assets::{service::LogoAssetService, storage::LogoAssetStorage},
     models::StreamProxy,
-    pipeline::{
-        core::orchestrator::PipelineOrchestrator,
-        stages::logo_caching::LogoCachingConfig,
-    },
+    pipeline::{core::orchestrator::PipelineOrchestrator, stages::logo_caching::LogoCachingConfig},
 };
-use sandboxed_file_manager::{SandboxedManager, CleanupPolicy, TimeMatch};
-use std::sync::Arc;
+use sandboxed_file_manager::{CleanupPolicy, SandboxedManager, TimeMatch};
 use std::collections::HashMap;
-use tokio::sync::Mutex;
 #[cfg(test)]
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
@@ -68,19 +65,36 @@ impl PipelineOrchestratorFactory {
         );
 
         // Create logo service with circuit breaker protection via factory
-        let logo_service = Arc::new(LogoAssetService::new(database.connection().clone(), logo_storage, http_client_factory).await);
+        let logo_service = Arc::new(
+            LogoAssetService::new(
+                database.connection().clone(),
+                logo_storage,
+                http_client_factory,
+            )
+            .await,
+        );
 
         // Create proxy output file manager for final M3U/XMLTV files
         let proxy_output_file_manager = SandboxedManager::builder()
             .base_directory(&storage_config.m3u_path)
-            .cleanup_policy(CleanupPolicy::new()
-                .remove_after(humantime::parse_duration(&storage_config.m3u_retention)?)
-                .time_match(TimeMatch::LastAccess))
-            .cleanup_interval(humantime::parse_duration(&storage_config.m3u_cleanup_interval)?)
+            .cleanup_policy(
+                CleanupPolicy::new()
+                    .remove_after(humantime::parse_duration(&storage_config.m3u_retention)?)
+                    .time_match(TimeMatch::LastAccess),
+            )
+            .cleanup_interval(humantime::parse_duration(
+                &storage_config.m3u_cleanup_interval,
+            )?)
             .build()
             .await?;
 
-        Ok(Self::new(database, logo_service, app_config, pipeline_file_manager, proxy_output_file_manager))
+        Ok(Self::new(
+            database,
+            logo_service,
+            app_config,
+            pipeline_file_manager,
+            proxy_output_file_manager,
+        ))
     }
 
     /// Create a PipelineOrchestrator for a specific proxy
@@ -129,17 +143,22 @@ impl PipelineOrchestratorFactory {
             active.insert(proxy_id, pipeline_id.clone());
         }
 
-        debug!("Successfully created and registered pipeline orchestrator for proxy {} (pipeline: {})", proxy_id, pipeline_id);
+        debug!(
+            "Successfully created and registered pipeline orchestrator for proxy {} (pipeline: {})",
+            proxy_id, pipeline_id
+        );
         Ok(orchestrator)
     }
 
     /// Load proxy configuration from database using flexible UUID parsing
-    async fn load_proxy_config(&self, proxy_id: Uuid) -> Result<StreamProxy, Box<dyn std::error::Error>> {
-        
+    async fn load_proxy_config(
+        &self,
+        proxy_id: Uuid,
+    ) -> Result<StreamProxy, Box<dyn std::error::Error>> {
         // Use SeaORM entity query instead of raw SQL
         use crate::entities::{prelude::*, stream_proxies};
-        use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
-        
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
         let proxy_entity = StreamProxies::find()
             .filter(stream_proxies::Column::Id.eq(proxy_id))
             .filter(stream_proxies::Column::IsActive.eq(true))
@@ -167,8 +186,11 @@ impl PipelineOrchestratorFactory {
                     last_generated_at: entity.last_generated_at,
                     relay_profile_id: entity.relay_profile_id,
                 };
-                
-                debug!("Loaded configuration for proxy '{}' ({})", config.name, proxy_id);
+
+                debug!(
+                    "Loaded configuration for proxy '{}' ({})",
+                    config.name, proxy_id
+                );
                 Ok(config)
             }
             None => {
@@ -192,7 +214,10 @@ impl PipelineOrchestratorFactory {
     pub async fn unregister_orchestrator(&self, proxy_id: Uuid) {
         let mut active = self.active_orchestrators.lock().await;
         if let Some(pipeline_id) = active.remove(&proxy_id) {
-            debug!("Unregistered orchestrator for proxy {} (pipeline: {})", proxy_id, pipeline_id);
+            debug!(
+                "Unregistered orchestrator for proxy {} (pipeline: {})",
+                proxy_id, pipeline_id
+            );
         }
     }
 
@@ -228,15 +253,25 @@ impl PipelineOrchestratorFactory {
         // Create Database wrapper from connection for test
         let test_database = crate::database::Database {
             connection: std::sync::Arc::new(db_connection),
-            read_connection: std::sync::Arc::new(sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite).into_connection()),
+            read_connection: std::sync::Arc::new(
+                sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite).into_connection(),
+            ),
             backend: sea_orm::DatabaseBackend::Sqlite,
             ingestion_config: crate::config::IngestionConfig::default(),
             database_type: crate::database::DatabaseType::SQLite,
         };
-        
+
         // Create HTTP client factory for testing
-        let http_client_factory = crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10));
-        Self::from_components(test_database, app_config, storage_config, pipeline_file_manager, &http_client_factory).await
+        let http_client_factory =
+            crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10));
+        Self::from_components(
+            test_database,
+            app_config,
+            storage_config,
+            pipeline_file_manager,
+            &http_client_factory,
+        )
+        .await
     }
 }
 
@@ -255,7 +290,7 @@ mod tests {
             .build()
             .await
             .unwrap();
-        
+
         let app_config = Config {
             web: WebConfig {
                 base_url: "http://test:8080".to_string(),
@@ -268,11 +303,9 @@ mod tests {
         let db_connection = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
 
         // Test factory creation
-        let factory = PipelineOrchestratorFactory::with_defaults(
-            db_connection,
-            app_config,
-            file_manager,
-        ).await;
+        let factory =
+            PipelineOrchestratorFactory::with_defaults(db_connection, app_config, file_manager)
+                .await;
 
         assert!(factory.is_ok());
     }

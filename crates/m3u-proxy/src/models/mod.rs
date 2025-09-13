@@ -1,9 +1,9 @@
-use std::str::FromStr;
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::StringLen;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use utoipa::ToSchema;
 use uuid::Uuid;
-use sea_orm::sea_query::StringLen;
 
 pub mod channel;
 pub mod data_mapping;
@@ -37,7 +37,18 @@ pub struct StreamSource {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, ToSchema, sea_orm::DeriveActiveEnum, strum::EnumIter)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Hash,
+    ToSchema,
+    sea_orm::DeriveActiveEnum,
+    strum::EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 pub enum StreamSourceType {
@@ -47,9 +58,18 @@ pub enum StreamSourceType {
     Xtream,
 }
 
-
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default, sea_orm::DeriveActiveEnum, strum::EnumIter)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Hash,
+    Default,
+    sea_orm::DeriveActiveEnum,
+    strum::EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 pub enum StreamProxyMode {
@@ -62,11 +82,10 @@ pub enum StreamProxyMode {
     Relay,
 }
 
-
 /// Implementation of FromStr trait for StreamProxyMode
 impl FromStr for StreamProxyMode {
     type Err = ();
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let result = match s {
             "redirect" => StreamProxyMode::Redirect,
@@ -129,7 +148,9 @@ pub struct ProxyEpgSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[schema(description = "Channel filter with complex condition logic for selecting/excluding channels")]
+#[schema(
+    description = "Channel filter with complex condition logic for selecting/excluding channels"
+)]
 pub struct Filter {
     pub id: Uuid,
     pub name: String,
@@ -141,7 +162,17 @@ pub struct Filter {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema, sea_orm::DeriveActiveEnum, strum::EnumIter)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    ToSchema,
+    sea_orm::DeriveActiveEnum,
+    strum::EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 pub enum FilterSourceType {
@@ -153,7 +184,7 @@ pub enum FilterSourceType {
 
 impl std::str::FromStr for FilterSourceType {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "stream" => Ok(FilterSourceType::Stream),
@@ -430,10 +461,11 @@ pub struct FilterTestRequest {
 // New generalized models
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ExpressionValidateRequest {
-    #[schema(example = "channel_name contains \"HD\" OR (group_title equals \"Movies\" AND stream_url starts_with \"https\")")]
+    #[schema(
+        example = "channel_name contains \"HD\" OR (group_title equals \"Movies\" AND stream_url starts_with \"https\")"
+    )]
     pub expression: String,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterTestResult {
@@ -455,39 +487,39 @@ pub enum ExpressionErrorCategory {
     Value,    // Invalid values, unparseable regex, type mismatches
 }
 
-
 // New generalized validation error
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ExpressionValidationError {
     #[schema(example = "field")]
     pub category: ExpressionErrorCategory,
-    
+
     #[schema(example = "unknown_field")]
     pub error_type: String,
-    
+
     #[schema(example = "Unknown field 'channe_name'")]
     pub message: String,
-    
+
     #[schema(example = "Field 'channe_name' is not available. Did you mean 'channel_name'?")]
     pub details: Option<String>,
-    
+
     #[schema(example = 25)]
     pub position: Option<usize>,
-    
+
     #[schema(example = "channe_name contains")]
     pub context: Option<String>,
-    
-    #[schema(example = "Available fields: channel_name, group_title, stream_url, tvg_id, tvg_name, tvg_logo")]
+
+    #[schema(
+        example = "Available fields: channel_name, group_title, stream_url, tvg_id, tvg_name, tvg_logo"
+    )]
     pub suggestion: Option<String>,
 }
-
 
 // New generalized validation result
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ExpressionValidateResult {
     #[schema(example = true)]
     pub is_valid: bool,
-    
+
     #[schema(example = json!([
         {
             "category": "field",
@@ -527,7 +559,7 @@ pub struct ExpressionValidateResult {
         }
     ]))]
     pub errors: Vec<ExpressionValidationError>,
-    
+
     #[schema(example = json!({
         "type": "condition",
         "field": "channel_name", 
@@ -538,7 +570,6 @@ pub struct ExpressionValidateResult {
     }))]
     pub expression_tree: Option<serde_json::Value>,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterTestChannel {
@@ -693,7 +724,7 @@ pub struct Action {
 ///
 /// ```
 /// use m3u_proxy::models::ActionOperator;
-/// 
+///
 /// // Basic assignment
 /// let set_op = ActionOperator::Set;
 ///
@@ -743,7 +774,7 @@ pub enum ActionOperator {
 ///
 /// ```
 /// use m3u_proxy::models::ActionValue;
-/// 
+///
 /// // Literal string value
 /// let literal = ActionValue::Literal("Sports HD".to_string());
 ///
@@ -857,7 +888,7 @@ impl Filter {
         if self.expression.trim().is_empty() {
             return None;
         }
-        
+
         // Parse expression to condition tree
         let parser = crate::expression_parser::ExpressionParser::new();
         match parser.parse(&self.expression) {
@@ -1247,8 +1278,6 @@ pub struct EpgRefreshResponse {
     pub program_count: usize,
 }
 
-
-
 // Unified Source API Models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "source_kind")]
@@ -1312,7 +1341,6 @@ pub enum UnifiedSourceWithStats {
         next_scheduled_update: Option<DateTime<Utc>>,
     },
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayStatus {
@@ -1613,9 +1641,10 @@ impl GenerationStats {
 
         // Calculate memory efficiency
         if let Some(peak_memory) = self.peak_memory_usage_mb
-            && peak_memory > 0.0 {
-                self.memory_efficiency = Some(self.total_channels_processed as f64 / peak_memory);
-            }
+            && peak_memory > 0.0
+        {
+            self.memory_efficiency = Some(self.total_channels_processed as f64 / peak_memory);
+        }
     }
 
     /// Generate a concise summary string for logging with tree-style stage breakdown

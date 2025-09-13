@@ -3,11 +3,11 @@
 //! This module provides retry mechanisms specifically designed for database operations,
 //! with exponential backoff and configurable retry policies.
 
+use crate::errors::{RepositoryError, RepositoryResult};
+use crate::utils::jitter::generate_jitter_percent;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, warn};
-use crate::errors::{RepositoryError, RepositoryResult};
-use crate::utils::jitter::generate_jitter_percent;
 
 /// Configuration for database retry behavior
 #[derive(Debug, Clone)]
@@ -92,7 +92,7 @@ where
     Fut: std::future::Future<Output = RepositoryResult<T>>,
 {
     let mut last_error = None;
-    
+
     for attempt in 1..=config.max_attempts {
         match operation().await {
             Ok(result) => {
@@ -106,7 +106,7 @@ where
             }
             Err(err) => {
                 let should_retry = is_retryable_error(&err);
-                
+
                 if !should_retry {
                     debug!(
                         "Database operation '{}' failed with non-retryable error: {}",
@@ -114,28 +114,34 @@ where
                     );
                     return Err(err);
                 }
-                
+
                 last_error = Some(err);
-                
+
                 if attempt < config.max_attempts {
                     let delay = calculate_delay(config, attempt);
-                    
+
                     warn!(
                         "Database operation '{}' failed on attempt {}/{}, retrying in {:?}: {}",
-                        operation_name, attempt, config.max_attempts, delay, last_error.as_ref().unwrap()
+                        operation_name,
+                        attempt,
+                        config.max_attempts,
+                        delay,
+                        last_error.as_ref().unwrap()
                     );
-                    
+
                     sleep(delay).await;
                 } else {
                     warn!(
                         "Database operation '{}' failed after {} attempts: {}",
-                        operation_name, config.max_attempts, last_error.as_ref().unwrap()
+                        operation_name,
+                        config.max_attempts,
+                        last_error.as_ref().unwrap()
                     );
                 }
             }
         }
     }
-    
+
     Err(last_error.unwrap())
 }
 
@@ -150,28 +156,28 @@ fn is_retryable_error(error: &RepositoryError) -> bool {
                 sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx_err)) => {
                     // Handle SQLx errors within SeaORM
                     let error_msg = format!("{sqlx_err}").to_lowercase();
-                    error_msg.contains("database is locked") ||
-                    error_msg.contains("database is busy") ||
-                    error_msg.contains("connection reset") ||
-                    error_msg.contains("timeout") ||
-                    error_msg.contains("pool timed out") ||
-                    error_msg.contains("pool closed")
+                    error_msg.contains("database is locked")
+                        || error_msg.contains("database is busy")
+                        || error_msg.contains("connection reset")
+                        || error_msg.contains("timeout")
+                        || error_msg.contains("pool timed out")
+                        || error_msg.contains("pool closed")
                 }
                 // Other SeaORM errors - check message for retryable patterns
                 _ => {
                     let error_msg = format!("{sea_orm_error}").to_lowercase();
-                    error_msg.contains("database is locked") ||
-                    error_msg.contains("database is busy") ||
-                    error_msg.contains("connection reset") ||
-                    error_msg.contains("timeout")
+                    error_msg.contains("database is locked")
+                        || error_msg.contains("database is busy")
+                        || error_msg.contains("connection reset")
+                        || error_msg.contains("timeout")
                 }
             }
-        },
+        }
         RepositoryError::ConnectionFailed { .. } => true,
         RepositoryError::QueryFailed { message, .. } => {
             let msg = message.to_lowercase();
             msg.contains("locked") || msg.contains("busy") || msg.contains("timeout")
-        },
+        }
         // Other repository errors are typically not retryable
         _ => false,
     }
@@ -179,11 +185,11 @@ fn is_retryable_error(error: &RepositoryError) -> bool {
 
 /// Calculate delay with exponential backoff and optional jitter
 fn calculate_delay(config: &RetryConfig, attempt: u32) -> Duration {
-    let exponential_delay = config.initial_delay.as_millis() as f64 
+    let exponential_delay = config.initial_delay.as_millis() as f64
         * config.backoff_multiplier.powi((attempt - 1) as i32);
-    
+
     let delay_ms = exponential_delay.min(config.max_delay.as_millis() as f64) as u64;
-    
+
     let final_delay = if config.jitter {
         // Add up to 25% jitter to prevent thundering herd
         let jitter = generate_jitter_percent(delay_ms, 25);
@@ -191,15 +197,15 @@ fn calculate_delay(config: &RetryConfig, attempt: u32) -> Duration {
     } else {
         delay_ms
     };
-    
+
     Duration::from_millis(final_delay)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Instant;
 
     /// Test that successful operations complete without retry
@@ -208,7 +214,7 @@ mod tests {
         let config = RetryConfig::default();
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
-        
+
         let result = with_retry(
             &config,
             || {
@@ -218,9 +224,10 @@ mod tests {
                     Ok::<i32, RepositoryError>(42)
                 }
             },
-            "test_operation"
-        ).await;
-        
+            "test_operation",
+        )
+        .await;
+
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);
         assert_eq!(counter.load(Ordering::SeqCst), 1); // Only called once
@@ -232,24 +239,22 @@ mod tests {
         let config = RetryConfig::default();
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
-        
+
         let result: Result<(), _> = with_retry(
             &config,
             || {
                 let counter = counter_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Err(RepositoryError::SerializationFailed(
-                        serde_json::Error::io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "test error"
-                        ))
-                    ))
+                    Err(RepositoryError::SerializationFailed(serde_json::Error::io(
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, "test error"),
+                    )))
                 }
             },
-            "test_non_retryable"
-        ).await;
-        
+            "test_non_retryable",
+        )
+        .await;
+
         assert!(result.is_err());
         assert_eq!(counter.load(Ordering::SeqCst), 1); // Only called once, no retries
     }
@@ -264,10 +269,10 @@ mod tests {
             backoff_multiplier: 2.0,
             jitter: false, // Predictable timing for tests
         };
-        
+
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
-        
+
         let result = with_retry(
             &config,
             || {
@@ -277,16 +282,17 @@ mod tests {
                     if count < 2 {
                         // Fail first 2 attempts with retryable error
                         Err(RepositoryError::ConnectionFailed {
-                            message: "database is locked".to_string()
+                            message: "database is locked".to_string(),
                         })
                     } else {
                         Ok(42)
                     }
                 }
             },
-            "test_retry"
-        ).await;
-        
+            "test_retry",
+        )
+        .await;
+
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);
         assert_eq!(counter.load(Ordering::SeqCst), 3); // Called 3 times
@@ -302,10 +308,10 @@ mod tests {
             backoff_multiplier: 2.0,
             jitter: false,
         };
-        
+
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
-        
+
         let result: Result<(), _> = with_retry(
             &config,
             || {
@@ -313,13 +319,14 @@ mod tests {
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
                     Err(RepositoryError::ConnectionFailed {
-                        message: "always fails".to_string()
+                        message: "always fails".to_string(),
                     })
                 }
             },
-            "test_max_attempts"
-        ).await;
-        
+            "test_max_attempts",
+        )
+        .await;
+
         assert!(result.is_err());
         assert_eq!(counter.load(Ordering::SeqCst), 2); // Called exactly max_attempts times
     }
@@ -366,10 +373,10 @@ mod tests {
 
         // First attempt: 100ms * 2^0 = 100ms
         assert_eq!(delay1, Duration::from_millis(100));
-        
+
         // Second attempt: 100ms * 2^1 = 200ms
         assert_eq!(delay2, Duration::from_millis(200));
-        
+
         // Third attempt: 100ms * 2^2 = 400ms
         assert_eq!(delay3, Duration::from_millis(400));
     }
@@ -387,7 +394,7 @@ mod tests {
 
         let delay5 = calculate_delay(&config, 5); // Would be 100 * 2^4 = 1600ms
         let delay6 = calculate_delay(&config, 6); // Would be 100 * 2^5 = 3200ms
-        
+
         // Both should be capped at max_delay
         assert_eq!(delay5, Duration::from_millis(500));
         assert_eq!(delay6, Duration::from_millis(500));
@@ -412,7 +419,7 @@ mod tests {
 
         // All delays should be >= base delay (100ms)
         assert!(delays.iter().all(|&d| d >= Duration::from_millis(100)));
-        
+
         // All delays should be <= base delay + 25% jitter
         let max_expected = Duration::from_millis(125); // 100 + 25
         assert!(delays.iter().all(|&d| d <= max_expected));
@@ -427,7 +434,7 @@ mod tests {
     fn test_is_retryable_error_classification() {
         // Connection failures should be retryable
         let conn_error = RepositoryError::ConnectionFailed {
-            message: "database is locked".to_string()
+            message: "database is locked".to_string(),
         };
         assert!(is_retryable_error(&conn_error));
 
@@ -451,12 +458,9 @@ mod tests {
         assert!(is_retryable_error(&query_error_timeout));
 
         // Non-retryable errors
-        let serialization_error = RepositoryError::SerializationFailed(
-            serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "test"
-            ))
-        );
+        let serialization_error = RepositoryError::SerializationFailed(serde_json::Error::io(
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "test"),
+        ));
         assert!(!is_retryable_error(&serialization_error));
 
         let record_not_found = RepositoryError::RecordNotFound {
@@ -477,11 +481,11 @@ mod tests {
             backoff_multiplier: 2.0,
             jitter: false,
         };
-        
+
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
         let start_time = Instant::now();
-        
+
         let result = with_retry(
             &config,
             || {
@@ -490,18 +494,19 @@ mod tests {
                     let count = counter.fetch_add(1, Ordering::SeqCst);
                     if count < 2 {
                         Err(RepositoryError::ConnectionFailed {
-                            message: "temporary failure".to_string()
+                            message: "temporary failure".to_string(),
                         })
                     } else {
                         Ok("success")
                     }
                 }
             },
-            "test_timing"
-        ).await;
-        
+            "test_timing",
+        )
+        .await;
+
         let elapsed = start_time.elapsed();
-        
+
         assert!(result.is_ok());
         // Should have waited at least: 50ms + 100ms = 150ms total
         // (first retry delay + second retry delay)
@@ -533,10 +538,10 @@ mod tests {
                 };
 
                 let delay = calculate_delay(&config, attempt);
-                
+
                 // Delay should never exceed max_delay
                 prop_assert!(delay <= config.max_delay);
-                
+
                 // Delay should be at least initial_delay, unless capped by max_delay
                 let expected_min_delay = config.initial_delay.min(config.max_delay);
                 prop_assert!(delay >= expected_min_delay);

@@ -3,15 +3,15 @@
 //! This provides a cleaner alternative to the rssafecircuit adapter
 //! with direct generic type support and simpler internal logic.
 
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Instant;
-use async_trait::async_trait;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::utils::circuit_breaker::{
-    CircuitBreaker, CircuitBreakerResult, CircuitBreakerError, CircuitBreakerState, 
-    CircuitBreakerStats, CircuitBreakerConfig
+    CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError, CircuitBreakerResult,
+    CircuitBreakerState, CircuitBreakerStats,
 };
 
 /// State tracking for the simple circuit breaker
@@ -68,7 +68,7 @@ impl SimpleCircuitBreaker {
     /// Check if we should allow the operation to proceed
     async fn should_allow_request(&self) -> bool {
         let mut state = self.state.write().await;
-        
+
         match state.state {
             CircuitBreakerState::Closed => true,
             CircuitBreakerState::Open => {
@@ -95,17 +95,18 @@ impl SimpleCircuitBreaker {
     /// Record the result of an operation and update state
     async fn record_result(&self, success: bool) {
         let mut state = self.state.write().await;
-        
+
         state.total_calls += 1;
-        
+
         if success {
             state.successful_calls += 1;
             state.failure_count = 0;
             state.success_count += 1;
-            
+
             // Check if we should transition from half-open to closed
-            if state.state == CircuitBreakerState::HalfOpen 
-                && state.success_count >= self.config.success_threshold {
+            if state.state == CircuitBreakerState::HalfOpen
+                && state.success_count >= self.config.success_threshold
+            {
                 info!("Circuit breaker transitioning from HalfOpen to Closed");
                 state.state = CircuitBreakerState::Closed;
                 state.success_count = 0;
@@ -115,18 +116,23 @@ impl SimpleCircuitBreaker {
             state.failed_calls += 1;
             state.success_count = 0;
             state.failure_count += 1;
-            
+
             // Check if we should open the circuit
             if state.failure_count >= self.config.failure_threshold {
                 match state.state {
                     CircuitBreakerState::Closed => {
-                        warn!("Circuit breaker opening due to {} consecutive failures", state.failure_count);
+                        warn!(
+                            "Circuit breaker opening due to {} consecutive failures",
+                            state.failure_count
+                        );
                         state.state = CircuitBreakerState::Open;
                         state.last_opened = Some(Instant::now());
                         state.last_state_change = Some(Instant::now());
                     }
                     CircuitBreakerState::HalfOpen => {
-                        warn!("Circuit breaker returning to Open state from HalfOpen due to failure");
+                        warn!(
+                            "Circuit breaker returning to Open state from HalfOpen due to failure"
+                        );
                         state.state = CircuitBreakerState::Open;
                         state.last_opened = Some(Instant::now());
                         state.last_state_change = Some(Instant::now());
@@ -151,7 +157,7 @@ impl CircuitBreaker for SimpleCircuitBreaker {
     {
         let start_time = Instant::now();
         let initial_state = self.state().await;
-        
+
         // Check if we should allow the request
         if !self.should_allow_request().await {
             return CircuitBreakerResult {
@@ -160,13 +166,13 @@ impl CircuitBreaker for SimpleCircuitBreaker {
                 execution_time: start_time.elapsed(),
             };
         }
-        
+
         // Execute the operation with timeout
         let result = tokio::time::timeout(self.config.timeout, operation()).await;
-        
+
         let execution_time = start_time.elapsed();
         let final_state;
-        
+
         match result {
             Ok(Ok(value)) => {
                 // Success
@@ -200,11 +206,11 @@ impl CircuitBreaker for SimpleCircuitBreaker {
             }
         }
     }
-    
+
     async fn state(&self) -> CircuitBreakerState {
         self.state.read().await.state
     }
-    
+
     async fn is_available(&self) -> bool {
         match self.state().await {
             CircuitBreakerState::Closed | CircuitBreakerState::HalfOpen => true,
@@ -219,7 +225,7 @@ impl CircuitBreaker for SimpleCircuitBreaker {
             }
         }
     }
-    
+
     async fn force_open(&self) {
         let mut state = self.state.write().await;
         info!("Manually forcing circuit breaker to Open state");
@@ -227,7 +233,7 @@ impl CircuitBreaker for SimpleCircuitBreaker {
         state.last_opened = Some(Instant::now());
         state.last_state_change = Some(Instant::now());
     }
-    
+
     async fn force_closed(&self) {
         let mut state = self.state.write().await;
         info!("Manually forcing circuit breaker to Closed state");
@@ -236,7 +242,7 @@ impl CircuitBreaker for SimpleCircuitBreaker {
         state.success_count = 0;
         state.last_state_change = Some(Instant::now());
     }
-    
+
     async fn stats(&self) -> CircuitBreakerStats {
         let state = self.state.read().await;
         let failure_rate = if state.total_calls > 0 {
@@ -244,7 +250,7 @@ impl CircuitBreaker for SimpleCircuitBreaker {
         } else {
             0.0
         };
-        
+
         CircuitBreakerStats {
             total_calls: state.total_calls,
             successful_calls: state.successful_calls,

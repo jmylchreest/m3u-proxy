@@ -48,7 +48,7 @@ impl JobQueue {
 
         let mut pending = self.pending.write().await;
         pending.push(Reverse(job.clone()));
-        
+
         info!(
             "Enqueued job {} (type: {:?}, priority: {:?}, scheduled: {})",
             job_key,
@@ -67,7 +67,7 @@ impl JobQueue {
 
         // Extract ready jobs from the heap
         let mut remaining_jobs = BinaryHeap::new();
-        
+
         while let Some(Reverse(job)) = pending.pop() {
             if job.is_ready(now) && ready_jobs.len() < limit {
                 ready_jobs.push(job);
@@ -88,24 +88,27 @@ impl JobQueue {
 
     /// Get jobs that can be executed considering both time readiness and concurrency limits
     pub async fn get_executable_jobs(
-        &self, 
-        now: DateTime<Utc>, 
+        &self,
+        now: DateTime<Utc>,
         available_slots: usize,
-        current_type_counts: &std::collections::HashMap<super::job_queue_runner::JobTypeCategory, usize>,
-        type_limits: &std::collections::HashMap<super::job_queue_runner::JobTypeCategory, usize>
+        current_type_counts: &std::collections::HashMap<
+            super::job_queue_runner::JobTypeCategory,
+            usize,
+        >,
+        type_limits: &std::collections::HashMap<super::job_queue_runner::JobTypeCategory, usize>,
     ) -> Vec<ScheduledJob> {
         let mut pending = self.pending.write().await;
         let mut executable_jobs = Vec::new();
         let mut remaining_jobs = BinaryHeap::new();
         let mut local_type_counts = current_type_counts.clone();
-        
+
         // Extract jobs from the heap and determine which can be executed
         while let Some(Reverse(job)) = pending.pop() {
             if job.is_ready(now) && executable_jobs.len() < available_slots {
                 let job_category = super::job_queue_runner::JobTypeCategory::from(&job.job_type);
                 let current_count = local_type_counts.get(&job_category).unwrap_or(&0);
                 let type_limit = type_limits.get(&job_category).unwrap_or(&1);
-                
+
                 if current_count < type_limit {
                     // Can execute this job
                     executable_jobs.push(job);
@@ -123,7 +126,10 @@ impl JobQueue {
         *pending = remaining_jobs;
 
         if !executable_jobs.is_empty() {
-            debug!("Retrieved {} executable jobs from queue", executable_jobs.len());
+            debug!(
+                "Retrieved {} executable jobs from queue",
+                executable_jobs.len()
+            );
         }
 
         executable_jobs
@@ -133,20 +139,20 @@ impl JobQueue {
     pub async fn mark_running(&self, job_id: Uuid, job_key: String) {
         let mut running = self.running.write().await;
         running.insert(job_id, job_key.clone());
-        
+
         debug!("Marked job {} as running", job_key);
     }
 
     /// Mark a job as completed and remove from tracking
     pub async fn mark_completed(&self, job_id: Uuid) {
         let mut running = self.running.write().await;
-        
+
         if let Some(job_key) = running.remove(&job_id) {
             drop(running);
-            
+
             let mut job_keys = self.job_keys.write().await;
             job_keys.remove(&job_key);
-            
+
             debug!("Job {} completed and removed from tracking", job_key);
         } else {
             warn!("Attempted to mark unknown job {} as completed", job_id);
@@ -167,7 +173,7 @@ impl JobQueue {
     pub async fn stats(&self) -> JobQueueStats {
         let pending = self.pending.read().await;
         let running = self.running.read().await;
-        
+
         JobQueueStats {
             pending_jobs: pending.len(),
             running_jobs: running.len(),
@@ -191,7 +197,7 @@ impl JobQueue {
         let mut pending = self.pending.write().await;
         let mut running = self.running.write().await;
         let mut job_keys = self.job_keys.write().await;
-        
+
         pending.clear();
         running.clear();
         job_keys.clear();
@@ -226,12 +232,9 @@ mod tests {
     async fn test_job_queue_enqueue_and_deduplication() {
         let queue = JobQueue::new();
         let source_id = Uuid::new_v4();
-        
-        let job1 = ScheduledJob::new(
-            JobType::StreamIngestion(source_id),
-            JobPriority::Normal,
-        );
-        
+
+        let job1 = ScheduledJob::new(JobType::StreamIngestion(source_id), JobPriority::Normal);
+
         let job2 = ScheduledJob::new(
             JobType::StreamIngestion(source_id), // Same source - should deduplicate
             JobPriority::High,
@@ -254,20 +257,20 @@ mod tests {
     async fn test_job_queue_priority_ordering() {
         let queue = JobQueue::new();
         let now = Utc::now();
-        
+
         // Add jobs in reverse priority order
         let maintenance_job = ScheduledJob::new_scheduled(
             JobType::Maintenance("test".to_string()),
             JobPriority::Maintenance,
             now,
         );
-        
+
         let critical_job = ScheduledJob::new_scheduled(
             JobType::StreamIngestion(Uuid::new_v4()),
             JobPriority::Critical,
             now,
         );
-        
+
         let normal_job = ScheduledJob::new_scheduled(
             JobType::EpgIngestion(Uuid::new_v4()),
             JobPriority::Normal,
@@ -281,7 +284,7 @@ mod tests {
         // Should get jobs in priority order
         let ready_jobs = queue.get_ready_jobs(now, 10).await;
         assert_eq!(ready_jobs.len(), 3);
-        
+
         // First job should be critical priority
         assert_eq!(ready_jobs[0].priority, JobPriority::Critical);
         assert_eq!(ready_jobs[0].id, critical_job.id);
@@ -291,13 +294,13 @@ mod tests {
     async fn test_job_queue_ready_jobs_filtering() {
         let queue = JobQueue::new();
         let now = Utc::now();
-        
+
         let ready_job = ScheduledJob::new_scheduled(
             JobType::StreamIngestion(Uuid::new_v4()),
             JobPriority::Normal,
             now - Duration::minutes(1), // Ready now
         );
-        
+
         let future_job = ScheduledJob::new_scheduled(
             JobType::EpgIngestion(Uuid::new_v4()),
             JobPriority::Normal,
@@ -334,14 +337,14 @@ mod tests {
         // Mark as running
         queue.mark_running(job_id, job_key.clone()).await;
         assert_eq!(queue.running_count().await, 1);
-        
+
         // Job key should still be tracked (prevents duplicates)
         assert!(queue.contains_job_key(&job_key).await);
 
         // Mark as completed
         queue.mark_completed(job_id).await;
         assert_eq!(queue.running_count().await, 0);
-        
+
         // Job key should no longer be tracked
         assert!(!queue.contains_job_key(&job_key).await);
     }
@@ -350,7 +353,7 @@ mod tests {
     async fn test_job_queue_limit_ready_jobs() {
         let queue = JobQueue::new();
         let now = Utc::now();
-        
+
         // Add 5 ready jobs
         for _i in 0..5 {
             let job = ScheduledJob::new_scheduled(

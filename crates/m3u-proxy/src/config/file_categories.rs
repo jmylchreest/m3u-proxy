@@ -91,8 +91,7 @@ impl FileManagerConfig {
         self.get_category(category).map(|config| {
             if !config.enabled {
                 // Use infinite retention for disabled cleanup
-                CleanupPolicy::infinite_retention()
-                    .time_match(config.time_match)
+                CleanupPolicy::infinite_retention().time_match(config.time_match)
             } else {
                 CleanupPolicy::new()
                     .remove_after(config.retention_duration)
@@ -129,9 +128,10 @@ impl FileManagerConfig {
     pub async fn create_logo_manager(
         path: &std::path::Path,
         infinite_retention: bool,
-    ) -> Result<sandboxed_file_manager::SandboxedManager, sandboxed_file_manager::SandboxedFileError> {
-        use sandboxed_file_manager::{SandboxedManager, CleanupPolicy, TimeMatch};
-        
+    ) -> Result<sandboxed_file_manager::SandboxedManager, sandboxed_file_manager::SandboxedFileError>
+    {
+        use sandboxed_file_manager::{CleanupPolicy, SandboxedManager, TimeMatch};
+
         let policy = if infinite_retention {
             CleanupPolicy::infinite_retention()
         } else {
@@ -140,15 +140,15 @@ impl FileManagerConfig {
                 .time_match(TimeMatch::LastAccess)
                 .enabled(true)
         };
-        
+
         let mut builder = SandboxedManager::builder()
             .base_directory(path)
             .cleanup_policy(policy);
-            
+
         if !infinite_retention {
             builder = builder.cleanup_interval(std::time::Duration::from_secs(43200)); // 12 hours
         }
-        
+
         builder.build().await
     }
 }
@@ -200,7 +200,7 @@ mod tests {
         // Check that default categories exist
         assert!(config.get_category("temp").is_some());
         assert!(config.get_category("proxy_output").is_some());
-        
+
         // Check that the config has exactly the expected categories
         assert_eq!(config.categories.len(), 2);
 

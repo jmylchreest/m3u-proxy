@@ -101,7 +101,7 @@ impl SessionStats {
         let hours = total_seconds / 3600;
         let minutes = (total_seconds % 3600) / 60;
         let seconds = total_seconds % 60;
-        
+
         if hours > 0 {
             format!("{hours}h{minutes:02}m{seconds:02}s")
         } else if minutes > 0 {
@@ -115,12 +115,12 @@ impl SessionStats {
         const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
         let mut size = self.bytes_served as f64;
         let mut unit_index = 0;
-        
+
         while size >= 1024.0 && unit_index < UNITS.len() - 1 {
             size /= 1024.0;
             unit_index += 1;
         }
-        
+
         format!("{:.2} {}", size, UNITS[unit_index])
     }
 }
@@ -145,18 +145,18 @@ impl SessionTracker {
             cleanup_interval,
             session_timeout,
         };
-        
+
         // Start background tasks
         tracker.start_stats_reporter();
         tracker.start_session_cleanup();
-        
+
         tracker
     }
 
     /// Start a new streaming session
     pub async fn start_session(&self, session_stats: SessionStats) {
         let session_id = session_stats.session_id.clone();
-        
+
         debug!(
             "session_id={} event=session_start client_ip={} proxy_name=\"{}\" proxy_id={} channel_name=\"{}\" channel_id={} upstream_url=\"{}\"{}{}",
             session_id,
@@ -166,15 +166,24 @@ impl SessionTracker {
             session_stats.channel_name,
             session_stats.channel_id,
             session_stats.upstream_url,
-            session_stats.client_info.user_agent.as_ref()
+            session_stats
+                .client_info
+                .user_agent
+                .as_ref()
                 .map(|ua| format!(" user_agent=\"{ua}\""))
                 .unwrap_or_default(),
-            session_stats.client_info.referer.as_ref()
+            session_stats
+                .client_info
+                .referer
+                .as_ref()
                 .map(|ref_| format!(" referer=\"{ref_}\""))
                 .unwrap_or_default()
         );
-        
-        self.sessions.write().await.insert(session_id, session_stats);
+
+        self.sessions
+            .write()
+            .await
+            .insert(session_id, session_stats);
     }
 
     /// Update session with bytes served
@@ -188,14 +197,17 @@ impl SessionTracker {
     pub async fn record_session_error(&self, session_id: &str, error: String) {
         if let Some(session) = self.sessions.write().await.get_mut(session_id) {
             session.record_error(error);
-            
+
             warn!(
                 "session_id={} event=session_error client_ip={} proxy_name=\"{}\" channel_name=\"{}\" error=\"{}\" total_errors={}",
                 session_id,
                 session.client_info.ip,
                 session.proxy_name,
                 session.channel_name,
-                session.last_error.as_ref().unwrap_or(&"Unknown".to_string()),
+                session
+                    .last_error
+                    .as_ref()
+                    .unwrap_or(&"Unknown".to_string()),
                 session.errors
             );
         }
@@ -205,7 +217,7 @@ impl SessionTracker {
     pub async fn record_connection_attempt(&self, session_id: &str) {
         if let Some(session) = self.sessions.write().await.get_mut(session_id) {
             session.record_connection_attempt();
-            
+
             debug!(
                 "session_id={} event=connection_attempt attempt_number={} client_ip={} proxy_name=\"{}\" channel_name=\"{}\"",
                 session_id,
@@ -231,7 +243,10 @@ impl SessionTracker {
                 session.client_info.ip,
                 session.proxy_name,
                 session.channel_name,
-                session.client_info.user_agent.as_ref()
+                session
+                    .client_info
+                    .user_agent
+                    .as_ref()
                     .map(|ua| format!(" user_agent=\"{ua}\""))
                     .unwrap_or(" user_agent=unknown".to_string())
             );
@@ -252,11 +267,11 @@ impl SessionTracker {
     pub async fn get_proxy_session_counts(&self) -> HashMap<String, usize> {
         let sessions = self.sessions.read().await;
         let mut counts = HashMap::new();
-        
+
         for session in sessions.values() {
             *counts.entry(session.proxy_id.clone()).or_insert(0) += 1;
         }
-        
+
         counts
     }
 
@@ -264,11 +279,11 @@ impl SessionTracker {
     pub async fn get_channel_session_counts(&self) -> HashMap<String, usize> {
         let sessions = self.sessions.read().await;
         let mut counts = HashMap::new();
-        
+
         for session in sessions.values() {
             *counts.entry(session.channel_id.clone()).or_insert(0) += 1;
         }
-        
+
         counts
     }
 
@@ -276,20 +291,20 @@ impl SessionTracker {
     fn start_stats_reporter(&self) {
         let sessions = self.sessions.clone();
         let interval = self.stats_interval;
-        
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(interval);
-            
+
             loop {
                 interval.tick().await;
-                
+
                 let sessions_read = sessions.read().await;
                 let session_count = sessions_read.len();
-                
+
                 if session_count == 0 {
                     continue;
                 }
-                
+
                 // Calculate aggregate statistics
                 let mut total_bytes = 0u64;
                 let mut total_chunks = 0u64;
@@ -297,31 +312,35 @@ impl SessionTracker {
                 let mut proxy_counts = HashMap::new();
                 let mut channel_counts = HashMap::new();
                 let mut client_counts = HashMap::new();
-                
+
                 for session in sessions_read.values() {
                     total_bytes += session.bytes_served;
                     total_chunks += session.chunks_served;
                     total_errors += session.errors;
-                    
+
                     *proxy_counts.entry(session.proxy_name.clone()).or_insert(0) += 1;
-                    *channel_counts.entry(session.channel_name.clone()).or_insert(0) += 1;
-                    *client_counts.entry(session.client_info.ip.clone()).or_insert(0) += 1;
+                    *channel_counts
+                        .entry(session.channel_name.clone())
+                        .or_insert(0) += 1;
+                    *client_counts
+                        .entry(session.client_info.ip.clone())
+                        .or_insert(0) += 1;
                 }
-                
+
                 // Format total bytes
                 let total_bytes_formatted = {
                     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
                     let mut size = total_bytes as f64;
                     let mut unit_index = 0;
-                    
+
                     while size >= 1024.0 && unit_index < UNITS.len() - 1 {
                         size /= 1024.0;
                         unit_index += 1;
                     }
-                    
+
                     format!("{:.2} {}", size, UNITS[unit_index])
                 };
-                
+
                 debug!(
                     "event=session_summary active_sessions={} total_data={} total_chunks={} total_errors={} unique_proxies={} unique_channels={} unique_clients={}",
                     session_count,
@@ -332,33 +351,38 @@ impl SessionTracker {
                     channel_counts.len(),
                     client_counts.len()
                 );
-                
+
                 // Log top proxies by session count
                 if !proxy_counts.is_empty() {
                     let mut proxy_vec: Vec<_> = proxy_counts.iter().collect();
                     proxy_vec.sort_by(|a, b| b.1.cmp(a.1));
-                    
-                    let top_proxies: Vec<String> = proxy_vec.iter()
+
+                    let top_proxies: Vec<String> = proxy_vec
+                        .iter()
                         .take(5)
                         .map(|(name, count)| format!("{name}: {count}"))
                         .collect();
-                    
+
                     debug!("event=top_proxies proxies=\"{}\"", top_proxies.join(", "));
                 }
-                
+
                 // Log top channels by session count
                 if !channel_counts.is_empty() {
                     let mut channel_vec: Vec<_> = channel_counts.iter().collect();
                     channel_vec.sort_by(|a, b| b.1.cmp(a.1));
-                    
-                    let top_channels: Vec<String> = channel_vec.iter()
+
+                    let top_channels: Vec<String> = channel_vec
+                        .iter()
                         .take(5)
                         .map(|(name, count)| format!("{name}: {count}"))
                         .collect();
-                    
-                    debug!("event=top_channels channels=\"{}\"", top_channels.join(", "));
+
+                    debug!(
+                        "event=top_channels channels=\"{}\"",
+                        top_channels.join(", ")
+                    );
                 }
-                
+
                 // Log detailed per-session statistics (for debug level)
                 for session in sessions_read.values() {
                     if session.duration().as_secs() > 0 {
@@ -383,22 +407,22 @@ impl SessionTracker {
         let sessions = self.sessions.clone();
         let cleanup_interval = self.cleanup_interval;
         let session_timeout = self.session_timeout;
-        
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(cleanup_interval);
-            
+
             loop {
                 interval.tick().await;
-                
+
                 let mut sessions_write = sessions.write().await;
                 let mut to_remove = Vec::new();
-                
+
                 for (session_id, session) in sessions_write.iter() {
                     if session.last_activity.elapsed() > session_timeout {
                         to_remove.push(session_id.clone());
                     }
                 }
-                
+
                 for session_id in to_remove {
                     if let Some(session) = sessions_write.remove(&session_id) {
                         warn!(
@@ -411,10 +435,15 @@ impl SessionTracker {
                             session.channel_name,
                             session.chunks_served,
                             session.errors,
-                            session.client_info.user_agent.as_ref()
+                            session
+                                .client_info
+                                .user_agent
+                                .as_ref()
                                 .map(|ua| format!(" user_agent=\"{ua}\""))
                                 .unwrap_or(" user_agent=unknown".to_string()),
-                            session.last_error.as_ref()
+                            session
+                                .last_error
+                                .as_ref()
                                 .map(|err| format!(" last_error=\"{err}\""))
                                 .unwrap_or_default()
                         );
@@ -446,7 +475,7 @@ mod tests {
             user_agent: Some("Test Agent".to_string()),
             referer: None,
         };
-        
+
         let mut stats = SessionStats::new(
             "test-session".to_string(),
             client_info,
@@ -456,9 +485,9 @@ mod tests {
             "Test Channel".to_string(),
             "http://example.com/stream".to_string(),
         );
-        
+
         stats.update_bytes_served(1024 * 1024 * 5); // 5MB
-        
+
         assert_eq!(stats.format_bytes(), "5.00 MB");
         assert!(stats.average_bitrate_kbps() > 0.0);
     }
@@ -470,13 +499,13 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(5),
         );
-        
+
         let client_info = ClientInfo {
             ip: "127.0.0.1".to_string(),
             user_agent: Some("Test Agent".to_string()),
             referer: None,
         };
-        
+
         let session_stats = SessionStats::new(
             "test-session".to_string(),
             client_info,
@@ -486,20 +515,20 @@ mod tests {
             "Test Channel".to_string(),
             "http://example.com/stream".to_string(),
         );
-        
+
         tracker.start_session(session_stats).await;
-        
+
         // Update session
         tracker.update_session_bytes("test-session", 1024).await;
-        
+
         // Verify session exists
         let stats = tracker.get_session_stats("test-session").await;
         assert!(stats.is_some());
         assert_eq!(stats.unwrap().bytes_served, 1024);
-        
+
         // End session
         tracker.end_session("test-session").await;
-        
+
         // Verify session is gone
         let stats = tracker.get_session_stats("test-session").await;
         assert!(stats.is_none());

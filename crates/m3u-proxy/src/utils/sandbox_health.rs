@@ -2,8 +2,8 @@
 //!
 //! This module provides health status information for sandbox file managers
 
-use crate::web::responses::{SandboxManagerHealth, ManagedDirectoryInfo};
 use crate::config::Config;
+use crate::web::responses::{ManagedDirectoryInfo, SandboxManagerHealth};
 use chrono::Utc;
 use sandboxed_file_manager::SandboxedManager;
 

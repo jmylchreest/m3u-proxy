@@ -1,7 +1,7 @@
 //! Common serde utilities for human-readable durations across configuration.
 
-use serde::{Serializer, Deserializer};
 use serde::de::{self, Visitor};
+use serde::{Deserializer, Serializer};
 use std::{fmt, time::Duration};
 
 /// Custom serde functions for Duration that support human-readable strings
@@ -77,7 +77,8 @@ pub mod option_duration {
             type Value = Option<Duration>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("null or a duration as seconds (number) or human-readable string")
+                formatter
+                    .write_str("null or a duration as seconds (number) or human-readable string")
             }
 
             fn visit_none<E>(self) -> Result<Self::Value, E>
@@ -126,7 +127,9 @@ pub mod timeout_seconds {
             type Value = i32;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a timeout as seconds (number) or human-readable string (e.g., '30s', '5m')")
+                formatter.write_str(
+                    "a timeout as seconds (number) or human-readable string (e.g., '30s', '5m')",
+                )
             }
 
             fn visit_i32<E>(self, seconds: i32) -> Result<Self::Value, E>
@@ -141,7 +144,9 @@ pub mod timeout_seconds {
                 E: de::Error,
             {
                 if seconds > i32::MAX as u64 {
-                    Err(de::Error::custom(format!("Timeout {seconds} seconds is too large for i32")))
+                    Err(de::Error::custom(format!(
+                        "Timeout {seconds} seconds is too large for i32"
+                    )))
                 } else {
                     Ok(seconds as i32)
                 }
@@ -153,10 +158,12 @@ pub mod timeout_seconds {
             {
                 let duration = humantime::parse_duration(value)
                     .map_err(|e| de::Error::custom(format!("Invalid duration '{value}': {e}")))?;
-                
+
                 let seconds = duration.as_secs();
                 if seconds > i32::MAX as u64 {
-                    Err(de::Error::custom(format!("Duration '{value}' is too large for i32 seconds")))
+                    Err(de::Error::custom(format!(
+                        "Duration '{value}' is too large for i32 seconds"
+                    )))
                 } else {
                     Ok(seconds as i32)
                 }
@@ -199,7 +206,8 @@ pub mod option_timeout_seconds {
             type Value = Option<i32>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("null or a timeout as seconds (number) or human-readable string")
+                formatter
+                    .write_str("null or a timeout as seconds (number) or human-readable string")
             }
 
             fn visit_none<E>(self) -> Result<Self::Value, E>

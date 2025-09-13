@@ -1,5 +1,7 @@
+use crate::database::repositories::{
+    ChannelSeaOrmRepository, EpgSourceSeaOrmRepository, StreamSourceSeaOrmRepository,
+};
 use crate::models::*;
-use crate::database::repositories::{ChannelSeaOrmRepository, StreamSourceSeaOrmRepository, EpgSourceSeaOrmRepository};
 use crate::services::ProgressService;
 use crate::sources::SourceHandlerFactory;
 use anyhow::Result;
@@ -27,8 +29,11 @@ pub struct IngestorService {
 }
 
 impl IngestorService {
-    pub fn new(progress_service: Arc<ProgressService>, channel_repo: ChannelSeaOrmRepository) -> Self {
-        Self { 
+    pub fn new(
+        progress_service: Arc<ProgressService>,
+        channel_repo: ChannelSeaOrmRepository,
+    ) -> Self {
+        Self {
             progress_service,
             channel_repo,
             http_client_factory: None,
@@ -36,11 +41,11 @@ impl IngestorService {
     }
 
     pub fn with_http_client_factory(
-        progress_service: Arc<ProgressService>, 
+        progress_service: Arc<ProgressService>,
         channel_repo: ChannelSeaOrmRepository,
-        http_client_factory: crate::utils::HttpClientFactory
+        http_client_factory: crate::utils::HttpClientFactory,
     ) -> Self {
-        Self { 
+        Self {
             progress_service,
             channel_repo,
             http_client_factory: Some(http_client_factory),
@@ -50,31 +55,41 @@ impl IngestorService {
     pub fn get_state_manager(&self) -> Arc<IngestionStateManager> {
         self.progress_service.get_ingestion_state_manager()
     }
-    
+
     pub fn get_progress_service(&self) -> &ProgressService {
         &self.progress_service
     }
 
     /// Ingest stream source using new source handlers and save to database
     pub async fn ingest_source(
-        &self, 
+        &self,
         database: crate::database::Database,
-        source: &StreamSource
+        source: &StreamSource,
     ) -> Result<usize> {
         use tracing::{error, info, warn};
-        
+
         let start_time = std::time::Instant::now();
         let source_id = source.id;
         let source_name = source.name.clone();
 
         // Check for duplicate processing - prevent race conditions and circular triggers
-        if !self.progress_service.get_ingestion_state_manager()
-            .try_start_processing(source_id, ProcessingTrigger::Scheduler).await {
-            warn!("Skipping stream source ingestion for '{}' - already processing or in backoff period", source_name);
+        if !self
+            .progress_service
+            .get_ingestion_state_manager()
+            .try_start_processing(source_id, ProcessingTrigger::Scheduler)
+            .await
+        {
+            warn!(
+                "Skipping stream source ingestion for '{}' - already processing or in backoff period",
+                source_name
+            );
             return Ok(0);
         }
 
-        info!("Starting stream source ingestion for '{}' ({})", source_name, source_id);
+        info!(
+            "Starting stream source ingestion for '{}' ({})",
+            source_name, source_id
+        );
 
         // Create source handler using HTTP client factory
         let factory = if let Some(factory) = &self.http_client_factory {
@@ -83,79 +98,121 @@ impl IngestorService {
             // Create a basic factory without circuit breaker manager if none provided
             &crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10))
         };
-        
+
         let handler = SourceHandlerFactory::create_handler(&source.source_type, factory)
             .await
             .map_err(|e| {
-                tracing::error!("Failed to create source handler for '{}': {}", source.name, e);
+                tracing::error!(
+                    "Failed to create source handler for '{}': {}",
+                    source.name,
+                    e
+                );
                 anyhow::anyhow!("Failed to create source handler: {}", e)
             })?;
-        
-        info!("Created {:?} source handler for '{}'", source.source_type, source.name);
-        
+
+        info!(
+            "Created {:?} source handler for '{}'",
+            source.source_type, source.name
+        );
+
         // Create one operation and pass its callback to the handler
-        let _progress_callback = match self.progress_service
+        let _progress_callback = match self
+            .progress_service
             .start_operation_with_id(
                 source.id, // Use source.id as operation_id for consistency
                 source.id, // owner_id same as operation_id
                 "stream_source".to_string(),
                 crate::services::progress_service::OperationType::StreamIngestion,
-                format!("Stream Ingestion: {}", source.name)
+                format!("Stream Ingestion: {}", source.name),
             )
-            .await {
-                Ok(callback) => callback,
-                Err(e) => {
-                    warn!("Cannot start stream ingestion for '{}': {}", source.name, e);
-                    return Err(crate::errors::AppError::operation_in_progress("stream ingestion", &source.name).into());
-                }
-            };
-        
-        info!("Starting channel ingestion with universal progress tracking for '{}'", source.name);
+            .await
+        {
+            Ok(callback) => callback,
+            Err(e) => {
+                warn!("Cannot start stream ingestion for '{}': {}", source.name, e);
+                return Err(crate::errors::AppError::operation_in_progress(
+                    "stream ingestion",
+                    &source.name,
+                )
+                .into());
+            }
+        };
+
+        info!(
+            "Starting channel ingestion with universal progress tracking for '{}'",
+            source.name
+        );
 
         // Use basic channel ingestion method
-        let channels = handler
-            .ingest_channels(source) 
-            .await
-            .map_err(|e| {
-                tracing::error!("Source handler failed for '{}': {}", source.name, e);
-                anyhow::anyhow!("New source handler failed: {}", e)
-            })?;
-            
+        let channels = handler.ingest_channels(source).await.map_err(|e| {
+            tracing::error!("Source handler failed for '{}': {}", source.name, e);
+            anyhow::anyhow!("New source handler failed: {}", e)
+        })?;
+
         let channel_count = channels.len();
-        info!("Successfully ingested {} channels for '{}'", channel_count, source.name);
+        info!(
+            "Successfully ingested {} channels for '{}'",
+            channel_count, source.name
+        );
 
         // Save channels to database
-        info!("Saving {} channels to database for '{}'", channel_count, source_name);
+        info!(
+            "Saving {} channels to database for '{}'",
+            channel_count, source_name
+        );
         self.channel_repo
             .update_source_channels(source_id, &channels)
             .await
             .map_err(|e| {
-                error!("Failed to save channels to database for '{}': {}", source_name, e);
+                error!(
+                    "Failed to save channels to database for '{}': {}",
+                    source_name, e
+                );
                 anyhow::anyhow!("Failed to update source channels: {}", e)
             })?;
 
-        info!("Successfully saved {} channels to database for Stream source '{}'", channel_count, source_name);
+        info!(
+            "Successfully saved {} channels to database for Stream source '{}'",
+            channel_count, source_name
+        );
 
         // Update last ingested timestamp using clean SeaORM repository
-        info!("Updating last_ingested_at timestamp for Stream source '{}'", source_name);
+        info!(
+            "Updating last_ingested_at timestamp for Stream source '{}'",
+            source_name
+        );
         let stream_source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
         if let Err(e) = stream_source_repo.update_last_ingested_at(&source_id).await {
-            error!("Failed to update last_ingested_at for stream source '{}': {}", source_name, e);
+            error!(
+                "Failed to update last_ingested_at for stream source '{}': {}",
+                source_name, e
+            );
         } else {
             info!("Updated timestamp for Stream source '{}'", source_name);
         }
 
         // Mark ingestion as completed with final channel count
-        info!("Marking ingestion as completed for Stream source '{}'", source_name);
-        self.get_state_manager().complete_ingestion(source_id, channel_count).await;
+        info!(
+            "Marking ingestion as completed for Stream source '{}'",
+            source_name
+        );
+        self.get_state_manager()
+            .complete_ingestion(source_id, channel_count)
+            .await;
 
         // Mark processing as completed
-        self.progress_service.get_ingestion_state_manager()
-            .finish_processing(source_id, true).await;
+        self.progress_service
+            .get_ingestion_state_manager()
+            .finish_processing(source_id, true)
+            .await;
 
         let duration = start_time.elapsed();
-        info!("Stream source ingestion completed for '{}' in {:.2}s: {} channels saved to database", 
-              source_name, duration.as_secs_f64(), channel_count);
+        info!(
+            "Stream source ingestion completed for '{}' in {:.2}s: {} channels saved to database",
+            source_name,
+            duration.as_secs_f64(),
+            channel_count
+        );
 
         Ok(channel_count)
     }
@@ -185,84 +242,112 @@ impl IngestorService {
         let source_name = source.name.clone();
 
         // Check for duplicate processing - prevent race conditions and circular triggers
-        if !self.progress_service.get_ingestion_state_manager()
-            .try_start_processing(source_id, ProcessingTrigger::Scheduler).await {
-            warn!("Skipping EPG source ingestion for '{}' - already processing or in backoff period", source_name);
+        if !self
+            .progress_service
+            .get_ingestion_state_manager()
+            .try_start_processing(source_id, ProcessingTrigger::Scheduler)
+            .await
+        {
+            warn!(
+                "Skipping EPG source ingestion for '{}' - already processing or in backoff period",
+                source_name
+            );
             return Ok((0, 0));
         }
-        
+
         // Create EPG source handler
-        let default_factory = crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10));
-        let http_factory = self.http_client_factory.as_ref().unwrap_or(&default_factory);
+        let default_factory =
+            crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10));
+        let http_factory = self
+            .http_client_factory
+            .as_ref()
+            .unwrap_or(&default_factory);
         let handler = SourceHandlerFactory::create_epg_handler(&source.source_type, http_factory)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create EPG source handler: {}", e))?;
-        
-        // Create universal progress callback via ProgressService  
-        let _progress_callback = match self.progress_service
+
+        // Create universal progress callback via ProgressService
+        let _progress_callback = match self
+            .progress_service
             .start_operation(
                 source.id,
                 "epg_source".to_string(),
                 crate::services::progress_service::OperationType::EpgIngestion,
-                format!("EPG Ingestion: {}", source.name)
+                format!("EPG Ingestion: {}", source.name),
             )
-            .await {
-                Ok(callback) => callback,
-                Err(e) => {
-                    warn!("Cannot start EPG ingestion for '{}': {}", source.name, e);
-                    // Mark processing as completed since we're not proceeding
-                    self.progress_service.get_ingestion_state_manager()
-                        .finish_processing(source_id, false).await;
-                    return Err(anyhow::anyhow!("Operation already in progress: {}", e).into());
-                }
-            };
-        
+            .await
+        {
+            Ok(callback) => callback,
+            Err(e) => {
+                warn!("Cannot start EPG ingestion for '{}': {}", source.name, e);
+                // Mark processing as completed since we're not proceeding
+                self.progress_service
+                    .get_ingestion_state_manager()
+                    .finish_processing(source_id, false)
+                    .await;
+                return Err(anyhow::anyhow!("Operation already in progress: {}", e).into());
+            }
+        };
+
         // Use new EPG source handler to ingest programs only (programs-only mode)
         let programs = handler
-            .ingest_epg_programs(source) 
+            .ingest_epg_programs(source)
             .await
             .map_err(|e| anyhow::anyhow!("New EPG source handler failed: {}", e))?;
-        
+
         info!(
             "EPG handler ingested {} programs from source '{}'",
             programs.len(),
             source.name
         );
-        
+
         // Save programs to database (programs-only mode - no channel processing)
         let programs_saved = match self.save_epg_programs(&database, source.id, programs).await {
             Ok(count) => count,
             Err(e) => {
-                warn!("Failed to save EPG programs for source '{}': {}", source_name, e);
+                warn!(
+                    "Failed to save EPG programs for source '{}': {}",
+                    source_name, e
+                );
                 0
             }
         };
-        
+
         // Always update timestamp, even if some data operations failed - using clean SeaORM repository
-        info!("Updating last_ingested_at timestamp for EPG source '{}'", source_name);
+        info!(
+            "Updating last_ingested_at timestamp for EPG source '{}'",
+            source_name
+        );
         let epg_source_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());
         if let Err(e) = epg_source_repo.update_last_ingested_at(&source_id).await {
-            warn!("Failed to update last_ingested_at for EPG source '{}': {}", source_name, e);
+            warn!(
+                "Failed to update last_ingested_at for EPG source '{}': {}",
+                source_name, e
+            );
         } else {
             info!("Updated timestamp for EPG source '{}'", source_name);
         }
-        
+
         // Mark processing as completed
-        self.progress_service.get_ingestion_state_manager()
-            .finish_processing(source_id, true).await;
+        self.progress_service
+            .get_ingestion_state_manager()
+            .finish_processing(source_id, true)
+            .await;
 
         let duration = start_time.elapsed();
         info!(
             "EPG ingestion completed for EPG source '{}' in {:.2}s: {} programs saved",
-            source_name, duration.as_secs_f64(), programs_saved
+            source_name,
+            duration.as_secs_f64(),
+            programs_saved
         );
-        
+
         // Mark operation as completed
         self.progress_service.complete_operation(source.id).await;
-        
+
         Ok((0, programs_saved)) // programs-only mode: no channels saved
     }
-    
+
     /// Save EPG programs to database
     async fn save_epg_programs(
         &self,
@@ -271,28 +356,29 @@ impl IngestorService {
         programs: Vec<crate::models::EpgProgram>,
     ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         use tracing::debug;
-        
+
         debug!("Saving {} EPG programs to database", programs.len());
-        
+
         // Use SeaORM transaction for atomicity
         use sea_orm::TransactionTrait;
         let db = database.connection();
         let txn = db.begin().await?;
-        
+
         // First, delete existing programs for this source to avoid duplicates
-        use crate::entities::{prelude::EpgPrograms, epg_programs};
-        use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
-        
+        use crate::entities::{epg_programs, prelude::EpgPrograms};
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
         EpgPrograms::delete_many()
             .filter(epg_programs::Column::SourceId.eq(source_id))
             .exec(&txn)
             .await?;
-        
+
         // Use SeaORM batch insert for efficiency and clean architecture
         use sea_orm::Set;
-        
-        let active_models: Vec<epg_programs::ActiveModel> = programs.into_iter().map(|program| {
-            epg_programs::ActiveModel {
+
+        let active_models: Vec<epg_programs::ActiveModel> = programs
+            .into_iter()
+            .map(|program| epg_programs::ActiveModel {
                 id: Set(program.id),
                 source_id: Set(program.source_id),
                 channel_id: Set(program.channel_id),
@@ -311,20 +397,17 @@ impl IngestorService {
                 program_icon: Set(program.program_icon),
                 created_at: Set(program.created_at),
                 updated_at: Set(program.updated_at),
-            }
-        }).collect();
-        
+            })
+            .collect();
+
         let programs_saved = active_models.len();
-        
+
         // Batch insert for efficiency - follows SeaORM best practices
-        EpgPrograms::insert_many(active_models)
-            .exec(&txn)
-            .await?;
-        
+        EpgPrograms::insert_many(active_models).exec(&txn).await?;
+
         txn.commit().await?;
         debug!("Successfully saved {} EPG programs", programs_saved);
-        
+
         Ok(programs_saved)
     }
-
 }

@@ -3,12 +3,15 @@
 //! This provides a database-agnostic repository for EPG Source operations using SeaORM.
 
 use anyhow::Result;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, ColumnTrait, QueryFilter, PaginatorTrait, QueryOrder};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, Set,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::entities::{prelude::EpgSources, epg_sources};
-use crate::models::{EpgSource, EpgSourceType, EpgSourceCreateRequest};
+use crate::entities::{epg_sources, prelude::EpgSources};
+use crate::models::{EpgSource, EpgSourceCreateRequest, EpgSourceType};
 
 /// SeaORM-based repository for EPG Source operations
 #[derive(Clone)]
@@ -36,7 +39,9 @@ impl EpgSourceSeaOrmRepository {
             username: Set(request.username.clone()),
             password: Set(request.password.clone()),
             original_timezone: Set(request.timezone.clone()),
-            time_offset: Set(Some(request.time_offset.unwrap_or_else(|| "+00:00".to_string()))),
+            time_offset: Set(Some(
+                request.time_offset.unwrap_or_else(|| "+00:00".to_string()),
+            )),
             created_at: Set(now),
             updated_at: Set(now),
             last_ingested_at: Set(None),
@@ -51,9 +56,7 @@ impl EpgSourceSeaOrmRepository {
 
     /// Find an EPG source by ID
     pub async fn find_by_id(&self, id: &Uuid) -> Result<Option<EpgSource>> {
-        let model = EpgSources::find_by_id(*id)
-            .one(&*self.connection)
-            .await?;
+        let model = EpgSources::find_by_id(*id).one(&*self.connection).await?;
 
         match model {
             Some(m) => Ok(Some(self.model_to_domain(m)?)),
@@ -65,13 +68,14 @@ impl EpgSourceSeaOrmRepository {
     pub async fn find_all(&self) -> Result<Vec<EpgSource>> {
         let models = EpgSources::find()
             .order_by_asc(epg_sources::Column::Name)
-            .all(&*self.connection).await?;
-        
+            .all(&*self.connection)
+            .await?;
+
         let mut sources = Vec::new();
         for model in models {
             sources.push(self.model_to_domain(model)?);
         }
-        
+
         Ok(sources)
     }
 
@@ -81,12 +85,12 @@ impl EpgSourceSeaOrmRepository {
             .filter(epg_sources::Column::SourceType.eq(source_type.to_string()))
             .all(&*self.connection)
             .await?;
-        
+
         let mut sources = Vec::new();
         for model in models {
             sources.push(self.model_to_domain(model)?);
         }
-        
+
         Ok(sources)
     }
 
@@ -97,29 +101,33 @@ impl EpgSourceSeaOrmRepository {
             .order_by_asc(epg_sources::Column::Name)
             .all(&*self.connection)
             .await?;
-        
+
         let mut sources = Vec::new();
         for model in models {
             sources.push(self.model_to_domain(model)?);
         }
-        
+
         Ok(sources)
     }
 
     /// Find EPG sources by URL and source type (for URL-based linking)
-    pub async fn find_by_url_and_type(&self, url: &str, source_type: EpgSourceType) -> Result<Vec<EpgSource>> {
+    pub async fn find_by_url_and_type(
+        &self,
+        url: &str,
+        source_type: EpgSourceType,
+    ) -> Result<Vec<EpgSource>> {
         let models = EpgSources::find()
             .filter(epg_sources::Column::Url.eq(url))
             .filter(epg_sources::Column::SourceType.eq(source_type.to_string()))
             .filter(epg_sources::Column::IsActive.eq(true))
             .all(&*self.connection)
             .await?;
-        
+
         let mut sources = Vec::new();
         for model in models {
             sources.push(self.model_to_domain(model)?);
         }
-        
+
         Ok(sources)
     }
 
@@ -156,9 +164,12 @@ impl EpgSourceSeaOrmRepository {
     }
 
     /// Update the last_ingested_at timestamp for an EPG source
-    pub async fn update_last_ingested_at(&self, id: &Uuid) -> Result<chrono::DateTime<chrono::Utc>> {
+    pub async fn update_last_ingested_at(
+        &self,
+        id: &Uuid,
+    ) -> Result<chrono::DateTime<chrono::Utc>> {
         let now = chrono::Utc::now();
-        
+
         let active_model = epg_sources::ActiveModel {
             id: Set(*id),
             last_ingested_at: Set(Some(now)),
@@ -170,12 +181,15 @@ impl EpgSourceSeaOrmRepository {
         Ok(now)
     }
 
-
     /// Update an EPG source
-    pub async fn update(&self, id: &Uuid, request: crate::models::EpgSourceUpdateRequest) -> Result<crate::models::EpgSource> {
-        use crate::entities::{prelude::EpgSources, epg_sources};
-        use sea_orm::{Set, ActiveModelTrait};
-        
+    pub async fn update(
+        &self,
+        id: &Uuid,
+        request: crate::models::EpgSourceUpdateRequest,
+    ) -> Result<crate::models::EpgSource> {
+        use crate::entities::{epg_sources, prelude::EpgSources};
+        use sea_orm::{ActiveModelTrait, Set};
+
         // Find the existing source
         let existing = EpgSources::find_by_id(*id)
             .one(&*self.connection)
@@ -194,7 +208,9 @@ impl EpgSourceSeaOrmRepository {
             active_model.password = Set(request.password);
         }
         active_model.original_timezone = Set(request.timezone);
-        active_model.time_offset = Set(Some(request.time_offset.unwrap_or_else(|| "+00:00".to_string())));
+        active_model.time_offset = Set(Some(
+            request.time_offset.unwrap_or_else(|| "+00:00".to_string()),
+        ));
         active_model.is_active = Set(request.is_active);
         active_model.updated_at = Set(chrono::Utc::now());
 
@@ -204,8 +220,8 @@ impl EpgSourceSeaOrmRepository {
 
     /// Delete an EPG source
     pub async fn delete(&self, id: &Uuid) -> Result<()> {
-        use crate::entities::{prelude::EpgSources};
-        
+        use crate::entities::prelude::EpgSources;
+
         let result = EpgSources::delete_by_id(*id)
             .exec(&*self.connection)
             .await?;
@@ -221,22 +237,22 @@ impl EpgSourceSeaOrmRepository {
     pub async fn list_with_stats(&self) -> Result<Vec<crate::models::EpgSourceWithStats>> {
         let sources = self.find_active().await?;
         let mut results = Vec::new();
-        
+
         for source in sources {
             // Get program count
-            use crate::entities::{prelude::EpgPrograms, epg_programs};
+            use crate::entities::{epg_programs, prelude::EpgPrograms};
             let program_count = EpgPrograms::find()
                 .filter(epg_programs::Column::SourceId.eq(source.id))
                 .count(&*self.connection)
                 .await?;
-            
+
             // Calculate next scheduled update from cron expression
             let next_scheduled_update = if source.is_active {
                 Self::calculate_next_update_time(&source.update_cron, source.last_ingested_at)
             } else {
                 None
             };
-            
+
             results.push(crate::models::EpgSourceWithStats {
                 source,
                 program_count: program_count as i64,
@@ -246,20 +262,23 @@ impl EpgSourceSeaOrmRepository {
 
         Ok(results)
     }
-    
+
     /// Calculate next scheduled update time from cron expression
-    fn calculate_next_update_time(cron_expr: &str, last_ingested_at: Option<chrono::DateTime<chrono::Utc>>) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn calculate_next_update_time(
+        cron_expr: &str,
+        last_ingested_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        use chrono::Utc;
         use cron::Schedule;
         use std::str::FromStr;
-        use chrono::Utc;
-        
+
         match Schedule::from_str(cron_expr) {
             Ok(schedule) => {
                 let now = Utc::now();
                 if let Some(last_ingested) = last_ingested_at {
                     // Find next update after last ingestion
                     let next_after_ingestion = schedule.after(&last_ingested).next();
-                    
+
                     // If the calculated next time is in the past, calculate from now instead
                     match next_after_ingestion {
                         Some(next_time) if next_time > now => Some(next_time),
@@ -276,31 +295,27 @@ impl EpgSourceSeaOrmRepository {
             }
         }
     }
-
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::IngestionConfig,
-        database::Database,
-    };
+    use crate::{config::IngestionConfig, database::Database};
 
     async fn create_test_db() -> Result<Database> {
         // For unit tests, we'll use the actual database structure but skip problematic migrations
         // This is acceptable for unit tests that only test repository logic
         use sea_orm::*;
         use std::sync::Arc;
-        
+
         let connection = sea_orm::Database::connect("sqlite::memory:").await?;
         let arc_connection = Arc::new(connection);
-        
+
         // Create minimal table structure for testing
-        arc_connection.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            r#"
+        arc_connection
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                r#"
             CREATE TABLE epg_sources (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -336,9 +351,11 @@ mod tests {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            "#.to_string()
-        )).await?;
-        
+            "#
+                .to_string(),
+            ))
+            .await?;
+
         // Create a minimal database wrapper for testing
         let db = crate::database::Database {
             connection: arc_connection.clone(),
@@ -347,7 +364,7 @@ mod tests {
             backend: DatabaseBackend::Sqlite,
             ingestion_config: IngestionConfig::default(),
         };
-        
+
         Ok(db)
     }
 
@@ -372,7 +389,10 @@ mod tests {
         assert_eq!(created_source.name, "Test EPG Source");
         assert_eq!(created_source.source_type, EpgSourceType::Xmltv);
         assert_eq!(created_source.time_offset, "+01:00");
-        assert_eq!(created_source.original_timezone, Some("Europe/London".to_string()));
+        assert_eq!(
+            created_source.original_timezone,
+            Some("Europe/London".to_string())
+        );
 
         // Test find by ID
         let found_source = repo.find_by_id(&created_source.id).await?;
@@ -410,8 +430,16 @@ mod tests {
 
         // Create EPG sources of different types
         let sources = vec![
-            ("XMLTV Source", EpgSourceType::Xmltv, "http://example.com/xmltv.xml"),
-            ("Xtream Source", EpgSourceType::Xtream, "http://example.com/xtream"),
+            (
+                "XMLTV Source",
+                EpgSourceType::Xmltv,
+                "http://example.com/xmltv.xml",
+            ),
+            (
+                "Xtream Source",
+                EpgSourceType::Xtream,
+                "http://example.com/xtream",
+            ),
         ];
 
         let mut created_ids = Vec::new();
@@ -448,7 +476,7 @@ mod tests {
 
         // Test that all sources have different IDs
         for i in 0..created_ids.len() {
-            for j in (i+1)..created_ids.len() {
+            for j in (i + 1)..created_ids.len() {
                 assert_ne!(created_ids[i], created_ids[j]);
             }
         }

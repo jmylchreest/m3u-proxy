@@ -26,10 +26,8 @@ pub struct GenerateProxyParams<'a> {
 
 #[derive(Clone)]
 pub struct ProxyService {
-    
     pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
     proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
-    
 }
 
 impl ProxyService {
@@ -66,7 +64,7 @@ impl ProxyService {
         );
 
         let start_time = std::time::Instant::now();
-        
+
         // Create factory with all dependencies
         let factory = PipelineOrchestratorFactory::new(
             params.database.clone(),
@@ -75,11 +73,15 @@ impl ProxyService {
             self.pipeline_file_manager.clone(),
             self.proxy_output_file_manager.clone(),
         );
-        
+
         // Create orchestrator using factory pattern
-        let mut orchestrator = factory.create_for_proxy(params.config.proxy.id).await
+        let mut orchestrator = factory
+            .create_for_proxy(params.config.proxy.id)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create pipeline orchestrator: {}", e))?;
-        let execution = orchestrator.execute_pipeline().await
+        let execution = orchestrator
+            .execute_pipeline()
+            .await
             .map_err(|e| anyhow::anyhow!("Pipeline execution failed: {}", e))?;
 
         // Convert pipeline execution to legacy format for compatibility
@@ -87,11 +89,11 @@ impl ProxyService {
             id: execution.id,
             proxy_id: params.config.proxy.id,
             version: 1,
-            channel_count: 0, // TODO: Extract from execution output files
+            channel_count: 0,           // TODO: Extract from execution output files
             m3u_content: String::new(), // TODO: Read from generated files
             created_at: execution.started_at,
-            total_channels: 0, // TODO: Extract from execution metrics
-            filtered_channels: 0, // TODO: Extract from execution metrics
+            total_channels: 0,       // TODO: Extract from execution metrics
+            filtered_channels: 0,    // TODO: Extract from execution metrics
             applied_filters: vec![], // TODO: Extract from config.filters
             stats: Some({
                 let mut stats = GenerationStats::new("orchestrator".to_string());
@@ -104,7 +106,8 @@ impl ProxyService {
         };
 
         // Handle output
-        self.write_output(&generation, &params.output, &params.config).await?;
+        self.write_output(&generation, &params.output, &params.config)
+            .await?;
 
         info!(
             "Generation completed proxy={} pipeline=orchestrator status={:?} duration={}",

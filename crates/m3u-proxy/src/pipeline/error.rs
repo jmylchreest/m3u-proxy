@@ -10,38 +10,35 @@ use std::fmt;
 pub enum PipelineError {
     /// Database operation failed
     Database(sea_orm::DbErr),
-    
+
     /// File system operation failed
     FileSystem(std::io::Error),
-    
+
     /// Stage execution failed
-    StageExecution { 
-        stage: String, 
+    StageExecution {
+        stage: String,
         message: String,
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
-    
+
     /// Configuration error
     Configuration(String),
-    
+
     /// Progress tracking error
     Progress(String),
-    
+
     /// Resource not found
     NotFound(String),
-    
+
     /// Invalid input or state
     InvalidInput(String),
-    
+
     /// External service error (logo downloads, etc.)
-    ExternalService {
-        service: String,
-        message: String,
-    },
-    
+    ExternalService { service: String, message: String },
+
     /// Serialization/deserialization error
     Serialization(String),
-    
+
     /// Generic error for compatibility
     Generic(String),
 }
@@ -72,7 +69,9 @@ impl std::error::Error for PipelineError {
         match self {
             PipelineError::Database(e) => Some(e),
             PipelineError::FileSystem(e) => Some(e),
-            PipelineError::StageExecution { source: Some(e), .. } => Some(e.as_ref()),
+            PipelineError::StageExecution {
+                source: Some(e), ..
+            } => Some(e.as_ref()),
             _ => None,
         }
     }
@@ -128,12 +127,12 @@ impl PipelineError {
             source: None,
         }
     }
-    
+
     /// Create a stage execution error with source
     pub fn stage_error_with_source(
-        stage: &str, 
+        stage: &str,
         message: impl Into<String>,
-        source: Box<dyn std::error::Error + Send + Sync>
+        source: Box<dyn std::error::Error + Send + Sync>,
     ) -> Self {
         PipelineError::StageExecution {
             stage: stage.to_string(),
@@ -141,12 +140,12 @@ impl PipelineError {
             source: Some(source),
         }
     }
-    
+
     /// Create a configuration error
     pub fn config_error(message: impl Into<String>) -> Self {
         PipelineError::Configuration(message.into())
     }
-    
+
     /// Create an external service error
     pub fn external_service_error(service: &str, message: impl Into<String>) -> Self {
         PipelineError::ExternalService {

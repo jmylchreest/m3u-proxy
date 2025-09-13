@@ -17,31 +17,31 @@ pub struct RelayProfile {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
-    
+
     // TS-compatible codec selection
     pub video_codec: VideoCodec,
     pub audio_codec: AudioCodec,
     #[schema(example = "main")]
     pub video_profile: Option<String>, // "main", "main10", "high"
     #[schema(example = "medium")]
-    pub video_preset: Option<String>,  // "fast", "medium", "slow"
+    pub video_preset: Option<String>, // "fast", "medium", "slow"
     #[schema(example = 2000)]
-    pub video_bitrate: Option<u32>,    // kbps
+    pub video_bitrate: Option<u32>, // kbps
     #[schema(example = 128)]
-    pub audio_bitrate: Option<u32>,    // kbps
+    pub audio_bitrate: Option<u32>, // kbps
     #[schema(example = 48000)]
     pub audio_sample_rate: Option<u32>, // Hz (e.g., 48000, 44100)
     #[schema(example = 2)]
-    pub audio_channels: Option<u32>,    // Channel count (e.g., 1, 2, 6)
-    
+    pub audio_channels: Option<u32>, // Channel count (e.g., 1, 2, 6)
+
     // Hardware acceleration
     pub enable_hardware_acceleration: bool,
     #[schema(example = "auto")]
     pub preferred_hwaccel: Option<String>, // "auto", "vaapi", "nvenc", "qsv", "amf"
-    
+
     // Manual override
-    pub manual_args: Option<String>,   // User-defined args override
-    
+    pub manual_args: Option<String>, // User-defined args override
+
     // Container and streaming settings
     pub output_format: RelayOutputFormat,
     #[schema(example = 6)]
@@ -50,7 +50,7 @@ pub struct RelayProfile {
     pub max_segments: Option<i32>,
     #[schema(example = 30)]
     pub input_timeout: i32,
-    
+
     // System flags
     pub is_system_default: bool,
     pub is_active: bool,
@@ -80,7 +80,6 @@ pub struct ResolvedRelayConfig {
     pub profile: RelayProfile,
     pub effective_args: Vec<String>, // Resolved FFmpeg arguments
 }
-
 
 /// Relay event for tracking lifecycle and metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,24 +160,24 @@ impl FromStr for RelayEventType {
 /// Video codec options (Transport Stream compatible)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub enum VideoCodec {
-    H264,      // Most compatible
-    H265,      // Better compression
-    AV1,       // Next-gen (may need -strict experimental)
-    MPEG2,     // Legacy compatibility
-    MPEG4,     // Older standard
-    Copy,      // Pass-through
+    H264,  // Most compatible
+    H265,  // Better compression
+    AV1,   // Next-gen (may need -strict experimental)
+    MPEG2, // Legacy compatibility
+    MPEG4, // Older standard
+    Copy,  // Pass-through
 }
 
 /// Audio codec options (Transport Stream compatible)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub enum AudioCodec {
-    AAC,       // Most common in TS
-    MP3,       // Universal compatibility
-    AC3,       // Dolby Digital
-    EAC3,      // Enhanced AC3
+    AAC,        // Most common in TS
+    MP3,        // Universal compatibility
+    AC3,        // Dolby Digital
+    EAC3,       // Enhanced AC3
     MPEG2Audio, // Legacy
-    DTS,       // Surround sound
-    Copy,      // Pass-through
+    DTS,        // Surround sound
+    Copy,       // Pass-through
 }
 
 /// FFmpeg output format types
@@ -203,7 +202,7 @@ impl std::fmt::Display for VideoCodec {
 
 impl FromStr for VideoCodec {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "h264" => Ok(VideoCodec::H264),
@@ -234,7 +233,7 @@ impl std::fmt::Display for AudioCodec {
 
 impl FromStr for AudioCodec {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "aac" => Ok(AudioCodec::AAC),
@@ -281,7 +280,7 @@ pub enum RelayContent {
 pub struct CreateRelayProfileRequest {
     pub name: String,
     pub description: Option<String>,
-    
+
     // Codec selection
     pub video_codec: VideoCodec,
     pub audio_codec: AudioCodec,
@@ -291,20 +290,20 @@ pub struct CreateRelayProfileRequest {
     pub audio_bitrate: Option<u32>,
     pub audio_sample_rate: Option<u32>,
     pub audio_channels: Option<u32>,
-    
+
     // Hardware acceleration
     pub enable_hardware_acceleration: Option<bool>,
     pub preferred_hwaccel: Option<String>,
-    
+
     // Manual override
     pub manual_args: Option<String>,
-    
+
     // Container settings
     pub output_format: RelayOutputFormat,
     pub segment_duration: Option<i32>,
     pub max_segments: Option<i32>,
     pub input_timeout: Option<i32>,
-    
+
     // System default flag (ignored by API handlers)
     pub is_system_default: Option<bool>,
 }
@@ -314,7 +313,7 @@ pub struct CreateRelayProfileRequest {
 pub struct UpdateRelayProfileRequest {
     pub name: Option<String>,
     pub description: Option<String>,
-    
+
     // Codec selection
     pub video_codec: Option<VideoCodec>,
     pub audio_codec: Option<AudioCodec>,
@@ -324,21 +323,21 @@ pub struct UpdateRelayProfileRequest {
     pub audio_bitrate: Option<u32>,
     pub audio_sample_rate: Option<u32>,
     pub audio_channels: Option<u32>,
-    
+
     // Hardware acceleration
     pub enable_hardware_acceleration: Option<bool>,
     pub preferred_hwaccel: Option<String>,
-    
+
     // Manual override
     pub manual_args: Option<String>,
-    
+
     // Container settings
     pub output_format: Option<RelayOutputFormat>,
     pub segment_duration: Option<i32>,
     pub max_segments: Option<i32>,
     pub input_timeout: Option<i32>,
     pub is_active: Option<bool>,
-    
+
     // System default flag (ignored by API handlers)
     pub is_system_default: Option<bool>,
 }
@@ -381,7 +380,7 @@ pub struct RelayProcessMetrics {
     pub is_running: bool,
     pub client_count: i32,
     pub connected_clients: Vec<ConnectedClient>,
-    pub bytes_received_upstream: i64,  // Bytes received from source
+    pub bytes_received_upstream: i64, // Bytes received from source
     pub bytes_delivered_downstream: i64, // Total bytes delivered to all clients
     pub uptime_seconds: Option<i64>,
     pub last_heartbeat: Option<DateTime<Utc>>,
@@ -393,8 +392,7 @@ pub struct RelayProcessMetrics {
 }
 
 /// Metrics for a specific relay configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RelayConfigMetrics {
     pub is_running: bool,
     pub client_count: i32,
@@ -404,16 +402,13 @@ pub struct RelayConfigMetrics {
     pub total_events: i64,
 }
 
-
 /// Hardware acceleration capabilities for FFmpeg
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HwAccelCapabilities {
     pub accelerators: Vec<HwAccelerator>,
     pub codecs: Vec<String>,
     pub support_matrix: HashMap<String, Vec<String>>, // accelerator -> supported codecs
 }
-
 
 /// Hardware accelerator information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -467,8 +462,7 @@ pub struct RelayProcessHealth {
 }
 
 /// Health status enumeration
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
 pub enum RelayHealthStatus {
     #[serde(rename = "healthy")]
     #[default]
@@ -482,8 +476,6 @@ pub enum RelayHealthStatus {
     #[serde(rename = "failed")]
     Failed,
 }
-
-
 
 /// Connected client information for metrics
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -500,22 +492,21 @@ pub struct ConnectedClient {
     pub last_activity: DateTime<Utc>,
 }
 
-
 impl RelayProfile {
-
     /// Create a new relay profile
     pub fn new(request: CreateRelayProfileRequest) -> Result<Self, String> {
         // Validate manual args if provided (basic security check)
         if let Some(ref manual_args) = request.manual_args
-            && let Ok(args_vec) = serde_json::from_str::<Vec<String>>(manual_args) {
-                Self::validate_ffmpeg_args(&args_vec)?;
-            }
-        
+            && let Ok(args_vec) = serde_json::from_str::<Vec<String>>(manual_args)
+        {
+            Self::validate_ffmpeg_args(&args_vec)?;
+        }
+
         Ok(Self {
             id: Uuid::new_v4(),
             name: request.name,
             description: request.description,
-            
+
             // Codec settings
             video_codec: request.video_codec,
             audio_codec: request.audio_codec,
@@ -525,20 +516,20 @@ impl RelayProfile {
             audio_bitrate: request.audio_bitrate,
             audio_sample_rate: request.audio_sample_rate,
             audio_channels: request.audio_channels,
-            
+
             // Hardware acceleration
             enable_hardware_acceleration: request.enable_hardware_acceleration.unwrap_or(false),
             preferred_hwaccel: request.preferred_hwaccel,
-            
+
             // Manual override
             manual_args: request.manual_args,
-            
+
             // Container settings
             output_format: request.output_format,
             segment_duration: request.segment_duration,
             max_segments: request.max_segments,
             input_timeout: request.input_timeout.unwrap_or(30),
-            
+
             // System flags
             is_system_default: false,
             is_active: true,
@@ -547,7 +538,6 @@ impl RelayProfile {
         })
     }
 
-    
     /// Validate FFmpeg arguments for security and correctness (legacy support)
     pub fn validate_ffmpeg_args(args: &[String]) -> Result<(), String> {
         // Basic validation to prevent command injection
@@ -556,10 +546,10 @@ impl RelayProfile {
                 return Err(format!("Potentially dangerous argument: {arg}"));
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get hardware acceleration encoder name for video codec
     pub fn get_hwaccel_encoder(&self, hwaccel: &str) -> Option<String> {
         match (hwaccel, &self.video_codec) {
@@ -567,24 +557,24 @@ impl RelayProfile {
             ("vaapi", VideoCodec::H265) => Some("hevc_vaapi".to_string()),
             ("vaapi", VideoCodec::AV1) => Some("av1_vaapi".to_string()),
             ("vaapi", VideoCodec::MPEG2) => Some("mpeg2_vaapi".to_string()),
-            
+
             ("nvenc", VideoCodec::H264) => Some("h264_nvenc".to_string()),
             ("nvenc", VideoCodec::H265) => Some("hevc_nvenc".to_string()),
             ("nvenc", VideoCodec::AV1) => Some("av1_nvenc".to_string()),
-            
+
             ("qsv", VideoCodec::H264) => Some("h264_qsv".to_string()),
             ("qsv", VideoCodec::H265) => Some("hevc_qsv".to_string()),
             ("qsv", VideoCodec::AV1) => Some("av1_qsv".to_string()),
             ("qsv", VideoCodec::MPEG2) => Some("mpeg2_qsv".to_string()),
-            
+
             ("amf", VideoCodec::H264) => Some("h264_amf".to_string()),
             ("amf", VideoCodec::H265) => Some("hevc_amf".to_string()),
             ("amf", VideoCodec::AV1) => Some("av1_amf".to_string()),
-            
+
             _ => None,
         }
     }
-    
+
     /// Get software encoder name for video codec
     pub fn get_software_encoder(&self) -> String {
         match self.video_codec {
@@ -596,7 +586,7 @@ impl RelayProfile {
             VideoCodec::Copy => "copy".to_string(),
         }
     }
-    
+
     /// Get audio encoder name
     pub fn get_audio_encoder(&self) -> String {
         match self.audio_codec {
@@ -622,14 +612,16 @@ impl ChannelRelayConfig {
         if let Some(ref custom_args) = request.custom_args {
             RelayProfile::validate_ffmpeg_args(custom_args)?;
         }
-        
+
         let custom_args_json = if let Some(args) = request.custom_args {
-            Some(serde_json::to_string(&args)
-                .map_err(|e| format!("Invalid custom arguments: {e}"))?)
+            Some(
+                serde_json::to_string(&args)
+                    .map_err(|e| format!("Invalid custom arguments: {e}"))?,
+            )
         } else {
             None
         };
-        
+
         Ok(Self {
             id: Uuid::new_v4(),
             proxy_id,
@@ -662,7 +654,7 @@ impl ResolvedRelayConfig {
             // New codec-based profile - args generated dynamically
             Vec::new()
         };
-        
+
         Ok(Self {
             config,
             profile,
@@ -680,7 +672,7 @@ impl ResolvedRelayConfig {
         // Use traditional hardcoded method for backward compatibility
         self.generate_ffmpeg_command_with_mapping(input_url, output_path, hwaccel_caps, None)
     }
-    
+
     /// Generate complete FFmpeg command with dynamic stream mapping
     pub fn generate_ffmpeg_command_with_mapping(
         &self,
@@ -693,22 +685,26 @@ impl ResolvedRelayConfig {
         if !self.effective_args.is_empty() {
             return self.resolve_template_variables(input_url, output_path);
         }
-        
+
         let mut args = Vec::new();
-        
+
         // Hardware acceleration setup (if enabled)
         if self.profile.enable_hardware_acceleration
-            && let Some(hwaccel_args) = self.generate_hwaccel_args(hwaccel_caps) {
-                args.extend(hwaccel_args);
-            }
-        
+            && let Some(hwaccel_args) = self.generate_hwaccel_args(hwaccel_caps)
+        {
+            args.extend(hwaccel_args);
+        }
+
         // Input with analyzeduration and probesize for better stream analysis
         args.extend([
-            "-analyzeduration".to_string(), "10000000".to_string(),  // 10 seconds
-            "-probesize".to_string(), "10000000".to_string(),        // 10MB
-            "-i".to_string(), input_url.to_string()
+            "-analyzeduration".to_string(),
+            "10000000".to_string(), // 10 seconds
+            "-probesize".to_string(),
+            "10000000".to_string(), // 10MB
+            "-i".to_string(),
+            input_url.to_string(),
         ]);
-        
+
         // Dynamic stream mapping based on probe results or fallback to hardcoded
         if let Some(strategy) = mapping_strategy {
             // Use dynamic mapping based on probe results
@@ -723,7 +719,7 @@ impl ResolvedRelayConfig {
             args.extend(["-map".to_string(), "0:v:0".to_string()]); // First video stream
             args.extend(["-map".to_string(), "0:a:0".to_string()]); // First audio stream
         }
-        
+
         // Video codec - use copy if strategy suggests it or handle normally
         if let Some(strategy) = mapping_strategy {
             if strategy.video_mapping.is_some() {
@@ -753,32 +749,36 @@ impl ResolvedRelayConfig {
                 args.push(self.profile.get_software_encoder());
             }
         }
-        
+
         // Hardware acceleration video filters (only when encoding, not copying)
         let should_apply_hwaccel_filters = if let Some(strategy) = mapping_strategy {
-            self.profile.enable_hardware_acceleration && strategy.video_mapping.is_some() && !strategy.video_copy
+            self.profile.enable_hardware_acceleration
+                && strategy.video_mapping.is_some()
+                && !strategy.video_copy
         } else {
-            self.profile.enable_hardware_acceleration && self.profile.video_codec != VideoCodec::Copy
+            self.profile.enable_hardware_acceleration
+                && self.profile.video_codec != VideoCodec::Copy
         };
-        
+
         if should_apply_hwaccel_filters
-            && let Some(hwaccel_filters) = self.generate_hwaccel_video_filters(hwaccel_caps) {
-                args.extend(hwaccel_filters);
-            }
-        
+            && let Some(hwaccel_filters) = self.generate_hwaccel_video_filters(hwaccel_caps)
+        {
+            args.extend(hwaccel_filters);
+        }
+
         // Video settings - only apply encoding parameters if we're not copying
         let should_apply_video_settings = if let Some(strategy) = mapping_strategy {
             strategy.video_mapping.is_some() && !strategy.video_copy
         } else {
             self.profile.video_codec != VideoCodec::Copy
         };
-        
+
         if should_apply_video_settings {
             // Use optimal bitrate from strategy or profile default
             let target_bitrate = mapping_strategy
                 .and_then(|s| s.target_video_bitrate)
                 .or(self.profile.video_bitrate);
-                
+
             if let Some(bitrate) = target_bitrate {
                 args.extend(["-b:v".to_string(), format!("{bitrate}k")]);
             }
@@ -789,7 +789,7 @@ impl ResolvedRelayConfig {
                 args.extend(["-profile:v".to_string(), profile.clone()]);
             }
         }
-        
+
         // Audio codec - use copy if strategy suggests it or handle normally
         if let Some(strategy) = mapping_strategy {
             if strategy.audio_mapping.is_some() {
@@ -798,15 +798,15 @@ impl ResolvedRelayConfig {
                     args.push("copy".to_string());
                 } else {
                     args.push(self.profile.get_audio_encoder());
-                    
+
                     // Use optimal bitrate from strategy or profile default
-                    let target_bitrate = strategy.target_audio_bitrate
-                        .or(self.profile.audio_bitrate);
-                    
+                    let target_bitrate =
+                        strategy.target_audio_bitrate.or(self.profile.audio_bitrate);
+
                     if let Some(bitrate) = target_bitrate {
                         args.extend(["-b:a".to_string(), format!("{bitrate}k")]);
                     }
-                    
+
                     // Set explicit audio parameters to avoid codec parameter issues when transcoding
                     let sample_rate = self.profile.audio_sample_rate.unwrap_or(48000);
                     let channels = self.profile.audio_channels.unwrap_or(2);
@@ -818,7 +818,7 @@ impl ResolvedRelayConfig {
             // Legacy behavior
             args.push("-c:a".to_string());
             args.push(self.profile.get_audio_encoder());
-            
+
             // Audio settings - only apply encoding parameters if we're not copying
             if self.profile.audio_codec != AudioCodec::Copy {
                 if let Some(bitrate) = self.profile.audio_bitrate {
@@ -831,19 +831,24 @@ impl ResolvedRelayConfig {
                 args.extend(["-ac".to_string(), channels.to_string()]);
             }
         }
-        
+
         // Transport Stream specific settings
         args.extend([
-            "-f".to_string(), "mpegts".to_string(),
-            "-mpegts_copyts".to_string(), "1".to_string(),
-            "-avoid_negative_ts".to_string(), "disabled".to_string(),
-            "-mpegts_start_pid".to_string(), "256".to_string(),  // Start PID for streams
-            "-mpegts_pmt_start_pid".to_string(), "4096".to_string(),  // Different PID for PMT
+            "-f".to_string(),
+            "mpegts".to_string(),
+            "-mpegts_copyts".to_string(),
+            "1".to_string(),
+            "-avoid_negative_ts".to_string(),
+            "disabled".to_string(),
+            "-mpegts_start_pid".to_string(),
+            "256".to_string(), // Start PID for streams
+            "-mpegts_pmt_start_pid".to_string(),
+            "4096".to_string(), // Different PID for PMT
         ]);
-        
+
         // Output to stdout for cyclic buffer consumption
         args.extend(["-y".to_string(), "pipe:1".to_string()]);
-        
+
         // Apply manual args override (if provided)
         if let Some(ref manual_args) = self.profile.manual_args {
             let manual_args_trimmed = manual_args.trim();
@@ -861,10 +866,10 @@ impl ResolvedRelayConfig {
                 }
             }
         }
-        
+
         args
     }
-    
+
     /// Create a JSON snapshot of the configuration for reference
     pub fn create_config_snapshot(&self, input_url: &str) -> String {
         let snapshot = serde_json::json!({
@@ -881,32 +886,34 @@ impl ResolvedRelayConfig {
             "output_format": self.profile.output_format.to_string(),
             "created_at": chrono::Utc::now()
         });
-        
+
         serde_json::to_string(&snapshot).unwrap_or_else(|_| "{}".to_string())
     }
-    
+
     /// Resolve template variables in FFmpeg arguments (legacy support)
-    pub fn resolve_template_variables(
-        &self,
-        input_url: &str,
-        output_path: &str,
-    ) -> Vec<String> {
+    pub fn resolve_template_variables(&self, input_url: &str, output_path: &str) -> Vec<String> {
         let mut resolved_args = Vec::new();
-        
+
         for arg in &self.effective_args {
             let resolved = arg
                 .replace("{input_url}", input_url)
                 .replace("{output_path}", output_path)
-                .replace("{segment_duration}", &self.profile.segment_duration.unwrap_or(30).to_string())
-                .replace("{max_segments}", &self.profile.max_segments.unwrap_or(4).to_string())
+                .replace(
+                    "{segment_duration}",
+                    &self.profile.segment_duration.unwrap_or(30).to_string(),
+                )
+                .replace(
+                    "{max_segments}",
+                    &self.profile.max_segments.unwrap_or(4).to_string(),
+                )
                 .replace("{input_timeout}", &self.profile.input_timeout.to_string());
-            
+
             resolved_args.push(resolved);
         }
-        
+
         resolved_args
     }
-    
+
     /// Generate hardware acceleration arguments (input setup only)
     pub fn generate_hwaccel_args(&self, hwaccel_caps: &HwAccelCapabilities) -> Option<Vec<String>> {
         // Determine which hwaccel to use
@@ -919,25 +926,28 @@ impl ResolvedRelayConfig {
         } else {
             self.select_best_hwaccel(hwaccel_caps)?
         };
-        
+
         // Check if this hwaccel supports the selected video codec
         if !self.hwaccel_supports_codec(&hwaccel, hwaccel_caps) {
             return None;
         }
-        
+
         let mut args = Vec::new();
-        
+
         // Add hardware device initialization
         args.extend(["-init_hw_device".to_string(), hwaccel.clone()]);
-        
+
         // Add hardware acceleration flag
         args.extend(["-hwaccel".to_string(), hwaccel.clone()]);
-        
+
         Some(args)
     }
-    
+
     /// Generate hardware acceleration video filters (for use after codec specification)
-    pub fn generate_hwaccel_video_filters(&self, hwaccel_caps: &HwAccelCapabilities) -> Option<Vec<String>> {
+    pub fn generate_hwaccel_video_filters(
+        &self,
+        hwaccel_caps: &HwAccelCapabilities,
+    ) -> Option<Vec<String>> {
         // Determine which hwaccel to use
         let hwaccel = if let Some(ref preferred) = self.profile.preferred_hwaccel {
             if preferred == "auto" {
@@ -948,14 +958,14 @@ impl ResolvedRelayConfig {
         } else {
             self.select_best_hwaccel(hwaccel_caps)?
         };
-        
+
         // Check if this hwaccel supports the selected video codec
         if !self.hwaccel_supports_codec(&hwaccel, hwaccel_caps) {
             return None;
         }
-        
+
         let mut args = Vec::new();
-        
+
         // Add video filter for hardware upload (placed after input and codec specs)
         args.push("-vf".to_string());
         match hwaccel.as_str() {
@@ -964,10 +974,10 @@ impl ResolvedRelayConfig {
             "qsv" => args.push("format=nv12,hwupload=extra_hw_frames=64".to_string()),
             _ => args.push("format=nv12,hwupload".to_string()),
         }
-        
+
         Some(args)
     }
-    
+
     /// Get hardware-accelerated video encoder
     pub fn get_hwaccel_video_encoder(&self, hwaccel_caps: &HwAccelCapabilities) -> Option<String> {
         let hwaccel = if let Some(ref preferred) = self.profile.preferred_hwaccel {
@@ -979,24 +989,24 @@ impl ResolvedRelayConfig {
         } else {
             self.select_best_hwaccel(hwaccel_caps)?
         };
-        
+
         self.profile.get_hwaccel_encoder(&hwaccel)
     }
-    
+
     /// Select the best available hardware accelerator
     fn select_best_hwaccel(&self, hwaccel_caps: &HwAccelCapabilities) -> Option<String> {
         // Priority order: nvenc > qsv > vaapi > amf
         let priority_order = ["nvenc", "qsv", "vaapi", "amf"];
-        
+
         for hwaccel in &priority_order {
             if self.hwaccel_supports_codec(hwaccel, hwaccel_caps) {
                 return Some(hwaccel.to_string());
             }
         }
-        
+
         None
     }
-    
+
     /// Check if hardware accelerator supports the profile's video codec
     fn hwaccel_supports_codec(&self, hwaccel: &str, hwaccel_caps: &HwAccelCapabilities) -> bool {
         let codec_name = match self.profile.video_codec {
@@ -1007,7 +1017,7 @@ impl ResolvedRelayConfig {
             VideoCodec::MPEG4 => "mpeg4",
             VideoCodec::Copy => return false, // No hwaccel for copy
         };
-        
+
         if let Some(supported_codecs) = hwaccel_caps.support_matrix.get(hwaccel) {
             supported_codecs.contains(&codec_name.to_string())
         } else {
@@ -1016,30 +1026,27 @@ impl ResolvedRelayConfig {
     }
 }
 
-
-
-
 /// Error types for relay operations
 #[derive(Debug, thiserror::Error)]
 pub enum RelayError {
     #[error("Relay process not found: {0}")]
     ProcessNotFound(Uuid),
-    
+
     #[error("Invalid path: {0}")]
     InvalidPath(String),
-    
+
     #[error("FFmpeg process failed: {0}")]
     ProcessFailed(String),
-    
+
     #[error("Database error: {0}")]
     Database(#[from] sea_orm::DbErr),
-    
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("UUID error: {0}")]
     Uuid(#[from] uuid::Error),
 }

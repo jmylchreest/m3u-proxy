@@ -4,10 +4,10 @@
 //! with appropriate circuit breaker protection based on service names.
 //! This decouples services from circuit breaker management.
 
-use std::time::Duration;
-use crate::utils::StandardHttpClient;
 use crate::services::CircuitBreakerManager;
+use crate::utils::StandardHttpClient;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Factory for creating HTTP clients with appropriate circuit breaker protection
 #[derive(Clone)]
@@ -32,7 +32,7 @@ impl HttpClientFactory {
     }
 
     /// Create an HTTP client for a specific service
-    /// 
+    ///
     /// The service name determines which circuit breaker profile to use:
     /// - "source_m3u" -> uses source_m3u circuit breaker profile
     /// - "source_xc_stream" -> uses source_xc_stream circuit breaker profile
@@ -48,16 +48,24 @@ impl HttpClientFactory {
 
                 match cb_manager.get_circuit_breaker(service_name).await {
                     Ok(circuit_breaker) => {
-                        tracing::debug!("Created circuit breaker-protected HTTP client for service: {} with acceptable codes: {:?}", service_name, acceptable_status_codes);
+                        tracing::debug!(
+                            "Created circuit breaker-protected HTTP client for service: {} with acceptable codes: {:?}",
+                            service_name,
+                            acceptable_status_codes
+                        );
                         StandardHttpClient::new(
                             self.default_connect_timeout,
                             Some(circuit_breaker),
                             &self.user_agent,
                             acceptable_status_codes,
                         )
-                    },
+                    }
                     Err(e) => {
-                        tracing::warn!("Failed to get circuit breaker for {}: {}. Creating client without circuit breaker.", service_name, e);
+                        tracing::warn!(
+                            "Failed to get circuit breaker for {}: {}. Creating client without circuit breaker.",
+                            service_name,
+                            e
+                        );
                         StandardHttpClient::new(
                             self.default_connect_timeout,
                             None,
@@ -68,7 +76,10 @@ impl HttpClientFactory {
                 }
             }
             None => {
-                tracing::debug!("Creating HTTP client for service: {} (no circuit breaker manager)", service_name);
+                tracing::debug!(
+                    "Creating HTTP client for service: {} (no circuit breaker manager)",
+                    service_name
+                );
                 // Use default acceptable status codes when no circuit breaker manager
                 let default_acceptable_codes = vec!["2xx".to_string(), "3xx".to_string()];
                 StandardHttpClient::new(
@@ -98,4 +109,3 @@ impl HttpClientFactory {
         self.circuit_breaker_manager.is_some()
     }
 }
-

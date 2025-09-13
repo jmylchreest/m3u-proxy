@@ -76,9 +76,7 @@ impl FileTypeValidator {
 
         // Read the beginning of the file for magic number detection
         let mut buffer = vec![0u8; self.config.max_detection_bytes];
-        let mut file = fs::File::open(path)
-            .await
-            .map_err(SandboxedFileError::Io)?;
+        let mut file = fs::File::open(path).await.map_err(SandboxedFileError::Io)?;
 
         let bytes_read = {
             use tokio::io::AsyncReadExt;
@@ -108,9 +106,7 @@ impl FileTypeValidator {
 
         // Read the beginning of the file for magic number detection
         let mut buffer = vec![0u8; self.config.max_detection_bytes];
-        let mut file = fs::File::open(path)
-            .await
-            .map_err(SandboxedFileError::Io)?;
+        let mut file = fs::File::open(path).await.map_err(SandboxedFileError::Io)?;
 
         let bytes_read = {
             use tokio::io::AsyncReadExt;

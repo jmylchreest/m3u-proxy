@@ -6,19 +6,19 @@
 use axum::{
     extract::{Query, State},
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse,
+        sse::{Event, KeepAlive, Sse},
     },
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, convert::Infallible, time::Duration};
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tracing::{debug, error};
-use utoipa::{ToSchema, IntoParams};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::web::AppState;
 use crate::utils::log_capture::MAX_LOG_BUFFER_SIZE;
+use crate::web::AppState;
 
 /// Log event structure for SSE streaming
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -142,56 +142,56 @@ pub async fn stream_logs(
     };
 
     // Create the SSE stream
-    let stream = BroadcastStream::new(log_receiver)
-        .filter_map(move |result| {
-            let event = match result {
-                Ok(event) => event,
-                Err(_) => return None, // Skip lagged events
-            };
+    let stream = BroadcastStream::new(log_receiver).filter_map(move |result| {
+        let event = match result {
+            Ok(event) => event,
+            Err(_) => return None, // Skip lagged events
+        };
 
-            // Apply log level filtering
-            if let Some(event_level) = LogLevel::from_str(&event.level)
-                && event_level < min_level {
-                    return None;
-                }
+        // Apply log level filtering
+        if let Some(event_level) = LogLevel::from_str(&event.level)
+            && event_level < min_level
+        {
+            return None;
+        }
 
-            // Apply target filtering
-            if let Some(ref target_filter) = params.target
-                && !event.target.contains(target_filter) {
-                    return None;
-                }
+        // Apply target filtering
+        if let Some(ref target_filter) = params.target
+            && !event.target.contains(target_filter)
+        {
+            return None;
+        }
 
-            // Optionally strip fields/spans based on parameters
-            let mut filtered_event = event;
-            if !params.include_fields {
-                filtered_event.fields.clear();
+        // Optionally strip fields/spans based on parameters
+        let mut filtered_event = event;
+        if !params.include_fields {
+            filtered_event.fields.clear();
+        }
+        if !params.include_spans {
+            filtered_event.span = None;
+        }
+
+        // Create SSE event
+        let sse_event = match Event::default()
+            .id(&filtered_event.id)
+            .event("log")
+            .json_data(&filtered_event)
+        {
+            Ok(event) => event,
+            Err(e) => {
+                error!("Failed to serialize log event: {}", e);
+                return None;
             }
-            if !params.include_spans {
-                filtered_event.span = None;
-            }
+        };
 
-            // Create SSE event
-            let sse_event = match Event::default()
-                .id(&filtered_event.id)
-                .event("log")
-                .json_data(&filtered_event)
-            {
-                Ok(event) => event,
-                Err(e) => {
-                    error!("Failed to serialize log event: {}", e);
-                    return None;
-                }
-            };
+        Some(Ok::<_, Infallible>(sse_event))
+    });
 
-            Some(Ok::<_, Infallible>(sse_event))
-        });
-
-    Ok(Sse::new(stream)
-        .keep_alive(
-            KeepAlive::new()
-                .interval(Duration::from_secs(15))
-                .text("heartbeat"),
-        ))
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("heartbeat"),
+    ))
 }
 
 /// Get log streaming statistics
@@ -206,9 +206,7 @@ pub async fn stream_logs(
         (status = 500, description = "Internal server error")
     )
 )]
-pub async fn get_log_stats(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn get_log_stats(State(state): State<AppState>) -> impl IntoResponse {
     let stats = match state.log_broadcaster.as_ref() {
         Some(broadcaster) => {
             serde_json::json!({
@@ -248,9 +246,7 @@ pub async fn get_log_stats(
         (status = 500, description = "Internal server error")
     )
 )]
-pub async fn send_test_log(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn send_test_log(State(state): State<AppState>) -> impl IntoResponse {
     let operation_id = Uuid::new_v4().to_string();
     let test_event = LogEvent {
         id: operation_id.clone(),
@@ -273,21 +269,19 @@ pub async fn send_test_log(
     };
 
     match state.log_broadcaster.as_ref() {
-        Some(broadcaster) => {
-            match broadcaster.send(test_event) {
-                Ok(_) => axum::response::Json(serde_json::json!({
-                    "success": true,
-                    "message": "Test log event sent successfully"
-                })),
-                Err(e) => {
-                    error!("Failed to send test log event: {}", e);
-                    axum::response::Json(serde_json::json!({
-                        "success": false,
-                        "message": "Failed to send test log event"
-                    }))
-                }
+        Some(broadcaster) => match broadcaster.send(test_event) {
+            Ok(_) => axum::response::Json(serde_json::json!({
+                "success": true,
+                "message": "Test log event sent successfully"
+            })),
+            Err(e) => {
+                error!("Failed to send test log event: {}", e);
+                axum::response::Json(serde_json::json!({
+                    "success": false,
+                    "message": "Failed to send test log event"
+                }))
             }
-        }
+        },
         None => axum::response::Json(serde_json::json!({
             "success": false,
             "message": "Log broadcaster not available"

@@ -3,19 +3,19 @@
 //! This module provides filter processing capabilities for both channels and EPG programs,
 //! with expression parsing, time function support and regex preprocessing optimization.
 
+use crate::models::ConditionTree;
+use crate::utils::regex_preprocessor::RegexPreprocessor;
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use crate::models::ConditionTree;
-use crate::utils::regex_preprocessor::RegexPreprocessor;
 use tracing::{trace, warn};
-use regex::Regex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterResult {
-    pub include_match: bool,    // Does this record match include criteria?
-    pub exclude_match: bool,    // Does this record match exclude criteria? 
+    pub include_match: bool, // Does this record match include criteria?
+    pub exclude_match: bool, // Does this record match exclude criteria?
     pub execution_time: Duration,
     pub error: Option<String>,
 }
@@ -37,18 +37,26 @@ impl RegexEvaluator {
     pub fn new(preprocessor: RegexPreprocessor) -> Self {
         Self { preprocessor }
     }
-    
-    pub fn evaluate_with_preprocessing(&self, pattern: &str, text: &str, context: &str) -> Result<bool, Box<dyn std::error::Error>> {
+
+    pub fn evaluate_with_preprocessing(
+        &self,
+        pattern: &str,
+        text: &str,
+        context: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         // Use preprocessor to check if regex should run
         if !self.preprocessor.should_run_regex(text, pattern, context) {
             return Ok(false);
         }
-        
+
         // Run the actual regex
         match Regex::new(pattern) {
             Ok(regex) => Ok(regex.is_match(text)),
             Err(e) => {
-                warn!("Invalid regex pattern '{}': {}, falling back to contains", pattern, e);
+                warn!(
+                    "Invalid regex pattern '{}': {}, falling back to contains",
+                    pattern, e
+                );
                 Ok(text.contains(pattern))
             }
         }
@@ -79,30 +87,32 @@ impl StreamFilterProcessor {
         } else {
             // First resolve time functions if any
             let resolved_expression = Self::resolve_time_functions(condition_expression)?;
-            
+
             // Parse the human-readable expression into a ConditionTree using ExpressionParser
-            let parser = crate::expression_parser::ExpressionParser::new()
-                .with_fields(vec![
-                    "tvg_id".to_string(),
-                    "tvg_name".to_string(),
-                    "tvg_logo".to_string(),
-                    "tvg_shift".to_string(),
-                    "group_title".to_string(),
-                    "channel_name".to_string(),
-                    "stream_url".to_string(),
-                ]);
-            
+            let parser = crate::expression_parser::ExpressionParser::new().with_fields(vec![
+                "tvg_id".to_string(),
+                "tvg_name".to_string(),
+                "tvg_logo".to_string(),
+                "tvg_shift".to_string(),
+                "group_title".to_string(),
+                "channel_name".to_string(),
+                "stream_url".to_string(),
+            ]);
+
             match parser.parse(&resolved_expression) {
                 Ok(condition_tree) => {
-                    trace!("Successfully parsed filter expression for filter_id={} filter_name={}", filter_id, filter_name);
+                    trace!(
+                        "Successfully parsed filter expression for filter_id={} filter_name={}",
+                        filter_id, filter_name
+                    );
                     Some(condition_tree)
-                },
+                }
                 Err(e) => {
                     return Err(format!("Failed to parse filter expression: {}", e).into());
                 }
             }
         };
-        
+
         Ok(Self {
             filter_id,
             filter_name,
@@ -112,89 +122,129 @@ impl StreamFilterProcessor {
             time_snapshot: Utc::now(), // Snapshot time for this execution
         })
     }
-    
+
     /// Resolve @time: functions in the condition expression
-    fn resolve_time_functions(condition_expression: &str) -> Result<String, Box<dyn std::error::Error>> {
-        crate::utils::time::resolve_time_functions(condition_expression)
-            .map_err(|e| e.into())
+    fn resolve_time_functions(
+        condition_expression: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        crate::utils::time::resolve_time_functions(condition_expression).map_err(|e| e.into())
     }
-    
+
     /// Evaluate the filter condition against a channel record
-    fn evaluate_condition(&self, record: &crate::models::Channel) -> Result<bool, Box<dyn std::error::Error>> {
+    fn evaluate_condition(
+        &self,
+        record: &crate::models::Channel,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         let Some(condition_tree) = &self.condition_tree else {
             // No condition means match all
             return Ok(true);
         };
-        
+
         self.evaluate_condition_node(&condition_tree.root, record)
     }
-    
+
     /// Evaluate a condition node recursively
-    fn evaluate_condition_node(&self, node: &crate::models::ConditionNode, record: &crate::models::Channel) -> Result<bool, Box<dyn std::error::Error>> {
-        use crate::models::{LogicalOperator, FilterOperator};
-        
+    fn evaluate_condition_node(
+        &self,
+        node: &crate::models::ConditionNode,
+        record: &crate::models::Channel,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        use crate::models::{FilterOperator, LogicalOperator};
+
         match node {
-            crate::models::ConditionNode::Condition { field, operator, value, .. } => {
+            crate::models::ConditionNode::Condition {
+                field,
+                operator,
+                value,
+                ..
+            } => {
                 let field_value = self.get_field_value(field, record)?;
                 let field_value_str = field_value.unwrap_or_default();
-                
+
                 let matches = match operator {
                     FilterOperator::Equals => field_value_str.eq_ignore_ascii_case(value),
                     FilterOperator::NotEquals => !field_value_str.eq_ignore_ascii_case(value),
-                    FilterOperator::Contains => field_value_str.to_lowercase().contains(&value.to_lowercase()),
-                    FilterOperator::NotContains => !field_value_str.to_lowercase().contains(&value.to_lowercase()),
-                    FilterOperator::StartsWith => field_value_str.to_lowercase().starts_with(&value.to_lowercase()),
-                    FilterOperator::NotStartsWith => !field_value_str.to_lowercase().starts_with(&value.to_lowercase()),
-                    FilterOperator::EndsWith => field_value_str.to_lowercase().ends_with(&value.to_lowercase()),
-                    FilterOperator::NotEndsWith => !field_value_str.to_lowercase().ends_with(&value.to_lowercase()),
-                    FilterOperator::Matches => {
-                        self.regex_evaluator.evaluate_with_preprocessing(value, &field_value_str, &format!("filter_{}", self.filter_name))?
-                    },
+                    FilterOperator::Contains => field_value_str
+                        .to_lowercase()
+                        .contains(&value.to_lowercase()),
+                    FilterOperator::NotContains => !field_value_str
+                        .to_lowercase()
+                        .contains(&value.to_lowercase()),
+                    FilterOperator::StartsWith => field_value_str
+                        .to_lowercase()
+                        .starts_with(&value.to_lowercase()),
+                    FilterOperator::NotStartsWith => !field_value_str
+                        .to_lowercase()
+                        .starts_with(&value.to_lowercase()),
+                    FilterOperator::EndsWith => field_value_str
+                        .to_lowercase()
+                        .ends_with(&value.to_lowercase()),
+                    FilterOperator::NotEndsWith => !field_value_str
+                        .to_lowercase()
+                        .ends_with(&value.to_lowercase()),
+                    FilterOperator::Matches => self.regex_evaluator.evaluate_with_preprocessing(
+                        value,
+                        &field_value_str,
+                        &format!("filter_{}", self.filter_name),
+                    )?,
                     FilterOperator::NotMatches => {
-                        !self.regex_evaluator.evaluate_with_preprocessing(value, &field_value_str, &format!("filter_{}", self.filter_name))?
-                    },
+                        !self.regex_evaluator.evaluate_with_preprocessing(
+                            value,
+                            &field_value_str,
+                            &format!("filter_{}", self.filter_name),
+                        )?
+                    }
                     FilterOperator::GreaterThan => {
                         self.compare_values(&field_value_str, value, std::cmp::Ordering::Greater)?
-                    },
+                    }
                     FilterOperator::LessThan => {
                         self.compare_values(&field_value_str, value, std::cmp::Ordering::Less)?
-                    },
+                    }
                     FilterOperator::GreaterThanOrEqual => {
-                        let result = self.compare_values(&field_value_str, value, std::cmp::Ordering::Greater)?;
+                        let result = self.compare_values(
+                            &field_value_str,
+                            value,
+                            std::cmp::Ordering::Greater,
+                        )?;
                         let equal = field_value_str.eq_ignore_ascii_case(value);
                         result || equal
-                    },
+                    }
                     FilterOperator::LessThanOrEqual => {
-                        let result = self.compare_values(&field_value_str, value, std::cmp::Ordering::Less)?;
+                        let result =
+                            self.compare_values(&field_value_str, value, std::cmp::Ordering::Less)?;
                         let equal = field_value_str.eq_ignore_ascii_case(value);
                         result || equal
-                    },
+                    }
                 };
-                
+
                 Ok(matches)
             }
             crate::models::ConditionNode::Group { operator, children } => {
                 if children.is_empty() {
                     return Ok(true); // Empty group defaults to true
                 }
-                
+
                 let mut results = Vec::new();
                 for child in children {
                     results.push(self.evaluate_condition_node(child, record)?);
                 }
-                
+
                 let group_result = match operator {
                     LogicalOperator::And => results.iter().all(|&r| r),
                     LogicalOperator::Or => results.iter().any(|&r| r),
                 };
-                
+
                 Ok(group_result)
             }
         }
     }
-    
+
     /// Get a field value from a channel record
-    fn get_field_value(&self, field_name: &str, record: &crate::models::Channel) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    fn get_field_value(
+        &self,
+        field_name: &str,
+        record: &crate::models::Channel,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         match field_name {
             "tvg_id" => Ok(record.tvg_id.clone()),
             "tvg_name" => Ok(record.tvg_name.clone()),
@@ -206,36 +256,47 @@ impl StreamFilterProcessor {
             _ => Err(anyhow::anyhow!("Unknown field: {}", field_name).into()),
         }
     }
-    
+
     /// Compare two values using numeric or datetime comparison
     /// First tries to parse as Unix timestamps, then falls back to string comparison
-    fn compare_values(&self, field_value: &str, expected_value: &str, ordering: std::cmp::Ordering) -> Result<bool, Box<dyn std::error::Error>> {
-        use crate::utils::time::{resolve_time_functions, parse_time_string};
-        
+    fn compare_values(
+        &self,
+        field_value: &str,
+        expected_value: &str,
+        ordering: std::cmp::Ordering,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        use crate::utils::time::{parse_time_string, resolve_time_functions};
+
         // Resolve any @time: functions in the expected value
         let resolved_expected = resolve_time_functions(expected_value)?;
-        
+
         // Try numeric comparison first (Unix timestamps)
         if let (Ok(field_num), Ok(expected_num)) = (
             parse_time_string(field_value),
-            parse_time_string(&resolved_expected)
+            parse_time_string(&resolved_expected),
         ) {
             return Ok(field_num.cmp(&expected_num) == ordering);
         }
-        
+
         // Fall back to lexicographic string comparison
         Ok(field_value.cmp(&resolved_expected) == ordering)
     }
 }
 
 impl FilterProcessor<crate::models::Channel> for StreamFilterProcessor {
-    fn process_record(&mut self, record: &crate::models::Channel) -> Result<FilterResult, Box<dyn std::error::Error>> {
+    fn process_record(
+        &mut self,
+        record: &crate::models::Channel,
+    ) -> Result<FilterResult, Box<dyn std::error::Error>> {
         let start = std::time::Instant::now();
-        
+
         let condition_result = match self.evaluate_condition(record) {
             Ok(result) => result,
             Err(e) => {
-                warn!("Filter evaluation failed: filter_id={} error={}", self.filter_id, e);
+                warn!(
+                    "Filter evaluation failed: filter_id={} error={}",
+                    self.filter_id, e
+                );
                 return Ok(FilterResult {
                     include_match: false,
                     exclude_match: false,
@@ -244,9 +305,9 @@ impl FilterProcessor<crate::models::Channel> for StreamFilterProcessor {
                 });
             }
         };
-        
+
         let execution_time = start.elapsed();
-        
+
         // Determine include/exclude based on filter type and condition result
         let (include_match, exclude_match) = if self.is_inverse {
             // Inverse/exclude filter: if condition matches, this should be excluded
@@ -255,7 +316,7 @@ impl FilterProcessor<crate::models::Channel> for StreamFilterProcessor {
             // Include filter: if condition matches, this should be included; otherwise excluded
             (condition_result, !condition_result)
         };
-        
+
         Ok(FilterResult {
             include_match,
             exclude_match,
@@ -263,15 +324,15 @@ impl FilterProcessor<crate::models::Channel> for StreamFilterProcessor {
             error: None,
         })
     }
-    
+
     fn get_filter_name(&self) -> &str {
         &self.filter_name
     }
-    
+
     fn get_filter_id(&self) -> &str {
         &self.filter_id
     }
-    
+
     fn is_inverse(&self) -> bool {
         self.is_inverse
     }
@@ -301,41 +362,45 @@ impl EpgFilterProcessor {
         } else {
             // First resolve time functions if any
             let resolved_expression = Self::resolve_time_functions(condition_expression)?;
-            
+
             // Parse the human-readable expression into a ConditionTree using ExpressionParser
-            let parser = crate::expression_parser::ExpressionParser::new()
-                .with_fields(vec![
-                    "id".to_string(),
-                    "channel_id".to_string(),
-                    "title".to_string(),
-                    "program_title".to_string(),
-                    "description".to_string(),
-                    "program_description".to_string(),
-                    "program_icon".to_string(),
-                    "program_category".to_string(),
-                    "subtitles".to_string(),
-                    "episode_num".to_string(),
-                    "season_num".to_string(),
-                    "language".to_string(),
-                    "rating".to_string(),
-                    "aspect_ratio".to_string(),
-                    "start_time".to_string(),
-                    "end_time".to_string(),
-                ]);
-            
+            let parser = crate::expression_parser::ExpressionParser::new().with_fields(vec![
+                "id".to_string(),
+                "channel_id".to_string(),
+                "title".to_string(),
+                "program_title".to_string(),
+                "description".to_string(),
+                "program_description".to_string(),
+                "program_icon".to_string(),
+                "program_category".to_string(),
+                "subtitles".to_string(),
+                "episode_num".to_string(),
+                "season_num".to_string(),
+                "language".to_string(),
+                "rating".to_string(),
+                "aspect_ratio".to_string(),
+                "start_time".to_string(),
+                "end_time".to_string(),
+            ]);
+
             match parser.parse(&resolved_expression) {
                 Ok(condition_tree) => {
-                    trace!("Successfully parsed EPG filter expression for filter_id={} filter_name={}", filter_id, filter_name);
+                    trace!(
+                        "Successfully parsed EPG filter expression for filter_id={} filter_name={}",
+                        filter_id, filter_name
+                    );
                     Some(condition_tree)
-                },
+                }
                 Err(e) => {
-                    warn!("Failed to parse EPG filter expression filter_id={} filter_name={} error={} expression={}", 
-                          filter_id, filter_name, e, resolved_expression);
+                    warn!(
+                        "Failed to parse EPG filter expression filter_id={} filter_name={} error={} expression={}",
+                        filter_id, filter_name, e, resolved_expression
+                    );
                     None
                 }
             }
         };
-        
+
         Ok(Self {
             filter_id,
             filter_name,
@@ -345,89 +410,129 @@ impl EpgFilterProcessor {
             time_snapshot: Utc::now(), // Snapshot time for this execution
         })
     }
-    
+
     /// Resolve @time: functions in the condition expression
-    fn resolve_time_functions(condition_expression: &str) -> Result<String, Box<dyn std::error::Error>> {
-        crate::utils::time::resolve_time_functions(condition_expression)
-            .map_err(|e| e.into())
+    fn resolve_time_functions(
+        condition_expression: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        crate::utils::time::resolve_time_functions(condition_expression).map_err(|e| e.into())
     }
-    
+
     /// Evaluate the filter condition against an EPG program record
-    fn evaluate_condition(&self, record: &crate::pipeline::engines::rule_processor::EpgProgram) -> Result<bool, Box<dyn std::error::Error>> {
+    fn evaluate_condition(
+        &self,
+        record: &crate::pipeline::engines::rule_processor::EpgProgram,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         let Some(condition_tree) = &self.condition_tree else {
             // No condition means match all
             return Ok(true);
         };
-        
+
         self.evaluate_condition_node(&condition_tree.root, record)
     }
-    
+
     /// Evaluate a condition node recursively
-    fn evaluate_condition_node(&self, node: &crate::models::ConditionNode, record: &crate::pipeline::engines::rule_processor::EpgProgram) -> Result<bool, Box<dyn std::error::Error>> {
-        use crate::models::{LogicalOperator, FilterOperator};
-        
+    fn evaluate_condition_node(
+        &self,
+        node: &crate::models::ConditionNode,
+        record: &crate::pipeline::engines::rule_processor::EpgProgram,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        use crate::models::{FilterOperator, LogicalOperator};
+
         match node {
-            crate::models::ConditionNode::Condition { field, operator, value, .. } => {
+            crate::models::ConditionNode::Condition {
+                field,
+                operator,
+                value,
+                ..
+            } => {
                 let field_value = self.get_field_value(field, record)?;
                 let field_value_str = field_value.unwrap_or_default();
-                
+
                 let matches = match operator {
                     FilterOperator::Equals => field_value_str.eq_ignore_ascii_case(value),
                     FilterOperator::NotEquals => !field_value_str.eq_ignore_ascii_case(value),
-                    FilterOperator::Contains => field_value_str.to_lowercase().contains(&value.to_lowercase()),
-                    FilterOperator::NotContains => !field_value_str.to_lowercase().contains(&value.to_lowercase()),
-                    FilterOperator::StartsWith => field_value_str.to_lowercase().starts_with(&value.to_lowercase()),
-                    FilterOperator::NotStartsWith => !field_value_str.to_lowercase().starts_with(&value.to_lowercase()),
-                    FilterOperator::EndsWith => field_value_str.to_lowercase().ends_with(&value.to_lowercase()),
-                    FilterOperator::NotEndsWith => !field_value_str.to_lowercase().ends_with(&value.to_lowercase()),
-                    FilterOperator::Matches => {
-                        self.regex_evaluator.evaluate_with_preprocessing(value, &field_value_str, &format!("epg_filter_{}", self.filter_name))?
-                    },
+                    FilterOperator::Contains => field_value_str
+                        .to_lowercase()
+                        .contains(&value.to_lowercase()),
+                    FilterOperator::NotContains => !field_value_str
+                        .to_lowercase()
+                        .contains(&value.to_lowercase()),
+                    FilterOperator::StartsWith => field_value_str
+                        .to_lowercase()
+                        .starts_with(&value.to_lowercase()),
+                    FilterOperator::NotStartsWith => !field_value_str
+                        .to_lowercase()
+                        .starts_with(&value.to_lowercase()),
+                    FilterOperator::EndsWith => field_value_str
+                        .to_lowercase()
+                        .ends_with(&value.to_lowercase()),
+                    FilterOperator::NotEndsWith => !field_value_str
+                        .to_lowercase()
+                        .ends_with(&value.to_lowercase()),
+                    FilterOperator::Matches => self.regex_evaluator.evaluate_with_preprocessing(
+                        value,
+                        &field_value_str,
+                        &format!("epg_filter_{}", self.filter_name),
+                    )?,
                     FilterOperator::NotMatches => {
-                        !self.regex_evaluator.evaluate_with_preprocessing(value, &field_value_str, &format!("epg_filter_{}", self.filter_name))?
-                    },
+                        !self.regex_evaluator.evaluate_with_preprocessing(
+                            value,
+                            &field_value_str,
+                            &format!("epg_filter_{}", self.filter_name),
+                        )?
+                    }
                     FilterOperator::GreaterThan => {
                         self.compare_values(&field_value_str, value, std::cmp::Ordering::Greater)?
-                    },
+                    }
                     FilterOperator::LessThan => {
                         self.compare_values(&field_value_str, value, std::cmp::Ordering::Less)?
-                    },
+                    }
                     FilterOperator::GreaterThanOrEqual => {
-                        let result = self.compare_values(&field_value_str, value, std::cmp::Ordering::Greater)?;
+                        let result = self.compare_values(
+                            &field_value_str,
+                            value,
+                            std::cmp::Ordering::Greater,
+                        )?;
                         let equal = field_value_str.eq_ignore_ascii_case(value);
                         result || equal
-                    },
+                    }
                     FilterOperator::LessThanOrEqual => {
-                        let result = self.compare_values(&field_value_str, value, std::cmp::Ordering::Less)?;
+                        let result =
+                            self.compare_values(&field_value_str, value, std::cmp::Ordering::Less)?;
                         let equal = field_value_str.eq_ignore_ascii_case(value);
                         result || equal
-                    },
+                    }
                 };
-                
+
                 Ok(matches)
             }
             crate::models::ConditionNode::Group { operator, children } => {
                 if children.is_empty() {
                     return Ok(true); // Empty group defaults to true
                 }
-                
+
                 let mut results = Vec::new();
                 for child in children {
                     results.push(self.evaluate_condition_node(child, record)?);
                 }
-                
+
                 let group_result = match operator {
                     LogicalOperator::And => results.iter().all(|&r| r),
                     LogicalOperator::Or => results.iter().any(|&r| r),
                 };
-                
+
                 Ok(group_result)
             }
         }
     }
-    
+
     /// Get a field value from an EPG program record
-    fn get_field_value(&self, field_name: &str, record: &crate::pipeline::engines::rule_processor::EpgProgram) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    fn get_field_value(
+        &self,
+        field_name: &str,
+        record: &crate::pipeline::engines::rule_processor::EpgProgram,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         let result = match field_name {
             "id" => Some(record.id.clone()),
             "channel_id" => Some(record.channel_id.clone()),
@@ -445,15 +550,25 @@ impl EpgFilterProcessor {
             "end_time" => Some(record.end_time.format("%Y-%m-%d %H:%M:%S").to_string()),
             _ => return Err(anyhow::anyhow!("Unknown EPG field: {}", field_name).into()),
         };
-        
+
         Ok(result)
     }
-    
+
     /// Compare two values numerically or lexicographically
-    fn compare_values(&self, field_value: &str, compare_value: &str, expected_ordering: std::cmp::Ordering) -> Result<bool, Box<dyn std::error::Error>> {
+    fn compare_values(
+        &self,
+        field_value: &str,
+        compare_value: &str,
+        expected_ordering: std::cmp::Ordering,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         // Try numeric comparison first
-        if let (Ok(field_num), Ok(compare_num)) = (field_value.parse::<f64>(), compare_value.parse::<f64>()) {
-            Ok(field_num.partial_cmp(&compare_num).unwrap_or(std::cmp::Ordering::Equal) == expected_ordering)
+        if let (Ok(field_num), Ok(compare_num)) =
+            (field_value.parse::<f64>(), compare_value.parse::<f64>())
+        {
+            Ok(field_num
+                .partial_cmp(&compare_num)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                == expected_ordering)
         } else {
             // Fall back to string comparison
             Ok(field_value.cmp(compare_value) == expected_ordering)
@@ -462,14 +577,21 @@ impl EpgFilterProcessor {
 }
 
 impl FilterProcessor<crate::pipeline::engines::rule_processor::EpgProgram> for EpgFilterProcessor {
-    fn process_record(&mut self, record: &crate::pipeline::engines::rule_processor::EpgProgram) -> Result<FilterResult, Box<dyn std::error::Error>> {
+    fn process_record(
+        &mut self,
+        record: &crate::pipeline::engines::rule_processor::EpgProgram,
+    ) -> Result<FilterResult, Box<dyn std::error::Error>> {
         let start = std::time::Instant::now();
-        
+
         match self.evaluate_condition(record) {
             Ok(condition_matches) => {
-                let include_match = if self.is_inverse { !condition_matches } else { condition_matches };
+                let include_match = if self.is_inverse {
+                    !condition_matches
+                } else {
+                    condition_matches
+                };
                 let exclude_match = !include_match; // If not included, it's excluded
-                
+
                 Ok(FilterResult {
                     include_match,
                     exclude_match,
@@ -478,7 +600,10 @@ impl FilterProcessor<crate::pipeline::engines::rule_processor::EpgProgram> for E
                 })
             }
             Err(e) => {
-                warn!("EPG filter evaluation error for filter_id={}: {}", self.filter_id, e);
+                warn!(
+                    "EPG filter evaluation error for filter_id={}: {}",
+                    self.filter_id, e
+                );
                 Ok(FilterResult {
                     include_match: false, // On error, exclude the program
                     exclude_match: true,
@@ -488,15 +613,15 @@ impl FilterProcessor<crate::pipeline::engines::rule_processor::EpgProgram> for E
             }
         }
     }
-    
+
     fn get_filter_name(&self) -> &str {
         &self.filter_name
     }
-    
+
     fn get_filter_id(&self) -> &str {
         &self.filter_id
     }
-    
+
     fn is_inverse(&self) -> bool {
         self.is_inverse
     }
@@ -521,22 +646,27 @@ impl<T> FilteringEngine<T> {
             performance_stats: HashMap::new(),
         }
     }
-    
+
     pub fn add_filter_processor(&mut self, processor: Box<dyn FilterProcessor<T>>) {
         self.filter_processors.push(processor);
     }
-    
+
     /// Process records with sequential filter logic using indices and deduplication
-    pub fn process_records(&mut self, input_records: &[T]) -> Result<FilterEngineResult<T>, Box<dyn std::error::Error>> 
-    where T: Clone {
+    pub fn process_records(
+        &mut self,
+        input_records: &[T],
+    ) -> Result<FilterEngineResult<T>, Box<dyn std::error::Error>>
+    where
+        T: Clone,
+    {
         let start_time = std::time::Instant::now();
         let mut filtered_indices = Vec::new();
-        
+
         // Apply filters sequentially in order
         for processor in &mut self.filter_processors {
             let filter_start = std::time::Instant::now();
             let before_count = filtered_indices.len();
-            
+
             if processor.is_inverse() {
                 // EXCLUDE filter: scan current filtered indices and remove matches
                 let mut remaining_indices = Vec::new();
@@ -574,10 +704,10 @@ impl<T> FilteringEngine<T> {
                     filtered_indices = remaining_indices;
                 }
             }
-            
+
             let after_count = filtered_indices.len();
             let filter_time = filter_start.elapsed();
-            
+
             // Track the actual effect: how many channels were added or removed by this filter
             let (filter_included, filter_excluded) = if processor.is_inverse() {
                 // EXCLUDE filter removes channels
@@ -592,21 +722,21 @@ impl<T> FilteringEngine<T> {
                     (after_count, before_count - after_count)
                 }
             };
-            
+
             self.performance_stats.insert(
                 processor.get_filter_id().to_string(),
-                (filter_included, filter_excluded, filter_time)
+                (filter_included, filter_excluded, filter_time),
             );
         }
-        
+
         // Convert indices back to actual records
         let filtered_records: Vec<T> = filtered_indices
             .into_iter()
             .map(|index| input_records[index].clone())
             .collect();
-        
+
         let filtered_count = filtered_records.len();
-        
+
         Ok(FilterEngineResult {
             filtered_records,
             total_input: input_records.len(),
@@ -615,27 +745,26 @@ impl<T> FilteringEngine<T> {
             filter_stats: self.performance_stats.clone(),
         })
     }
-    
-    
+
     /// Check if the engine has any filters configured
     pub fn has_filters(&self) -> bool {
         !self.filter_processors.is_empty()
     }
-    
+
     /// Determine if a single record should be included based on all configured filters
     /// This is useful for individual record filtering rather than batch processing
     pub fn should_include(&mut self, record: &T) -> Result<bool, Box<dyn std::error::Error>> {
         if self.filter_processors.is_empty() {
             return Ok(true); // No filters means include everything
         }
-        
+
         let mut should_include = false;
         let mut has_include_filters = false;
-        
+
         // Process filters in order
         for processor in &mut self.filter_processors {
             let result = processor.process_record(record)?;
-            
+
             if processor.is_inverse() {
                 // EXCLUDE filter: if it matches, exclude the record
                 if result.exclude_match {
@@ -649,12 +778,16 @@ impl<T> FilteringEngine<T> {
                 }
             }
         }
-        
+
         // If we have include filters, at least one must have matched
         // If we only have exclude filters and none matched, include the record
-        Ok(if has_include_filters { should_include } else { true })
+        Ok(if has_include_filters {
+            should_include
+        } else {
+            true
+        })
     }
-    
+
     pub fn clear_cache(&mut self) {
         // Clear any cached state for next pipeline run
         self.performance_stats.clear();
@@ -669,7 +802,6 @@ pub struct FilterEngineResult<T> {
     pub execution_time: Duration,
     pub filter_stats: HashMap<String, (usize, usize, Duration)>,
 }
-
 
 /// Type aliases for convenience
 pub type ChannelFilteringEngine = FilteringEngine<crate::models::Channel>;
@@ -712,7 +844,11 @@ mod tests {
         }
     }
 
-    fn create_sample_epg_program(title: &str, channel_id: &str, category: Option<&str>) -> EpgProgram {
+    fn create_sample_epg_program(
+        title: &str,
+        channel_id: &str,
+        category: Option<&str>,
+    ) -> EpgProgram {
         EpgProgram {
             id: format!("prog_{}", title.to_lowercase().replace(' ', "_")),
             channel_id: channel_id.to_string(),
@@ -720,8 +856,12 @@ mod tests {
             title: title.to_string(),
             description: Some(format!("Description for {}", title)),
             program_icon: None,
-            start_time: DateTime::parse_from_rfc3339("2024-01-01T20:00:00Z").unwrap().with_timezone(&Utc),
-            end_time: DateTime::parse_from_rfc3339("2024-01-01T22:00:00Z").unwrap().with_timezone(&Utc),
+            start_time: DateTime::parse_from_rfc3339("2024-01-01T20:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            end_time: DateTime::parse_from_rfc3339("2024-01-01T22:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
             program_category: category.map(|c| c.to_string()),
             subtitles: Some("English".to_string()),
             episode_num: Some("1".to_string()),
@@ -740,10 +880,14 @@ mod tests {
             false,
             r#"channel_name equals "News Channel""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
-        let matching_channel = create_sample_channel("News Channel", "News", "http://example.com/news");
-        let result = processor.process_record(&matching_channel).expect("Should process record");
+        let matching_channel =
+            create_sample_channel("News Channel", "News", "http://example.com/news");
+        let result = processor
+            .process_record(&matching_channel)
+            .expect("Should process record");
 
         assert!(result.include_match);
         assert!(!result.exclude_match);
@@ -758,10 +902,14 @@ mod tests {
             false,
             r#"channel_name equals "Sports Channel""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
-        let non_matching_channel = create_sample_channel("News Channel", "News", "http://example.com/news");
-        let result = processor.process_record(&non_matching_channel).expect("Should process record");
+        let non_matching_channel =
+            create_sample_channel("News Channel", "News", "http://example.com/news");
+        let result = processor
+            .process_record(&non_matching_channel)
+            .expect("Should process record");
 
         assert!(!result.include_match);
         assert!(result.exclude_match);
@@ -776,10 +924,14 @@ mod tests {
             true, // inverse = true
             r#"channel_name equals "News Channel""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
-        let matching_channel = create_sample_channel("News Channel", "News", "http://example.com/news");
-        let result = processor.process_record(&matching_channel).expect("Should process record");
+        let matching_channel =
+            create_sample_channel("News Channel", "News", "http://example.com/news");
+        let result = processor
+            .process_record(&matching_channel)
+            .expect("Should process record");
 
         // Inverse filter: condition matches but result is inverted
         assert!(!result.include_match);
@@ -794,10 +946,14 @@ mod tests {
             false,
             r#"channel_name matches "^News.*""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
-        let matching_channel = create_sample_channel("News Channel 1", "News", "http://example.com/news1");
-        let result = processor.process_record(&matching_channel).expect("Should process record");
+        let matching_channel =
+            create_sample_channel("News Channel 1", "News", "http://example.com/news1");
+        let result = processor
+            .process_record(&matching_channel)
+            .expect("Should process record");
 
         assert!(result.include_match);
         assert!(!result.exclude_match);
@@ -811,10 +967,17 @@ mod tests {
             false,
             r#"group_title equals "Entertainment""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
-        let matching_channel = create_sample_channel("Movie Channel", "Entertainment", "http://example.com/movies");
-        let result = processor.process_record(&matching_channel).expect("Should process record");
+        let matching_channel = create_sample_channel(
+            "Movie Channel",
+            "Entertainment",
+            "http://example.com/movies",
+        );
+        let result = processor
+            .process_record(&matching_channel)
+            .expect("Should process record");
 
         assert!(result.include_match);
     }
@@ -827,10 +990,13 @@ mod tests {
             false,
             r#"program_title equals "Breaking News""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
         let matching_program = create_sample_epg_program("Breaking News", "ch1", Some("News"));
-        let result = processor.process_record(&matching_program).expect("Should process record");
+        let result = processor
+            .process_record(&matching_program)
+            .expect("Should process record");
 
         assert!(result.include_match);
         assert!(!result.exclude_match);
@@ -845,16 +1011,21 @@ mod tests {
             false,
             r#"program_category equals "Movies""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
         let matching_program = create_sample_epg_program("Action Hero", "ch2", Some("Movies"));
-        let result = processor.process_record(&matching_program).expect("Should process record");
+        let result = processor
+            .process_record(&matching_program)
+            .expect("Should process record");
 
         assert!(result.include_match);
         assert!(!result.exclude_match);
 
         let non_matching_program = create_sample_epg_program("Evening News", "ch1", Some("News"));
-        let result2 = processor.process_record(&non_matching_program).expect("Should process record");
+        let result2 = processor
+            .process_record(&non_matching_program)
+            .expect("Should process record");
 
         assert!(!result2.include_match);
         assert!(result2.exclude_match);
@@ -868,10 +1039,13 @@ mod tests {
             false,
             r#"channel_id equals "ch1""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
         let matching_program = create_sample_epg_program("News Show", "ch1", Some("News"));
-        let result = processor.process_record(&matching_program).expect("Should process record");
+        let result = processor
+            .process_record(&matching_program)
+            .expect("Should process record");
 
         assert!(result.include_match);
     }
@@ -884,15 +1058,21 @@ mod tests {
             false,
             r#"program_title matches "^Movie:.*""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
-        let matching_program = create_sample_epg_program("Movie: Action Hero", "ch2", Some("Movies"));
-        let result = processor.process_record(&matching_program).expect("Should process record");
+        let matching_program =
+            create_sample_epg_program("Movie: Action Hero", "ch2", Some("Movies"));
+        let result = processor
+            .process_record(&matching_program)
+            .expect("Should process record");
 
         assert!(result.include_match);
 
         let non_matching_program = create_sample_epg_program("Breaking News", "ch1", Some("News"));
-        let result2 = processor.process_record(&non_matching_program).expect("Should process record");
+        let result2 = processor
+            .process_record(&non_matching_program)
+            .expect("Should process record");
 
         assert!(!result2.include_match);
     }
@@ -908,7 +1088,8 @@ mod tests {
             false,
             r#"channel_name equals "Test""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
         engine.add_filter_processor(Box::new(processor));
         assert!(engine.has_filters());
@@ -919,7 +1100,9 @@ mod tests {
         let mut engine = FilteringEngine::<Channel>::new();
         let channel = create_sample_channel("Test", "Group", "http://test.com");
 
-        let result = engine.should_include(&channel).expect("Should evaluate inclusion");
+        let result = engine
+            .should_include(&channel)
+            .expect("Should evaluate inclusion");
         assert!(result); // No filters means include everything
     }
 
@@ -933,16 +1116,22 @@ mod tests {
             false, // include filter
             r#"group_title equals "News""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
         engine.add_filter_processor(Box::new(processor));
 
         let matching_channel = create_sample_channel("News Show", "News", "http://news.com");
-        let result = engine.should_include(&matching_channel).expect("Should evaluate inclusion");
+        let result = engine
+            .should_include(&matching_channel)
+            .expect("Should evaluate inclusion");
         assert!(result);
 
-        let non_matching_channel = create_sample_channel("Movie Show", "Movies", "http://movies.com");
-        let result2 = engine.should_include(&non_matching_channel).expect("Should evaluate inclusion");
+        let non_matching_channel =
+            create_sample_channel("Movie Show", "Movies", "http://movies.com");
+        let result2 = engine
+            .should_include(&non_matching_channel)
+            .expect("Should evaluate inclusion");
         assert!(!result2);
     }
 
@@ -956,16 +1145,21 @@ mod tests {
             true, // exclude filter
             r#"group_title equals "Adult""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
         engine.add_filter_processor(Box::new(processor));
 
         let excluded_channel = create_sample_channel("Adult Show", "Adult", "http://adult.com");
-        let result = engine.should_include(&excluded_channel).expect("Should evaluate inclusion");
+        let result = engine
+            .should_include(&excluded_channel)
+            .expect("Should evaluate inclusion");
         assert!(!result); // Should be excluded
 
         let allowed_channel = create_sample_channel("News Show", "News", "http://news.com");
-        let result2 = engine.should_include(&allowed_channel).expect("Should evaluate inclusion");
+        let result2 = engine
+            .should_include(&allowed_channel)
+            .expect("Should evaluate inclusion");
         assert!(result2); // Should be included (not excluded)
     }
 
@@ -979,16 +1173,21 @@ mod tests {
             false,
             r#"program_category equals "Movies""#,
             create_test_regex_evaluator(),
-        ).expect("Should create filter processor");
+        )
+        .expect("Should create filter processor");
 
         engine.add_filter_processor(Box::new(processor));
 
         let movie_program = create_sample_epg_program("Action Movie", "ch1", Some("Movies"));
-        let result = engine.should_include(&movie_program).expect("Should evaluate inclusion");
+        let result = engine
+            .should_include(&movie_program)
+            .expect("Should evaluate inclusion");
         assert!(result);
 
         let news_program = create_sample_epg_program("Evening News", "ch1", Some("News"));
-        let result2 = engine.should_include(&news_program).expect("Should evaluate inclusion");
+        let result2 = engine
+            .should_include(&news_program)
+            .expect("Should evaluate inclusion");
         assert!(!result2);
     }
 
@@ -1003,7 +1202,8 @@ mod tests {
             false,
             r#"group_title equals "News""#,
             create_test_regex_evaluator(),
-        ).expect("Should create include filter");
+        )
+        .expect("Should create include filter");
 
         // Then add exclude filter for Adult content
         let exclude_processor = StreamFilterProcessor::new(
@@ -1012,22 +1212,36 @@ mod tests {
             true,
             r#"channel_name matches ".*Adult.*""#,
             create_test_regex_evaluator(),
-        ).expect("Should create exclude filter");
+        )
+        .expect("Should create exclude filter");
 
         engine.add_filter_processor(Box::new(include_processor));
         engine.add_filter_processor(Box::new(exclude_processor));
 
         // Should include news channels
         let news_channel = create_sample_channel("CNN News", "News", "http://cnn.com");
-        assert!(engine.should_include(&news_channel).expect("Should evaluate"));
+        assert!(
+            engine
+                .should_include(&news_channel)
+                .expect("Should evaluate")
+        );
 
         // Should exclude adult news channels
-        let adult_news_channel = create_sample_channel("Adult News", "News", "http://adultnews.com");
-        assert!(!engine.should_include(&adult_news_channel).expect("Should evaluate"));
+        let adult_news_channel =
+            create_sample_channel("Adult News", "News", "http://adultnews.com");
+        assert!(
+            !engine
+                .should_include(&adult_news_channel)
+                .expect("Should evaluate")
+        );
 
         // Should not include non-news channels
         let movie_channel = create_sample_channel("Movie Channel", "Movies", "http://movies.com");
-        assert!(!engine.should_include(&movie_channel).expect("Should evaluate"));
+        assert!(
+            !engine
+                .should_include(&movie_channel)
+                .expect("Should evaluate")
+        );
     }
 
     #[test]
@@ -1051,10 +1265,13 @@ mod tests {
             false,
             "", // empty expression
             create_test_regex_evaluator(),
-        ).expect("Should create filter with empty expression");
+        )
+        .expect("Should create filter with empty expression");
 
         let channel = create_sample_channel("Test", "Group", "http://test.com");
-        let result = processor.process_record(&channel).expect("Should process record");
+        let result = processor
+            .process_record(&channel)
+            .expect("Should process record");
 
         // Empty expression should default to include
         assert!(result.include_match);

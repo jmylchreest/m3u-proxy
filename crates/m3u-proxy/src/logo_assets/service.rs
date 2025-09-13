@@ -1,17 +1,17 @@
-use crate::logo_assets::storage::LogoAssetStorage;
 use crate::entities::{logo_assets, prelude::LogoAssets};
+use crate::logo_assets::storage::LogoAssetStorage;
 use crate::models::logo_asset::{
-    LogoAssetType, LogoFormatType, LogoAsset, LogoAssetListRequest, LogoAssetListResponse,
-    LogoAssetWithUrl, LogoAssetSearchRequest, LogoAssetSearchResult, LogoCacheStats
+    LogoAsset, LogoAssetListRequest, LogoAssetListResponse, LogoAssetSearchRequest,
+    LogoAssetSearchResult, LogoAssetType, LogoAssetWithUrl, LogoCacheStats, LogoFormatType,
 };
-use crate::utils::{StandardHttpClient, HttpClientFactory};
+use crate::utils::{HttpClientFactory, StandardHttpClient};
 
 use anyhow;
 use chrono::Utc;
 use image::ImageFormat;
 use sandboxed_file_manager::SandboxedManager;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use sha2::{Digest, Sha256};
-use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, QueryOrder};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -28,7 +28,6 @@ pub struct LogoAssetService {
     http_client: StandardHttpClient,
     logo_file_manager: Option<SandboxedManager>,
 }
-
 
 /// Parameters for creating a logo asset with specific ID
 #[derive(Debug)]
@@ -47,9 +46,9 @@ pub struct CreateAssetWithIdParams {
 }
 impl LogoAssetService {
     pub async fn new(
-        connection: Arc<DatabaseConnection>, 
+        connection: Arc<DatabaseConnection>,
         storage: LogoAssetStorage,
-        http_client_factory: &HttpClientFactory
+        http_client_factory: &HttpClientFactory,
     ) -> Self {
         // Create HTTP client using the factory for consistent circuit breaker integration
         let http_client = http_client_factory
@@ -64,13 +63,11 @@ impl LogoAssetService {
         }
     }
 
-
     /// Update the service with a file manager
     pub fn with_file_manager(mut self, file_manager: SandboxedManager) -> Self {
         self.logo_file_manager = Some(file_manager);
         self
     }
-    
 
     /// Construct the full URL for a cached logo
     pub fn get_cached_logo_url(&self, cache_id: &str, base_url: &str) -> String {
@@ -85,7 +82,7 @@ impl LogoAssetService {
         params: CreateAssetWithIdParams,
     ) -> Result<logo_assets::Model, anyhow::Error> {
         use sea_orm::{ActiveModelTrait, Set};
-        
+
         let created_at = Utc::now();
         let updated_at = created_at;
 
@@ -129,15 +126,15 @@ impl LogoAssetService {
         request: LogoAssetListRequest,
         base_url: &str,
     ) -> Result<LogoAssetListResponse, anyhow::Error> {
-        use sea_orm::{QueryFilter, QueryOrder, QuerySelect, ColumnTrait, PaginatorTrait};
-        
+        use sea_orm::{ColumnTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
+
         let limit = request.limit.unwrap_or(20);
         let page = request.page.unwrap_or(1);
         let offset = (page - 1) * limit;
 
         // Build SeaORM query with filters
-        let mut find_query = LogoAssets::find()
-            .filter(logo_assets::Column::FormatType.eq("original"));
+        let mut find_query =
+            LogoAssets::find().filter(logo_assets::Column::FormatType.eq("original"));
 
         if let Some(search) = &request.search {
             find_query = find_query.filter(logo_assets::Column::Name.contains(search));
@@ -198,10 +195,14 @@ impl LogoAssetService {
                 updated_at: model.updated_at,
             };
 
-            let url = format!("{}/api/v1/logos/{}", base_url.trim_end_matches('/'), model.id);
-            converted_assets.push(LogoAssetWithUrl { 
+            let url = format!(
+                "{}/api/v1/logos/{}",
+                base_url.trim_end_matches('/'),
+                model.id
+            );
+            converted_assets.push(LogoAssetWithUrl {
                 asset: domain_asset,
-                url 
+                url,
             });
         }
         let assets_with_urls = converted_assets;
@@ -223,8 +224,8 @@ impl LogoAssetService {
         name: String,
         description: Option<String>,
     ) -> Result<logo_assets::Model, anyhow::Error> {
-        use sea_orm::{EntityTrait, ActiveModelTrait, Set};
-        
+        use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+
         let updated_at = Utc::now();
 
         // Find the existing asset and update it using SeaORM ActiveModel
@@ -238,7 +239,10 @@ impl LogoAssetService {
         active_model.description = Set(description);
         active_model.updated_at = Set(updated_at);
 
-        active_model.update(&*self.connection).await.map_err(Into::into)
+        active_model
+            .update(&*self.connection)
+            .await
+            .map_err(Into::into)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -254,7 +258,7 @@ impl LogoAssetService {
         name: Option<String>,
         description: Option<String>,
     ) -> Result<logo_assets::Model, anyhow::Error> {
-        use sea_orm::{EntityTrait, ActiveModelTrait, Set};
+        use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
         // Find the existing asset
         let existing_asset = LogoAssets::find_by_id(asset_id)
@@ -265,7 +269,7 @@ impl LogoAssetService {
         // Update the database record
         let updated_at = Utc::now();
         let mut active_model: logo_assets::ActiveModel = existing_asset.into();
-        
+
         active_model.file_name = Set(file_name);
         active_model.file_path = Set(file_path);
         active_model.file_size = Set(file_size as i32);
@@ -273,7 +277,7 @@ impl LogoAssetService {
         active_model.width = Set(width);
         active_model.height = Set(height);
         active_model.updated_at = Set(updated_at);
-        
+
         // Update name and description if provided
         if let Some(new_name) = name {
             active_model.name = Set(new_name);
@@ -282,12 +286,15 @@ impl LogoAssetService {
             active_model.description = Set(Some(new_description));
         }
 
-        active_model.update(&*self.connection).await.map_err(Into::into)
+        active_model
+            .update(&*self.connection)
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn delete_asset(&self, asset_id: Uuid) -> Result<(), anyhow::Error> {
-        use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
-                
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
         // Get asset info first to delete the file
         let asset = self.get_asset(asset_id).await?;
 
@@ -335,8 +342,8 @@ impl LogoAssetService {
         request: LogoAssetSearchRequest,
         base_url: &str,
     ) -> Result<LogoAssetSearchResult, anyhow::Error> {
-        use sea_orm::{QueryFilter, QueryOrder, QuerySelect, ColumnTrait};
-        
+        use sea_orm::{ColumnTrait, QueryFilter, QueryOrder, QuerySelect};
+
         let limit = request.limit.unwrap_or(20);
         let search_query = request.query.unwrap_or_default();
 
@@ -390,7 +397,10 @@ impl LogoAssetService {
                 base_url.trim_end_matches('/'),
                 model.id
             );
-            assets.push(LogoAssetWithUrl { asset: domain_asset, url });
+            assets.push(LogoAssetWithUrl {
+                asset: domain_asset,
+                url,
+            });
         }
 
         Ok(LogoAssetSearchResult {
@@ -422,64 +432,65 @@ impl LogoAssetService {
         all_assets.extend(db_result.assets);
 
         // Add cached logos from LogoCacheService if requested and service is available
-        if include_cached
-            && let Some(cache_service) = logo_cache_service {
-                // Use the new logo cache service to search - pass query as single search term
-                let query = if let Some(q) = search_query {
-                    crate::services::logo_cache::entry::LogoCacheQuery {
-                        original_url: Some(q.to_string()), // Use the query as a unified search term
-                        channel_name: None,
-                        channel_group: None,
-                    }
-                } else {
-                    crate::services::logo_cache::entry::LogoCacheQuery {
-                        original_url: None,
-                        channel_name: None,
-                        channel_group: None,
-                    }
-                };
-                
-                let cached_results = cache_service
-                    .search(&query)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to search cached logos: {}", e))?;
-
-                // Convert cached logo search results to LogoAssetWithUrl format
-                for result in cached_results {
-                    // Create a synthetic LogoAsset from cached logo search result
-                    let display_name = result.matched_text.clone()
-                        .unwrap_or_else(|| format!("Cached: {}", result.relative_path));
-                    
-                    let synthetic_asset = LogoAsset {
-                        id: result.url_hash.to_string(), // Use url_hash as string ID
-                        name: display_name.clone(),
-                        description: Some(format!("Cached logo: {}", display_name)),
-                        file_name: result.relative_path.clone(),
-                        file_path: format!("cached/{}", result.relative_path),
-                        file_size: result.file_size as i64,
-                        mime_type: result.mime_type.unwrap_or_else(|| "image/png".to_string()),
-                        asset_type: LogoAssetType::Cached,
-                        source_url: None, // Would need to be resolved from metadata
-                        width: result.width,
-                        height: result.height,
-                        parent_asset_id: None,
-                        format_type: crate::models::logo_asset::LogoFormatType::Original,
-                        created_at: result.cached_at.unwrap_or_else(chrono::Utc::now),
-                        updated_at: result.updated_at.unwrap_or_else(chrono::Utc::now),
-                    };
-
-                    // Use the cached logo serving URL
-                    let url = format!(
-                        "{}/api/v1/logos/cached/{}",
-                        base_url.trim_end_matches('/'),
-                        result.url_hash
-                    );
-                    all_assets.push(LogoAssetWithUrl {
-                        asset: synthetic_asset,
-                        url,
-                    });
+        if include_cached && let Some(cache_service) = logo_cache_service {
+            // Use the new logo cache service to search - pass query as single search term
+            let query = if let Some(q) = search_query {
+                crate::services::logo_cache::entry::LogoCacheQuery {
+                    original_url: Some(q.to_string()), // Use the query as a unified search term
+                    channel_name: None,
+                    channel_group: None,
                 }
+            } else {
+                crate::services::logo_cache::entry::LogoCacheQuery {
+                    original_url: None,
+                    channel_name: None,
+                    channel_group: None,
+                }
+            };
+
+            let cached_results = cache_service
+                .search(&query)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to search cached logos: {}", e))?;
+
+            // Convert cached logo search results to LogoAssetWithUrl format
+            for result in cached_results {
+                // Create a synthetic LogoAsset from cached logo search result
+                let display_name = result
+                    .matched_text
+                    .clone()
+                    .unwrap_or_else(|| format!("Cached: {}", result.relative_path));
+
+                let synthetic_asset = LogoAsset {
+                    id: result.url_hash.to_string(), // Use url_hash as string ID
+                    name: display_name.clone(),
+                    description: Some(format!("Cached logo: {}", display_name)),
+                    file_name: result.relative_path.clone(),
+                    file_path: format!("cached/{}", result.relative_path),
+                    file_size: result.file_size as i64,
+                    mime_type: result.mime_type.unwrap_or_else(|| "image/png".to_string()),
+                    asset_type: LogoAssetType::Cached,
+                    source_url: None, // Would need to be resolved from metadata
+                    width: result.width,
+                    height: result.height,
+                    parent_asset_id: None,
+                    format_type: crate::models::logo_asset::LogoFormatType::Original,
+                    created_at: result.cached_at.unwrap_or_else(chrono::Utc::now),
+                    updated_at: result.updated_at.unwrap_or_else(chrono::Utc::now),
+                };
+
+                // Use the cached logo serving URL
+                let url = format!(
+                    "{}/api/v1/logos/cached/{}",
+                    base_url.trim_end_matches('/'),
+                    result.url_hash
+                );
+                all_assets.push(LogoAssetWithUrl {
+                    asset: synthetic_asset,
+                    url,
+                });
             }
+        }
 
         // Sort by asset type (uploaded first, cached after), then by name
         all_assets.sort_by(|a, b| {
@@ -503,9 +514,7 @@ impl LogoAssetService {
 
     pub async fn get_cache_stats(&self) -> Result<LogoCacheStats, anyhow::Error> {
         // Get all logo assets to calculate statistics
-        let all_assets = LogoAssets::find()
-            .all(&*self.connection)
-            .await?;
+        let all_assets = LogoAssets::find().all(&*self.connection).await?;
 
         let mut total_cached_logos = 0i64;
         let mut total_uploaded_logos = 0i64;
@@ -520,7 +529,7 @@ impl LogoAssetService {
                 (_, "png_conversion") => total_linked_assets += 1,
                 _ => {}
             }
-            
+
             // Sum file sizes
             total_storage_used += asset.file_size as i64;
         }
@@ -549,9 +558,7 @@ impl LogoAssetService {
 
         // Add logo cache service stats if available
         if let Some(cache_service) = logo_cache_service {
-            let cache_stats = cache_service
-                .get_stats()
-                .await;
+            let cache_stats = cache_service.get_stats().await;
 
             stats.filesystem_cached_logos = cache_stats.total_entries as i64;
             stats.filesystem_cached_storage = cache_stats.storage_usage_bytes as i64;
@@ -688,11 +695,14 @@ impl LogoAssetService {
         self.cache_logo_from_url_with_metadata(logo_url, None, None, None)
             .await
     }
-    
+
     /// Download and cache a logo from a URL with size tracking
     ///
     /// Returns (cache_id, bytes_transferred) where bytes_transferred is 0 for cache hits
-    pub async fn cache_logo_from_url_with_size_tracking(&self, logo_url: &str) -> Result<(String, u64), anyhow::Error> {
+    pub async fn cache_logo_from_url_with_size_tracking(
+        &self,
+        logo_url: &str,
+    ) -> Result<(String, u64), anyhow::Error> {
         self.cache_logo_from_url_with_metadata_and_size_tracking(logo_url, None, None, None)
             .await
     }
@@ -705,12 +715,17 @@ impl LogoAssetService {
         channel_group: Option<String>,
         extra_fields: Option<std::collections::HashMap<String, String>>,
     ) -> Result<String, anyhow::Error> {
-        let (cache_id, _bytes_transferred) = self.cache_logo_from_url_with_metadata_and_size_tracking(
-            logo_url, channel_name, channel_group, extra_fields
-        ).await?;
+        let (cache_id, _bytes_transferred) = self
+            .cache_logo_from_url_with_metadata_and_size_tracking(
+                logo_url,
+                channel_name,
+                channel_group,
+                extra_fields,
+            )
+            .await?;
         Ok(cache_id)
     }
-    
+
     /// Download and cache a logo from a URL with optional metadata and size tracking
     pub async fn cache_logo_from_url_with_metadata_and_size_tracking(
         &self,
@@ -735,42 +750,60 @@ impl LogoAssetService {
                 // Read existing metadata to check if URL changed and update info
                 match file_manager.read(&metadata_file_path).await {
                     Ok(metadata_bytes) => {
-                        match serde_json::from_slice::<crate::services::logo_cache::CachedLogoMetadata>(&metadata_bytes) {
+                        match serde_json::from_slice::<
+                            crate::services::logo_cache::CachedLogoMetadata,
+                        >(&metadata_bytes)
+                        {
                             Ok(mut existing_metadata) => {
-                                let url_changed = existing_metadata.original_url.as_deref() != Some(logo_url);
-                                
+                                let url_changed =
+                                    existing_metadata.original_url.as_deref() != Some(logo_url);
+
                                 if url_changed {
                                     // URL has changed - need to refetch the logo
                                     debug!(
                                         "Logo URL changed for cache_id {}: {} -> {}, refetching",
                                         cache_id,
-                                        existing_metadata.original_url.as_deref().unwrap_or("unknown"),
+                                        existing_metadata
+                                            .original_url
+                                            .as_deref()
+                                            .unwrap_or("unknown"),
                                         logo_url
                                     );
                                     // Continue to download logic below
                                 } else {
                                     // URL same, but update metadata with fresh channel info
-                                    let metadata_updated = existing_metadata.channel_name != channel_name 
+                                    let metadata_updated = existing_metadata.channel_name
+                                        != channel_name
                                         || existing_metadata.channel_group != channel_group;
-                                    
+
                                     if metadata_updated {
                                         trace!(
                                             "Updating metadata for cached logo: {} -> {}",
                                             logo_url, cache_id
                                         );
-                                        
+
                                         // Update metadata with fresh info
                                         existing_metadata.channel_name = channel_name;
                                         existing_metadata.channel_group = channel_group;
                                         existing_metadata.extra_fields = extra_fields;
                                         existing_metadata.updated_at = chrono::Utc::now();
-                                        
+
                                         // Write updated metadata
-                                        let json_content = serde_json::to_string_pretty(&existing_metadata)?;
-                                        if let Err(e) = file_manager.write(&metadata_file_path, json_content.as_bytes()).await {
-                                            debug!("Failed to update metadata for {}: {}", cache_id, e);
+                                        let json_content =
+                                            serde_json::to_string_pretty(&existing_metadata)?;
+                                        if let Err(e) = file_manager
+                                            .write(&metadata_file_path, json_content.as_bytes())
+                                            .await
+                                        {
+                                            debug!(
+                                                "Failed to update metadata for {}: {}",
+                                                cache_id, e
+                                            );
                                         } else {
-                                            debug!("Updated metadata for cached logo: {}", cache_id);
+                                            debug!(
+                                                "Updated metadata for cached logo: {}",
+                                                cache_id
+                                            );
                                         }
                                     } else {
                                         trace!(
@@ -778,18 +811,24 @@ impl LogoAssetService {
                                             logo_url, cache_id
                                         );
                                     }
-                                    
+
                                     return Ok((cache_id, 0)); // 0 bytes for cache hit
                                 }
                             }
                             Err(e) => {
-                                debug!("Failed to parse existing metadata for {}: {}, regenerating", cache_id, e);
+                                debug!(
+                                    "Failed to parse existing metadata for {}: {}, regenerating",
+                                    cache_id, e
+                                );
                                 // Continue to download logic to regenerate everything
                             }
                         }
                     }
                     Err(e) => {
-                        debug!("Failed to read existing metadata for {}: {}, regenerating", cache_id, e);
+                        debug!(
+                            "Failed to read existing metadata for {}: {}, regenerating",
+                            cache_id, e
+                        );
                         // Continue to download logic to regenerate everything
                     }
                 }
@@ -828,42 +867,58 @@ impl LogoAssetService {
                 // Read existing metadata to check if URL changed and update info
                 match std::fs::read(&metadata_path) {
                     Ok(metadata_bytes) => {
-                        match serde_json::from_slice::<crate::services::logo_cache::CachedLogoMetadata>(&metadata_bytes) {
+                        match serde_json::from_slice::<
+                            crate::services::logo_cache::CachedLogoMetadata,
+                        >(&metadata_bytes)
+                        {
                             Ok(mut existing_metadata) => {
-                                let url_changed = existing_metadata.original_url.as_deref() != Some(logo_url);
-                                
+                                let url_changed =
+                                    existing_metadata.original_url.as_deref() != Some(logo_url);
+
                                 if url_changed {
                                     // URL has changed - need to refetch the logo
                                     debug!(
                                         "Logo URL changed for cache_id {}: {} -> {}, refetching",
                                         cache_id,
-                                        existing_metadata.original_url.as_deref().unwrap_or("unknown"),
+                                        existing_metadata
+                                            .original_url
+                                            .as_deref()
+                                            .unwrap_or("unknown"),
                                         logo_url
                                     );
                                     // Continue to download logic below
                                 } else {
                                     // URL same, but update metadata with fresh channel info
-                                    let metadata_updated = existing_metadata.channel_name != channel_name 
+                                    let metadata_updated = existing_metadata.channel_name
+                                        != channel_name
                                         || existing_metadata.channel_group != channel_group;
-                                    
+
                                     if metadata_updated {
                                         trace!(
                                             "Updating metadata for cached logo: {} -> {}",
                                             logo_url, cache_id
                                         );
-                                        
+
                                         // Update metadata with fresh info
                                         existing_metadata.channel_name = channel_name;
                                         existing_metadata.channel_group = channel_group;
                                         existing_metadata.extra_fields = extra_fields;
                                         existing_metadata.updated_at = chrono::Utc::now();
-                                        
+
                                         // Write updated metadata
-                                        let json_content = serde_json::to_string_pretty(&existing_metadata)?;
-                                        if let Err(e) = std::fs::write(&metadata_path, json_content) {
-                                            debug!("Failed to update metadata for {}: {}", cache_id, e);
+                                        let json_content =
+                                            serde_json::to_string_pretty(&existing_metadata)?;
+                                        if let Err(e) = std::fs::write(&metadata_path, json_content)
+                                        {
+                                            debug!(
+                                                "Failed to update metadata for {}: {}",
+                                                cache_id, e
+                                            );
                                         } else {
-                                            debug!("Updated metadata for cached logo: {}", cache_id);
+                                            debug!(
+                                                "Updated metadata for cached logo: {}",
+                                                cache_id
+                                            );
                                         }
                                     } else {
                                         trace!(
@@ -871,18 +926,24 @@ impl LogoAssetService {
                                             logo_url, cache_id
                                         );
                                     }
-                                    
+
                                     return Ok((cache_id, 0)); // 0 bytes for cache hit
                                 }
                             }
                             Err(e) => {
-                                debug!("Failed to parse existing metadata for {}: {}, regenerating", cache_id, e);
+                                debug!(
+                                    "Failed to parse existing metadata for {}: {}, regenerating",
+                                    cache_id, e
+                                );
                                 // Continue to download logic to regenerate everything
                             }
                         }
                     }
                     Err(e) => {
-                        debug!("Failed to read existing metadata for {}: {}, regenerating", cache_id, e);
+                        debug!(
+                            "Failed to read existing metadata for {}: {}, regenerating",
+                            cache_id, e
+                        );
                         // Continue to download logic to regenerate everything
                     }
                 }
@@ -911,15 +972,16 @@ impl LogoAssetService {
         debug!("Downloading logo from URL: {} -> {}", logo_url, cache_id);
 
         // Download the image using circuit breaker protected HTTP client
-        let image_bytes = self.http_client.fetch_logo(logo_url).await.map_err(|e| {
-            anyhow::anyhow!("Failed to download logo from '{}': {}", logo_url, e)
-        })?;
-        
+        let image_bytes =
+            self.http_client.fetch_logo(logo_url).await.map_err(|e| {
+                anyhow::anyhow!("Failed to download logo from '{}': {}", logo_url, e)
+            })?;
+
         let raw_bytes_downloaded = image_bytes.len() as u64;
 
         // Convert to PNG and extract dimensions
         let png_bytes = self.convert_image_to_png(&image_bytes, logo_url)?;
-        
+
         // Extract dimensions from the converted PNG
         let dimensions = self.extract_image_dimensions(&png_bytes).unwrap_or(None);
 
@@ -953,33 +1015,36 @@ impl LogoAssetService {
         let bytes_transferred = png_bytes.len() as u64;
         debug!(
             "Successfully cached logo: {} -> {} (downloaded {} raw bytes, stored {} PNG bytes)",
-            logo_url,
-            cache_id,
-            raw_bytes_downloaded,
-            bytes_transferred
+            logo_url, cache_id, raw_bytes_downloaded, bytes_transferred
         );
 
         // Generate metadata file if channel info provided
         if channel_name.is_some() || channel_group.is_some() || extra_fields.is_some() {
             if self.logo_file_manager.is_some() {
-                if let Err(e) = self.generate_metadata_for_cached_logo_with_file_manager(
+                if let Err(e) = self
+                    .generate_metadata_for_cached_logo_with_file_manager(
+                        &cache_id,
+                        logo_url,
+                        channel_name,
+                        channel_group,
+                        extra_fields,
+                        dimensions,
+                    )
+                    .await
+                {
+                    debug!("Failed to generate metadata for {}: {}", cache_id, e);
+                }
+            } else if let Err(e) = self
+                .generate_metadata_for_cached_logo(
                     &cache_id,
                     logo_url,
                     channel_name,
                     channel_group,
                     extra_fields,
                     dimensions,
-                ).await {
-                    debug!("Failed to generate metadata for {}: {}", cache_id, e);
-                }
-            } else if let Err(e) = self.generate_metadata_for_cached_logo(
-                &cache_id,
-                logo_url,
-                channel_name,
-                channel_group,
-                extra_fields,
-                dimensions,
-            ).await {
+                )
+                .await
+            {
                 debug!("Failed to generate metadata for {}: {}", cache_id, e);
             }
         }
@@ -1072,7 +1137,10 @@ impl LogoAssetService {
     }
 
     /// Extract image dimensions from image bytes
-    fn extract_image_dimensions(&self, image_bytes: &[u8]) -> Result<Option<(i32, i32)>, anyhow::Error> {
+    fn extract_image_dimensions(
+        &self,
+        image_bytes: &[u8],
+    ) -> Result<Option<(i32, i32)>, anyhow::Error> {
         match image::load_from_memory(image_bytes) {
             Ok(img) => Ok(Some((img.width() as i32, img.height() as i32))),
             Err(e) => {
@@ -1081,7 +1149,6 @@ impl LogoAssetService {
             }
         }
     }
-
 
     /// Convert image bytes to PNG format
     fn convert_image_to_png(
@@ -1134,8 +1201,7 @@ impl LogoAssetService {
                 _ => LogoAssetType::Uploaded,
             };
 
-            let parent_asset_id = model.parent_asset_id
-                .map(|uuid| uuid.to_string());
+            let parent_asset_id = model.parent_asset_id.map(|uuid| uuid.to_string());
 
             let format_type = match model.format_type.as_str() {
                 "png_conversion" => LogoFormatType::PngConversion,
@@ -1210,12 +1276,12 @@ mod tests {
 
     #[test]
     fn test_convert_image_to_png() {
-        use image::{RgbImage, ImageBuffer};
+        use image::{ImageBuffer, RgbImage};
         use std::io::Cursor;
-        
+
         // Create a simple 1x1 RGB image programmatically
         let img: RgbImage = ImageBuffer::new(1, 1);
-        
+
         // Convert to PNG bytes
         let mut png_bytes = Vec::new();
         {
@@ -1223,11 +1289,11 @@ mod tests {
             img.write_to(&mut cursor, image::ImageFormat::Png)
                 .expect("Failed to write PNG to memory");
         }
-        
+
         // Test that we can load this PNG
         let result = image::load_from_memory(&png_bytes);
         assert!(result.is_ok(), "Should be able to load generated PNG");
-        
+
         // Verify it's recognized as PNG
         let loaded_image = result.unwrap();
         assert_eq!(loaded_image.width(), 1);

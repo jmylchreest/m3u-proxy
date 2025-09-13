@@ -3,13 +3,13 @@
 //! This module provides a clean SeaORM-based implementation of the DataMappingService
 //! with the essential methods needed by the web API.
 
+use crate::database::repositories::DataMappingRuleSeaOrmRepository;
 use crate::models::data_mapping::*;
 use crate::pipeline::engines::DataMappingValidator;
-use crate::database::repositories::DataMappingRuleSeaOrmRepository;
+use anyhow::Result;
 use sea_orm::DatabaseConnection;
 use tracing::error;
 use uuid::Uuid;
-use anyhow::Result;
 
 /// SeaORM-based data mapping service
 #[derive(Clone)]
@@ -30,10 +30,17 @@ impl SeaOrmDataMappingService {
     ) -> Result<DataMappingRule> {
         // Validate expression if provided
         if let Some(ref expression) = request.expression {
-            let validation = DataMappingValidator::validate_expression(expression, &request.source_type);
+            let validation =
+                DataMappingValidator::validate_expression(expression, &request.source_type);
             if !validation.is_valid {
-                error!("Invalid expression for rule '{}': {:?}", request.name, validation.error);
-                return Err(anyhow::anyhow!("Invalid expression: {:?}", validation.error.unwrap_or_default()));
+                error!(
+                    "Invalid expression for rule '{}': {:?}",
+                    request.name, validation.error
+                );
+                return Err(anyhow::anyhow!(
+                    "Invalid expression: {:?}",
+                    validation.error.unwrap_or_default()
+                ));
             }
         }
 
@@ -58,13 +65,17 @@ impl SeaOrmDataMappingService {
     ) -> Result<DataMappingRule> {
         // Validate expression if provided
         if let Some(ref expression) = request.expression
-            && let Some(ref source_type) = request.source_type {
-                let validation = DataMappingValidator::validate_expression(expression, source_type);
-                if !validation.is_valid {
-                    error!("Invalid expression for rule update: {:?}", validation.error);
-                    return Err(anyhow::anyhow!("Invalid expression: {:?}", validation.error.unwrap_or_default()));
-                }
+            && let Some(ref source_type) = request.source_type
+        {
+            let validation = DataMappingValidator::validate_expression(expression, source_type);
+            if !validation.is_valid {
+                error!("Invalid expression for rule update: {:?}", validation.error);
+                return Err(anyhow::anyhow!(
+                    "Invalid expression: {:?}",
+                    validation.error.unwrap_or_default()
+                ));
             }
+        }
 
         self.repository.update(&rule_id, request).await
     }
@@ -89,7 +100,10 @@ impl SeaOrmDataMappingService {
         _logo_asset_service: &crate::logo_assets::service::LogoAssetService,
         _base_url: &str,
         _data_mapping_engine: Option<String>,
-    ) -> Result<(Vec<crate::models::Channel>, std::collections::HashMap<String, u64>)> {
+    ) -> Result<(
+        Vec<crate::models::Channel>,
+        std::collections::HashMap<String, u64>,
+    )> {
         // For now, return channels as-is since the current data model
         // doesn't have the action/target_field/value structure needed
         // for complex mapping operations.
@@ -98,10 +112,11 @@ impl SeaOrmDataMappingService {
     }
 
     /// Filter channels that were modified by mapping
-    pub fn filter_modified_channels(channels: Vec<crate::models::Channel>) -> Vec<crate::models::Channel> {
+    pub fn filter_modified_channels(
+        channels: Vec<crate::models::Channel>,
+    ) -> Vec<crate::models::Channel> {
         // For simplicity, return all channels as potentially modified
         // In a real implementation, you would track which channels were actually changed
         channels
     }
 }
-

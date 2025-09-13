@@ -4,7 +4,10 @@
 //! that works across SQLite, PostgreSQL, and MySQL databases.
 
 use anyhow::Result;
-use sea_orm::{DatabaseConnection, EntityTrait, QueryOrder, ActiveModelTrait, Set, QueryFilter, ColumnTrait, PaginatorTrait, QuerySelect};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -54,9 +57,7 @@ impl FilterSeaOrmRepository {
 
     /// Find filter by ID
     pub async fn find_by_id(&self, id: Uuid) -> Result<Option<Filter>> {
-        let model = Filters::find_by_id(id)
-            .one(&*self.connection)
-            .await?;
+        let model = Filters::find_by_id(id).one(&*self.connection).await?;
 
         match model {
             Some(m) => Ok(Some(Filter {
@@ -69,7 +70,7 @@ impl FilterSeaOrmRepository {
                 created_at: m.created_at,
                 updated_at: m.updated_at,
             })),
-            None => Ok(None)
+            None => Ok(None),
         }
     }
 
@@ -104,7 +105,7 @@ impl FilterSeaOrmRepository {
             .ok_or_else(|| anyhow::anyhow!("Filter not found"))?;
 
         let mut active_model: filters::ActiveModel = model.into();
-        
+
         active_model.name = Set(request.name);
         active_model.expression = Set(request.expression);
         active_model.is_inverse = Set(request.is_inverse);
@@ -200,7 +201,7 @@ impl FilterSeaOrmRepository {
     /// Get usage count for a specific filter (how many proxy filters use it)
     pub async fn get_usage_count(&self, filter_id: &Uuid) -> Result<u64> {
         use crate::entities::{prelude::ProxyFilters, proxy_filters};
-        
+
         let count = ProxyFilters::find()
             .filter(proxy_filters::Column::FilterId.eq(*filter_id))
             .count(&*self.connection)
@@ -216,10 +217,10 @@ impl FilterSeaOrmRepository {
 
     /// Get filters with usage information and optional filtering
     pub async fn get_filters_with_usage_filtered(
-        &self, 
+        &self,
         source_type: Option<crate::models::FilterSourceType>,
         sort: Option<String>,
-        order: Option<String>
+        order: Option<String>,
     ) -> Result<Vec<crate::models::FilterWithUsage>> {
         let filters = self.list_all().await?;
         let mut filter_usage_list = Vec::new();
@@ -227,9 +228,10 @@ impl FilterSeaOrmRepository {
         for filter in filters {
             // Filter by source type if specified
             if let Some(ref st) = source_type
-                && &filter.source_type != st {
-                    continue;
-                }
+                && &filter.source_type != st
+            {
+                continue;
+            }
 
             let usage_count = self.get_usage_count(&filter.id).await.unwrap_or(0);
             filter_usage_list.push(crate::models::FilterWithUsage {
@@ -281,9 +283,11 @@ impl FilterSeaOrmRepository {
         source_id: Option<Uuid>,
     ) -> Result<crate::models::FilterTestResult> {
         use crate::models::FilterTestChannel;
-        use crate::pipeline::engines::filter_processor::{StreamFilterProcessor, FilterProcessor, RegexEvaluator};
+        use crate::pipeline::engines::filter_processor::{
+            FilterProcessor, RegexEvaluator, StreamFilterProcessor,
+        };
         use crate::utils::regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
-        
+
         // Parse the expression first to check if it's valid
         let fields = match source_type {
             crate::models::FilterSourceType::Stream => vec![
@@ -308,30 +312,29 @@ impl FilterSeaOrmRepository {
                 "season_num".to_string(),
             ],
         };
-        
-        let parser = crate::expression_parser::ExpressionParser::new()
-            .with_fields(fields);
-        
+
+        let parser = crate::expression_parser::ExpressionParser::new().with_fields(fields);
+
         match parser.parse(pattern) {
-            Err(e) => {
-                Ok(crate::models::FilterTestResult {
-                    is_valid: false,
-                    error: Some(format!("Invalid filter expression: {e}")),
-                    matching_channels: Vec::new(),
-                    total_channels: 0,
-                    matched_count: 0,
-                    expression_tree: None,
-                })
-            }
+            Err(e) => Ok(crate::models::FilterTestResult {
+                is_valid: false,
+                error: Some(format!("Invalid filter expression: {e}")),
+                matching_channels: Vec::new(),
+                total_channels: 0,
+                matched_count: 0,
+                expression_tree: None,
+            }),
             Ok(condition_tree) => {
                 // Get channels from database for testing
-                let channels = self.get_channels_for_testing(source_type, source_id).await?;
+                let channels = self
+                    .get_channels_for_testing(source_type, source_id)
+                    .await?;
                 let total_channels = channels.len();
-                
+
                 // Create regex evaluator with default config
                 let regex_preprocessor = RegexPreprocessor::new(RegexPreprocessorConfig::default());
                 let regex_evaluator = RegexEvaluator::new(regex_preprocessor);
-                
+
                 // Create filter processor
                 let mut filter_processor = StreamFilterProcessor::new(
                     Uuid::new_v4().to_string(),
@@ -339,10 +342,11 @@ impl FilterSeaOrmRepository {
                     false, // not inverse for testing
                     pattern,
                     regex_evaluator,
-                ).map_err(|e| anyhow::anyhow!("Failed to create filter processor: {e}"))?;
-                
+                )
+                .map_err(|e| anyhow::anyhow!("Failed to create filter processor: {e}"))?;
+
                 let mut matching_channels = Vec::new();
-                
+
                 for channel in &channels {
                     match filter_processor.process_record(channel) {
                         Ok(result) => {
@@ -366,12 +370,12 @@ impl FilterSeaOrmRepository {
                         }
                     }
                 }
-                
+
                 let matched_count = matching_channels.len();
-                
+
                 // Convert condition tree to JSON for debugging
                 let expression_tree = serde_json::to_value(&condition_tree).ok();
-                
+
                 Ok(crate::models::FilterTestResult {
                     is_valid: true,
                     error: None,
@@ -383,7 +387,7 @@ impl FilterSeaOrmRepository {
             }
         }
     }
-    
+
     /// Get channels for filter testing with source validation (adapted for SeaORM)
     async fn get_channels_for_testing(
         &self,
@@ -391,7 +395,7 @@ impl FilterSeaOrmRepository {
         source_id: Option<Uuid>,
     ) -> Result<Vec<crate::models::Channel>> {
         use crate::entities::{channels, prelude::Channels};
-        
+
         // Validate source_id exists if provided
         if let Some(source_id) = source_id {
             match source_type {
@@ -429,7 +433,7 @@ impl FilterSeaOrmRepository {
 
                 let channel_models = channels_query.all(&*self.connection).await?;
                 let mut channels = Vec::new();
-                
+
                 for model in channel_models {
                     channels.push(crate::models::Channel {
                         id: model.id,
@@ -451,7 +455,7 @@ impl FilterSeaOrmRepository {
                         updated_at: model.updated_at,
                     });
                 }
-                
+
                 Ok(channels)
             }
             crate::models::FilterSourceType::Epg => {
@@ -460,14 +464,14 @@ impl FilterSeaOrmRepository {
             }
         }
     }
-    
+
     /// Get EPG programs for filter testing with source validation
     async fn get_epg_programs_for_testing(
         &self,
         source_id: Option<Uuid>,
     ) -> Result<Vec<crate::models::Channel>> {
         use crate::entities::{epg_programs, prelude::EpgPrograms};
-        
+
         // EPG programs need to be converted to a compatible format for filter testing
         // For now, we'll create mock Channel objects from EPG programs
         let epg_programs_query = if let Some(source_id) = source_id {
@@ -480,9 +484,9 @@ impl FilterSeaOrmRepository {
             .limit(100) // Limit for testing performance
             .all(&*self.connection)
             .await?;
-        
+
         let mut channels = Vec::new();
-        
+
         // Convert EPG programs to Channel format for filter testing
         // This is a temporary approach - ideally we'd have separate EPG filter testing
         for model in epg_program_models {
@@ -506,7 +510,7 @@ impl FilterSeaOrmRepository {
                 updated_at: model.updated_at,
             });
         }
-        
+
         Ok(channels)
     }
 }

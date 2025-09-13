@@ -1,5 +1,5 @@
 use crate::expression_parser::ExpressionParser;
-use crate::models::data_mapping::{DataMappingSourceType, DataMappingFieldInfo};
+use crate::models::data_mapping::{DataMappingFieldInfo, DataMappingSourceType};
 
 /// Rule validation result
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -36,7 +36,7 @@ impl DataMappingValidator {
     pub fn new(source_type: DataMappingSourceType) -> Self {
         Self { source_type }
     }
-    
+
     /// Validate a data mapping rule expression
     pub fn validate_expression(
         expression: &str,
@@ -45,30 +45,28 @@ impl DataMappingValidator {
         let validator = Self::new(source_type.clone());
         validator.validate_expression_impl(expression)
     }
-    
+
     fn validate_expression_impl(&self, expression: &str) -> RuleValidationResult {
         let available_fields = self.get_available_fields();
         let parser = ExpressionParser::new().with_fields(available_fields.clone());
-        
+
         match parser.parse_extended(expression) {
-            Ok(_parsed_expression) => {
-                RuleValidationResult {
-                    is_valid: true,
-                    error: None,
-                    parsed_successfully: true,
-                    field_errors: vec![],
-                }
-            }
+            Ok(_parsed_expression) => RuleValidationResult {
+                is_valid: true,
+                error: None,
+                parsed_successfully: true,
+                field_errors: vec![],
+            },
             Err(parse_error) => {
                 let error_message = parse_error.to_string();
                 let mut field_errors = vec![];
-                
+
                 for field in &available_fields {
                     if error_message.contains(field) {
                         field_errors.push(format!("Issue with field: {field}"));
                     }
                 }
-                
+
                 RuleValidationResult {
                     is_valid: false,
                     error: Some(error_message),
@@ -78,9 +76,11 @@ impl DataMappingValidator {
             }
         }
     }
-    
+
     /// Get available fields for a data mapping source type
-    pub fn get_available_fields_for_source(source_type: &DataMappingSourceType) -> Vec<DataMappingFieldInfo> {
+    pub fn get_available_fields_for_source(
+        source_type: &DataMappingSourceType,
+    ) -> Vec<DataMappingFieldInfo> {
         DataMappingFieldInfo::available_for_source_type(source_type)
     }
 }
@@ -89,7 +89,7 @@ impl StageValidator for DataMappingValidator {
     fn validate_expression(&self, expression: &str) -> RuleValidationResult {
         self.validate_expression_impl(expression)
     }
-    
+
     fn validate_syntax(&self, expression: &str) -> RuleValidationResult {
         if expression.trim().is_empty() {
             return RuleValidationResult {
@@ -99,7 +99,7 @@ impl StageValidator for DataMappingValidator {
                 field_errors: vec![],
             };
         }
-        
+
         RuleValidationResult {
             is_valid: true,
             error: None,
@@ -107,7 +107,7 @@ impl StageValidator for DataMappingValidator {
             field_errors: vec![],
         }
     }
-    
+
     fn get_available_fields(&self) -> Vec<String> {
         match self.source_type {
             DataMappingSourceType::Stream => vec![
@@ -127,7 +127,7 @@ impl StageValidator for DataMappingValidator {
             ],
         }
     }
-    
+
     fn get_stage_type(&self) -> PipelineStageType {
         PipelineStageType::DataMapping
     }
@@ -146,13 +146,13 @@ impl FilteringValidator {
     pub fn new() -> Self {
         Self
     }
-    
+
     /// Validate a filtering rule expression
     pub fn validate_expression(expression: &str) -> RuleValidationResult {
         let validator = Self::new();
         validator.validate_expression_impl(expression)
     }
-    
+
     fn validate_expression_impl(&self, expression: &str) -> RuleValidationResult {
         // First validate time functions
         if let Some(error) = self.validate_time_functions(expression) {
@@ -163,29 +163,27 @@ impl FilteringValidator {
                 field_errors: vec![],
             };
         }
-        
+
         let available_fields = self.get_available_fields();
         let parser = ExpressionParser::new().with_fields(available_fields.clone());
-        
+
         match parser.parse_extended(expression) {
-            Ok(_parsed_expression) => {
-                RuleValidationResult {
-                    is_valid: true,
-                    error: None,
-                    parsed_successfully: true,
-                    field_errors: vec![],
-                }
-            }
+            Ok(_parsed_expression) => RuleValidationResult {
+                is_valid: true,
+                error: None,
+                parsed_successfully: true,
+                field_errors: vec![],
+            },
             Err(parse_error) => {
                 let error_message = parse_error.to_string();
                 let mut field_errors = vec![];
-                
+
                 for field in &available_fields {
                     if error_message.contains(field) {
                         field_errors.push(format!("Issue with field: {field}"));
                     }
                 }
-                
+
                 RuleValidationResult {
                     is_valid: false,
                     error: Some(error_message),
@@ -195,7 +193,7 @@ impl FilteringValidator {
             }
         }
     }
-    
+
     /// Validate time function syntax in expressions
     fn validate_time_functions(&self, expression: &str) -> Option<String> {
         crate::utils::time::validate_time_function_syntax(expression)
@@ -206,7 +204,7 @@ impl StageValidator for FilteringValidator {
     fn validate_expression(&self, expression: &str) -> RuleValidationResult {
         self.validate_expression_impl(expression)
     }
-    
+
     fn validate_syntax(&self, expression: &str) -> RuleValidationResult {
         if expression.trim().is_empty() {
             return RuleValidationResult {
@@ -216,7 +214,7 @@ impl StageValidator for FilteringValidator {
                 field_errors: vec![],
             };
         }
-        
+
         RuleValidationResult {
             is_valid: true,
             error: None,
@@ -224,7 +222,7 @@ impl StageValidator for FilteringValidator {
             field_errors: vec![],
         }
     }
-    
+
     fn get_available_fields(&self) -> Vec<String> {
         vec![
             "channel_name".to_string(),
@@ -235,7 +233,7 @@ impl StageValidator for FilteringValidator {
             "stream_url".to_string(),
         ]
     }
-    
+
     fn get_stage_type(&self) -> PipelineStageType {
         PipelineStageType::Filtering
     }
@@ -254,36 +252,34 @@ impl NumberingValidator {
     pub fn new() -> Self {
         Self
     }
-    
+
     /// Validate a numbering rule expression
     pub fn validate_expression(expression: &str) -> RuleValidationResult {
         let validator = Self::new();
         validator.validate_expression_impl(expression)
     }
-    
+
     fn validate_expression_impl(&self, expression: &str) -> RuleValidationResult {
         let available_fields = self.get_available_fields();
         let parser = ExpressionParser::new().with_fields(available_fields.clone());
-        
+
         match parser.parse_extended(expression) {
-            Ok(_parsed_expression) => {
-                RuleValidationResult {
-                    is_valid: true,
-                    error: None,
-                    parsed_successfully: true,
-                    field_errors: vec![],
-                }
-            }
+            Ok(_parsed_expression) => RuleValidationResult {
+                is_valid: true,
+                error: None,
+                parsed_successfully: true,
+                field_errors: vec![],
+            },
             Err(parse_error) => {
                 let error_message = parse_error.to_string();
                 let mut field_errors = vec![];
-                
+
                 for field in &available_fields {
                     if error_message.contains(field) {
                         field_errors.push(format!("Issue with field: {field}"));
                     }
                 }
-                
+
                 RuleValidationResult {
                     is_valid: false,
                     error: Some(error_message),
@@ -299,7 +295,7 @@ impl StageValidator for NumberingValidator {
     fn validate_expression(&self, expression: &str) -> RuleValidationResult {
         self.validate_expression_impl(expression)
     }
-    
+
     fn validate_syntax(&self, expression: &str) -> RuleValidationResult {
         if expression.trim().is_empty() {
             return RuleValidationResult {
@@ -309,7 +305,7 @@ impl StageValidator for NumberingValidator {
                 field_errors: vec![],
             };
         }
-        
+
         RuleValidationResult {
             is_valid: true,
             error: None,
@@ -317,7 +313,7 @@ impl StageValidator for NumberingValidator {
             field_errors: vec![],
         }
     }
-    
+
     fn get_available_fields(&self) -> Vec<String> {
         vec![
             "channel_name".to_string(),
@@ -326,7 +322,7 @@ impl StageValidator for NumberingValidator {
             "sort_order".to_string(),
         ]
     }
-    
+
     fn get_stage_type(&self) -> PipelineStageType {
         PipelineStageType::Numbering
     }
@@ -345,36 +341,34 @@ impl GenerationValidator {
     pub fn new() -> Self {
         Self
     }
-    
+
     /// Validate a generation rule expression
     pub fn validate_expression(expression: &str) -> RuleValidationResult {
         let validator = Self::new();
         validator.validate_expression_impl(expression)
     }
-    
+
     fn validate_expression_impl(&self, expression: &str) -> RuleValidationResult {
         let available_fields = self.get_available_fields();
         let parser = ExpressionParser::new().with_fields(available_fields.clone());
-        
+
         match parser.parse_extended(expression) {
-            Ok(_parsed_expression) => {
-                RuleValidationResult {
-                    is_valid: true,
-                    error: None,
-                    parsed_successfully: true,
-                    field_errors: vec![],
-                }
-            }
+            Ok(_parsed_expression) => RuleValidationResult {
+                is_valid: true,
+                error: None,
+                parsed_successfully: true,
+                field_errors: vec![],
+            },
             Err(parse_error) => {
                 let error_message = parse_error.to_string();
                 let mut field_errors = vec![];
-                
+
                 for field in &available_fields {
                     if error_message.contains(field) {
                         field_errors.push(format!("Issue with field: {field}"));
                     }
                 }
-                
+
                 RuleValidationResult {
                     is_valid: false,
                     error: Some(error_message),
@@ -390,7 +384,7 @@ impl StageValidator for GenerationValidator {
     fn validate_expression(&self, expression: &str) -> RuleValidationResult {
         self.validate_expression_impl(expression)
     }
-    
+
     fn validate_syntax(&self, expression: &str) -> RuleValidationResult {
         if expression.trim().is_empty() {
             return RuleValidationResult {
@@ -400,7 +394,7 @@ impl StageValidator for GenerationValidator {
                 field_errors: vec![],
             };
         }
-        
+
         RuleValidationResult {
             is_valid: true,
             error: None,
@@ -408,7 +402,7 @@ impl StageValidator for GenerationValidator {
             field_errors: vec![],
         }
     }
-    
+
     fn get_available_fields(&self) -> Vec<String> {
         vec![
             "channel_name".to_string(),
@@ -419,7 +413,7 @@ impl StageValidator for GenerationValidator {
             "format".to_string(),
         ]
     }
-    
+
     fn get_stage_type(&self) -> PipelineStageType {
         PipelineStageType::Generation
     }
@@ -430,7 +424,10 @@ pub struct ValidationFactory;
 
 impl ValidationFactory {
     /// Create a validator for a specific pipeline stage
-    pub fn create_validator(stage_type: PipelineStageType, source_type: Option<DataMappingSourceType>) -> Box<dyn StageValidator> {
+    pub fn create_validator(
+        stage_type: PipelineStageType,
+        source_type: Option<DataMappingSourceType>,
+    ) -> Box<dyn StageValidator> {
         match stage_type {
             PipelineStageType::DataMapping => {
                 let source_type = source_type.unwrap_or(DataMappingSourceType::Stream);
@@ -441,7 +438,7 @@ impl ValidationFactory {
             PipelineStageType::Generation => Box::new(GenerationValidator::new()),
         }
     }
-    
+
     /// Validate an expression for a specific stage type
     pub fn validate_for_stage(
         expression: &str,
@@ -464,13 +461,13 @@ impl RuleValidationService {
     ) -> RuleValidationResult {
         DataMappingValidator::validate_expression(expression, source_type)
     }
-    
+
     /// Validate expression syntax only (basic check)
     pub fn validate_syntax(expression: &str) -> RuleValidationResult {
         let validator = DataMappingValidator::new(DataMappingSourceType::Stream);
         validator.validate_syntax(expression)
     }
-    
+
     /// Get available fields for a source type (for API clients)
     pub fn get_available_fields(source_type: &DataMappingSourceType) -> Vec<DataMappingFieldInfo> {
         DataMappingValidator::get_available_fields_for_source(source_type)

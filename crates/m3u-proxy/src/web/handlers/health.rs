@@ -8,12 +8,7 @@ use std::str::FromStr;
 use utoipa;
 
 use crate::database::Database;
-use crate::web::{
-    AppState,
-    extractors::RequestContext,
-    responses::ok,
-    utils::log_request,
-};
+use crate::web::{AppState, extractors::RequestContext, responses::ok, utils::log_request};
 use serde_json::json;
 
 /// Health check endpoint with comprehensive system status
@@ -55,7 +50,7 @@ pub async fn health_check(
         let system = state.system.read().await;
         let cpu_count = system.cpus().len() as u32;
         let load_avg = sysinfo::System::load_average();
-        
+
         // Calculate CPU usage percentages based on load average
         let cpu_info = serde_json::json!({
             "cores": cpu_count,
@@ -64,7 +59,7 @@ pub async fn health_check(
             "load_15min": load_avg.fifteen,
             "load_percentage_1min": (load_avg.one / cpu_count as f64 * 100.0).min(100.0),
         });
-        
+
         (load_avg.one, cpu_info)
     };
 
@@ -77,12 +72,13 @@ pub async fn health_check(
     // Get sandbox manager health information
     let sandbox_health = crate::utils::sandbox_health::get_sandbox_health(
         &state.temp_file_manager,
-        &state.preview_file_manager, 
+        &state.preview_file_manager,
         &state.temp_file_manager, // pipeline uses temp for now
         &state.logo_file_manager,
         &state.proxy_output_file_manager,
         &state.config,
-    ).await;
+    )
+    .await;
 
     // Get relay system health information using in-memory RelayManager
     let relay_health = get_relay_system_health_from_manager(&state.relay_manager).await;
@@ -124,10 +120,12 @@ pub async fn health_check(
     }
 
     // Determine overall health status
-    let overall_healthy = db_health.status == "healthy" 
+    let overall_healthy = db_health.status == "healthy"
         && (scheduler_health.status == "running" || scheduler_health.status == "idle")
         && sandbox_health.status == "running"
-        && (relay_health.status == "healthy" || relay_health.status == "degraded" || relay_health.status == "idle");
+        && (relay_health.status == "healthy"
+            || relay_health.status == "degraded"
+            || relay_health.status == "idle");
 
     let response = if overall_healthy {
         serde_json::json!({
@@ -155,7 +153,6 @@ pub async fn health_check(
 
     ok(response)
 }
-
 
 /// Readiness check (for Kubernetes probes)
 #[utoipa::path(
@@ -219,25 +216,27 @@ pub async fn liveness_check(_context: RequestContext) -> impl IntoResponse {
     }))
 }
 
-
 /// Get scheduler health information from AppState components
-async fn get_scheduler_health(state: &crate::web::AppState) -> crate::web::responses::SchedulerHealth {
-    
+async fn get_scheduler_health(
+    state: &crate::web::AppState,
+) -> crate::web::responses::SchedulerHealth {
     // Get source counts from lightweight database queries
-    let (stream_sources_count, epg_sources_count, _) = get_scheduled_sources_info(&state.database).await;
-    
+    let (stream_sources_count, epg_sources_count, _) =
+        get_scheduled_sources_info(&state.database).await;
+
     // Get next scheduled times from in-memory services (avoiding additional DB queries)
     let next_scheduled_times = get_next_scheduled_from_services(state).await;
-    
+
     // Get active ingestions from state manager
     let active_ingestions = get_active_ingestion_count(&state.state_manager).await;
-    
+
     // Get active proxy regenerations count
-    let active_regenerations = get_active_regeneration_count(&state.proxy_regeneration_service).await;
-    
+    let active_regenerations =
+        get_active_regeneration_count(&state.proxy_regeneration_service).await;
+
     // Get last cache refresh time from progress service
     let last_cache_refresh = get_last_cache_refresh_time(&state.progress_service).await;
-    
+
     // Determine scheduler status based on available data - include proxy regenerations
     let status = if active_ingestions > 0 || active_regenerations > 0 {
         "running".to_string()
@@ -246,7 +245,7 @@ async fn get_scheduler_health(state: &crate::web::AppState) -> crate::web::respo
     } else {
         "no_sources".to_string()
     };
-    
+
     crate::web::responses::SchedulerHealth {
         status,
         sources_scheduled: crate::web::responses::ScheduledSourceCounts {
@@ -261,70 +260,92 @@ async fn get_scheduler_health(state: &crate::web::AppState) -> crate::web::respo
 }
 
 /// Get scheduled sources information from the database using SeaORM repositories
-async fn get_scheduled_sources_info(database: &crate::database::Database) -> (u32, u32, Vec<crate::web::responses::NextScheduledTime>) {
-    let stream_source_repo = crate::database::repositories::StreamSourceSeaOrmRepository::new(database.connection().clone());
-    let epg_source_repo = crate::database::repositories::EpgSourceSeaOrmRepository::new(database.connection().clone());
-    
+async fn get_scheduled_sources_info(
+    database: &crate::database::Database,
+) -> (u32, u32, Vec<crate::web::responses::NextScheduledTime>) {
+    let stream_source_repo = crate::database::repositories::StreamSourceSeaOrmRepository::new(
+        database.connection().clone(),
+    );
+    let epg_source_repo = crate::database::repositories::EpgSourceSeaOrmRepository::new(
+        database.connection().clone(),
+    );
+
     // Get active source counts using SeaORM repositories
-    let stream_sources_count = stream_source_repo.find_active().await.map(|sources| sources.len() as u32).unwrap_or(0);
-    let epg_sources_count = epg_source_repo.find_active().await.map(|sources| sources.len() as u32).unwrap_or(0);
-    
+    let stream_sources_count = stream_source_repo
+        .find_active()
+        .await
+        .map(|sources| sources.len() as u32)
+        .unwrap_or(0);
+    let epg_sources_count = epg_source_repo
+        .find_active()
+        .await
+        .map(|sources| sources.len() as u32)
+        .unwrap_or(0);
+
     (stream_sources_count, epg_sources_count, Vec::new())
 }
 
 /// Get next scheduled times using SeaORM repositories (rationalized approach)
-async fn get_next_scheduled_from_services(state: &crate::web::AppState) -> Vec<crate::web::responses::NextScheduledTime> {
-    let stream_source_repo = crate::database::repositories::StreamSourceSeaOrmRepository::new(state.database.connection().clone());
-    let epg_source_repo = crate::database::repositories::EpgSourceSeaOrmRepository::new(state.database.connection().clone());
+async fn get_next_scheduled_from_services(
+    state: &crate::web::AppState,
+) -> Vec<crate::web::responses::NextScheduledTime> {
+    let stream_source_repo = crate::database::repositories::StreamSourceSeaOrmRepository::new(
+        state.database.connection().clone(),
+    );
+    let epg_source_repo = crate::database::repositories::EpgSourceSeaOrmRepository::new(
+        state.database.connection().clone(),
+    );
     let mut scheduled_times = Vec::new();
-    
+
     // Get scheduled stream sources using SeaORM
     if let Ok(stream_sources) = stream_source_repo.find_active().await {
         for source in stream_sources {
             if !source.update_cron.is_empty() {
                 // Calculate actual next run time from cron expression
                 if let Ok(schedule) = cron::Schedule::from_str(&source.update_cron)
-                    && let Some(next_run) = schedule.upcoming(chrono::Utc).next() {
-                        scheduled_times.push(crate::web::responses::NextScheduledTime {
-                            source_id: source.id,
-                            source_name: source.name,
-                            source_type: match source.source_type {
-                                crate::models::StreamSourceType::M3u => "m3u".to_string(),
-                                crate::models::StreamSourceType::Xtream => "xtream".to_string(),
-                            },
-                            next_run,
-                            cron_expression: source.update_cron,
-                        });
-                    }
+                    && let Some(next_run) = schedule.upcoming(chrono::Utc).next()
+                {
+                    scheduled_times.push(crate::web::responses::NextScheduledTime {
+                        source_id: source.id,
+                        source_name: source.name,
+                        source_type: match source.source_type {
+                            crate::models::StreamSourceType::M3u => "m3u".to_string(),
+                            crate::models::StreamSourceType::Xtream => "xtream".to_string(),
+                        },
+                        next_run,
+                        cron_expression: source.update_cron,
+                    });
+                }
             }
         }
     }
-    
+
     // Get scheduled EPG sources using SeaORM
     if let Ok(epg_sources) = epg_source_repo.find_active().await {
         for source in epg_sources {
             if !source.update_cron.is_empty() {
                 // Calculate actual next run time from cron expression
                 if let Ok(schedule) = cron::Schedule::from_str(&source.update_cron)
-                    && let Some(next_run) = schedule.upcoming(chrono::Utc).next() {
-                        scheduled_times.push(crate::web::responses::NextScheduledTime {
-                            source_id: source.id,
-                            source_name: source.name,
-                            source_type: match source.source_type {
-                                crate::models::EpgSourceType::Xmltv => "xmltv".to_string(),
-                                crate::models::EpgSourceType::Xtream => "xtream".to_string(),
-                            },
-                            next_run,
-                            cron_expression: source.update_cron,
-                        });
-                    }
+                    && let Some(next_run) = schedule.upcoming(chrono::Utc).next()
+                {
+                    scheduled_times.push(crate::web::responses::NextScheduledTime {
+                        source_id: source.id,
+                        source_name: source.name,
+                        source_type: match source.source_type {
+                            crate::models::EpgSourceType::Xmltv => "xmltv".to_string(),
+                            crate::models::EpgSourceType::Xtream => "xtream".to_string(),
+                        },
+                        next_run,
+                        cron_expression: source.update_cron,
+                    });
+                }
             }
         }
     }
-    
+
     // Sort by next run time to show most urgent first
     scheduled_times.sort_by(|a, b| a.next_run.cmp(&b.next_run));
-    
+
     scheduled_times
 }
 
@@ -332,18 +353,27 @@ async fn get_next_scheduled_from_services(state: &crate::web::AppState) -> Vec<c
 async fn get_active_ingestion_count(state_manager: &crate::ingestor::IngestionStateManager) -> u32 {
     // Check if any ingestions are currently active
     match state_manager.has_active_ingestions().await {
-        Ok(is_active) => if is_active { 1 } else { 0 },
+        Ok(is_active) => {
+            if is_active {
+                1
+            } else {
+                0
+            }
+        }
         Err(_) => 0, // Default to 0 if unable to determine
     }
 }
 
 /// Get active proxy regeneration count from proxy regeneration service
-async fn get_active_regeneration_count(proxy_regeneration_service: &crate::services::proxy_regeneration::ProxyRegenerationService) -> u32 {
+async fn get_active_regeneration_count(
+    proxy_regeneration_service: &crate::services::proxy_regeneration::ProxyRegenerationService,
+) -> u32 {
     // Get queue status and extract active regeneration count
     match proxy_regeneration_service.get_queue_status().await {
         Ok(status_json) => {
             // Parse the JSON response to extract active_regenerations count
-            status_json.get("active_regenerations")
+            status_json
+                .get("active_regenerations")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32)
                 .unwrap_or(0)
@@ -353,28 +383,33 @@ async fn get_active_regeneration_count(proxy_regeneration_service: &crate::servi
 }
 
 /// Get last cache refresh time from progress service
-async fn get_last_cache_refresh_time(_progress_service: &crate::services::progress_service::ProgressService) -> chrono::DateTime<chrono::Utc> {
+async fn get_last_cache_refresh_time(
+    _progress_service: &crate::services::progress_service::ProgressService,
+) -> chrono::DateTime<chrono::Utc> {
     // For now, return a reasonable estimate
     // In a real implementation, this would query the progress service for the most recent completion
     chrono::Utc::now() - chrono::Duration::minutes(15)
 }
 
 /// Simple database health check without circuit breaker
-async fn check_database_health(database: &Database, db_config: &crate::config::DatabaseConfig) -> crate::web::responses::DatabaseHealth {
+async fn check_database_health(
+    database: &Database,
+    db_config: &crate::config::DatabaseConfig,
+) -> crate::web::responses::DatabaseHealth {
     use sea_orm::ConnectionTrait;
-    
+
     let start_time = std::time::Instant::now();
-    
+
     // Simple connectivity check
     let health_query = "SELECT 1 as test";
     let stmt = sea_orm::Statement::from_string(database.backend(), health_query.to_owned());
     let health_result = database.connection().query_one(stmt).await;
-    
+
     let query_duration = start_time.elapsed();
     let max_connections = db_config.max_connections.unwrap_or(10);
     let active_connections = 1; // Conservative estimate
     let idle_connections = max_connections.saturating_sub(active_connections);
-    
+
     let response_time_status = if query_duration.as_millis() < 50 {
         "excellent"
     } else if query_duration.as_millis() < 100 {
@@ -384,13 +419,14 @@ async fn check_database_health(database: &Database, db_config: &crate::config::D
     } else {
         "critical"
     };
-    
-    let (overall_status, tables_accessible, write_capability, no_blocking_locks) = match health_result {
-        Ok(Some(_)) => ("healthy", true, true, true),
-        Ok(None) => ("degraded", false, true, true),
-        Err(_) => ("disconnected", false, false, false),
-    };
-    
+
+    let (overall_status, tables_accessible, write_capability, no_blocking_locks) =
+        match health_result {
+            Ok(Some(_)) => ("healthy", true, true, true),
+            Ok(None) => ("degraded", false, true, true),
+            Err(_) => ("disconnected", false, false, false),
+        };
+
     crate::web::responses::DatabaseHealth {
         status: overall_status.to_string(),
         connection_pool_size: max_connections,
@@ -401,19 +437,25 @@ async fn check_database_health(database: &Database, db_config: &crate::config::D
         write_capability,
         no_blocking_locks,
         idle_connections,
-        pool_utilization_percent: (active_connections as f32 / max_connections as f32 * 100.0) as u32,
+        pool_utilization_percent: (active_connections as f32 / max_connections as f32 * 100.0)
+            as u32,
     }
 }
 
-
-
 /// Get memory breakdown without relay manager dependency (SeaORM migration compatible)
 async fn get_memory_breakdown_without_relay(
-    system: &std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>
+    system: &std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 ) -> crate::web::responses::MemoryBreakdown {
-        
     // Minimize write lock duration - refresh and extract data quickly
-    let (total_memory, used_memory, free_memory, available_memory, swap_used, swap_total, current_pid) = {
+    let (
+        total_memory,
+        used_memory,
+        free_memory,
+        available_memory,
+        swap_used,
+        swap_total,
+        current_pid,
+    ) = {
         let mut sys = system.write().await;
         sys.refresh_memory();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
@@ -425,8 +467,16 @@ async fn get_memory_breakdown_without_relay(
         let swap_used = sys.used_swap() as f64 / (1024.0 * 1024.0);
         let swap_total = sys.total_swap() as f64 / (1024.0 * 1024.0);
         let current_pid = std::process::id();
-        
-        (total_memory, used_memory, free_memory, available_memory, swap_used, swap_total, current_pid)
+
+        (
+            total_memory,
+            used_memory,
+            free_memory,
+            available_memory,
+            swap_used,
+            swap_total,
+            current_pid,
+        )
     }; // Write lock released here
 
     // Calculate process memory usage with read-only access
@@ -451,7 +501,6 @@ fn calculate_process_memory_without_relay(
     system: &sysinfo::System,
     main_pid: u32,
 ) -> crate::web::responses::ProcessMemoryBreakdown {
-    
     let mut main_process_memory = 0.0f64;
     let mut child_processes_memory = 0.0f64;
     let mut child_process_count = 0u32;
@@ -472,7 +521,7 @@ fn calculate_process_memory_without_relay(
     }
 
     let total_process_tree_memory = main_process_memory + child_processes_memory;
-    
+
     // Calculate percentage of system memory
     let total_system_memory = system.total_memory() as f64 / (1024.0 * 1024.0); // Convert from bytes to MB
     let percentage_of_system = if total_system_memory > 0.0 {
@@ -492,28 +541,30 @@ fn calculate_process_memory_without_relay(
 
 /// Find child processes of the main process (simple version without relay manager)
 fn find_child_processes_simple(system: &sysinfo::System, parent_pid: u32) -> Vec<u32> {
-    
     let mut children = Vec::new();
-    
+
     for (pid, process) in system.processes() {
         if let Some(parent) = process.parent()
-            && parent.as_u32() == parent_pid {
-                children.push(pid.as_u32());
-                // Recursively find grandchildren
-                let grandchildren = find_child_processes_simple(system, pid.as_u32());
-                children.extend(grandchildren);
-            }
+            && parent.as_u32() == parent_pid
+        {
+            children.push(pid.as_u32());
+            // Recursively find grandchildren
+            let grandchildren = find_child_processes_simple(system, pid.as_u32());
+            children.extend(grandchildren);
+        }
     }
-    
+
     children
 }
 
 /// Get relay system health information using RelayManager (proper in-memory approach)
-pub async fn get_relay_system_health_from_manager(relay_manager: &std::sync::Arc<crate::services::relay_manager::RelayManager>) -> crate::web::responses::RelaySystemHealth {
+pub async fn get_relay_system_health_from_manager(
+    relay_manager: &std::sync::Arc<crate::services::relay_manager::RelayManager>,
+) -> crate::web::responses::RelaySystemHealth {
     // Check if FFmpeg/FFprobe are available in the system
     let (ffmpeg_available, ffmpeg_version) = check_ffmpeg_availability().await;
     let (ffprobe_available, ffprobe_version) = check_ffprobe_availability().await;
-    
+
     // Get real-time relay process information from RelayManager
     let relay_health = relay_manager.get_relay_health().await.unwrap_or_else(|_| {
         // Return empty health if RelayManager fails
@@ -525,37 +576,42 @@ pub async fn get_relay_system_health_from_manager(relay_manager: &std::sync::Arc
             last_check: chrono::Utc::now(),
         }
     });
-    
+
     // Extract process counts from RelayManager health data
     let total_processes = relay_health.total_processes as u32;
     let healthy_processes = relay_health.healthy_processes as u32;
     let unhealthy_processes = relay_health.unhealthy_processes as u32;
-    
+
     // Use cached hardware acceleration capabilities from RelayManager (more accurate than re-testing)
     let hwaccel_available = relay_manager.hwaccel_available;
     let cached_capabilities = &relay_manager.hwaccel_capabilities;
-    
+
     // Convert cached RelayManager data to API response format
-    let accelerators = cached_capabilities.accelerators.iter().map(|acc| acc.name.clone()).collect();
+    let accelerators = cached_capabilities
+        .accelerators
+        .iter()
+        .map(|acc| acc.name.clone())
+        .collect();
     let codecs = cached_capabilities.codecs.clone();
-    let support_matrix = cached_capabilities.support_matrix
+    let support_matrix = cached_capabilities
+        .support_matrix
         .iter()
         .map(|(accel_name, supported_codecs)| {
             let accel_support = crate::web::responses::AcceleratorSupport {
                 h264: supported_codecs.contains(&"h264".to_string()),
                 hevc: supported_codecs.contains(&"hevc".to_string()),
-                av1: supported_codecs.contains(&"av1".to_string()),  // Now uses properly tested data!
+                av1: supported_codecs.contains(&"av1".to_string()), // Now uses properly tested data!
             };
             (accel_name.clone(), accel_support)
         })
         .collect();
-    
+
     let hwaccel_capabilities = crate::web::responses::DetailedHwAccelCapabilities {
         accelerators,
         codecs,
         support_matrix,
     };
-    
+
     // Determine overall status based on real process health
     let status = if unhealthy_processes > 0 {
         "degraded".to_string()
@@ -566,7 +622,7 @@ pub async fn get_relay_system_health_from_manager(relay_manager: &std::sync::Arc
     } else {
         "degraded".to_string()
     };
-    
+
     crate::web::responses::RelaySystemHealth {
         status,
         total_processes: total_processes as i32,
@@ -597,7 +653,7 @@ pub async fn check_ffmpeg_availability() -> (bool, Option<String>) {
                 .and_then(|line| line.split_whitespace().nth(2))
                 .map(|v| v.to_string());
             (true, version)
-        },
+        }
         _ => (false, None),
     }
 }
@@ -618,63 +674,73 @@ pub async fn check_ffprobe_availability() -> (bool, Option<String>) {
                 .and_then(|line| line.split_whitespace().nth(2))
                 .map(|v| v.to_string());
             (true, version)
-        },
+        }
         _ => (false, None),
     }
 }
 
 /// Check hardware acceleration capabilities using cached RelayManager data when available
-pub async fn check_hardware_acceleration() -> (bool, crate::web::responses::DetailedHwAccelCapabilities) {
+pub async fn check_hardware_acceleration()
+-> (bool, crate::web::responses::DetailedHwAccelCapabilities) {
     // Basic hardware acceleration detection (fallback for when RelayManager isn't available)
     let mut accelerators = Vec::new();
     let mut codecs = Vec::new();
     let mut support_matrix = std::collections::HashMap::new();
-    
+
     // Check for common hardware acceleration methods
     if let Ok(output) = tokio::process::Command::new("ffmpeg")
         .args(["-hide_banner", "-hwaccels"])
         .output()
         .await
-        && output.status.success() {
-            let hwaccel_output = String::from_utf8_lossy(&output.stdout);
-            for line in hwaccel_output.lines() {
-                let accel = line.trim();
-                if !accel.is_empty() && accel != "Hardware acceleration methods:" {
-                    accelerators.push(accel.to_string());
-                    
-                    // Fixed codec support mapping - check for VAAPI specifically for AV1
-                    let accel_support = crate::web::responses::AcceleratorSupport {
-                        h264: accel.contains("264") || accel.contains("vaapi") || accel.contains("nvenc"),
-                        hevc: accel.contains("hevc") || accel.contains("265") || accel.contains("vaapi") || accel.contains("nvenc"),
-                        av1: accel.contains("vaapi"), // Fix: VAAPI supports AV1, not just if string contains "av1"
-                    };
-                    
-                    support_matrix.insert(accel.to_string(), accel_support);
-                    
-                    // Add common codecs for this accelerator
-                    if accel.contains("vaapi") || accel.contains("nvenc") {
-                        codecs.push("h264".to_string());
-                        codecs.push("hevc".to_string());
-                        // Add AV1 for VAAPI since we know it supports it
-                        if accel.contains("vaapi") {
-                            codecs.push("av1".to_string());
-                        }
+        && output.status.success()
+    {
+        let hwaccel_output = String::from_utf8_lossy(&output.stdout);
+        for line in hwaccel_output.lines() {
+            let accel = line.trim();
+            if !accel.is_empty() && accel != "Hardware acceleration methods:" {
+                accelerators.push(accel.to_string());
+
+                // Fixed codec support mapping - check for VAAPI specifically for AV1
+                let accel_support = crate::web::responses::AcceleratorSupport {
+                    h264: accel.contains("264")
+                        || accel.contains("vaapi")
+                        || accel.contains("nvenc"),
+                    hevc: accel.contains("hevc")
+                        || accel.contains("265")
+                        || accel.contains("vaapi")
+                        || accel.contains("nvenc"),
+                    av1: accel.contains("vaapi"), // Fix: VAAPI supports AV1, not just if string contains "av1"
+                };
+
+                support_matrix.insert(accel.to_string(), accel_support);
+
+                // Add common codecs for this accelerator
+                if accel.contains("vaapi") || accel.contains("nvenc") {
+                    codecs.push("h264".to_string());
+                    codecs.push("hevc".to_string());
+                    // Add AV1 for VAAPI since we know it supports it
+                    if accel.contains("vaapi") {
+                        codecs.push("av1".to_string());
                     }
                 }
             }
         }
-    
+    }
+
     // Remove duplicates from codecs
     codecs.sort();
     codecs.dedup();
-    
+
     let hwaccel_available = !accelerators.is_empty();
-    
-    (hwaccel_available, crate::web::responses::DetailedHwAccelCapabilities {
-        accelerators,
-        codecs,
-        support_matrix,
-    })
+
+    (
+        hwaccel_available,
+        crate::web::responses::DetailedHwAccelCapabilities {
+            accelerators,
+            codecs,
+            support_matrix,
+        },
+    )
 }
 
 /// Logo cache debug endpoint
@@ -708,7 +774,8 @@ pub async fn logo_cache_debug(
         Err(e) => {
             return axum::response::Json(json!({
                 "error": format!("Failed to get cache stats: {}", e)
-            })).into_response();
+            }))
+            .into_response();
         }
     };
 
@@ -739,11 +806,11 @@ pub async fn logo_cache_debug(
             "efficiency": {
                 "hash_based_indexing": true,
                 "smart_dimension_encoding": "12-bit with variable precision",
-                "memory_vs_string_storage": format!("~{}x more efficient", 
-                    if cache_stats.total_entries > 0 { 
-                        std::cmp::max(1, (cache_stats.total_entries * 200) / cache_stats.memory_usage_bytes) 
-                    } else { 
-                        1 
+                "memory_vs_string_storage": format!("~{}x more efficient",
+                    if cache_stats.total_entries > 0 {
+                        std::cmp::max(1, (cache_stats.total_entries * 200) / cache_stats.memory_usage_bytes)
+                    } else {
+                        1
                     }
                 )
             },

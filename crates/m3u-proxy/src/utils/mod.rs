@@ -32,12 +32,19 @@ pub mod validation;
 pub mod xmltv_parser;
 
 // Re-export commonly used types for convenience
-pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerType, ConcreteCircuitBreaker, create_circuit_breaker, create_circuit_breaker_for_service, create_circuit_breaker_from_profile};
+pub use circuit_breaker::{
+    CircuitBreaker, CircuitBreakerConfig, CircuitBreakerType, ConcreteCircuitBreaker,
+    create_circuit_breaker, create_circuit_breaker_for_service,
+    create_circuit_breaker_from_profile,
+};
 pub use cron_helper::{calculate_next_scheduled_time, calculate_next_scheduled_time_validated};
 pub use database_operations::DatabaseOperations;
 pub use database_retry::{RetryConfig, with_retry};
 pub use decompression::{CompressionFormat, DecompressionService};
-pub use deterministic_uuid::{generate_channel_uuid, generate_deterministic_uuid, generate_proxy_config_uuid, generate_relay_config_uuid};
+pub use deterministic_uuid::{
+    generate_channel_uuid, generate_deterministic_uuid, generate_proxy_config_uuid,
+    generate_relay_config_uuid,
+};
 pub use http_client::{DecompressingHttpClient, StandardHttpClient};
 pub use http_client_factory::HttpClientFactory;
 pub use human_format::{format_duration, format_memory, format_memory_delta};
@@ -47,8 +54,8 @@ pub use memory_cleanup::{
 // Memory monitoring modules available for future pipeline integration
 // but not exposed to prevent accidental usage
 pub use regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
-pub use sample_data::{SampleDataGenerator, SampleChannel};
+pub use sample_data::{SampleChannel, SampleDataGenerator};
 pub use status_code_matcher::is_status_acceptable;
 pub use system_manager::SystemManager;
 pub use url::UrlUtils;
-pub use uuid_parser::{resolve_proxy_id, uuid_to_base64, uuid_to_hex32, deserialize_optional_uuid};
+pub use uuid_parser::{deserialize_optional_uuid, resolve_proxy_id, uuid_to_base64, uuid_to_hex32};

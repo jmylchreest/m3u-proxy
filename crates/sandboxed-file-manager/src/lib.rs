@@ -174,7 +174,7 @@
 //! **✅ Allowed operations:**
 //! ```rust
 //! use sandboxed_file_manager::SandboxedManager;
-//! 
+//!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let manager = SandboxedManager::builder().base_directory("/var/cache/myapp").build().await?;
 //! manager.write("file.txt", "content").await?;                    // Simple file

@@ -3,10 +3,10 @@
 //! This module provides a wrapper that adds retry capabilities to any repository
 //! implementation, making database operations more resilient to transient failures.
 
-use async_trait::async_trait;
 use crate::errors::RepositoryResult;
 use crate::repositories::traits::Repository;
 use crate::utils::database_retry::{RetryConfig, with_retry};
+use async_trait::async_trait;
 use std::marker::PhantomData;
 
 /// Wrapper that adds retry functionality to any repository
@@ -44,7 +44,7 @@ use std::marker::PhantomData;
 ///     async fn delete(&self, _id: Uuid) -> RepositoryResult<()> { Ok(()) }
 ///     async fn count(&self, _query: String) -> RepositoryResult<u64> { Ok(0) }
 /// }
-/// 
+///
 /// async fn example() -> Result<(), Box<dyn Error>> {
 ///     let base_repo = ExampleRepository;
 ///     let retry_repo = RetryWrapper::new(base_repo, RetryConfig::for_writes());
@@ -55,8 +55,8 @@ use std::marker::PhantomData;
 ///     Ok(())
 /// }
 /// ```
-pub struct RetryWrapper<T, ID, R> 
-where 
+pub struct RetryWrapper<T, ID, R>
+where
     R: Repository<T, ID>,
     ID: Send + 'static,
 {
@@ -118,7 +118,8 @@ where
                 async move { self.repository.find_by_id(id).await }
             },
             "find_by_id",
-        ).await
+        )
+        .await
     }
 
     async fn find_all(&self, query: Self::Query) -> RepositoryResult<Vec<T>> {
@@ -130,7 +131,8 @@ where
                 async move { self.repository.find_all(query).await }
             },
             "find_all",
-        ).await
+        )
+        .await
     }
 
     async fn create(&self, request: Self::CreateRequest) -> RepositoryResult<T> {
@@ -142,7 +144,8 @@ where
                 async move { self.repository.create(request).await }
             },
             "create",
-        ).await
+        )
+        .await
     }
 
     async fn update(&self, id: ID, request: Self::UpdateRequest) -> RepositoryResult<T> {
@@ -156,7 +159,8 @@ where
                 async move { self.repository.update(id, request).await }
             },
             "update",
-        ).await
+        )
+        .await
     }
 
     async fn delete(&self, id: ID) -> RepositoryResult<()> {
@@ -168,7 +172,8 @@ where
                 async move { self.repository.delete(id).await }
             },
             "delete",
-        ).await
+        )
+        .await
     }
 
     async fn count(&self, query: Self::Query) -> RepositoryResult<u64> {
@@ -180,7 +185,8 @@ where
                 async move { self.repository.count(query).await }
             },
             "count",
-        ).await
+        )
+        .await
     }
 }
 
@@ -224,8 +230,8 @@ mod tests {
     use crate::errors::RepositoryError;
     use crate::utils::database_retry::RetryConfig;
     use async_trait::async_trait;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -266,15 +272,15 @@ mod tests {
     #[async_trait]
     impl Repository<String, Uuid> for MockRepository {
         type CreateRequest = String;
-        type UpdateRequest = String;  
+        type UpdateRequest = String;
         type Query = String;
 
         async fn find_by_id(&self, _id: Uuid) -> RepositoryResult<Option<String>> {
             let attempt = self.fail_counter.fetch_add(1, Ordering::SeqCst) + 1;
-            
+
             if attempt <= self.fail_until_attempt {
                 Err(RepositoryError::ConnectionFailed {
-                    message: "database is locked".to_string()
+                    message: "database is locked".to_string(),
                 })
             } else {
                 Ok(Some("success".to_string()))
@@ -283,10 +289,10 @@ mod tests {
 
         async fn find_all(&self, query: Self::Query) -> RepositoryResult<Vec<String>> {
             let attempt = self.fail_counter.fetch_add(1, Ordering::SeqCst) + 1;
-            
+
             if attempt <= self.fail_until_attempt {
                 Err(RepositoryError::ConnectionFailed {
-                    message: "database is locked".to_string()
+                    message: "database is locked".to_string(),
                 })
             } else {
                 Ok(vec![format!("result_for_{query}")])
@@ -295,22 +301,26 @@ mod tests {
 
         async fn create(&self, request: Self::CreateRequest) -> RepositoryResult<String> {
             let attempt = self.fail_counter.fetch_add(1, Ordering::SeqCst) + 1;
-            
+
             if attempt <= self.fail_until_attempt {
                 Err(RepositoryError::ConnectionFailed {
-                    message: "database is locked".to_string()
+                    message: "database is locked".to_string(),
                 })
             } else {
                 Ok(format!("created_{request}"))
             }
         }
 
-        async fn update(&self, _id: Uuid, request: Self::UpdateRequest) -> RepositoryResult<String> {
+        async fn update(
+            &self,
+            _id: Uuid,
+            request: Self::UpdateRequest,
+        ) -> RepositoryResult<String> {
             let attempt = self.fail_counter.fetch_add(1, Ordering::SeqCst) + 1;
-            
+
             if attempt <= self.fail_until_attempt {
                 Err(RepositoryError::ConnectionFailed {
-                    message: "database is locked".to_string()
+                    message: "database is locked".to_string(),
                 })
             } else {
                 Ok(format!("updated_{request}"))
@@ -319,10 +329,10 @@ mod tests {
 
         async fn delete(&self, _id: Uuid) -> RepositoryResult<()> {
             let attempt = self.fail_counter.fetch_add(1, Ordering::SeqCst) + 1;
-            
+
             if attempt <= self.fail_until_attempt {
                 Err(RepositoryError::ConnectionFailed {
-                    message: "database is locked".to_string()
+                    message: "database is locked".to_string(),
                 })
             } else {
                 Ok(())
@@ -331,10 +341,10 @@ mod tests {
 
         async fn count(&self, query: Self::Query) -> RepositoryResult<u64> {
             let attempt = self.fail_counter.fetch_add(1, Ordering::SeqCst) + 1;
-            
+
             if attempt <= self.fail_until_attempt {
                 Err(RepositoryError::ConnectionFailed {
-                    message: "database is locked".to_string()
+                    message: "database is locked".to_string(),
                 })
             } else {
                 Ok(query.len() as u64) // Return query length as mock count
@@ -347,38 +357,38 @@ mod tests {
     async fn test_successful_operations_no_retry() {
         let mock_repo = MockRepository::new();
         let retry_repo = RetryWrapper::for_reads(mock_repo.clone());
-        
+
         let id = Uuid::new_v4();
-        
+
         // Test find_by_id
         let result = retry_repo.find_by_id(id).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Some("success".to_string()));
-        
+
         // Test find_all
         let result = retry_repo.find_all("test_query".to_string()).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), vec!["result_for_test_query"]);
-        
+
         // Test create
         let result = retry_repo.create("test_data".to_string()).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "created_test_data");
-        
+
         // Test update
         let result = retry_repo.update(id, "updated_data".to_string()).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "updated_updated_data");
-        
+
         // Test delete
         let result = retry_repo.delete(id).await;
         assert!(result.is_ok());
-        
+
         // Test count
         let result = retry_repo.count("count_query".to_string()).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 11); // "count_query".len()
-        
+
         // Should have called each operation exactly once (no retries)
         assert_eq!(mock_repo.call_count(), 6);
     }
@@ -389,13 +399,13 @@ mod tests {
         // Mock repo that fails first 2 attempts
         let mock_repo = MockRepository::new_with_failure_count(2);
         let retry_repo = RetryWrapper::for_writes(mock_repo.clone());
-        
+
         let id = Uuid::new_v4();
         let result = retry_repo.find_by_id(id).await;
-        
+
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Some("success".to_string()));
-        
+
         // Should have been called 3 times (2 failures + 1 success)
         assert_eq!(mock_repo.call_count(), 3);
     }
@@ -406,36 +416,47 @@ mod tests {
         // Test read configuration (3 max attempts)
         let mock_repo_read = MockRepository::new_with_failure_count(4); // More failures than max attempts
         let retry_repo_read = RetryWrapper::for_reads(mock_repo_read.clone());
-        
+
         let id = Uuid::new_v4();
         let result = retry_repo_read.find_by_id(id).await;
-        
+
         assert!(result.is_err()); // Should fail after 3 attempts
         assert_eq!(mock_repo_read.call_count(), 3); // Read config: max 3 attempts
-        
+
         // Test write configuration (5 max attempts)
         let mock_repo_write = MockRepository::new_with_failure_count(4); // 4 failures, should succeed on 5th attempt
         let retry_repo_write = RetryWrapper::for_writes(mock_repo_write.clone());
-        
+
         let result = retry_repo_write.create("test_data".to_string()).await;
-        
+
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "created_test_data");
         assert_eq!(mock_repo_write.call_count(), 5); // Write config: succeeded on 5th attempt
-        
+
         // Test critical configuration (7 max attempts)
         let mock_repo_critical = MockRepository::new_with_failure_count(6); // 6 failures, should succeed on 7th attempt
         let critical_config = RetryConfig::for_critical();
-        eprintln!("DEBUG: Critical config max_attempts: {}", critical_config.max_attempts);
+        eprintln!(
+            "DEBUG: Critical config max_attempts: {}",
+            critical_config.max_attempts
+        );
         let retry_repo_critical = RetryWrapper::for_critical(mock_repo_critical.clone());
-        
-        let result = retry_repo_critical.update(id, "critical_data".to_string()).await;
-        
+
+        let result = retry_repo_critical
+            .update(id, "critical_data".to_string())
+            .await;
+
         if let Err(ref e) = result {
             eprintln!("DEBUG: Critical update failed with error: {e:?}");
         }
-        eprintln!("DEBUG: Critical call count: {}", mock_repo_critical.call_count());
-        assert!(result.is_ok(), "Critical update should succeed after retries, got: {result:?}");
+        eprintln!(
+            "DEBUG: Critical call count: {}",
+            mock_repo_critical.call_count()
+        );
+        assert!(
+            result.is_ok(),
+            "Critical update should succeed after retries, got: {result:?}"
+        );
         assert_eq!(result.unwrap(), "updated_critical_data");
         assert_eq!(mock_repo_critical.call_count(), 7); // Critical config: succeeded on 7th attempt
     }
@@ -444,12 +465,12 @@ mod tests {
     #[tokio::test]
     async fn test_extension_trait_methods() {
         let mock_repo = MockRepository::new();
-        
+
         // Test each extension trait method
         let _read_retry_repo = mock_repo.clone().with_read_retries();
         let _write_retry_repo = mock_repo.clone().with_write_retries();
         let _critical_retry_repo = mock_repo.clone().with_critical_retries();
-        
+
         // Test custom config
         let custom_config = RetryConfig {
             max_attempts: 10,
@@ -459,7 +480,7 @@ mod tests {
             jitter: false,
         };
         let _custom_retry_repo = mock_repo.with_retries(custom_config);
-        
+
         // All should compile and create correctly
     }
 
@@ -495,7 +516,11 @@ mod tests {
                 Ok("created".to_string())
             }
 
-            async fn update(&self, _id: Uuid, _request: Self::UpdateRequest) -> RepositoryResult<String> {
+            async fn update(
+                &self,
+                _id: Uuid,
+                _request: Self::UpdateRequest,
+            ) -> RepositoryResult<String> {
                 Ok("updated".to_string())
             }
 
@@ -512,10 +537,10 @@ mod tests {
             call_counter: Arc::new(AtomicU32::new(0)),
         };
         let retry_repo = RetryWrapper::for_writes(mock_repo.clone());
-        
+
         let id = Uuid::new_v4();
         let result = retry_repo.find_by_id(id).await;
-        
+
         assert!(result.is_err());
         // Should only be called once since the error is not retryable
         assert_eq!(mock_repo.call_counter.load(Ordering::SeqCst), 1);
@@ -526,20 +551,20 @@ mod tests {
     async fn test_clone_requirements() {
         let mock_repo = MockRepository::new();
         let retry_repo = RetryWrapper::for_reads(mock_repo.clone());
-        
+
         // These should all compile because String implements Clone
         let query = "test_query".to_string();
         let create_request = "create_data".to_string();
         let update_request = "update_data".to_string();
         let id = Uuid::new_v4();
-        
+
         // Test that we can call operations multiple times with cloned parameters
         let _result1 = retry_repo.find_all(query.clone()).await;
         let _result2 = retry_repo.find_all(query.clone()).await;
-        
+
         let _result3 = retry_repo.create(create_request.clone()).await;
         let _result4 = retry_repo.create(create_request.clone()).await;
-        
+
         let _result5 = retry_repo.update(id, update_request.clone()).await;
         let _result6 = retry_repo.update(id, update_request.clone()).await;
     }
@@ -549,12 +574,12 @@ mod tests {
     async fn test_error_preservation() {
         let mock_repo = MockRepository::new_with_permanent_failure();
         let retry_repo = RetryWrapper::for_reads(mock_repo.clone());
-        
+
         let id = Uuid::new_v4();
         let result = retry_repo.find_by_id(id).await;
-        
+
         assert!(result.is_err());
-        
+
         // Check that the original error is preserved
         match result.unwrap_err() {
             RepositoryError::ConnectionFailed { message } => {
@@ -562,7 +587,7 @@ mod tests {
             }
             other => panic!("Expected ConnectionFailed error, got: {other:?}"),
         }
-        
+
         // Should have exhausted all retry attempts
         assert_eq!(mock_repo.call_count(), 3); // Read config max attempts
     }
@@ -571,9 +596,9 @@ mod tests {
     #[tokio::test]
     async fn test_retry_timing_integration() {
         use std::time::Instant;
-        
+
         let mock_repo = MockRepository::new_with_failure_count(2);
-        
+
         // Custom config with known timing for test predictability
         let config = RetryConfig {
             max_attempts: 3,
@@ -582,21 +607,21 @@ mod tests {
             backoff_multiplier: 2.0,
             jitter: false,
         };
-        
+
         let retry_repo = RetryWrapper::new(mock_repo.clone(), config);
-        
+
         let start = Instant::now();
         let result = retry_repo.create("timing_test".to_string()).await;
         let elapsed = start.elapsed();
-        
+
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "created_timing_test");
-        
+
         // Should have waited: 10ms (first retry) + 20ms (second retry) = 30ms minimum
         assert!(elapsed >= Duration::from_millis(30));
         // But not too much longer (allowing for execution overhead and test environment variability)
         assert!(elapsed < Duration::from_millis(500)); // Increased from 100ms to 500ms
-        
+
         assert_eq!(mock_repo.call_count(), 3);
     }
 }

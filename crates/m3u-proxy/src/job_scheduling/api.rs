@@ -25,7 +25,10 @@ impl JobSchedulingAPI {
 
     /// Trigger immediate refresh of a stream source
     pub async fn trigger_stream_source_refresh(&self, source_id: Uuid) -> Result<()> {
-        info!("API: Triggering immediate stream source refresh for {}", source_id);
+        info!(
+            "API: Triggering immediate stream source refresh for {}",
+            source_id
+        );
         self.job_scheduler
             .trigger_source_refresh(source_id, SourceType::Stream)
             .await
@@ -33,7 +36,10 @@ impl JobSchedulingAPI {
 
     /// Trigger immediate refresh of an EPG source
     pub async fn trigger_epg_source_refresh(&self, source_id: Uuid) -> Result<()> {
-        info!("API: Triggering immediate EPG source refresh for {}", source_id);
+        info!(
+            "API: Triggering immediate EPG source refresh for {}",
+            source_id
+        );
         self.job_scheduler
             .trigger_source_refresh(source_id, SourceType::EPG)
             .await
@@ -42,7 +48,10 @@ impl JobSchedulingAPI {
     /// Schedule proxy regeneration jobs (called after ingestion completes)
     pub async fn schedule_proxy_regenerations(&self, proxy_ids: Vec<Uuid>) -> Result<()> {
         if !proxy_ids.is_empty() {
-            info!("API: Scheduling regeneration for {} proxies", proxy_ids.len());
+            info!(
+                "API: Scheduling regeneration for {} proxies",
+                proxy_ids.len()
+            );
             self.job_scheduler
                 .schedule_proxy_regenerations(proxy_ids)
                 .await?;
@@ -51,7 +60,11 @@ impl JobSchedulingAPI {
     }
 
     /// Schedule a maintenance operation
-    pub async fn schedule_maintenance(&self, operation: String, priority: JobPriority) -> Result<()> {
+    pub async fn schedule_maintenance(
+        &self,
+        operation: String,
+        priority: JobPriority,
+    ) -> Result<()> {
         info!("API: Scheduling maintenance operation: {}", operation);
         self.job_scheduler
             .schedule_maintenance(operation, priority)
@@ -66,7 +79,7 @@ impl JobSchedulingAPI {
     /// Health check endpoint for the scheduling system
     pub async fn health_check(&self) -> SchedulingHealthStatus {
         let stats = self.get_queue_stats().await;
-        
+
         SchedulingHealthStatus {
             is_healthy: true,
             pending_jobs: stats.pending_jobs,
@@ -83,12 +96,18 @@ impl JobSchedulingAPI {
             LegacySchedulerEvent::SourceCreated(source_id, source_type) => {
                 // For newly created sources, we don't immediately trigger refresh
                 // The scheduler will pick them up on the next cycle
-                info!("API: Source created {} ({:?}) - will be picked up by scheduler", source_id, source_type);
+                info!(
+                    "API: Source created {} ({:?}) - will be picked up by scheduler",
+                    source_id, source_type
+                );
                 Ok(())
             }
             LegacySchedulerEvent::SourceUpdated(source_id, source_type) => {
                 // Source updates don't automatically trigger refresh
-                info!("API: Source updated {} ({:?}) - no immediate action", source_id, source_type);
+                info!(
+                    "API: Source updated {} ({:?}) - no immediate action",
+                    source_id, source_type
+                );
                 Ok(())
             }
             LegacySchedulerEvent::ManualRefreshTriggered(source_id, source_type) => {

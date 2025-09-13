@@ -3,11 +3,14 @@
 //! This provides a database-agnostic repository for Channel operations using SeaORM.
 
 use anyhow::Result;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, ColumnTrait, QueryFilter, PaginatorTrait, QueryOrder, QuerySelect, ConnectionTrait};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::entities::{prelude::Channels, channels};
+use crate::entities::{channels, prelude::Channels};
 use crate::models::Channel;
 
 /// Request for channel creation
@@ -81,9 +84,7 @@ impl ChannelSeaOrmRepository {
 
     /// Find a channel by ID
     pub async fn find_by_id(&self, id: &Uuid) -> Result<Option<Channel>> {
-        let model = Channels::find_by_id(*id)
-            .one(&*self.connection)
-            .await?;
+        let model = Channels::find_by_id(*id).one(&*self.connection).await?;
 
         match model {
             Some(m) => Ok(Some(self.model_to_domain(m))),
@@ -97,16 +98,23 @@ impl ChannelSeaOrmRepository {
             .filter(channels::Column::SourceId.eq(*source_id))
             .all(&*self.connection)
             .await?;
-        
-        Ok(models.into_iter().map(|m| self.model_to_domain(m)).collect())
+
+        Ok(models
+            .into_iter()
+            .map(|m| self.model_to_domain(m))
+            .collect())
     }
 
     /// Find all channels
     pub async fn find_all(&self) -> Result<Vec<Channel>> {
         let models = Channels::find()
             .order_by_asc(channels::Column::ChannelName)
-            .all(&*self.connection).await?;
-        Ok(models.into_iter().map(|m| self.model_to_domain(m)).collect())
+            .all(&*self.connection)
+            .await?;
+        Ok(models
+            .into_iter()
+            .map(|m| self.model_to_domain(m))
+            .collect())
     }
 
     /// Find channels by group title
@@ -115,8 +123,11 @@ impl ChannelSeaOrmRepository {
             .filter(channels::Column::GroupTitle.eq(group_title))
             .all(&*self.connection)
             .await?;
-        
-        Ok(models.into_iter().map(|m| self.model_to_domain(m)).collect())
+
+        Ok(models
+            .into_iter()
+            .map(|m| self.model_to_domain(m))
+            .collect())
     }
 
     /// Find a channel by tvg_id
@@ -137,21 +148,26 @@ impl ChannelSeaOrmRepository {
         let model = Channels::find_by_id(channel_id)
             .one(&*self.connection)
             .await?;
-        
+
         Ok(model.map(|m| m.channel_name))
     }
 
     /// Update all channels for a source (replaces existing channels)
-    pub async fn update_source_channels(&self, source_id: Uuid, channels: &[Channel]) -> Result<()> {
-        self.update_source_channels_with_batch_config(source_id, channels, None).await
+    pub async fn update_source_channels(
+        &self,
+        source_id: Uuid,
+        channels: &[Channel],
+    ) -> Result<()> {
+        self.update_source_channels_with_batch_config(source_id, channels, None)
+            .await
     }
 
     /// Update all channels for a source with configurable batch size (replaces existing channels)
     pub async fn update_source_channels_with_batch_config(
-        &self, 
-        source_id: Uuid, 
+        &self,
+        source_id: Uuid,
         channels: &[Channel],
-        batch_config: Option<&crate::config::DatabaseBatchConfig>
+        batch_config: Option<&crate::config::DatabaseBatchConfig>,
     ) -> Result<()> {
         use sea_orm::TransactionTrait;
 
@@ -167,21 +183,31 @@ impl ChannelSeaOrmRepository {
             .filter(channels::Column::SourceId.eq(source_id))
             .exec(&txn)
             .await?;
-        
-        tracing::debug!("Deleted {} existing channels for source {}", delete_result.rows_affected, source_id);
+
+        tracing::debug!(
+            "Deleted {} existing channels for source {}",
+            delete_result.rows_affected,
+            source_id
+        );
 
         // Use the batch insert function but pass the transaction instead of the connection
         match Self::insert_stream_channels_batch_in_transaction(
             channels.to_vec(),
             &txn,
             batch_config,
-        ).await {
+        )
+        .await
+        {
             Ok(inserted_count) => {
                 // Commit the transaction only after both operations succeed
                 txn.commit().await?;
-                tracing::info!("Successfully updated {} channels for source {} (atomic operation)", inserted_count, source_id);
+                tracing::info!(
+                    "Successfully updated {} channels for source {} (atomic operation)",
+                    inserted_count,
+                    source_id
+                );
                 Ok(())
-            },
+            }
             Err(e) => {
                 // Transaction will be automatically rolled back when dropped
                 tracing::error!("Failed to insert channels for source {}: {}", source_id, e);
@@ -194,14 +220,17 @@ impl ChannelSeaOrmRepository {
     async fn insert_stream_channels_batch_in_transaction(
         channels: Vec<Channel>,
         txn: &sea_orm::DatabaseTransaction,
-        batch_config: Option<&crate::config::DatabaseBatchConfig>
+        batch_config: Option<&crate::config::DatabaseBatchConfig>,
     ) -> Result<usize> {
         if channels.is_empty() {
             return Ok(0);
         }
 
         let batch_size = channels.len();
-        tracing::debug!("Inserting batch of {} stream channels using multi-value INSERT in transaction", batch_size);
+        tracing::debug!(
+            "Inserting batch of {} stream channels using multi-value INSERT in transaction",
+            batch_size
+        );
 
         // Use configurable batch size based on database backend and user configuration
         let max_records_per_query = if let Some(config) = batch_config {
@@ -211,29 +240,33 @@ impl ChannelSeaOrmRepository {
             let default_config = crate::config::DatabaseBatchConfig::default();
             default_config.safe_stream_channel_batch_size(txn.get_database_backend())
         };
-        
-        tracing::debug!("Using stream channel batch size: {} for backend: {:?}", max_records_per_query, txn.get_database_backend());
-        
+
+        tracing::debug!(
+            "Using stream channel batch size: {} for backend: {:?}",
+            max_records_per_query,
+            txn.get_database_backend()
+        );
+
         let mut total_inserted = 0;
-        
+
         for chunk in channels.chunks(max_records_per_query) {
             if chunk.is_empty() {
                 continue;
             }
-            
+
             // Build multi-value INSERT statement with conflict resolution
             let mut query = match txn.get_database_backend() {
-                sea_orm::DatabaseBackend::Postgres => {
-                    String::from("INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES ")
-                },
-                sea_orm::DatabaseBackend::Sqlite => {
-                    String::from("INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES ")
-                },
-                _ => {
-                    String::from("INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES ")
-                }
+                sea_orm::DatabaseBackend::Postgres => String::from(
+                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES ",
+                ),
+                sea_orm::DatabaseBackend::Sqlite => String::from(
+                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES ",
+                ),
+                _ => String::from(
+                    "INSERT INTO channels (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at) VALUES ",
+                ),
             };
-            
+
             // Generate placeholders based on database backend
             let placeholders: Vec<String> = (0..chunk.len())
                 .enumerate()
@@ -241,73 +274,89 @@ impl ChannelSeaOrmRepository {
                     let base_idx = i * 12; // 12 fields per channel
                     match txn.get_database_backend() {
                         sea_orm::DatabaseBackend::Postgres => {
-                            format!("(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                                base_idx + 1, base_idx + 2, base_idx + 3, base_idx + 4,
-                                base_idx + 5, base_idx + 6, base_idx + 7, base_idx + 8,
-                                base_idx + 9, base_idx + 10, base_idx + 11, base_idx + 12)
+                            format!(
+                                "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                                base_idx + 1,
+                                base_idx + 2,
+                                base_idx + 3,
+                                base_idx + 4,
+                                base_idx + 5,
+                                base_idx + 6,
+                                base_idx + 7,
+                                base_idx + 8,
+                                base_idx + 9,
+                                base_idx + 10,
+                                base_idx + 11,
+                                base_idx + 12
+                            )
                         }
-                        _ => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string()
+                        _ => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string(),
                     }
                 })
                 .collect();
             query.push_str(&placeholders.join(", "));
-            
+
             // Add conflict resolution clause based on database backend
             match txn.get_database_backend() {
                 sea_orm::DatabaseBackend::Postgres => {
                     query.push_str(" ON CONFLICT (id) DO NOTHING");
-                },
+                }
                 sea_orm::DatabaseBackend::Sqlite => {
                     query.push_str(" ON CONFLICT (id) DO NOTHING");
-                },
+                }
                 _ => {
                     // For MySQL/MariaDB, use INSERT IGNORE or handle differently
                     // For now, we'll rely on the transaction isolation
                 }
             }
-            
+
             let mut values = Vec::new();
-            
+
             // Collect all parameters - order must match INSERT statement
             // Use the deterministic UUIDs from the channel data
             for channel in chunk {
-                values.push(channel.id.into());                           // id
-                values.push(channel.source_id.into());                    // source_id
-                values.push(channel.tvg_id.clone().into());               // tvg_id
-                values.push(channel.tvg_name.clone().into());             // tvg_name
-                values.push(channel.tvg_chno.clone().into());             // tvg_chno
-                values.push(channel.channel_name.clone().into());         // channel_name
-                values.push(channel.tvg_logo.clone().into());             // tvg_logo
-                values.push(channel.tvg_shift.clone().into());            // tvg_shift
-                values.push(channel.group_title.clone().into());          // group_title
-                values.push(channel.stream_url.clone().into());           // stream_url
-                values.push(channel.created_at.into());                   // created_at
-                values.push(channel.updated_at.into());                   // updated_at
+                values.push(channel.id.into()); // id
+                values.push(channel.source_id.into()); // source_id
+                values.push(channel.tvg_id.clone().into()); // tvg_id
+                values.push(channel.tvg_name.clone().into()); // tvg_name
+                values.push(channel.tvg_chno.clone().into()); // tvg_chno
+                values.push(channel.channel_name.clone().into()); // channel_name
+                values.push(channel.tvg_logo.clone().into()); // tvg_logo
+                values.push(channel.tvg_shift.clone().into()); // tvg_shift
+                values.push(channel.group_title.clone().into()); // group_title
+                values.push(channel.stream_url.clone().into()); // stream_url
+                values.push(channel.created_at.into()); // created_at
+                values.push(channel.updated_at.into()); // updated_at
             }
-            
+
             use sea_orm::{ConnectionTrait, Statement};
             let stmt = Statement::from_sql_and_values(txn.get_database_backend(), &query, values);
-            let result = txn.execute(stmt).await
-                .map_err(|e| {
-                    tracing::debug!("SQL execution failed: {}", e);
-                    tracing::debug!("Query was: {}", query);
-                    tracing::debug!("Attempted to insert {} channels in batch", chunk.len());
-                    anyhow::anyhow!("Failed to insert stream channels batch: {}", e)
-                })?;
-            
+            let result = txn.execute(stmt).await.map_err(|e| {
+                tracing::debug!("SQL execution failed: {}", e);
+                tracing::debug!("Query was: {}", query);
+                tracing::debug!("Attempted to insert {} channels in batch", chunk.len());
+                anyhow::anyhow!("Failed to insert stream channels batch: {}", e)
+            })?;
+
             let rows_affected = result.rows_affected() as usize;
             total_inserted += rows_affected;
-            
+
             // Log if fewer rows were inserted than expected (due to conflicts)
             if rows_affected < chunk.len() {
-                tracing::debug!("Inserted {} out of {} channels in batch (some may have been deduplicated)", 
-                              rows_affected, chunk.len());
+                tracing::debug!(
+                    "Inserted {} out of {} channels in batch (some may have been deduplicated)",
+                    rows_affected,
+                    chunk.len()
+                );
             } else {
                 tracing::trace!("Inserted {} channels in multi-value query", rows_affected);
             }
         }
 
-        tracing::debug!("Successfully prepared {} stream channels for insertion in transaction", total_inserted);
+        tracing::debug!(
+            "Successfully prepared {} stream channels for insertion in transaction",
+            total_inserted
+        );
         Ok(total_inserted)
     }
 
@@ -360,7 +409,10 @@ impl ChannelSeaOrmRepository {
             .all(&*self.connection)
             .await?;
 
-        let channels = models.into_iter().map(|m| self.model_to_domain(m)).collect();
+        let channels = models
+            .into_iter()
+            .map(|m| self.model_to_domain(m))
+            .collect();
         Ok((channels, total_count))
     }
 }
@@ -368,24 +420,22 @@ impl ChannelSeaOrmRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::IngestionConfig,
-        database::Database,
-    };
+    use crate::{config::IngestionConfig, database::Database};
 
     async fn create_test_db() -> Result<Database> {
         // For unit tests, we'll use the actual database structure but skip problematic migrations
         // This is acceptable for unit tests that only test repository logic
         use sea_orm::*;
         use std::sync::Arc;
-        
+
         let connection = sea_orm::Database::connect("sqlite::memory:").await?;
         let arc_connection = Arc::new(connection);
-        
+
         // Create minimal table structure for testing
-        arc_connection.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            r#"
+        arc_connection
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                r#"
             CREATE TABLE channels (
                 id TEXT PRIMARY KEY,
                 source_id TEXT NOT NULL,
@@ -400,9 +450,11 @@ mod tests {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            "#.to_string()
-        )).await?;
-        
+            "#
+                .to_string(),
+            ))
+            .await?;
+
         // Create a minimal database wrapper for testing
         let db = crate::database::Database {
             connection: arc_connection.clone(),
@@ -411,7 +463,7 @@ mod tests {
             backend: DatabaseBackend::Sqlite,
             ingestion_config: IngestionConfig::default(),
         };
-        
+
         Ok(db)
     }
 
@@ -425,8 +477,9 @@ mod tests {
         // Test create
         use crate::utils::SampleDataGenerator;
         let mut generator = SampleDataGenerator::new();
-        let sample_channel = generator.generate_sample_channels(1, Some("entertainment"))[0].clone();
-        
+        let sample_channel =
+            generator.generate_sample_channels(1, Some("entertainment"))[0].clone();
+
         let create_request = ChannelCreateRequest {
             source_id,
             tvg_id: Some(sample_channel.tvg_id.clone()),
@@ -484,11 +537,19 @@ mod tests {
         use crate::utils::SampleDataGenerator;
         let mut generator = SampleDataGenerator::new();
         let sample_channels = generator.generate_sample_channels(3, Some("entertainment"));
-        
-        let channels: Vec<(String, String, String, String)> = sample_channels.iter().enumerate().map(|(i, ch)| {
-            (ch.channel_name.clone(), ch.tvg_id.clone(), 
-             format!("{}", 101 + i), "Entertainment".to_string())
-        }).collect();
+
+        let channels: Vec<(String, String, String, String)> = sample_channels
+            .iter()
+            .enumerate()
+            .map(|(i, ch)| {
+                (
+                    ch.channel_name.clone(),
+                    ch.tvg_id.clone(),
+                    format!("{}", 101 + i),
+                    "Entertainment".to_string(),
+                )
+            })
+            .collect();
 
         let mut created_ids = Vec::new();
         for (name, tvg_id, chno, group) in channels {
@@ -518,7 +579,7 @@ mod tests {
 
         // Test that all channels have different IDs
         for i in 0..created_ids.len() {
-            for j in (i+1)..created_ids.len() {
+            for j in (i + 1)..created_ids.len() {
                 assert_ne!(created_ids[i], created_ids[j]);
             }
         }

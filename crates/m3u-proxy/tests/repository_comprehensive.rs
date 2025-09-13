@@ -4,31 +4,33 @@
 //! operations, data integrity, error handling, and security validation.
 //! Tests use the existing SQL injection prevention infrastructure.
 
-use serde_json::json;
 use sea_orm::DatabaseConnection;
+use serde_json::json;
 use uuid::Uuid;
 
 use m3u_proxy::{
     database::Database,
-    models::*,
     database::repositories::{
-        stream_source::StreamSourceSeaOrmRepository,
-        channel::{ChannelSeaOrmRepository, ChannelCreateRequest},
-        filter::FilterSeaOrmRepository,
+        channel::{ChannelCreateRequest, ChannelSeaOrmRepository},
         epg_source::EpgSourceSeaOrmRepository,
+        filter::FilterSeaOrmRepository,
+        stream_source::StreamSourceSeaOrmRepository,
     },
+    models::*,
 };
 
 /// Helper to create test database using SeaORM infrastructure
 async fn create_test_database() -> (Database, std::sync::Arc<DatabaseConnection>) {
     use sea_orm::*;
-    
+
     let database = create_in_memory_database().await;
-    
+
     // Create minimal tables directly instead of running migrations to avoid SQLite FK issues
-    database.connection().execute(Statement::from_string(
-        DatabaseBackend::Sqlite,
-        r#"
+    database
+        .connection()
+        .execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            r#"
         CREATE TABLE stream_sources (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -85,15 +87,22 @@ async fn create_test_database() -> (Database, std::sync::Arc<DatabaseConnection>
             last_ingested_at TEXT,
             is_active INTEGER NOT NULL DEFAULT 1
         );
-        "#.to_string()
-    )).await.expect("Failed to create tables");
-    
+        "#
+            .to_string(),
+        ))
+        .await
+        .expect("Failed to create tables");
+
     // Enable foreign key constraints for SQLite
-    database.connection().execute(Statement::from_string(
-        DatabaseBackend::Sqlite,
-        "PRAGMA foreign_keys = ON;".to_string()
-    )).await.expect("Failed to enable foreign keys");
-    
+    database
+        .connection()
+        .execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "PRAGMA foreign_keys = ON;".to_string(),
+        ))
+        .await
+        .expect("Failed to enable foreign keys");
+
     let connection = database.connection().clone();
     (database, connection)
 }
@@ -116,15 +125,18 @@ async fn test_stream_source_repository_complete_lifecycle() {
         update_cron: "0 */4 * * *".to_string(),
         username: Some("testuser".to_string()),
         password: Some("testpass".to_string()),
-        field_map: Some(json!({
-            "tvg_logo": "logo_url",
-            "group_title": "category"
-        }).to_string()),
+        field_map: Some(
+            json!({
+                "tvg_logo": "logo_url",
+                "group_title": "category"
+            })
+            .to_string(),
+        ),
         ignore_channel_numbers: true,
     };
 
     let created_source = repo.create(create_request).await.unwrap();
-    
+
     // Verify all fields are set correctly
     assert_eq!(created_source.name, "Test Source Complete");
     assert_eq!(created_source.source_type, StreamSourceType::M3u);
@@ -153,16 +165,22 @@ async fn test_stream_source_repository_complete_lifecycle() {
         update_cron: "0 */4 * * *".to_string(),
         username: Some("testuser".to_string()),
         password: Some("testpass".to_string()),
-        field_map: Some(json!({
-            "tvg_logo": "new_logo_field",
-            "tvg_name": "name_field"
-        }).to_string()),
+        field_map: Some(
+            json!({
+                "tvg_logo": "new_logo_field",
+                "tvg_name": "name_field"
+            })
+            .to_string(),
+        ),
         ignore_channel_numbers: true,
         is_active: true,
         update_linked: true,
     };
 
-    let updated_source = repo.update(&created_source.id, update_request).await.unwrap();
+    let updated_source = repo
+        .update(&created_source.id, update_request)
+        .await
+        .unwrap();
     assert_eq!(updated_source.name, "Updated Test Source");
     assert_eq!(updated_source.url, "http://example.com/updated.m3u");
     assert_eq!(updated_source.max_concurrent_streams, 20);
@@ -175,7 +193,10 @@ async fn test_stream_source_repository_complete_lifecycle() {
     assert!(all_sources.iter().any(|s| s.id == created_source.id));
 
     // Test get_channel_count_for_source
-    let count = repo.get_channel_count_for_source(&created_source.id).await.unwrap();
+    let count = repo
+        .get_channel_count_for_source(&created_source.id)
+        .await
+        .unwrap();
     assert_eq!(count, 0); // No channels created yet
 
     // Test find_active
@@ -185,7 +206,7 @@ async fn test_stream_source_repository_complete_lifecycle() {
 
     // Test delete
     repo.delete(&created_source.id).await.unwrap();
-    
+
     // Verify deletion
     let deleted_source = repo.find_by_id(&created_source.id).await.unwrap();
     assert!(deleted_source.is_none());
@@ -289,7 +310,7 @@ async fn test_channel_repository_with_source_relationship() {
     };
 
     let created_channel = channel_repo.create(create_request).await.unwrap();
-    
+
     // Verify all fields
     assert_eq!(created_channel.source_id, source.id);
     assert_eq!(created_channel.channel_name, "Test Channel HD");
@@ -318,17 +339,26 @@ async fn test_channel_repository_with_source_relationship() {
     }
 
     // Test get_channel_name
-    let channel_name = channel_repo.get_channel_name(created_channel.id).await.unwrap();
+    let channel_name = channel_repo
+        .get_channel_name(created_channel.id)
+        .await
+        .unwrap();
     assert!(channel_name.is_some());
-    
+
     // Delete source to test cascade deletion
     source_repo.delete(&source.id).await.unwrap();
-    
+
     // Verify channel was deleted due to cascade
-    assert!(channel_repo.find_by_id(&created_channel.id).await.unwrap().is_none());
+    assert!(
+        channel_repo
+            .find_by_id(&created_channel.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_channel_repository_foreign_key_constraints() {
     let (_db, connection) = create_test_database().await;
     let channel_repo = ChannelSeaOrmRepository::new(connection);
@@ -358,7 +388,6 @@ async fn test_channel_repository_foreign_key_constraints() {
 // EPG SOURCE REPOSITORY TESTS
 // =============================================================================
 
-
 #[tokio::test]
 async fn test_epg_source_repository_basic_operations() {
     let (_db, connection) = create_test_database().await;
@@ -377,7 +406,7 @@ async fn test_epg_source_repository_basic_operations() {
     };
 
     let created_source = epg_repo.create(create_request).await.unwrap();
-    
+
     // Verify creation
     assert_eq!(created_source.name, "Test EPG Source");
     assert_eq!(created_source.source_type, EpgSourceType::Xmltv);
@@ -386,7 +415,7 @@ async fn test_epg_source_repository_basic_operations() {
     // Test find_by_id
     let found_source = epg_repo.find_by_id(&created_source.id).await.unwrap();
     assert!(found_source.is_some());
-    
+
     // Test delete
     epg_repo.delete(&created_source.id).await.unwrap();
     let deleted_source = epg_repo.find_by_id(&created_source.id).await.unwrap();
@@ -415,12 +444,12 @@ async fn test_filter_repository_complete_lifecycle() {
     };
 
     let created_filter = filter_repo.create(create_request).await.unwrap();
-    
+
     // Verify creation
     assert_eq!(created_filter.name, "Test Filter");
-//     assert_eq!(created_filter.source_id, source.id);
-//     assert_eq!(created_filter.priority, 1);
-//     assert!(created_source.is_active);
+    //     assert_eq!(created_filter.source_id, source.id);
+    //     assert_eq!(created_filter.priority, 1);
+    //     assert!(created_source.is_active);
 
     // Test update
     let update_request = FilterUpdateRequest {
@@ -429,10 +458,13 @@ async fn test_filter_repository_complete_lifecycle() {
         is_inverse: false,
         expression: "group_title contains \"News\" AND channel_name contains \"HD\"".to_string(),
     };
-    let updated_filter = filter_repo.update(&created_filter.id, update_request).await.unwrap();
+    let updated_filter = filter_repo
+        .update(&created_filter.id, update_request)
+        .await
+        .unwrap();
     assert_eq!(updated_filter.name, "Updated Filter");
-//     assert_eq!(updated_filter.priority, 2);
-//     assert_eq!(updated_filter.is_active, false);
+    //     assert_eq!(updated_filter.priority, 2);
+    //     assert_eq!(updated_filter.is_active, false);
 
     // Filter repository testing requires specific query types - simplified for now
 
@@ -470,7 +502,7 @@ async fn test_cross_repository_cascade_operations() {
             group_title: Some("Test Group".to_string()),
             stream_url: format!("http://example.com/stream{i}"),
         };
-        
+
         let channel = channel_repo.create(channel_request).await.unwrap();
         created_channels.push(channel);
     }
@@ -490,16 +522,19 @@ async fn test_cross_repository_cascade_operations() {
 
     // Test deleting source (should handle cascades appropriately)
     source_repo.delete(&source.id).await.unwrap();
-    
+
     // Verify source is deleted
     assert!(source_repo.find_by_id(&source.id).await.unwrap().is_none());
 
     // Check if related entities are handled appropriately
     // (depends on cascade delete configuration)
     let remaining_channels = channel_repo.find_by_source_id(&source.id).await.unwrap();
-    
+
     // May be empty (cascade delete) or should error on foreign key constraint
-    println!("Remaining channels after source deletion: {}", remaining_channels.len());
+    println!(
+        "Remaining channels after source deletion: {}",
+        remaining_channels.len()
+    );
 }
 
 // =============================================================================
@@ -572,7 +607,8 @@ async fn test_repository_bulk_operations_performance() {
     let start_time = std::time::Instant::now();
     let mut created_channels = Vec::new();
 
-    for i in 1..=50 { // Create 50 channels
+    for i in 1..=50 {
+        // Create 50 channels
         let group_num = (i % 5) + 1;
         let channel_request = ChannelCreateRequest {
             source_id: source.id,
@@ -585,7 +621,7 @@ async fn test_repository_bulk_operations_performance() {
             group_title: Some(format!("Group {group_num}")),
             stream_url: format!("http://example.com/bulk_stream_{i}"),
         };
-        
+
         let channel = channel_repo.create(channel_request).await.unwrap();
         created_channels.push(channel);
     }
@@ -597,7 +633,7 @@ async fn test_repository_bulk_operations_performance() {
     let query_start = std::time::Instant::now();
     let all_channels = channel_repo.find_all().await.unwrap();
     let query_time = query_start.elapsed();
-    
+
     assert_eq!(all_channels.len(), 50);
     println!("Queried {} channels in {query_time:?}", all_channels.len());
 
@@ -605,20 +641,32 @@ async fn test_repository_bulk_operations_performance() {
     let search_start = std::time::Instant::now();
     let all_channels_after_bulk = channel_repo.find_all().await.unwrap();
     let search_time = search_start.elapsed();
-    
+
     assert!(!all_channels_after_bulk.is_empty());
-    println!("Found {} channels in {search_time:?}", all_channels_after_bulk.len());
+    println!(
+        "Found {} channels in {search_time:?}",
+        all_channels_after_bulk.len()
+    );
 
     // Performance assertions - adjust thresholds as needed
-    assert!(creation_time.as_millis() < 5000, "Bulk creation took too long: {creation_time:?}");
-    assert!(query_time.as_millis() < 500, "Query took too long: {query_time:?}");
-    assert!(search_time.as_millis() < 1000, "Search took too long: {search_time:?}");
+    assert!(
+        creation_time.as_millis() < 5000,
+        "Bulk creation took too long: {creation_time:?}"
+    );
+    assert!(
+        query_time.as_millis() < 500,
+        "Query took too long: {query_time:?}"
+    );
+    assert!(
+        search_time.as_millis() < 1000,
+        "Search took too long: {search_time:?}"
+    );
 }
 
 #[tokio::test]
 async fn test_concurrent_repository_operations() {
     use tokio::task::JoinSet;
-    
+
     let (_db, connection) = create_test_database().await;
     let source_repo = StreamSourceSeaOrmRepository::new(connection);
 
@@ -663,8 +711,10 @@ async fn test_concurrent_repository_operations() {
 }
 /// Helper function to create in-memory database for testing
 async fn create_in_memory_database() -> Database {
-    use m3u_proxy::config::{DatabaseConfig, IngestionConfig, SqliteConfig, PostgreSqlConfig, MySqlConfig};
-    
+    use m3u_proxy::config::{
+        DatabaseConfig, IngestionConfig, MySqlConfig, PostgreSqlConfig, SqliteConfig,
+    };
+
     let db_config = DatabaseConfig {
         url: "sqlite::memory:".to_string(),
         max_connections: Some(10),
@@ -673,10 +723,11 @@ async fn create_in_memory_database() -> Database {
         postgresql: PostgreSqlConfig::default(),
         mysql: MySqlConfig::default(),
     };
-    
+
     let ingestion_config = IngestionConfig::default();
-    
-    Database::new(&db_config, &ingestion_config).await
+
+    Database::new(&db_config, &ingestion_config)
+        .await
         .expect("Failed to create in-memory database")
 }
 
@@ -693,5 +744,7 @@ async fn create_test_stream_source(repo: &StreamSourceSeaOrmRepository) -> Strea
         field_map: None,
         ignore_channel_numbers: false,
     };
-    repo.create(request).await.expect("Failed to create test stream source")
+    repo.create(request)
+        .await
+        .expect("Failed to create test stream source")
 }

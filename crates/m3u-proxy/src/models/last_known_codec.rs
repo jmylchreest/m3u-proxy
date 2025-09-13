@@ -104,7 +104,7 @@ pub struct ChannelWithCodec {
     pub stream_url: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    
+
     // Last known codec information
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,

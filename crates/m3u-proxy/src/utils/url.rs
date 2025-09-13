@@ -102,8 +102,13 @@ impl UrlUtils {
     /// let url = UrlUtils::build_xtream_xmltv_url("http://example.com", "user", "pass").unwrap();
     /// assert_eq!(url, "http://example.com/xmltv.php?username=user&password=pass");
     /// ```
-    pub fn build_xtream_xmltv_url(base_url: &str, username: &str, password: &str) -> Result<String, url::ParseError> {
-        let xmltv_path_with_params = format!("xmltv.php?username={}&password={}", username, password);
+    pub fn build_xtream_xmltv_url(
+        base_url: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<String, url::ParseError> {
+        let xmltv_path_with_params =
+            format!("xmltv.php?username={}&password={}", username, password);
         Self::join(base_url, &xmltv_path_with_params)
     }
 
@@ -185,13 +190,14 @@ impl UrlUtils {
 
         // Handle URL auth (user:pass@host)
         if let Ok(parsed) = Url::parse(url)
-            && (!parsed.username().is_empty() || parsed.password().is_some()) {
-                let mut new_url = parsed.clone();
-                // Clear existing credentials and set obfuscated ones
-                let _ = new_url.set_username("****");
-                let _ = new_url.set_password(Some("****"));
-                obfuscated = new_url.to_string();
-            }
+            && (!parsed.username().is_empty() || parsed.password().is_some())
+        {
+            let mut new_url = parsed.clone();
+            // Clear existing credentials and set obfuscated ones
+            let _ = new_url.set_username("****");
+            let _ = new_url.set_password(Some("****"));
+            obfuscated = new_url.to_string();
+        }
 
         // Handle query parameters with case-insensitive matching
         let sensitive_params = ["username", "password", "user", "pass", "pwd", "passwd"];

@@ -401,9 +401,15 @@ pub async fn update_stream_source(
                     ok(response).into_response()
                 }
                 Err(e) => {
-                    tracing::error!("Failed to get updated stream source details {}: {}", uuid, e);
-                    crate::web::responses::internal_error(&format!("Failed to get updated source details: {e}"))
-                        .into_response()
+                    tracing::error!(
+                        "Failed to get updated stream source details {}: {}",
+                        uuid,
+                        e
+                    );
+                    crate::web::responses::internal_error(&format!(
+                        "Failed to get updated source details: {e}"
+                    ))
+                    .into_response()
                 }
             }
         }
@@ -577,7 +583,9 @@ pub async fn refresh_stream_source(
 ) -> impl IntoResponse {
     log_request(
         &axum::http::Method::POST,
-        &format!("/api/v1/sources/stream/{id}/refresh").parse().unwrap(),
+        &format!("/api/v1/sources/stream/{id}/refresh")
+            .parse()
+            .unwrap(),
         &context,
     );
 
@@ -586,46 +594,70 @@ pub async fn refresh_stream_source(
         Err(error) => return crate::web::responses::bad_request(&error).into_response(),
     };
 
-    let stream_source_repo = crate::database::repositories::StreamSourceSeaOrmRepository::new(state.database.connection().clone());
+    let stream_source_repo = crate::database::repositories::StreamSourceSeaOrmRepository::new(
+        state.database.connection().clone(),
+    );
     match stream_source_repo.find_by_id(&uuid).await {
         Ok(Some(source)) => {
             // Create progress manager for manual refresh operation
-            let progress_manager = match state.progress_service.create_staged_progress_manager(
-                source.id, // Use source ID as owner
-                "stream_source".to_string(),
-                crate::services::progress_service::OperationType::StreamIngestion,
-                format!("Manual Refresh: {}", source.name),
-            ).await {
+            let progress_manager = match state
+                .progress_service
+                .create_staged_progress_manager(
+                    source.id, // Use source ID as owner
+                    "stream_source".to_string(),
+                    crate::services::progress_service::OperationType::StreamIngestion,
+                    format!("Manual Refresh: {}", source.name),
+                )
+                .await
+            {
                 Ok(manager) => {
                     // Add ingestion stage
-                    let manager_with_stage = manager.add_stage("stream_ingestion", "Stream Ingestion").await;
-                    Some((manager_with_stage, manager.get_stage_updater("stream_ingestion").await))
-                },
+                    let manager_with_stage = manager
+                        .add_stage("stream_ingestion", "Stream Ingestion")
+                        .await;
+                    Some((
+                        manager_with_stage,
+                        manager.get_stage_updater("stream_ingestion").await,
+                    ))
+                }
                 Err(e) => {
-                    tracing::warn!("Failed to create progress manager for stream source manual refresh {}: {} - continuing without progress", source.name, e);
+                    tracing::warn!(
+                        "Failed to create progress manager for stream source manual refresh {}: {} - continuing without progress",
+                        source.name,
+                        e
+                    );
                     None
                 }
             };
-            
-            let progress_updater = progress_manager.as_ref().and_then(|(_, updater)| updater.as_ref());
-            
+
+            let progress_updater = progress_manager
+                .as_ref()
+                .and_then(|(_, updater)| updater.as_ref());
+
             // Call stream source service refresh with progress tracking
-            match state.stream_source_service.refresh_with_progress_updater(&source, progress_updater).await {
+            match state
+                .stream_source_service
+                .refresh_with_progress_updater(&source, progress_updater)
+                .await
+            {
                 Ok(_channel_count) => {
                     // Complete progress operation if it was created
                     if let Some((manager, _)) = progress_manager {
                         manager.complete().await;
                     }
-                    
+
                     // Trigger proxy auto-regeneration after successful manual refresh
-                    state.proxy_regeneration_service.queue_affected_proxies_coordinated(uuid, "stream").await;
-                    
+                    state
+                        .proxy_regeneration_service
+                        .queue_affected_proxies_coordinated(uuid, "stream")
+                        .await;
+
                     // Enqueue stream source refresh job directly to queue
                     let job = crate::job_scheduling::types::ScheduledJob::new(
                         crate::job_scheduling::types::JobType::StreamIngestion(uuid),
                         crate::job_scheduling::types::JobPriority::High, // High priority for manual triggers
                     );
-                    
+
                     match state.job_queue.enqueue(job).await {
                         Ok(true) => {
                             tracing::info!("Enqueued stream ingestion job for {}", uuid);
@@ -634,43 +666,55 @@ pub async fn refresh_stream_source(
                             tracing::debug!("Stream source {} ingestion already queued", uuid);
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to enqueue stream ingestion for {}: {}", uuid, e);
+                            tracing::warn!(
+                                "Failed to enqueue stream ingestion for {}: {}",
+                                uuid,
+                                e
+                            );
                         }
                     }
-                    
+
                     ok(serde_json::json!({
                         "message": "Stream source refresh started",
                         "source_id": uuid,
                         "source_name": source.name
-                    })).into_response()
+                    }))
+                    .into_response()
                 }
                 Err(e) => {
                     // Fail progress operation if it was created
                     if let Some((manager, _)) = progress_manager {
-                        manager.fail(&format!("Stream source refresh failed: {e}")).await;
+                        manager
+                            .fail(&format!("Stream source refresh failed: {e}"))
+                            .await;
                     }
-                    
+
                     tracing::error!("Failed to refresh stream source {}: {}", source.id, e);
-                    
+
                     // Check if it's an operation in progress error
-                    if let Some(crate::errors::AppError::OperationInProgress { .. }) = e.downcast_ref::<crate::errors::AppError>() {
-                        return crate::web::responses::conflict("Operation already in progress").into_response();
+                    if let Some(crate::errors::AppError::OperationInProgress { .. }) =
+                        e.downcast_ref::<crate::errors::AppError>()
+                    {
+                        return crate::web::responses::conflict("Operation already in progress")
+                            .into_response();
                     }
-                    
-                    crate::web::responses::handle_error(crate::errors::AppError::Internal { 
-                        message: "Stream source refresh failed".to_string() 
-                    }).into_response()
+
+                    crate::web::responses::handle_error(crate::errors::AppError::Internal {
+                        message: "Stream source refresh failed".to_string(),
+                    })
+                    .into_response()
                 }
             }
         }
         Ok(None) => {
             crate::web::responses::not_found("Stream source", &uuid.to_string()).into_response()
-        },
+        }
         Err(e) => {
             tracing::error!("Failed to get stream source {}: {}", uuid, e);
-            crate::web::responses::handle_error(crate::errors::AppError::Internal { 
-                message: "Failed to retrieve stream source".to_string() 
-            }).into_response()
+            crate::web::responses::handle_error(crate::errors::AppError::Internal {
+                message: "Failed to retrieve stream source".to_string(),
+            })
+            .into_response()
         }
     }
 }

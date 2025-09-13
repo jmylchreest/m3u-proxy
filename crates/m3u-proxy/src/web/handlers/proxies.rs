@@ -8,12 +8,15 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
-use tracing::{debug, info, warn, error};
 
 use crate::{
-    database::repositories::{StreamProxySeaOrmRepository, ChannelSeaOrmRepository, FilterSeaOrmRepository, StreamSourceSeaOrmRepository},
+    database::repositories::{
+        ChannelSeaOrmRepository, FilterSeaOrmRepository, StreamProxySeaOrmRepository,
+        StreamSourceSeaOrmRepository,
+    },
     models::{StreamProxy, StreamProxyMode},
     proxy::session_tracker::{ClientInfo, SessionStats},
     utils::{resolve_proxy_id, uuid_parser::parse_uuid_flexible},
@@ -27,7 +30,9 @@ use crate::{
 
 /// Helper to create SeaORM repositories with shared connection
 /// Since SeaORM handles connection pooling internally, we don't need separate read/write pools
-fn create_repositories(database: &crate::database::Database) -> (
+fn create_repositories(
+    database: &crate::database::Database,
+) -> (
     StreamProxySeaOrmRepository,
     ChannelSeaOrmRepository,
     FilterSeaOrmRepository,
@@ -228,10 +233,10 @@ impl StreamProxyResponse {
     /// Create a response from a StreamProxy with the provided base URL
     pub fn from_proxy_with_base_url(proxy: StreamProxy, base_url: &str) -> Self {
         use crate::utils::uuid_parser::uuid_to_base64;
-        
+
         let trimmed_base_url = base_url.trim_end_matches('/');
         let proxy_id_b64 = uuid_to_base64(&proxy.id);
-        
+
         Self {
             id: proxy.id,
             name: proxy.name,
@@ -418,11 +423,11 @@ pub async fn list_proxies(
     );
 
     // Create service instances from state using read repositories
-    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) =
         create_repositories(&state.database);
 
-    let service = crate::services::StreamProxyService::new(
-        crate::services::StreamProxyServiceBuilder {
+    let service =
+        crate::services::StreamProxyService::new(crate::services::StreamProxyServiceBuilder {
             proxy_repo,
             channel_repo,
             filter_repo,
@@ -437,8 +442,7 @@ pub async fn list_proxies(
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
             system: state.system.clone(),
-        },
-    );
+        });
 
     // Get proxies with pagination
     let limit = Some(list_params.pagination.limit as usize);
@@ -494,11 +498,11 @@ pub async fn get_proxy(
     };
 
     // Create service instances
-    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) =
         create_repositories(&state.database);
 
-    let service = crate::services::StreamProxyService::new(
-        crate::services::StreamProxyServiceBuilder {
+    let service =
+        crate::services::StreamProxyService::new(crate::services::StreamProxyServiceBuilder {
             proxy_repo,
             channel_repo,
             filter_repo,
@@ -513,8 +517,7 @@ pub async fn get_proxy(
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
             system: state.system.clone(),
-        },
-    );
+        });
 
     match service.get_by_id(uuid).await {
         Ok(Some(proxy)) => ok(proxy).into_response(),
@@ -554,11 +557,11 @@ pub async fn create_proxy(
     };
 
     // Create service instances using write repositories for mutations
-    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) =
         create_repositories(&state.database);
 
-    let service = crate::services::StreamProxyService::new(
-        crate::services::StreamProxyServiceBuilder {
+    let service =
+        crate::services::StreamProxyService::new(crate::services::StreamProxyServiceBuilder {
             proxy_repo,
             channel_repo,
             filter_repo,
@@ -573,8 +576,7 @@ pub async fn create_proxy(
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
             system: state.system.clone(),
-        },
-    );
+        });
 
     match service.create(service_request).await {
         Ok(proxy) => ok(proxy).into_response(),
@@ -671,11 +673,11 @@ pub async fn update_proxy(
     };
 
     // Create service instances using write repositories for mutations
-    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) =
         create_repositories(&state.database);
 
-    let service = crate::services::StreamProxyService::new(
-        crate::services::StreamProxyServiceBuilder {
+    let service =
+        crate::services::StreamProxyService::new(crate::services::StreamProxyServiceBuilder {
             proxy_repo,
             channel_repo,
             filter_repo,
@@ -690,8 +692,7 @@ pub async fn update_proxy(
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
             system: state.system.clone(),
-        },
-    );
+        });
 
     match service.update(uuid, service_request).await {
         Ok(proxy) => ok(proxy).into_response(),
@@ -734,11 +735,11 @@ pub async fn delete_proxy(
     };
 
     // Create service instances using write repositories for mutations
-    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) =
         create_repositories(&state.database);
 
-    let service = crate::services::StreamProxyService::new(
-        crate::services::StreamProxyServiceBuilder {
+    let service =
+        crate::services::StreamProxyService::new(crate::services::StreamProxyServiceBuilder {
             proxy_repo,
             channel_repo,
             filter_repo,
@@ -753,8 +754,7 @@ pub async fn delete_proxy(
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
             system: state.system.clone(),
-        },
-    );
+        });
 
     match service.delete(uuid).await {
         Ok(()) => {
@@ -804,11 +804,11 @@ pub async fn preview_proxy_config(
     tracing::debug!("Preview request: {:?}", request);
 
     // Create service instances
-    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) =
         create_repositories(&state.database);
 
-    let service = crate::services::StreamProxyService::new(
-        crate::services::StreamProxyServiceBuilder {
+    let service =
+        crate::services::StreamProxyService::new(crate::services::StreamProxyServiceBuilder {
             proxy_repo,
             channel_repo,
             filter_repo,
@@ -823,8 +823,7 @@ pub async fn preview_proxy_config(
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
             system: state.system.clone(),
-        },
-    );
+        });
 
     match service.generate_preview(request).await {
         Ok(preview) => {
@@ -883,11 +882,11 @@ pub async fn preview_existing_proxy(
     };
 
     // Create service instances
-    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) = 
+    let (proxy_repo, channel_repo, filter_repo, stream_source_repo) =
         create_repositories(&state.database);
 
-    let service = crate::services::StreamProxyService::new(
-        crate::services::StreamProxyServiceBuilder {
+    let service =
+        crate::services::StreamProxyService::new(crate::services::StreamProxyServiceBuilder {
             proxy_repo,
             channel_repo,
             filter_repo,
@@ -902,8 +901,7 @@ pub async fn preview_existing_proxy(
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
             system: state.system.clone(),
-        },
-    );
+        });
 
     // Get the existing proxy first
     match service.get_by_id(uuid).await {
@@ -999,11 +997,10 @@ pub async fn serve_proxy_m3u(
         }
     };
 
-    let proxy_repo = crate::database::repositories::StreamProxySeaOrmRepository::new(state.database.connection().clone());
-    let _proxy = match proxy_repo
-        .find_by_id(&resolved_uuid)
-        .await
-    {
+    let proxy_repo = crate::database::repositories::StreamProxySeaOrmRepository::new(
+        state.database.connection().clone(),
+    );
+    let _proxy = match proxy_repo.find_by_id(&resolved_uuid).await {
         Ok(Some(proxy)) => {
             if !proxy.is_active {
                 warn!("Proxy {} is not active", id);
@@ -1086,9 +1083,8 @@ pub async fn serve_proxy_m3u(
                 "content-type",
                 "application/vnd.apple.mpegurl".parse().unwrap(),
             );
-            let content = format!(
-                "#EXTM3U\n# Proxy {id} M3U8 not generated yet - trigger regeneration\n"
-            );
+            let content =
+                format!("#EXTM3U\n# Proxy {id} M3U8 not generated yet - trigger regeneration\n");
             (StatusCode::NOT_FOUND, headers, content)
         }
     }
@@ -1144,11 +1140,10 @@ pub async fn serve_proxy_xmltv(
         }
     };
 
-    let proxy_repo2 = crate::database::repositories::StreamProxySeaOrmRepository::new(state.database.connection().clone());
-    let proxy = match proxy_repo2
-        .find_by_id(&resolved_uuid)
-        .await
-    {
+    let proxy_repo2 = crate::database::repositories::StreamProxySeaOrmRepository::new(
+        state.database.connection().clone(),
+    );
+    let proxy = match proxy_repo2.find_by_id(&resolved_uuid).await {
         Ok(Some(proxy)) => {
             if !proxy.is_active {
                 warn!("Proxy {} is not active", id);
@@ -1317,11 +1312,10 @@ pub async fn proxy_stream(
     );
 
     // 3. Look up proxy to get its configuration
-    let proxy_repo3 = crate::database::repositories::StreamProxySeaOrmRepository::new(state.database.connection().clone());
-    let proxy = match proxy_repo3
-        .find_by_id(&resolved_proxy_uuid)
-        .await
-    {
+    let proxy_repo3 = crate::database::repositories::StreamProxySeaOrmRepository::new(
+        state.database.connection().clone(),
+    );
+    let proxy = match proxy_repo3.find_by_id(&resolved_proxy_uuid).await {
         Ok(Some(proxy)) => {
             if !proxy.is_active {
                 warn!("Proxy {} is not active", proxy_id);
@@ -1352,8 +1346,9 @@ pub async fn proxy_stream(
                 &state.database,
                 &resolved_proxy_uuid,
                 &channel_id.to_string(),
-            ).await;
-            
+            )
+            .await;
+
             warn!(
                 "Channel {} not accessible in proxy {}: {}",
                 channel_id, resolved_proxy_uuid, diagnostic_info
@@ -1453,9 +1448,9 @@ pub async fn proxy_stream(
                         .observability
                         .complete_active_session(&session_id_clone)
                         .await
-                    {
-                        error!("Failed to complete active session: {}", e);
-                    }
+                {
+                    error!("Failed to complete active session: {}", e);
+                }
                 // End session tracking for redirect
                 state_clone
                     .session_tracker
@@ -1513,7 +1508,10 @@ pub async fn proxy_stream(
                 channel.stream_url.clone(),
             );
 
-            state.session_tracker.start_session(session_stats.clone()).await;
+            state
+                .session_tracker
+                .start_session(session_stats.clone())
+                .await;
 
             // Implement HTTP proxying (SeaORM-compatible implementation)
             proxy_http_stream_seaorm(
@@ -1521,7 +1519,8 @@ pub async fn proxy_stream(
                 headers,
                 state.session_tracker.clone(),
                 session_stats,
-            ).await
+            )
+            .await
         }
         StreamProxyMode::Relay => {
             info!(
@@ -1586,14 +1585,17 @@ pub async fn proxy_stream(
                 channel.stream_url.clone(),
             );
 
-            state.session_tracker.start_session(session_stats.clone()).await;
+            state
+                .session_tracker
+                .start_session(session_stats.clone())
+                .await;
 
             // Resolve relay configuration
-            let relay_config = match state.relay_config_resolver.resolve_relay_config(
-                proxy.id,
-                channel_id,
-                _relay_profile_id,
-            ).await {
+            let relay_config = match state
+                .relay_config_resolver
+                .resolve_relay_config(proxy.id, channel_id, _relay_profile_id)
+                .await
+            {
                 Ok(config) => config,
                 Err(e) => {
                     error!("Failed to resolve relay configuration: {}", e);
@@ -1606,7 +1608,11 @@ pub async fn proxy_stream(
             };
 
             // Ensure relay is running
-            if let Err(e) = state.relay_manager.ensure_relay_running(&relay_config, &channel.stream_url).await {
+            if let Err(e) = state
+                .relay_manager
+                .ensure_relay_running(&relay_config, &channel.stream_url)
+                .await
+            {
                 error!("Failed to start relay: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1623,16 +1629,16 @@ pub async fn proxy_stream(
             };
 
             // Serve relay content
-            match state.relay_manager.serve_relay_content(
-                relay_config.config.id,
-                "",
-                &client_info,
-            ).await {
+            match state
+                .relay_manager
+                .serve_relay_content(relay_config.config.id, "", &client_info)
+                .await
+            {
                 Ok(crate::models::relay::RelayContent::Stream(stream)) => {
-                    use futures::StreamExt;
                     use axum::body::Body;
                     use axum::http::{StatusCode, header};
-                    
+                    use futures::StreamExt;
+
                     // Track bytes served for session tracking
                     let state_clone = state.clone();
                     let session_id_clone = session_id.clone();
@@ -1656,7 +1662,7 @@ pub async fn proxy_stream(
                         }
                         chunk_result
                     });
-                    
+
                     axum::response::Response::builder()
                         .status(StatusCode::OK)
                         .header(header::CONTENT_TYPE, "video/mp2t")
@@ -1668,9 +1674,9 @@ pub async fn proxy_stream(
                 Ok(crate::models::relay::RelayContent::Segment(data)) => {
                     use axum::body::Body;
                     use axum::http::{StatusCode, header};
-                    
+
                     info!("Serving relay segment: {} bytes", data.len());
-                    
+
                     // Update session tracker with bytes served
                     let bytes_len = data.len() as u64;
                     tokio::spawn(async move {
@@ -1679,7 +1685,7 @@ pub async fn proxy_stream(
                             .update_session_bytes(&session_id, bytes_len)
                             .await;
                     });
-                    
+
                     axum::response::Response::builder()
                         .status(StatusCode::OK)
                         .header(header::CONTENT_TYPE, "video/mp2t")
@@ -1691,9 +1697,9 @@ pub async fn proxy_stream(
                 Ok(crate::models::relay::RelayContent::Playlist(playlist_content)) => {
                     use axum::body::Body;
                     use axum::http::{StatusCode, header};
-                    
+
                     info!("Serving relay playlist: {} bytes", playlist_content.len());
-                    
+
                     axum::response::Response::builder()
                         .status(StatusCode::OK)
                         .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
@@ -1722,44 +1728,56 @@ async fn proxy_http_stream_seaorm(
     session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
     session_stats: crate::proxy::session_tracker::SessionStats,
 ) -> axum::response::Response<axum::body::Body> {
-    use axum::response::Response;
     use axum::body::Body;
-    use axum::http::{header, StatusCode};
-    
+    use axum::http::{StatusCode, header};
+    use axum::response::Response;
+
     info!("Proxying HTTP stream from: {}", stream_url);
-    
+
     // Create HTTP client for proxying
     let client = reqwest::Client::builder()
         .user_agent("m3u-proxy/SeaORM")
         .timeout(std::time::Duration::from_secs(30))
         .build();
-    
+
     let client = match client {
         Ok(client) => client,
         Err(e) => {
             error!("Failed to create HTTP client: {}", e);
             session_tracker.end_session(&session_stats.session_id).await;
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create HTTP client").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create HTTP client",
+            )
+                .into_response();
         }
     };
-    
+
     // Make request to source stream
     let response = match client.get(&stream_url).send().await {
         Ok(response) => response,
         Err(e) => {
             error!("Failed to connect to stream URL {}: {}", stream_url, e);
             session_tracker.end_session(&session_stats.session_id).await;
-            return (StatusCode::BAD_GATEWAY, format!("Failed to connect to stream: {}", e)).into_response();
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to connect to stream: {}", e),
+            )
+                .into_response();
         }
     };
-    
+
     // Check if source responded successfully
     if !response.status().is_success() {
         error!("Stream source returned error: {}", response.status());
         session_tracker.end_session(&session_stats.session_id).await;
-        return (StatusCode::BAD_GATEWAY, format!("Stream source error: {}", response.status())).into_response();
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!("Stream source error: {}", response.status()),
+        )
+            .into_response();
     }
-    
+
     // Extract content type from source
     let content_type = response
         .headers()
@@ -1767,13 +1785,13 @@ async fn proxy_http_stream_seaorm(
         .and_then(|ct| ct.to_str().ok())
         .unwrap_or("video/mp2t") // Default to MPEG-TS for streams
         .to_string(); // Convert to owned String
-    
+
     info!("Streaming content type: {}", content_type);
-    
+
     // Convert response to streaming body
     let stream_body = response.bytes_stream();
     let body = Body::from_stream(stream_body);
-    
+
     // Create response with appropriate headers
     match Response::builder()
         .status(StatusCode::OK)
@@ -1801,15 +1819,17 @@ async fn diagnose_channel_access_issue_seaorm(
     proxy_uuid: &uuid::Uuid,
     channel_id: &str,
 ) -> String {
-    use crate::database::repositories::{StreamProxySeaOrmRepository, ChannelSeaOrmRepository, StreamSourceSeaOrmRepository};
-    
+    use crate::database::repositories::{
+        ChannelSeaOrmRepository, StreamProxySeaOrmRepository, StreamSourceSeaOrmRepository,
+    };
+
     // Create repositories
     let proxy_repo = StreamProxySeaOrmRepository::new(database.connection().clone());
     let channel_repo = ChannelSeaOrmRepository::new(database.connection().clone());
     let _source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
-    
+
     let mut diagnostics = Vec::new();
-    
+
     // Check if proxy exists
     match proxy_repo.find_by_id(proxy_uuid).await {
         Ok(Some(_)) => {
@@ -1819,10 +1839,14 @@ async fn diagnose_channel_access_issue_seaorm(
                     if sources.is_empty() {
                         diagnostics.push("Proxy has no configured sources".to_string());
                     } else {
-                        diagnostics.push(format!("Proxy has {} configured source(s)", sources.len()));
-                        
+                        diagnostics
+                            .push(format!("Proxy has {} configured source(s)", sources.len()));
+
                         // Check if channel exists in any source (simplified for now)
-                        diagnostics.push(format!("Checking {} proxy sources for channel", sources.len()));
+                        diagnostics.push(format!(
+                            "Checking {} proxy sources for channel",
+                            sources.len()
+                        ));
                     }
                 }
                 Err(e) => {
@@ -1837,22 +1861,26 @@ async fn diagnose_channel_access_issue_seaorm(
             diagnostics.push(format!("Database error checking proxy: {}", e));
         }
     }
-    
+
     // Check if channel exists anywhere (simplified search)
     if let Ok(channels) = channel_repo.find_all().await {
-        let matching_channels: Vec<_> = channels.iter()
+        let matching_channels: Vec<_> = channels
+            .iter()
             .filter(|ch| ch.id.to_string() == channel_id)
             .collect();
-        
+
         if matching_channels.is_empty() {
             diagnostics.push("Channel does not exist in any source".to_string());
         } else {
-            diagnostics.push(format!("Channel exists in {} source(s)", matching_channels.len()));
+            diagnostics.push(format!(
+                "Channel exists in {} source(s)",
+                matching_channels.len()
+            ));
         }
     } else {
         diagnostics.push("Error searching for channel globally".to_string());
     }
-    
+
     diagnostics.join("; ")
 }
 
@@ -1929,7 +1957,7 @@ async fn diagnose_channel_access_issue_seaorm(
             }
 
             // Serve content using relay manager directly
-            
+
             let client_info = crate::proxy::session_tracker::ClientInfo {
                 ip: client_ip.clone(),
                 user_agent: user_agent.clone(),
@@ -1945,7 +1973,7 @@ async fn diagnose_channel_access_issue_seaorm(
                     use futures::StreamExt;
                     use axum::body::Body;
                     use axum::http::{StatusCode, header};
-                    
+
                     // Track bytes served for session tracking
                     let state_clone = state.clone();
                     let session_id_clone = session_id.clone();
@@ -1991,7 +2019,7 @@ async fn diagnose_channel_access_issue_seaorm(
                 Ok(crate::models::relay::RelayContent::Segment(data)) => {
                     use axum::body::Body;
                     use axum::http::{StatusCode, header};
-                    
+
                     info!("Serving relay segment: {} bytes", data.len());
 
                     axum::response::Response::builder()
@@ -2285,12 +2313,12 @@ async fn proxy_http_stream(
     let heartbeat_session = completion_session.clone();
     let heartbeat_bytes = completion_bytes.clone();
     let heartbeat_ended = completion_ended.clone();
-    
+
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         let mut last_bytes = 0u64;
         let mut stale_count = 0u8;
-        
+
         loop {
             tokio::select! {
                 _ = token_for_heartbeat.cancelled() => {
@@ -2299,7 +2327,7 @@ async fn proxy_http_stream(
                 }
                 _ = interval.tick() => {
                     let current_bytes = heartbeat_bytes.load(std::sync::atomic::Ordering::Relaxed);
-                    
+
                     // Check if bytes are still increasing (stream is active)
                     if current_bytes == last_bytes {
                         stale_count += 1;
@@ -2307,7 +2335,7 @@ async fn proxy_http_stream(
                             "Session {} stale check {}/3: {} bytes (no progress)",
                             heartbeat_session_id, stale_count, current_bytes
                         );
-                        
+
                         if stale_count >= 3 {
                             // No progress for 90 seconds - client likely disconnected
                             if !heartbeat_ended.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -2315,7 +2343,7 @@ async fn proxy_http_stream(
                                     "Detected stale connection for session {} - no progress for {}s, cleaning up",
                                     heartbeat_session_id, stale_count * 30
                                 );
-                                
+
                                 // Handle cleanup asynchronously
                                 let cleanup_state = heartbeat_state.clone();
                                 let cleanup_session = heartbeat_session.clone();
@@ -2374,7 +2402,7 @@ async fn proxy_http_stream(
                     None => {
                         // Stream completed (either successfully or client disconnected)
                         cancel_token.cancel(); // Cancel heartbeat task
-                        
+
                         if !completed && !ended_ref.swap(true, std::sync::atomic::Ordering::Relaxed)
                         {
                             let final_bytes = bytes_ref.load(std::sync::atomic::Ordering::Relaxed);
@@ -2453,7 +2481,7 @@ async fn diagnose_channel_proxy_issue(
     // Check if channel exists at all and get additional info - rationalized to SeaORM
     use crate::entities::{prelude::*, channels, stream_sources};
     use sea_orm::{EntityTrait, QueryFilter, ColumnTrait, RelationTrait, QuerySelect, JoinType};
-    
+
     let channel_info = Channels::find()
         .filter(channels::Column::Id.eq(channel_id))
         .join_rev(JoinType::LeftJoin, stream_sources::Relation::Channels.def())
@@ -2478,13 +2506,13 @@ async fn diagnose_channel_proxy_issue(
                 .into_tuple::<(Option<String>,)>()
                 .one(&*database.connection())
                 .await;
-            
+
             let timing_info = match proxy_info {
                 Ok(Some((Some(generated_at),))) => format!(" (proxy last generated: {generated_at})"),
                 Ok(Some((None,))) => " (proxy never generated)".to_string(),
                 _ => " (proxy status unknown)".to_string(),
             };
-            
+
             return format!("channel does not exist - M3U may be stale{timing_info}");
         }
         Err(_) => {
@@ -2494,7 +2522,7 @@ async fn diagnose_channel_proxy_issue(
 
     // Check if proxy exists and is active - rationalized to SeaORM
     use crate::entities::{prelude::StreamProxies, stream_proxies};
-    
+
     let proxy_status = StreamProxies::find()
         .filter(stream_proxies::Column::Id.eq(proxy_id))
         .one(&*database.connection())
@@ -2517,13 +2545,13 @@ async fn diagnose_channel_proxy_issue(
     // Check if channel's source is linked to the proxy - rationalized to SeaORM
     use crate::entities::{prelude::{Channels, ProxySources}, proxy_sources};
     use sea_orm::PaginatorTrait;
-    
+
     // First get the channel to find its source_id
     let channel = Channels::find()
         .filter(channels::Column::Id.eq(channel_id))
         .one(&*database.connection())
         .await;
-        
+
     let source_linked = match channel {
         Ok(Some(channel)) => {
             // Check if this source is linked to the proxy
@@ -2558,10 +2586,10 @@ mod tests {
     #[test]
     fn test_stream_proxy_response_url_generation() {
         use crate::utils::uuid_parser::uuid_to_base64;
-        
+
         let proxy_id = Uuid::new_v4();
         let base_url = "https://example.com:8080";
-        
+
         let proxy = StreamProxy {
             id: proxy_id,
             name: "Test Proxy".to_string(),
@@ -2593,10 +2621,10 @@ mod tests {
     #[test]
     fn test_stream_proxy_response_url_generation_with_trailing_slash() {
         use crate::utils::uuid_parser::uuid_to_base64;
-        
+
         let proxy_id = Uuid::new_v4();
         let base_url = "https://example.com:8080/"; // Note the trailing slash
-        
+
         let proxy = StreamProxy {
             id: proxy_id,
             name: "Test Proxy".to_string(),

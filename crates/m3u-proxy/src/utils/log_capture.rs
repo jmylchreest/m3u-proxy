@@ -5,14 +5,14 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, atomic::{AtomicU64, Ordering}, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tokio::sync::broadcast;
 use tracing::{Event, Subscriber};
-use tracing_subscriber::{
-    layer::Context,
-    Layer,
-};
+use tracing_subscriber::{Layer, layer::Context};
 use uuid::Uuid;
 
 use crate::web::api::log_streaming::LogEvent;
@@ -59,22 +59,25 @@ impl LogCaptureLayer {
     /// Extract fields and message from a tracing event
     fn extract_fields_and_message(&self, event: &Event<'_>) -> (HashMap<String, String>, String) {
         let mut fields = HashMap::new();
-        
+
         // Use our field visitor to extract structured fields
         let mut visitor = FieldVisitor::new(&mut fields);
         event.record(&mut visitor);
-        
+
         // Extract message - try to get it from fields first, fallback to event name
-        let message = fields.get("message")
+        let message = fields
+            .get("message")
             .cloned()
             .unwrap_or_else(|| event.metadata().name().to_string());
-        
+
         (fields, message)
     }
 
-
     /// Try to extract span info in a way that's compatible with any subscriber
-    fn try_extract_span_info<S>(&self, ctx: Context<'_, S>) -> Option<crate::web::api::log_streaming::SpanInfo> 
+    fn try_extract_span_info<S>(
+        &self,
+        ctx: Context<'_, S>,
+    ) -> Option<crate::web::api::log_streaming::SpanInfo>
     where
         S: Subscriber,
     {
@@ -83,9 +86,11 @@ impl LogCaptureLayer {
             // Get the current span metadata if available
             let current_span = ctx.current_span();
             let metadata = current_span.metadata();
-            
+
             Some(crate::web::api::log_streaming::SpanInfo {
-                name: metadata.map(|m| m.name().to_string()).unwrap_or_else(|| "unknown".to_string()),
+                name: metadata
+                    .map(|m| m.name().to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
                 id: format!("{current_span_id:?}"),
                 parent_id: None, // Keep this simple for now
             })
@@ -102,18 +107,18 @@ where
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         // Skip events from the log capture system itself to avoid recursion
         let target = event.metadata().target();
-        if target.starts_with("m3u_proxy::web::api::log_streaming") 
-            || target.starts_with("m3u_proxy::utils::log_capture") {
+        if target.starts_with("m3u_proxy::web::api::log_streaming")
+            || target.starts_with("m3u_proxy::utils::log_capture")
+        {
             return;
         }
 
         // Extract log information
         let level = event.metadata().level().to_string().to_uppercase();
         let (fields, message) = self.extract_fields_and_message(event);
-        
+
         // Try to extract span info if the subscriber supports it
         let span_info = self.try_extract_span_info(ctx);
-        
 
         // Derive event ID from operation context or span
         let event_id = if let Some(operation_id) = fields.get("operation_id") {
@@ -159,47 +164,56 @@ impl<'a> FieldVisitor<'a> {
 
 impl<'a> tracing::field::Visit for FieldVisitor<'a> {
     fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         let formatted = format!("{value:?}");
         // Clean up quoted strings for better readability
-        let clean_value = if formatted.starts_with('"') && formatted.ends_with('"') && formatted.len() > 1 {
-            formatted[1..formatted.len()-1].to_string()
-        } else {
-            formatted
-        };
+        let clean_value =
+            if formatted.starts_with('"') && formatted.ends_with('"') && formatted.len() > 1 {
+                formatted[1..formatted.len() - 1].to_string()
+            } else {
+                formatted
+            };
         self.fields.insert(field.name().to_string(), clean_value);
     }
 
-    fn record_error(&mut self, field: &tracing::field::Field, value: &(dyn std::error::Error + 'static)) {
-        self.fields.insert(field.name().to_string(), value.to_string());
+    fn record_error(
+        &mut self,
+        field: &tracing::field::Field,
+        value: &(dyn std::error::Error + 'static),
+    ) {
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
     }
 }
-
 
 /// Initialize log capture and return the broadcast sender
 pub fn init_log_capture() -> broadcast::Sender<LogEvent> {
     let (layer, _receiver) = LogCaptureLayer::new(); // Use default buffer size
-    
-    
+
     // The layer would be added to the tracing subscriber in main.rs
     // For now, just return the sender
     layer.sender()
@@ -209,10 +223,10 @@ pub fn init_log_capture() -> broadcast::Sender<LogEvent> {
 pub fn setup_log_capture_with_subscriber() -> (LogCaptureLayer, broadcast::Sender<LogEvent>) {
     let (layer, _receiver) = LogCaptureLayer::new(); // Use default buffer size (200 events)
     let sender = layer.sender();
-    
+
     // Store the sender globally for access from web handlers
     let _ = GLOBAL_LOG_BROADCASTER.set(sender.clone());
-    
+
     (layer, sender)
 }
 

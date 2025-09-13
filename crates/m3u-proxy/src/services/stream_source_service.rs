@@ -4,20 +4,19 @@
 //! including auto-linking with EPG sources for Xtream providers.
 
 use anyhow::Result;
+use opentelemetry::KeyValue;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
-use opentelemetry::KeyValue;
 
 use crate::database::Database;
-use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceUpdateRequest};
 use crate::database::repositories::{
-    channel::ChannelSeaOrmRepository,
+    channel::ChannelSeaOrmRepository, epg_source::EpgSourceSeaOrmRepository,
     stream_source::StreamSourceSeaOrmRepository,
-    epg_source::EpgSourceSeaOrmRepository,
 };
-use crate::services::UrlLinkingService;
+use crate::models::{StreamSource, StreamSourceCreateRequest, StreamSourceUpdateRequest};
 use crate::observability::AppObservability;
+use crate::services::UrlLinkingService;
 
 /// Service for managing stream sources with business logic
 pub struct StreamSourceService {
@@ -79,18 +78,19 @@ impl StreamSourceService {
     /// Legacy constructor for backward compatibility (deprecated)
     /// TODO: Remove once all callers are updated to use dependency injection
     #[deprecated(note = "Use dependency injection constructor instead")]
-    pub fn new_legacy(
-        database: Database,
-        cache_invalidation_tx: broadcast::Sender<()>,
-    ) -> Self {
+    pub fn new_legacy(database: Database, cache_invalidation_tx: broadcast::Sender<()>) -> Self {
         let stream_source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
         let channel_repo = ChannelSeaOrmRepository::new(database.connection().clone());
         let epg_source_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());
-        let url_linking_service = UrlLinkingService::new(
-            stream_source_repo.clone(),
-            epg_source_repo.clone(),
-        );
-        Self::new(stream_source_repo, channel_repo, epg_source_repo, url_linking_service, cache_invalidation_tx)
+        let url_linking_service =
+            UrlLinkingService::new(stream_source_repo.clone(), epg_source_repo.clone());
+        Self::new(
+            stream_source_repo,
+            channel_repo,
+            epg_source_repo,
+            url_linking_service,
+            cache_invalidation_tx,
+        )
     }
 
     /// Normalize URL to ensure it has a proper scheme (http:// or https://)
@@ -100,15 +100,16 @@ impl StreamSourceService {
         if url.starts_with("http://") || url.starts_with("https://") {
             return url;
         }
-        
+
         // Check for common HTTPS ports to determine scheme
         // Common HTTPS ports: 443, 8443, 9443, 2087, 2083, 8883, etc.
-        if url.contains(":443") || 
-           url.contains(":8443") || 
-           url.contains(":9443") || 
-           url.contains(":2087") || 
-           url.contains(":2083") || 
-           url.contains(":8883") {
+        if url.contains(":443")
+            || url.contains(":8443")
+            || url.contains(":9443")
+            || url.contains(":2087")
+            || url.contains(":2083")
+            || url.contains(":8883")
+        {
             format!("https://{}", url)
         } else {
             // Default to http:// for all other cases
@@ -127,31 +128,42 @@ impl StreamSourceService {
 
         // Record start metrics if observability is available
         if let Some(obs) = &self.observability {
-            obs.channels_processed.add(1, &[
-                KeyValue::new("operation", "create_stream_source"),
-                KeyValue::new("source_type", source_type.clone()),
-            ]);
+            obs.channels_processed.add(
+                1,
+                &[
+                    KeyValue::new("operation", "create_stream_source"),
+                    KeyValue::new("source_type", source_type.clone()),
+                ],
+            );
         }
 
         // Wrap the entire operation to catch any errors for metrics
-        let result = self.create_stream_source_internal(request, start_time).await;
+        let result = self
+            .create_stream_source_internal(request, start_time)
+            .await;
 
         // Record outcome metrics
         if let Some(obs) = &self.observability {
             match &result {
                 Ok(_) => {
                     let duration = start_time.elapsed().as_secs_f64();
-                    obs.channel_refresh_duration.record(duration, &[
-                        KeyValue::new("operation", "create_stream_source"),
-                        KeyValue::new("source_type", source_type),
-                        KeyValue::new("status", "success"),
-                    ]);
+                    obs.channel_refresh_duration.record(
+                        duration,
+                        &[
+                            KeyValue::new("operation", "create_stream_source"),
+                            KeyValue::new("source_type", source_type),
+                            KeyValue::new("status", "success"),
+                        ],
+                    );
                 }
                 Err(_) => {
-                    obs.source_failures.add(1, &[
-                        KeyValue::new("operation", "create_stream_source"),
-                        KeyValue::new("source_type", source_type),
-                    ]);
+                    obs.source_failures.add(
+                        1,
+                        &[
+                            KeyValue::new("operation", "create_stream_source"),
+                            KeyValue::new("source_type", source_type),
+                        ],
+                    );
                 }
             }
         }
@@ -165,24 +177,35 @@ impl StreamSourceService {
         mut request: StreamSourceCreateRequest,
         _start_time: std::time::Instant,
     ) -> Result<StreamSource> {
-        
         // Normalize the URL to ensure it has a proper scheme
         request.url = Self::smart_normalize_url(request.url);
         debug!("Normalized URL: {}", request.url);
 
         // Create the stream source
-        let source = self.stream_source_repo.create(request).await
+        let source = self
+            .stream_source_repo
+            .create(request)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create stream source: {}", e))?;
 
         // For Xtream sources, check if EPG is available and auto-create EPG source
         if source.source_type == crate::models::StreamSourceType::Xtream {
             if let (Some(username), Some(password)) = (&source.username, &source.password) {
-                debug!("Checking EPG availability for Xtream source: {}", source.name);
-                
-                match self.check_epg_availability(&source.url, username, password).await {
+                debug!(
+                    "Checking EPG availability for Xtream source: {}",
+                    source.name
+                );
+
+                match self
+                    .check_epg_availability(&source.url, username, password)
+                    .await
+                {
                     Ok(true) => {
-                        info!("EPG available for Xtream source '{}', creating linked EPG source", source.name);
-                        
+                        info!(
+                            "EPG available for Xtream source '{}', creating linked EPG source",
+                            source.name
+                        );
+
                         // Create EPG source with same credentials
                         let epg_create_request = crate::models::EpgSourceCreateRequest {
                             name: source.name.clone(),
@@ -214,17 +237,22 @@ impl StreamSourceService {
                         info!("No EPG available for Xtream source '{}'", source.name);
                     }
                     Err(e) => {
-                        warn!("Failed to check EPG availability for '{}': {}", source.name, e);
+                        warn!(
+                            "Failed to check EPG availability for '{}': {}",
+                            source.name, e
+                        );
                     }
                 }
             } else {
-                debug!("Xtream source '{}' missing credentials, skipping EPG auto-creation", source.name);
+                debug!(
+                    "Xtream source '{}' missing credentials, skipping EPG auto-creation",
+                    source.name
+                );
             }
         }
 
         // Invalidate cache since we added a new source
         let _ = self.cache_invalidation_tx.send(());
-
 
         info!(
             "Successfully created stream source: {} ({})",
@@ -241,21 +269,25 @@ impl StreamSourceService {
         mut request: StreamSourceUpdateRequest,
     ) -> Result<StreamSource> {
         info!("Updating stream source: {}", id);
-        
+
         // Normalize the URL to ensure it has a proper scheme
         request.url = Self::smart_normalize_url(request.url);
         debug!("Normalized URL for update: {}", request.url);
 
         // Update linked sources first if requested
         if request.update_linked {
-            match self.url_linking_service.update_linked_sources(
-                id,
-                "stream",
-                Some(&request.url),
-                request.username.as_ref(),
-                request.password.as_ref(),
-                request.update_linked,
-            ).await {
+            match self
+                .url_linking_service
+                .update_linked_sources(
+                    id,
+                    "stream",
+                    Some(&request.url),
+                    request.username.as_ref(),
+                    request.password.as_ref(),
+                    request.update_linked,
+                )
+                .await
+            {
                 Ok(count) if count > 0 => {
                     info!("Updated {} linked sources for stream source {}", count, id);
                 }
@@ -263,13 +295,19 @@ impl StreamSourceService {
                     // No linked sources to update
                 }
                 Err(e) => {
-                    error!("Failed to update linked sources for stream source '{}': {}", id, e);
+                    error!(
+                        "Failed to update linked sources for stream source '{}': {}",
+                        id, e
+                    );
                 }
             }
         }
 
         // Update the stream source
-        let source = self.stream_source_repo.update(&id, request).await
+        let source = self
+            .stream_source_repo
+            .update(&id, request)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to update stream source: {}", e))?;
 
         // Invalidate cache
@@ -288,7 +326,9 @@ impl StreamSourceService {
         info!("Deleting stream source: {}", id);
 
         // Delete the stream source (this will cascade to linked sources)
-        self.stream_source_repo.delete(&id).await
+        self.stream_source_repo
+            .delete(&id)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to delete stream source: {}", e))?;
 
         // Invalidate cache
@@ -300,7 +340,10 @@ impl StreamSourceService {
 
     /// List stream sources with statistics
     pub async fn list_with_stats(&self) -> Result<Vec<StreamSourceWithStats>> {
-        let sources_with_stats = self.stream_source_repo.list_with_stats().await
+        let sources_with_stats = self
+            .stream_source_repo
+            .list_with_stats()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to list stream sources with stats: {}", e))?;
 
         let mut result = Vec::new();
@@ -319,15 +362,26 @@ impl StreamSourceService {
 
     /// Get a stream source with detailed information
     pub async fn get_with_details(&self, id: uuid::Uuid) -> Result<StreamSourceWithDetails> {
-        let source = self.stream_source_repo.find_by_id(&id).await
+        let source = self
+            .stream_source_repo
+            .find_by_id(&id)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get stream source: {}", e))?
             .ok_or_else(|| anyhow::anyhow!("Stream source not found"))?;
 
-        let channel_count = self.stream_source_repo.get_channel_count_for_source(&id).await
-            .map_err(|e| anyhow::anyhow!("Failed to get channel count: {}", e))? as u64;
-        
+        let channel_count = self
+            .stream_source_repo
+            .get_channel_count_for_source(&id)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get channel count: {}", e))?
+            as u64;
+
         // Use service pattern for URL linking
-        let linked_epgs = self.url_linking_service.find_linked_epg_sources(&source).await.unwrap_or_default();
+        let linked_epgs = self
+            .url_linking_service
+            .find_linked_epg_sources(&source)
+            .await
+            .unwrap_or_default();
         let linked_epg = linked_epgs.into_iter().next();
 
         // Calculate next scheduled update from cron expression
@@ -349,20 +403,27 @@ impl StreamSourceService {
 
     /// Get stream source by ID
     pub async fn get(&self, id: uuid::Uuid) -> Result<StreamSource> {
-        self.stream_source_repo.find_by_id(&id).await
+        self.stream_source_repo
+            .find_by_id(&id)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get stream source: {}", e))?
             .ok_or_else(|| anyhow::anyhow!("Stream source not found"))
     }
 
     /// List all stream sources
     pub async fn list(&self) -> Result<Vec<StreamSource>> {
-        self.stream_source_repo.find_all().await
+        self.stream_source_repo
+            .find_all()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to list stream sources: {}", e))
     }
 
     /// Check if a stream source exists
     pub async fn exists(&self, id: uuid::Uuid) -> Result<bool> {
-        Ok(self.stream_source_repo.find_by_id(&id).await
+        Ok(self
+            .stream_source_repo
+            .find_by_id(&id)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to check stream source existence: {}", e))?
             .is_some())
     }
@@ -374,7 +435,7 @@ impl StreamSourceService {
     ) -> Result<TestConnectionResult> {
         // Normalize the URL before testing
         let normalized_url = Self::smart_normalize_url(request.url.clone());
-        
+
         // This would test the connection without creating the source
         // Implementation would depend on source type
         match request.source_type {
@@ -480,8 +541,6 @@ impl StreamSourceService {
         }
     }
 
-
-    
     /// Save channels to database using ChannelRepository
     async fn save_channels(
         &self,
@@ -489,21 +548,27 @@ impl StreamSourceService {
         channels: Vec<crate::models::Channel>,
     ) -> Result<usize> {
         use tracing::debug;
-        
-        debug!("Saving {} channels to database using ChannelRepository", channels.len());
-        
+
+        debug!(
+            "Saving {} channels to database using ChannelRepository",
+            channels.len()
+        );
+
         // Use ChannelRepository to replace channels for this source
         let channels_count = channels.len();
         self.channel_repo
             .update_source_channels(source_id, &channels)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to update source channels: {}", e))?;
-        
-        debug!("Successfully saved {} channels using ChannelRepository", channels_count);
-        
+
+        debug!(
+            "Successfully saved {} channels using ChannelRepository",
+            channels_count
+        );
+
         Ok(channels_count)
     }
-    
+
     /// Refresh stream source using ProgressStageUpdater (new API)
     pub async fn refresh_with_progress_updater(
         &self,
@@ -511,22 +576,28 @@ impl StreamSourceService {
         progress_updater: Option<&crate::services::progress_service::ProgressStageUpdater>,
     ) -> Result<usize> {
         use crate::sources::factory::SourceHandlerFactory;
-        
+
         let start_time = std::time::Instant::now();
         let source_type = source.source_type.to_string();
         let source_name = source.name.clone();
-        
-        info!("Starting stream source refresh with ProgressStageUpdater for source: {}", source.name);
+
+        info!(
+            "Starting stream source refresh with ProgressStageUpdater for source: {}",
+            source.name
+        );
 
         // Record channel refresh start
         if let Some(obs) = &self.observability {
-            obs.channel_refresh_total.add(1, &[
-                KeyValue::new("source_id", source.id.to_string()),
-                KeyValue::new("source_type", source_type.clone()),
-                KeyValue::new("source_name", source_name.clone()),
-            ]);
+            obs.channel_refresh_total.add(
+                1,
+                &[
+                    KeyValue::new("source_id", source.id.to_string()),
+                    KeyValue::new("source_type", source_type.clone()),
+                    KeyValue::new("source_name", source_name.clone()),
+                ],
+            );
         }
-        
+
         // Create stream source handler using the factory with HTTP client factory
         let factory = if let Some(factory) = &self.http_client_factory {
             factory
@@ -534,100 +605,146 @@ impl StreamSourceService {
             // Create basic factory if none provided
             &crate::utils::HttpClientFactory::new(None, std::time::Duration::from_secs(10))
         };
-        
+
         let handler = SourceHandlerFactory::create_handler(&source.source_type, factory)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create stream source handler: {}", e))?;
-        
+
         // Update progress: starting ingestion
         if let Some(updater) = progress_updater {
-            updater.update_progress(0.0, &format!("Starting stream ingestion for {}", source.name)).await;
-            
+            updater
+                .update_progress(
+                    0.0,
+                    &format!("Starting stream ingestion for {}", source.name),
+                )
+                .await;
+
             // Check for cancellation before starting the operation
             if updater.is_cancellation_requested().await {
-                return Err(anyhow::anyhow!("Stream ingestion cancelled for source: {}", source.name));
+                return Err(anyhow::anyhow!(
+                    "Stream ingestion cancelled for source: {}",
+                    source.name
+                ));
             }
         }
-        
+
         // Ingest channels using the handler
         let channels = handler
             .ingest_channels(source)
             .await
             .map_err(|e| anyhow::anyhow!("Stream source handler failed: {}", e))?;
-        
+
         info!(
             "Stream handler ingested {} channels from source '{}'",
-            channels.len(), source.name
+            channels.len(),
+            source.name
         );
-        
+
         // Update progress: saving to database
         if let Some(updater) = progress_updater {
-            updater.update_progress(80.0, &format!("Saving {} channels to database", channels.len())).await;
-            
+            updater
+                .update_progress(
+                    80.0,
+                    &format!("Saving {} channels to database", channels.len()),
+                )
+                .await;
+
             // DO NOT check for cancellation here - we must complete the database transaction
             // to avoid partial state corruption (deleting old data without inserting new data)
         }
-        
+
         // Save channels to database
-        info!("Saving {} channels to database for '{}'", channels.len(), source.name);
+        info!(
+            "Saving {} channels to database for '{}'",
+            channels.len(),
+            source.name
+        );
         let channels_saved = match self.save_channels(source.id, channels).await {
             Ok(count) => count,
             Err(e) => {
                 warn!("Failed to save channels for '{}': {}", source.name, e);
-                
+
                 // Record failure metrics
                 if let Some(obs) = &self.observability {
-                    obs.source_failures.add(1, &[
-                        KeyValue::new("operation", "refresh_channels"),
-                        KeyValue::new("source_type", source_type),
-                        KeyValue::new("error_type", "save_channels_failed"),
-                    ]);
+                    obs.source_failures.add(
+                        1,
+                        &[
+                            KeyValue::new("operation", "refresh_channels"),
+                            KeyValue::new("source_type", source_type),
+                            KeyValue::new("error_type", "save_channels_failed"),
+                        ],
+                    );
                 }
-                
+
                 return Err(e);
             }
         };
-        
+
         // Final progress update
         if let Some(updater) = progress_updater {
-            updater.update_progress(100.0, &format!("Completed: {channels_saved} channels saved")).await;
+            updater
+                .update_progress(
+                    100.0,
+                    &format!("Completed: {channels_saved} channels saved"),
+                )
+                .await;
             updater.complete_stage().await;
         }
-        
+
         // Update the source's last_ingested_at timestamp
-        info!("Attempting to update last_ingested_at for stream source '{}'", source.name);
-        match self.stream_source_repo.update_last_ingested_at(&source.id).await {
+        info!(
+            "Attempting to update last_ingested_at for stream source '{}'",
+            source.name
+        );
+        match self
+            .stream_source_repo
+            .update_last_ingested_at(&source.id)
+            .await
+        {
             Ok(updated_timestamp) => {
-                info!("Successfully updated last_ingested_at for stream source '{}' to {}", source.name, updated_timestamp.to_rfc3339());
+                info!(
+                    "Successfully updated last_ingested_at for stream source '{}' to {}",
+                    source.name,
+                    updated_timestamp.to_rfc3339()
+                );
             }
             Err(e) => {
-                error!("Failed to update last_ingested_at for stream source '{}': {}", source.name, e);
+                error!(
+                    "Failed to update last_ingested_at for stream source '{}': {}",
+                    source.name, e
+                );
             }
         }
-        
+
         // Invalidate cache since we updated channels
         let _ = self.cache_invalidation_tx.send(());
-        
+
         // Record comprehensive completion metrics
         if let Some(obs) = &self.observability {
             let duration = start_time.elapsed().as_secs_f64();
-            
+
             // Channel refresh duration
-            obs.channel_refresh_duration.record(duration, &[
-                KeyValue::new("source_id", source.id.to_string()),
-                KeyValue::new("source_type", source_type.clone()),
-                KeyValue::new("source_name", source_name.clone()),
-                KeyValue::new("status", "success"),
-            ]);
-            
+            obs.channel_refresh_duration.record(
+                duration,
+                &[
+                    KeyValue::new("source_id", source.id.to_string()),
+                    KeyValue::new("source_type", source_type.clone()),
+                    KeyValue::new("source_name", source_name.clone()),
+                    KeyValue::new("status", "success"),
+                ],
+            );
+
             // Channels processed count
-            obs.channels_processed.add(channels_saved as u64, &[
-                KeyValue::new("source_id", source.id.to_string()),
-                KeyValue::new("source_type", source_type),
-                KeyValue::new("operation", "refresh_channels"),
-            ]);
+            obs.channels_processed.add(
+                channels_saved as u64,
+                &[
+                    KeyValue::new("source_id", source.id.to_string()),
+                    KeyValue::new("source_type", source_type),
+                    KeyValue::new("operation", "refresh_channels"),
+                ],
+            );
         }
-        
+
         info!(
             "Stream source refresh completed for '{}': {} channels saved",
             source.name, channels_saved

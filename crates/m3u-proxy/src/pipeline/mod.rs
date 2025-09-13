@@ -2,7 +2,7 @@
 //!
 //! This module contains the new refactored pipeline infrastructure with
 //! clean separation of concerns:
-//! 
+//!
 //! - **Core**: Pipeline orchestration and execution coordination
 //! - **Engines**: Data mapping engines with rule-based processing
 //! - **Models**: Pipeline execution tracking and state management  
@@ -14,26 +14,31 @@
 
 pub mod core;
 pub mod engines;
-pub mod models;
-pub mod stages;
-pub mod services;
-pub mod traits;
 pub mod error;
+pub mod models;
+pub mod services;
+pub mod stages;
+pub mod traits;
 
 // Re-export key types for easier access
-pub use core::{PipelineBuilder, PipelineConfig, PipelineOrchestrator, PipelineOrchestratorFactory};
-pub use engines::{
-    DataMappingEngine, ChannelDataMappingEngine, ProgramDataMappingEngine, 
-    RuleProcessor, RuleResult, FieldModification, DataMappingTestService, DataMappingTestResult, EpgDataMappingTestService, EpgDataMappingTestResult, EpgProgramTestResult,
-    RuleValidationResult, PipelineStageType, StageValidator,
-    DataMappingValidator, FilteringValidator, NumberingValidator, GenerationValidator,
-    ValidationFactory, RuleValidationService
+pub use core::{
+    PipelineBuilder, PipelineConfig, PipelineOrchestrator, PipelineOrchestratorFactory,
 };
-pub use models::{PipelineExecution, PipelineStageExecution, PipelineStatus, StageStatus};
-pub use stages::{DataMappingStage, FilteringStage, LogoCachingStage, LogoCachingConfig, NumberingStage, GenerationStage};
-pub use services::{SeaOrmDataMappingService, PipelineValidationService, ApiValidationService};
-pub use traits::{ProgressAware, PipelineStage, PipelineStageFactory};
+pub use engines::{
+    ChannelDataMappingEngine, DataMappingEngine, DataMappingTestResult, DataMappingTestService,
+    DataMappingValidator, EpgDataMappingTestResult, EpgDataMappingTestService,
+    EpgProgramTestResult, FieldModification, FilteringValidator, GenerationValidator,
+    NumberingValidator, PipelineStageType, ProgramDataMappingEngine, RuleProcessor, RuleResult,
+    RuleValidationResult, RuleValidationService, StageValidator, ValidationFactory,
+};
 pub use error::PipelineError;
+pub use models::{PipelineExecution, PipelineStageExecution, PipelineStatus, StageStatus};
+pub use services::{ApiValidationService, PipelineValidationService, SeaOrmDataMappingService};
+pub use stages::{
+    DataMappingStage, FilteringStage, GenerationStage, LogoCachingConfig, LogoCachingStage,
+    NumberingStage,
+};
+pub use traits::{PipelineStage, PipelineStageFactory, ProgressAware};
 
 /// Pipeline stage names for consistent naming across the system
 pub mod stage_names {

@@ -100,32 +100,34 @@ pub fn detect_timezone_from_xmltv(content: &str) -> Option<String> {
     let time_regex = Regex::new(r"\d{14}\s+([+-]\d{4})").ok()?;
 
     if let Some(caps) = time_regex.captures(content)
-        && let Some(tz_match) = caps.get(1) {
-            let tz_str = tz_match.as_str();
-            debug!("Detected timezone offset from XMLTV: {}", tz_str);
+        && let Some(tz_match) = caps.get(1)
+    {
+        let tz_str = tz_match.as_str();
+        debug!("Detected timezone offset from XMLTV: {}", tz_str);
 
-            // Convert +0100 format to timezone
-            if let Ok(offset_hours) = tz_str[1..3].parse::<i32>() {
-                let offset_mins = tz_str[3..5].parse::<i32>().unwrap_or(0);
-                let total_offset = if tz_str.starts_with('+') {
-                    offset_hours * 3600 + offset_mins * 60
-                } else {
-                    -(offset_hours * 3600 + offset_mins * 60)
-                };
+        // Convert +0100 format to timezone
+        if let Ok(offset_hours) = tz_str[1..3].parse::<i32>() {
+            let offset_mins = tz_str[3..5].parse::<i32>().unwrap_or(0);
+            let total_offset = if tz_str.starts_with('+') {
+                offset_hours * 3600 + offset_mins * 60
+            } else {
+                -(offset_hours * 3600 + offset_mins * 60)
+            };
 
-                // Try to find a named timezone that matches this offset
-                return find_timezone_by_offset(total_offset);
-            }
+            // Try to find a named timezone that matches this offset
+            return find_timezone_by_offset(total_offset);
         }
+    }
 
     // Look for explicit timezone declarations in XML
     let tz_decl_regex = Regex::new(r#"timezone\s*=\s*["']([^"']+)["']"#).ok()?;
     if let Some(caps) = tz_decl_regex.captures(content)
-        && let Some(tz_match) = caps.get(1) {
-            let tz_name = tz_match.as_str();
-            debug!("Found explicit timezone declaration in XMLTV: {}", tz_name);
-            return Some(tz_name.to_string());
-        }
+        && let Some(tz_match) = caps.get(1)
+    {
+        let tz_name = tz_match.as_str();
+        debug!("Found explicit timezone declaration in XMLTV: {}", tz_name);
+        return Some(tz_name.to_string());
+    }
 
     None
 }
@@ -180,7 +182,9 @@ pub fn validate_timezone(tz_str: &str) -> Result<String, String> {
         return Ok(tz_str.to_string());
     }
 
-    Err(format!("Invalid timezone: '{tz_str}'. Use either a named timezone (e.g., 'Europe/London') or UTC offset (e.g., '+01:00')"))
+    Err(format!(
+        "Invalid timezone: '{tz_str}'. Use either a named timezone (e.g., 'Europe/London') or UTC offset (e.g., '+01:00')"
+    ))
 }
 
 /// Parse fixed offset timezone formats like "+01:00", "+0100", etc.
@@ -221,7 +225,6 @@ fn parse_fixed_offset(offset_str: &str) -> Result<FixedOffset, String> {
     FixedOffset::east_opt(total_seconds).ok_or_else(|| "Invalid timezone offset".to_string())
 }
 
-
 /// Format duration in seconds to human readable string
 fn format_duration(seconds: i32) -> String {
     let hours = seconds / 3600;
@@ -245,7 +248,6 @@ fn format_duration(seconds: i32) -> String {
         parts.join("")
     }
 }
-
 
 /// Format datetime for display in local timezone
 pub fn format_for_display(utc_time: DateTime<Utc>, local_tz_str: &str) -> String {
@@ -300,61 +302,67 @@ pub fn parse_time_string(time_str: &str) -> Result<i64, String> {
 pub fn resolve_time_functions(expression: &str) -> Result<String, String> {
     let mut resolved = expression.to_string();
     let now_epoch = Utc::now().timestamp();
-    
+
     // Replace @time:now() with current epoch
     resolved = resolved.replace("@time:now()", &now_epoch.to_string());
-    
+
     // Handle @time:parse("datestring") patterns
     let parse_regex = Regex::new(r#"@time:parse\("([^"]+)"\)"#)
         .map_err(|e| format!("Regex compilation error: {e}"))?;
-    resolved = parse_regex.replace_all(&resolved, |caps: &regex::Captures| {
-        let date_string = &caps[1];
-        match parse_time_string(date_string) {
-            Ok(epoch) => epoch.to_string(),
-            Err(e) => {
-                warn!("Failed to parse time string '{}': {}", date_string, e);
-                "0".to_string() // Fallback to epoch 0 on parse error
+    resolved = parse_regex
+        .replace_all(&resolved, |caps: &regex::Captures| {
+            let date_string = &caps[1];
+            match parse_time_string(date_string) {
+                Ok(epoch) => epoch.to_string(),
+                Err(e) => {
+                    warn!("Failed to parse time string '{}': {}", date_string, e);
+                    "0".to_string() // Fallback to epoch 0 on parse error
+                }
             }
-        }
-    }).to_string();
-    
+        })
+        .to_string();
+
     // Handle @time:<epoch> patterns (direct epoch timestamps)
-    let epoch_regex = Regex::new(r"@time:(\d+)")
-        .map_err(|e| format!("Regex compilation error: {e}"))?;
-    resolved = epoch_regex.replace_all(&resolved, |caps: &regex::Captures| {
-        let epoch_str = &caps[1];
-        // Validate the epoch is a valid number
-        match epoch_str.parse::<i64>() {
-            Ok(epoch) => epoch.to_string(),
-            Err(_) => {
-                warn!("Invalid epoch timestamp in @time:{}", epoch_str);
-                "0".to_string()
+    let epoch_regex =
+        Regex::new(r"@time:(\d+)").map_err(|e| format!("Regex compilation error: {e}"))?;
+    resolved = epoch_regex
+        .replace_all(&resolved, |caps: &regex::Captures| {
+            let epoch_str = &caps[1];
+            // Validate the epoch is a valid number
+            match epoch_str.parse::<i64>() {
+                Ok(epoch) => epoch.to_string(),
+                Err(_) => {
+                    warn!("Invalid epoch timestamp in @time:{}", epoch_str);
+                    "0".to_string()
+                }
             }
-        }
-    }).to_string();
-    
+        })
+        .to_string();
+
     // Handle @time:now()+offset and @time:now()-offset patterns
     let offset_regex = Regex::new(r"@time:now\(\)\s*([+-])\s*(\d+)")
         .map_err(|e| format!("Regex compilation error: {e}"))?;
-    resolved = offset_regex.replace_all(&resolved, |caps: &regex::Captures| {
-        let operator = &caps[1];
-        let offset_str = &caps[2];
-        match offset_str.parse::<i64>() {
-            Ok(offset) => {
-                let result_epoch = if operator == "+" {
-                    now_epoch + offset
-                } else {
-                    now_epoch - offset
-                };
-                result_epoch.to_string()
-            },
-            Err(_) => {
-                warn!("Invalid offset in @time:now(){}{}", operator, offset_str);
-                now_epoch.to_string()
+    resolved = offset_regex
+        .replace_all(&resolved, |caps: &regex::Captures| {
+            let operator = &caps[1];
+            let offset_str = &caps[2];
+            match offset_str.parse::<i64>() {
+                Ok(offset) => {
+                    let result_epoch = if operator == "+" {
+                        now_epoch + offset
+                    } else {
+                        now_epoch - offset
+                    };
+                    result_epoch.to_string()
+                }
+                Err(_) => {
+                    warn!("Invalid offset in @time:now(){}{}", operator, offset_str);
+                    now_epoch.to_string()
+                }
             }
-        }
-    }).to_string();
-    
+        })
+        .to_string();
+
     Ok(resolved)
 }
 
@@ -370,7 +378,7 @@ pub fn validate_time_function_syntax(expression: &str) -> Option<String> {
             return Some("@time function cannot have space after colon".to_string());
         }
     }
-    
+
     None
 }
 
@@ -441,14 +449,14 @@ mod tests {
         assert!(parse_time_string("01/01/2024 00:00:00").is_ok()); // Fixed: date-only needs time
         assert!(parse_time_string("20240101120000").is_ok()); // XMLTV format
         assert!(parse_time_string("20240101000000").is_ok()); // Fixed: XMLTV date needs time
-        
+
         // Test Unix timestamp
         assert_eq!(parse_time_string("1704110400").unwrap(), 1704110400); // 2024-01-01 12:00:00 UTC
-        
+
         // Test RFC3339
         assert!(parse_time_string("2024-01-01T12:00:00Z").is_ok());
         assert!(parse_time_string("2024-01-01T12:00:00+01:00").is_ok());
-        
+
         // Test invalid formats
         assert!(parse_time_string("invalid-date").is_err());
         assert!(parse_time_string("").is_err());
@@ -459,31 +467,37 @@ mod tests {
         // Test @time:now() replacement
         let result = resolve_time_functions("@time:now()").unwrap();
         assert!(result.parse::<i64>().is_ok());
-        
+
         // Test @time:parse() replacement
         let result = resolve_time_functions(r#"@time:parse("2024-01-01 12:00:00")"#).unwrap();
         assert_eq!(result, "1704110400");
-        
+
         // Test @time:<epoch> replacement
         let result = resolve_time_functions("@time:1704110400").unwrap();
         assert_eq!(result, "1704110400");
-        
+
         // Test @time:now() with offset - check format rather than exact value due to timing
         let result = resolve_time_functions("@time:now() + 3600").unwrap();
         // Should return "@time:now() + 3600" format, not calculate the actual result
         assert!(result.contains("+") || result.parse::<i64>().is_ok());
-        
+
         let result = resolve_time_functions("@time:now() - 1800").unwrap();
         // Should return format with subtraction or parsed timestamp
         assert!(result.contains("-") || result.parse::<i64>().is_ok());
-        
+
         // Test complex expression
-        let result = resolve_time_functions(r#"field > @time:parse("2024-01-01") AND field < @time:now()"#).unwrap();
+        let result =
+            resolve_time_functions(r#"field > @time:parse("2024-01-01") AND field < @time:now()"#)
+                .unwrap();
         // Should resolve both time functions and preserve the AND expression structure
         assert!(result.contains(" AND field < "));
         assert!(result.parse::<i64>().is_err()); // Should not be a single number
         // Should contain numeric timestamps (the exact values depend on parsing implementation)
-        assert!(result.split_whitespace().any(|word| word.parse::<i64>().is_ok()));
+        assert!(
+            result
+                .split_whitespace()
+                .any(|word| word.parse::<i64>().is_ok())
+        );
     }
 
     #[test]
@@ -494,7 +508,7 @@ mod tests {
         assert!(validate_time_function_syntax("@time:1704110400").is_none());
         assert!(validate_time_function_syntax("@time:now() + 3600").is_none());
         assert!(validate_time_function_syntax("@time:now() - 1800").is_none());
-        
+
         // Invalid functions - simplified validation only catches basic syntax errors
         // Detailed validation happens during time resolution, not syntax checking
         assert!(validate_time_function_syntax("@time:invalid").is_none()); // Basic syntax is fine
@@ -502,9 +516,14 @@ mod tests {
         assert!(validate_time_function_syntax("@time:parse(unquoted)").is_none()); // Basic syntax is fine
         assert!(validate_time_function_syntax("@time:now() + invalid").is_none()); // Basic syntax is fine
         assert!(validate_time_function_syntax("@time: ").is_some()); // Space after colon is caught
-        
+
         // Complex expressions
-        assert!(validate_time_function_syntax(r#"field > @time:parse("2024-01-01") AND field < @time:now()"#).is_none());
+        assert!(
+            validate_time_function_syntax(
+                r#"field > @time:parse("2024-01-01") AND field < @time:now()"#
+            )
+            .is_none()
+        );
         assert!(validate_time_function_syntax("@time:invalid AND @time:now()").is_none()); // Basic syntax is fine
     }
 }

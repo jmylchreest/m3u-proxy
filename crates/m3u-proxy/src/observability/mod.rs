@@ -1,8 +1,7 @@
 use anyhow::Result;
 use opentelemetry::{
-    global,
-    metrics::{Counter, Histogram, Meter, UpDownCounter, MeterProvider},
-    KeyValue,
+    KeyValue, global,
+    metrics::{Counter, Histogram, Meter, MeterProvider, UpDownCounter},
 };
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use tracing::info;
@@ -14,7 +13,7 @@ pub struct AppObservability {
     pub meter: Meter,
     // Note: Prometheus registry removed due to opentelemetry-prometheus incompatibility
     // Metrics are now exported via OTLP to external collectors like Prometheus
-    
+
     // Pre-built common metrics instruments
     pub client_connections: Counter<u64>,
     pub active_clients: UpDownCounter<i64>,
@@ -22,7 +21,7 @@ pub struct AppObservability {
     pub bytes_received: Counter<u64>,
     pub client_session_duration: Histogram<f64>,
     pub transfer_rate: Histogram<f64>,
-    
+
     pub channel_refresh_duration: Histogram<f64>,
     pub channel_refresh_total: Counter<u64>,
     pub channels_processed: Counter<u64>,
@@ -31,7 +30,7 @@ pub struct AppObservability {
     pub programs_processed: Counter<u64>,
     pub source_retries: Counter<u64>,
     pub source_failures: Counter<u64>,
-    
+
     pub relay_starts: Counter<u64>,
     pub relay_stops: Counter<u64>,
     pub active_relays: UpDownCounter<i64>,
@@ -42,12 +41,12 @@ pub struct AppObservability {
     pub relay_memory_usage: Histogram<f64>,
     pub relay_frame_drops: Counter<u64>,
     pub relay_bitrate: Histogram<f64>,
-    
+
     pub db_queries: Counter<u64>,
     pub db_query_duration: Histogram<f64>,
     pub db_connections: UpDownCounter<i64>,
     pub batch_operations: Counter<u64>,
-    
+
     pub proxy_generations: Counter<u64>,
     pub proxy_generation_duration: Histogram<f64>,
     pub filter_evaluations: Counter<u64>,
@@ -60,25 +59,27 @@ impl AppObservability {
     pub fn new(service_name: &str) -> Result<Self> {
         // Create a simple meter provider without Prometheus exporter
         // Metrics will be exported via OTLP to external systems
-        let provider = SdkMeterProvider::builder()
-            .build();
-        
+        let provider = SdkMeterProvider::builder().build();
+
         // Set as the global provider
         global::set_meter_provider(provider.clone());
 
         // Create meter from our provider (using static string for OpenTelemetry requirement)
         let meter = provider.meter("m3u-proxy");
-        
+
         // Initialize tracing if OTLP endpoint is configured
         if let Ok(otlp_endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
             Self::init_tracing(&otlp_endpoint, service_name.to_owned())?;
-            info!("OpenTelemetry configured: OTLP tracing to {}", otlp_endpoint);
+            info!(
+                "OpenTelemetry configured: OTLP tracing to {}",
+                otlp_endpoint
+            );
         } else {
             info!("OpenTelemetry configured: Local metrics only (OTLP endpoint not configured)");
         }
 
         let observability = Self::build_with_instruments(meter);
-        
+
         Ok(observability)
     }
 
@@ -86,10 +87,13 @@ impl AppObservability {
     fn init_tracing(otlp_endpoint: &str, _service_name: String) -> Result<()> {
         // For now, just log that tracing would be initialized
         // The OTLP API has significant changes in 0.30 that need more investigation
-        info!("OpenTelemetry tracing would be initialized with OTLP endpoint: {} (implementation pending API updates)", otlp_endpoint);
+        info!(
+            "OpenTelemetry tracing would be initialized with OTLP endpoint: {} (implementation pending API updates)",
+            otlp_endpoint
+        );
         Ok(())
     }
-    
+
     /// Build observability with pre-configured instruments
     fn build_with_instruments(meter: Meter) -> Self {
         // Client/Connection metrics
@@ -117,7 +121,7 @@ impl AppObservability {
             .f64_histogram("transfer_rate_bytes_per_second")
             .with_description("Data transfer rate")
             .build();
-        
+
         // Channel processing metrics
         let channel_refresh_duration = meter
             .f64_histogram("channel_refresh_duration_seconds")
@@ -151,7 +155,7 @@ impl AppObservability {
             .u64_counter("source_failures_total")
             .with_description("Source operation failures")
             .build();
-        
+
         // Relay/FFmpeg metrics
         let relay_starts = meter
             .u64_counter("relay_starts_total")
@@ -193,7 +197,7 @@ impl AppObservability {
             .f64_histogram("relay_bitrate_kbps")
             .with_description("Relay stream bitrate in kbps")
             .build();
-        
+
         // Database metrics
         let db_queries = meter
             .u64_counter("database_queries_total")
@@ -211,7 +215,7 @@ impl AppObservability {
             .u64_counter("batch_operations_total")
             .with_description("Database batch operations")
             .build();
-        
+
         // Business logic metrics
         let proxy_generations = meter
             .u64_counter("proxy_generations_total")
@@ -233,7 +237,7 @@ impl AppObservability {
             .u64_counter("channels_excluded_total")
             .with_description("Channels excluded by filters")
             .build();
-        
+
         Self {
             meter,
             client_connections,
@@ -292,17 +296,21 @@ impl AppObservability {
             relay_used: false,
             relay_config_id: None,
         };
-        
+
         // Record metrics
-        self.client_connections.add(1, &[
-            KeyValue::new("proxy_name", proxy_name),
-            KeyValue::new("channel_id", channel_id.to_string()),
-        ]);
-        
-        self.active_clients.add(1, &[
-            KeyValue::new("proxy_name", session.proxy_ulid.clone()),
-        ]);
-        
+        self.client_connections.add(
+            1,
+            &[
+                KeyValue::new("proxy_name", proxy_name),
+                KeyValue::new("channel_id", channel_id.to_string()),
+            ],
+        );
+
+        self.active_clients.add(
+            1,
+            &[KeyValue::new("proxy_name", session.proxy_ulid.clone())],
+        );
+
         // Keep existing logging behavior
         tracing::info!(
             proxy_ulid = %session.proxy_ulid,
@@ -311,7 +319,7 @@ impl AppObservability {
             user_agent = ?user_agent,
             "Stream session started"
         );
-        
+
         session
     }
 
@@ -326,13 +334,16 @@ impl AppObservability {
         proxy_mode: &str,
     ) -> Result<String> {
         let session_id = Uuid::new_v4().to_string();
-        
+
         // Record session start metrics
-        self.client_connections.add(1, &[
-            KeyValue::new("proxy_name", proxy_name),
-            KeyValue::new("proxy_mode", proxy_mode.to_string()),
-        ]);
-        
+        self.client_connections.add(
+            1,
+            &[
+                KeyValue::new("proxy_name", proxy_name),
+                KeyValue::new("proxy_mode", proxy_mode.to_string()),
+            ],
+        );
+
         Ok(session_id)
     }
 
@@ -354,7 +365,6 @@ impl AppObservability {
         // We don't need it for observability, but keep for compatibility
         &()
     }
-
 
     /// Log a basic event (for compatibility)
     pub async fn log_event(&self, event: &str) {
@@ -381,21 +391,24 @@ impl StreamAccessSession {
     pub async fn finish(self, observability: &AppObservability, bytes_served: u64) {
         let duration = chrono::Utc::now()
             .signed_duration_since(self.start_time)
-            .num_milliseconds() as f64 / 1000.0;
-        
+            .num_milliseconds() as f64
+            / 1000.0;
+
         // Record metrics
-        observability.client_session_duration.record(duration, &[
-            KeyValue::new("proxy_name", self.proxy_ulid.clone()),
-        ]);
-        
-        observability.bytes_sent.add(bytes_served, &[
-            KeyValue::new("proxy_name", self.proxy_ulid.clone()),
-        ]);
-        
-        observability.active_clients.add(-1, &[
-            KeyValue::new("proxy_name", self.proxy_ulid.clone()),
-        ]);
-        
+        observability.client_session_duration.record(
+            duration,
+            &[KeyValue::new("proxy_name", self.proxy_ulid.clone())],
+        );
+
+        observability.bytes_sent.add(
+            bytes_served,
+            &[KeyValue::new("proxy_name", self.proxy_ulid.clone())],
+        );
+
+        observability
+            .active_clients
+            .add(-1, &[KeyValue::new("proxy_name", self.proxy_ulid.clone())]);
+
         tracing::info!(
             proxy_ulid = %self.proxy_ulid,
             channel_id = %self.channel_id,

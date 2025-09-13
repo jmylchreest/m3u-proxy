@@ -3,8 +3,8 @@
 //! This module defines the core traits that services implement to provide
 //! consistent interfaces for business operations across the application.
 
-use async_trait::async_trait;
 use crate::errors::AppResult;
+use async_trait::async_trait;
 
 /// Core service trait for entity management
 ///
@@ -163,7 +163,10 @@ pub trait ValidationService<T, ID: Send + 'static>: Service<T, ID> {
     ///
     /// * `Ok(ValidationResult)` - Validation results
     /// * `Err(AppError)` - Validation error
-    async fn validate_create(&self, request: &Self::CreateRequest) -> AppResult<Self::ValidationResult>;
+    async fn validate_create(
+        &self,
+        request: &Self::CreateRequest,
+    ) -> AppResult<Self::ValidationResult>;
 
     /// Validate an update request without persisting
     ///
@@ -176,7 +179,11 @@ pub trait ValidationService<T, ID: Send + 'static>: Service<T, ID> {
     ///
     /// * `Ok(ValidationResult)` - Validation results
     /// * `Err(AppError)` - Validation error
-    async fn validate_update(&self, id: ID, request: &Self::UpdateRequest) -> AppResult<Self::ValidationResult>;
+    async fn validate_update(
+        &self,
+        id: ID,
+        request: &Self::UpdateRequest,
+    ) -> AppResult<Self::ValidationResult>;
 
     /// Validate a delete operation without persisting
     ///
@@ -225,7 +232,10 @@ pub trait BulkService<T, ID: Send + 'static>: Service<T, ID> {
     ///
     /// * `Ok(BulkResult)` - Results of bulk operation
     /// * `Err(AppError)` - Validation or business rule error (all operations rolled back)
-    async fn update_bulk(&self, updates: std::collections::HashMap<ID, Self::UpdateRequest>) -> AppResult<Self::BulkResult>;
+    async fn update_bulk(
+        &self,
+        updates: std::collections::HashMap<ID, Self::UpdateRequest>,
+    ) -> AppResult<Self::BulkResult>;
 
     /// Delete multiple entities in a single transaction
     ///
@@ -269,7 +279,11 @@ pub trait ImportExportService<T, ID: Send + 'static>: Service<T, ID> {
     ///
     /// * `Ok(ImportResult)` - Import results with statistics
     /// * `Err(AppError)` - Import validation or processing error
-    async fn import(&self, data: Self::ImportData, options: ImportOptions) -> AppResult<Self::ImportResult>;
+    async fn import(
+        &self,
+        data: Self::ImportData,
+        options: ImportOptions,
+    ) -> AppResult<Self::ImportResult>;
 
     /// Export entities in specified format
     ///
@@ -285,12 +299,15 @@ pub trait ImportExportService<T, ID: Send + 'static>: Service<T, ID> {
     ///
     /// * `Ok(ExportResult)` - Exported data
     /// * `Err(AppError)` - Export processing error
-    async fn export(&self, query: Self::Query, format: Self::ExportFormat) -> AppResult<Self::ExportResult>;
+    async fn export(
+        &self,
+        query: Self::Query,
+        format: Self::ExportFormat,
+    ) -> AppResult<Self::ExportResult>;
 }
 
 /// Options for import operations
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ImportOptions {
     /// Whether to update existing entities
     pub update_existing: bool,
@@ -301,7 +318,6 @@ pub struct ImportOptions {
     /// Whether to run in dry-run mode (validate only)
     pub dry_run: bool,
 }
-
 
 /// Standard service response for list operations
 #[derive(Debug, Clone)]
@@ -399,7 +415,11 @@ impl BulkOperationError {
     }
 
     /// Create a bulk operation error with context
-    pub fn with_context<S: Into<String>, C: Into<String>>(index: usize, error: S, context: C) -> Self {
+    pub fn with_context<S: Into<String>, C: Into<String>>(
+        index: usize,
+        error: S,
+        context: C,
+    ) -> Self {
         Self {
             index,
             error: error.into(),

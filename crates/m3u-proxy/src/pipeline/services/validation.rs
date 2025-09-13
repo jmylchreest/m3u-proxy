@@ -1,7 +1,7 @@
 use crate::models::data_mapping::DataMappingSourceType;
 use crate::pipeline::engines::{
-    DataMappingValidator, FilteringValidator, NumberingValidator, GenerationValidator,
-    ValidationFactory, PipelineStageType, RuleValidationResult
+    DataMappingValidator, FilteringValidator, GenerationValidator, NumberingValidator,
+    PipelineStageType, RuleValidationResult, ValidationFactory,
 };
 
 /// Centralized validation service for all pipeline stages
@@ -16,22 +16,22 @@ impl PipelineValidationService {
     ) -> RuleValidationResult {
         DataMappingValidator::validate_expression(expression, source_type)
     }
-    
+
     /// Validate a filtering rule expression
     pub fn validate_filtering_rule(expression: &str) -> RuleValidationResult {
         FilteringValidator::validate_expression(expression)
     }
-    
+
     /// Validate a numbering rule expression
     pub fn validate_numbering_rule(expression: &str) -> RuleValidationResult {
         NumberingValidator::validate_expression(expression)
     }
-    
+
     /// Validate a generation rule expression
     pub fn validate_generation_rule(expression: &str) -> RuleValidationResult {
         GenerationValidator::validate_expression(expression)
     }
-    
+
     /// Validate expression for any pipeline stage using the factory
     pub fn validate_for_stage(
         expression: &str,
@@ -40,7 +40,7 @@ impl PipelineValidationService {
     ) -> RuleValidationResult {
         ValidationFactory::validate_for_stage(expression, stage_type, source_type)
     }
-    
+
     /// Get available fields for a specific stage
     pub fn get_available_fields_for_stage(
         stage_type: PipelineStageType,
@@ -49,7 +49,7 @@ impl PipelineValidationService {
         let validator = ValidationFactory::create_validator(stage_type, source_type);
         validator.get_available_fields()
     }
-    
+
     /// Validate only syntax (no field context) for any expression
     pub fn validate_syntax_only(expression: &str) -> RuleValidationResult {
         if expression.trim().is_empty() {
@@ -60,7 +60,7 @@ impl PipelineValidationService {
                 field_errors: vec![],
             };
         }
-        
+
         RuleValidationResult {
             is_valid: true,
             error: None,
@@ -88,7 +88,7 @@ impl ApiValidationService {
             "generation" => PipelineStageType::Generation,
             _ => return Err(format!("Unknown stage: {stage_name}")),
         };
-        
+
         let source_type_enum = if let Some(st) = source_type {
             match st {
                 "stream" => Some(DataMappingSourceType::Stream),
@@ -98,14 +98,14 @@ impl ApiValidationService {
         } else {
             None
         };
-        
+
         Ok(PipelineValidationService::validate_for_stage(
             expression,
             stage_type,
             source_type_enum,
         ))
     }
-    
+
     /// Get available fields by stage name (string)
     pub fn get_fields_by_stage_name(
         stage_name: &str,
@@ -118,7 +118,7 @@ impl ApiValidationService {
             "generation" => PipelineStageType::Generation,
             _ => return Err(format!("Unknown stage: {stage_name}")),
         };
-        
+
         let source_type_enum = if let Some(st) = source_type {
             match st {
                 "stream" => Some(DataMappingSourceType::Stream),
@@ -128,7 +128,7 @@ impl ApiValidationService {
         } else {
             None
         };
-        
+
         Ok(PipelineValidationService::get_available_fields_for_stage(
             stage_type,
             source_type_enum,

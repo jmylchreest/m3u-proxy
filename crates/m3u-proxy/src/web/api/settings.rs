@@ -5,13 +5,13 @@
 
 use axum::{
     extract::State,
-    response::{IntoResponse, Json},
     http::StatusCode,
+    response::{IntoResponse, Json},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::{web::AppState, config::JobSchedulingConfig};
+use crate::{config::JobSchedulingConfig, web::AppState};
 
 /// Runtime server settings that can be changed without restart
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -55,9 +55,7 @@ const VALID_LOG_LEVELS: &[&str] = &["TRACE", "DEBUG", "INFO", "WARN", "ERROR"];
         (status = 500, description = "Internal server error")
     )
 )]
-pub async fn get_settings(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn get_settings(State(state): State<AppState>) -> impl IntoResponse {
     let runtime_settings = state.runtime_settings_store.get().await;
     let settings = RuntimeSettings {
         log_level: runtime_settings.log_level,
@@ -106,8 +104,6 @@ pub async fn update_settings(
         }
     }
 
-
-
     // Return validation errors if any
     if !validation_errors.is_empty() {
         let error_response = serde_json::json!({
@@ -119,10 +115,10 @@ pub async fn update_settings(
     }
 
     // Apply changes using the runtime settings store
-    let applied_changes = state.runtime_settings_store.update_multiple(
-        request.log_level.as_deref(),
-        request.enable_request_logging,
-    ).await;
+    let applied_changes = state
+        .runtime_settings_store
+        .update_multiple(request.log_level.as_deref(), request.enable_request_logging)
+        .await;
 
     // Get current settings after update
     let updated_settings = state.runtime_settings_store.get().await;
@@ -153,11 +149,9 @@ pub async fn update_settings(
         (status = 500, description = "Internal server error")
     )
 )]
-pub async fn get_settings_info(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn get_settings_info(State(state): State<AppState>) -> impl IntoResponse {
     let current_settings = state.runtime_settings_store.get().await;
-    
+
     let info = serde_json::json!({
         "available_settings": {
             "log_level": {
@@ -216,11 +210,9 @@ pub struct JobSchedulingResponse {
         (status = 500, description = "Internal server error")
     )
 )]
-pub async fn get_job_scheduling_config(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn get_job_scheduling_config(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.job_queue_runner.get_concurrency_config().await;
-    
+
     let response = JobSchedulingResponse {
         success: true,
         message: "Job scheduling configuration retrieved successfully".to_string(),
@@ -271,7 +263,10 @@ pub async fn update_job_scheduling_config(
             validation_errors.push("Stream ingestion limit must be between 1 and 50".to_string());
         } else {
             new_config.stream_ingestion_limit = stream_limit;
-            applied_changes.push(format!("Updated stream ingestion limit to {}", stream_limit));
+            applied_changes.push(format!(
+                "Updated stream ingestion limit to {}",
+                stream_limit
+            ));
         }
     }
 
@@ -289,7 +284,10 @@ pub async fn update_job_scheduling_config(
             validation_errors.push("Proxy regeneration limit must be between 1 and 50".to_string());
         } else {
             new_config.proxy_regeneration_limit = proxy_limit;
-            applied_changes.push(format!("Updated proxy regeneration limit to {}", proxy_limit));
+            applied_changes.push(format!(
+                "Updated proxy regeneration limit to {}",
+                proxy_limit
+            ));
         }
     }
 
@@ -298,21 +296,23 @@ pub async fn update_job_scheduling_config(
             validation_errors.push("Maintenance limit must be between 1 and 10".to_string());
         } else {
             new_config.maintenance_limit = maintenance_limit;
-            applied_changes.push(format!("Updated maintenance limit to {}", maintenance_limit));
+            applied_changes.push(format!(
+                "Updated maintenance limit to {}",
+                maintenance_limit
+            ));
         }
     }
 
     // Additional validation: ensure type limits don't exceed global limit
-    let total_max_possible = new_config.stream_ingestion_limit 
-        + new_config.epg_ingestion_limit 
-        + new_config.proxy_regeneration_limit 
+    let total_max_possible = new_config.stream_ingestion_limit
+        + new_config.epg_ingestion_limit
+        + new_config.proxy_regeneration_limit
         + new_config.maintenance_limit;
-        
+
     if total_max_possible > new_config.global_max_jobs {
         validation_errors.push(format!(
-            "Sum of type limits ({}) cannot exceed global maximum ({})", 
-            total_max_possible, 
-            new_config.global_max_jobs
+            "Sum of type limits ({}) cannot exceed global maximum ({})",
+            total_max_possible, new_config.global_max_jobs
         ));
     }
 
@@ -328,7 +328,10 @@ pub async fn update_job_scheduling_config(
 
     // Apply the configuration if there were changes
     if !applied_changes.is_empty() {
-        state.job_queue_runner.update_concurrency_config(&new_config).await;
+        state
+            .job_queue_runner
+            .update_concurrency_config(&new_config)
+            .await;
     }
 
     let response = JobSchedulingResponse {
@@ -344,4 +347,3 @@ pub async fn update_job_scheduling_config(
 
     Json(response).into_response()
 }
-

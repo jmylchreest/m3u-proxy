@@ -3,9 +3,9 @@
 // Used by: data mapping rules, filter expressions, numbering rules, generation rules
 
 use crate::models::{
-    Action, ActionOperator, ActionValue, ConditionNode, ConditionTree, ExtendedExpression,
-    FilterOperator, LogicalOperator, ExpressionErrorCategory, ExpressionValidationError,
-    ExpressionValidateResult,
+    Action, ActionOperator, ActionValue, ConditionNode, ConditionTree, ExpressionErrorCategory,
+    ExpressionValidateResult, ExpressionValidationError, ExtendedExpression, FilterOperator,
+    LogicalOperator,
 };
 use anyhow::{Result, anyhow};
 use tracing::{trace, warn};
@@ -75,25 +75,22 @@ impl ExpressionParser {
     }
 
     /// Parse a text expression into an ExtendedExpression (supports actions)
-    /// 
+    ///
     /// # Basic Syntax
     /// Example: "channel_name contains \"sport\" SET group_title = \"Sports\""
-    /// 
-    /// # Complex Syntax 
+    ///
+    /// # Complex Syntax
     /// Multiple conditions: "(channel_name matches \"regex\" AND tvg_id contains \"test\" SET tvg_shift = \"$1$2\")"
     /// Multiple groups: "(condition1 SET action1) AND (condition2 SET action2)"
-    /// 
+    ///
     /// # Important: SET actions must come AFTER all conditions in a group
     /// ✅ Valid: "(condition1 AND condition2 SET action)"
     /// ✅ Valid: "(condition1 SET action) AND (condition2 SET action)"
     /// ❌ Invalid: "(condition1 SET action AND condition2)" - SET cannot be followed by more conditions
-    /// 
+    ///
     /// Used by: data mapping rules, complex transformations
     pub fn parse_extended(&self, expression: &str) -> Result<ExtendedExpression> {
-        trace!(
-            "Parsing expression (length: {} chars)",
-            expression.len()
-        );
+        trace!("Parsing expression (length: {} chars)", expression.len());
 
         let tokens = self.tokenize(expression)?;
         trace!("Tokenized into {} tokens", tokens.len());
@@ -196,18 +193,21 @@ impl ExpressionParser {
     /// This provides detailed validation results suitable for UI display and API responses
     /// Returns structured validation result with multiple detailed errors
     pub fn validate(&self, expression: &str) -> ExpressionValidateResult {
-        trace!("Performing structured validation of expression: '{}'", expression);
-        
+        trace!(
+            "Performing structured validation of expression: '{}'",
+            expression
+        );
+
         let mut errors = Vec::new();
         let mut expression_tree = None;
-        
+
         // Step 1: Parse the expression and collect syntax errors
         match self.parse_extended_with_errors(expression) {
             Ok(parsed) => {
                 // Step 2: Validate semantic correctness and collect semantic errors
                 let semantic_errors = self.validate_extended_with_errors(&parsed);
                 errors.extend(semantic_errors);
-                
+
                 // If we successfully parsed, serialize the expression tree for display
                 if let Ok(tree_json) = serde_json::to_value(&parsed) {
                     expression_tree = Some(tree_json);
@@ -218,9 +218,9 @@ impl ExpressionParser {
                 errors.extend(syntax_errors);
             }
         }
-        
+
         let is_valid = errors.is_empty();
-        
+
         ExpressionValidateResult {
             is_valid,
             errors,
@@ -229,9 +229,12 @@ impl ExpressionParser {
     }
 
     /// Internal parsing method that collects structured errors instead of failing fast
-    fn parse_extended_with_errors(&self, expression: &str) -> Result<ExtendedExpression, Vec<ExpressionValidationError>> {
+    fn parse_extended_with_errors(
+        &self,
+        expression: &str,
+    ) -> Result<ExtendedExpression, Vec<ExpressionValidationError>> {
         let mut errors = Vec::new();
-        
+
         // Tokenization with error collection
         let tokens = match self.tokenize_with_errors(expression) {
             Ok(tokens) => tokens,
@@ -240,7 +243,7 @@ impl ExpressionParser {
                 return Err(errors);
             }
         };
-        
+
         // Expression parsing with error collection
         match self.parse_extended_from_tokens(&tokens) {
             Ok(expr) => Ok(expr),
@@ -252,7 +255,10 @@ impl ExpressionParser {
     }
 
     /// Internal tokenization method that collects structured errors
-    fn tokenize_with_errors(&self, expression: &str) -> Result<Vec<Token>, Vec<ExpressionValidationError>> {
+    fn tokenize_with_errors(
+        &self,
+        expression: &str,
+    ) -> Result<Vec<Token>, Vec<ExpressionValidationError>> {
         let mut tokens = Vec::new();
         let mut errors = Vec::new();
         let mut current_pos = 0;
@@ -298,7 +304,7 @@ impl ExpressionParser {
                         } else {
                             remaining.to_string()
                         };
-                        
+
                         errors.push(ExpressionValidationError {
                             category: ExpressionErrorCategory::Syntax,
                             error_type: "unclosed_quote".to_string(),
@@ -334,7 +340,9 @@ impl ExpressionParser {
                                     category: ExpressionErrorCategory::Operator,
                                     error_type: "unknown_logical_operator".to_string(),
                                     message: format!("Unknown logical operator: {logical_op}"),
-                                    details: Some("This logical operator is not supported".to_string()),
+                                    details: Some(
+                                        "This logical operator is not supported".to_string(),
+                                    ),
                                     position: Some(current_pos),
                                     context: Some(logical_op.clone()),
                                     suggestion: Some("Use AND or OR".to_string()),
@@ -355,18 +363,27 @@ impl ExpressionParser {
 
             // Check for common logical operator mistakes
             let common_mistakes = [
-                ("&&", "AND"), ("||", "OR"), ("and", "AND"), ("or", "OR"),
-                ("&", "AND"), ("|", "OR"), ("AND and", "AND"), ("OR or", "OR")
+                ("&&", "AND"),
+                ("||", "OR"),
+                ("and", "AND"),
+                ("or", "OR"),
+                ("&", "AND"),
+                ("|", "OR"),
+                ("AND and", "AND"),
+                ("OR or", "OR"),
             ];
-            
+
             for (mistake, correct) in &common_mistakes {
-                if remaining.to_uppercase().starts_with(&mistake.to_uppercase()) {
+                if remaining
+                    .to_uppercase()
+                    .starts_with(&mistake.to_uppercase())
+                {
                     let context = if remaining.len() > 10 {
                         format!("{}...", &remaining[..10])
                     } else {
                         remaining.to_string()
                     };
-                    
+
                     errors.push(ExpressionValidationError {
                         category: ExpressionErrorCategory::Operator,
                         error_type: "invalid_logical_operator".to_string(),
@@ -501,16 +518,29 @@ impl ExpressionParser {
 
             // Check for common operator typos and suggest corrections
             let common_operator_typos = [
-                ("containz", "contains"), ("contians", "contains"), ("contain", "contains"),
-                ("equal", "equals"), ("equls", "equals"), ("=", "equals"),
-                ("match", "matches"), ("matche", "matches"), ("regex", "matches"),
-                ("start_with", "starts_with"), ("begin_with", "starts_with"),
-                ("end_with", "ends_with"), ("finish_with", "ends_with"),
-                ("!=", "not_equals"), ("not_equal", "not_equals"),
-                ("!", "not_"), ("~", "not_"), ("does_not", "not_"),
+                ("containz", "contains"),
+                ("contians", "contains"),
+                ("contain", "contains"),
+                ("equal", "equals"),
+                ("equls", "equals"),
+                ("=", "equals"),
+                ("match", "matches"),
+                ("matche", "matches"),
+                ("regex", "matches"),
+                ("start_with", "starts_with"),
+                ("begin_with", "starts_with"),
+                ("end_with", "ends_with"),
+                ("finish_with", "ends_with"),
+                ("!=", "not_equals"),
+                ("not_equal", "not_equals"),
+                ("!", "not_"),
+                ("~", "not_"),
+                ("does_not", "not_"),
                 // Comparison operators
-                (">", "greater_than"), (">=", "greater_than_or_equal"),
-                ("<", "less_than"), ("<=", "less_than_or_equal"),
+                (">", "greater_than"),
+                (">=", "greater_than_or_equal"),
+                ("<", "less_than"),
+                ("<=", "less_than_or_equal"),
             ];
 
             for (typo, correct) in &common_operator_typos {
@@ -527,12 +557,14 @@ impl ExpressionParser {
                         } else {
                             remaining.to_string()
                         };
-                        
+
                         errors.push(ExpressionValidationError {
                             category: ExpressionErrorCategory::Operator,
                             error_type: "operator_typo".to_string(),
                             message: format!("Unknown operator: {typo}"),
-                            details: Some(format!("'{typo}' is not a valid operator. Did you mean '{correct}'?")),
+                            details: Some(format!(
+                                "'{typo}' is not a valid operator. Did you mean '{correct}'?"
+                            )),
                             position: Some(current_pos),
                             context: Some(context),
                             suggestion: Some(format!("Use '{correct}' instead")),
@@ -559,15 +591,20 @@ impl ExpressionParser {
                 } else {
                     remaining.to_string()
                 };
-                
+
                 errors.push(ExpressionValidationError {
                     category: ExpressionErrorCategory::Syntax,
                     error_type: "unexpected_character".to_string(),
                     message: format!("Unexpected character at position {current_pos}"),
-                    details: Some(format!("Character '{}' is not valid in this context", remaining.chars().next().unwrap_or('?'))),
+                    details: Some(format!(
+                        "Character '{}' is not valid in this context",
+                        remaining.chars().next().unwrap_or('?')
+                    )),
                     position: Some(current_pos),
                     context: Some(context),
-                    suggestion: Some("Remove the invalid character or check your syntax".to_string()),
+                    suggestion: Some(
+                        "Remove the invalid character or check your syntax".to_string(),
+                    ),
                 });
                 // Skip the problematic character and continue to find more errors
                 current_pos += 1;
@@ -582,13 +619,13 @@ impl ExpressionParser {
         }
     }
 
-
-
-
     /// Internal parsing method that works with pre-tokenized input
-    fn parse_extended_from_tokens(&self, tokens: &[Token]) -> Result<ExtendedExpression, Vec<ExpressionValidationError>> {
+    fn parse_extended_from_tokens(
+        &self,
+        tokens: &[Token],
+    ) -> Result<ExtendedExpression, Vec<ExpressionValidationError>> {
         let mut errors = Vec::new();
-        
+
         // Check for empty token list
         if tokens.is_empty() {
             errors.push(ExpressionValidationError {
@@ -633,10 +670,14 @@ impl ExpressionParser {
                 category: ExpressionErrorCategory::Syntax,
                 error_type: "unclosed_parenthesis".to_string(),
                 message: "Unclosed parenthesis".to_string(),
-                details: Some(format!("Opening parenthesis at position {open_pos} is never closed")),
+                details: Some(format!(
+                    "Opening parenthesis at position {open_pos} is never closed"
+                )),
                 position: Some(open_pos),
                 context: Some("(".to_string()),
-                suggestion: Some("Add closing parenthesis: (...) or remove the opening parenthesis".to_string()),
+                suggestion: Some(
+                    "Add closing parenthesis: (...) or remove the opening parenthesis".to_string(),
+                ),
             });
         }
 
@@ -709,7 +750,10 @@ impl ExpressionParser {
     }
 
     /// Internal validation method that collects structured errors instead of failing fast
-    fn validate_extended_with_errors(&self, expression: &ExtendedExpression) -> Vec<ExpressionValidationError> {
+    fn validate_extended_with_errors(
+        &self,
+        expression: &ExtendedExpression,
+    ) -> Vec<ExpressionValidationError> {
         let mut errors = Vec::new();
 
         match expression {
@@ -732,26 +776,40 @@ impl ExpressionParser {
     }
 
     /// Validate condition tree and collect structured errors
-    fn validate_condition_tree_with_errors(&self, condition_tree: &ConditionTree) -> Vec<ExpressionValidationError> {
+    fn validate_condition_tree_with_errors(
+        &self,
+        condition_tree: &ConditionTree,
+    ) -> Vec<ExpressionValidationError> {
         self.validate_condition_node_with_errors(&condition_tree.root)
     }
 
     /// Validate condition nodes recursively and collect structured errors
-    fn validate_condition_node_with_errors(&self, condition: &ConditionNode) -> Vec<ExpressionValidationError> {
+    fn validate_condition_node_with_errors(
+        &self,
+        condition: &ConditionNode,
+    ) -> Vec<ExpressionValidationError> {
         let mut errors = Vec::new();
 
         match condition {
-            ConditionNode::Condition { field, operator, value, .. } => {
+            ConditionNode::Condition {
+                field,
+                operator,
+                value,
+                ..
+            } => {
                 // Validate field name
                 if let Some(field_error) = self.validate_field_name_with_error(field) {
                     errors.push(field_error);
                 }
 
                 // Validate regex patterns for matches operators
-                if matches!(operator, FilterOperator::Matches | FilterOperator::NotMatches)
-                    && let Some(regex_error) = self.validate_regex_pattern(value) {
-                        errors.push(regex_error);
-                    }
+                if matches!(
+                    operator,
+                    FilterOperator::Matches | FilterOperator::NotMatches
+                ) && let Some(regex_error) = self.validate_regex_pattern(value)
+                {
+                    errors.push(regex_error);
+                }
             }
             ConditionNode::Group { children, .. } => {
                 for child in children {
@@ -772,19 +830,28 @@ impl ExpressionParser {
         if !self.valid_fields.iter().any(|f| f == field) {
             // Find similar field names for suggestions
             let suggestion = self.find_similar_field_name(field);
-            
+
             Some(ExpressionValidationError {
                 category: ExpressionErrorCategory::Field,
                 error_type: "unknown_field".to_string(),
                 message: format!("Unknown field '{field}'"),
                 details: if let Some(ref similar) = suggestion {
-                    Some(format!("Field '{field}' is not available. Did you mean '{similar}'?"))
+                    Some(format!(
+                        "Field '{field}' is not available. Did you mean '{similar}'?"
+                    ))
                 } else {
-                    Some(format!("Field '{field}' is not available for this expression type"))
+                    Some(format!(
+                        "Field '{field}' is not available for this expression type"
+                    ))
                 },
                 position: None, // Would need additional tracking to provide position
                 context: Some(field.to_string()),
-                suggestion: suggestion.or_else(|| Some(format!("Available fields: {}", self.valid_fields.join(", ")))),
+                suggestion: suggestion.or_else(|| {
+                    Some(format!(
+                        "Available fields: {}",
+                        self.valid_fields.join(", ")
+                    ))
+                }),
             })
         } else {
             None
@@ -798,7 +865,8 @@ impl ExpressionParser {
 
         for valid_field in &self.valid_fields {
             let score = self.calculate_similarity(field, valid_field);
-            if score > best_score && score >= 60 { // 60% similarity threshold
+            if score > best_score && score >= 60 {
+                // 60% similarity threshold
                 best_score = score;
                 best_match = Some(valid_field.clone());
             }
@@ -852,7 +920,10 @@ impl ExpressionParser {
                 details: Some(format!("Regex pattern '{pattern}' is invalid: {e}")),
                 position: None,
                 context: Some(format!("matches \"{pattern}\"")),
-                suggestion: Some("Use valid regex syntax. Example: channel_name matches \"^[a-zA-Z]+$\"".to_string()),
+                suggestion: Some(
+                    "Use valid regex syntax. Example: channel_name matches \"^[a-zA-Z]+$\""
+                        .to_string(),
+                ),
             }),
         }
     }
@@ -879,17 +950,25 @@ impl ExpressionParser {
 
         // Validate value length
         if let ActionValue::Literal(literal) = &action.value
-            && literal.len() > 255 {
-                return Some(ExpressionValidationError {
-                    category: ExpressionErrorCategory::Value,
-                    error_type: "value_too_long".to_string(),
-                    message: format!("Value for field '{}' is too long", action.field),
-                    details: Some(format!("Value is {} characters long, maximum allowed is 255", literal.len())),
-                    position: None,
-                    context: Some(format!("{} = \"{}...\"", action.field, &literal[..20.min(literal.len())])),
-                    suggestion: Some("Shorten the value to 255 characters or less".to_string()),
-                });
-            }
+            && literal.len() > 255
+        {
+            return Some(ExpressionValidationError {
+                category: ExpressionErrorCategory::Value,
+                error_type: "value_too_long".to_string(),
+                message: format!("Value for field '{}' is too long", action.field),
+                details: Some(format!(
+                    "Value is {} characters long, maximum allowed is 255",
+                    literal.len()
+                )),
+                position: None,
+                context: Some(format!(
+                    "{} = \"{}...\"",
+                    action.field,
+                    &literal[..20.min(literal.len())]
+                )),
+                suggestion: Some("Shorten the value to 255 characters or less".to_string()),
+            });
+        }
 
         None
     }
@@ -1276,33 +1355,34 @@ impl ExpressionParser {
 
         // Check if there's a logical operator
         if *pos < tokens.len()
-            && let Token::LogicalOp(op) = &tokens[*pos] {
-                let operator = op.clone();
-                *pos += 1;
+            && let Token::LogicalOp(op) = &tokens[*pos]
+        {
+            let operator = op.clone();
+            *pos += 1;
 
-                let mut children = vec![left];
+            let mut children = vec![left];
 
-                // Parse the right side
-                let right = self.parse_expression(tokens, pos)?;
-                children.push(right);
+            // Parse the right side
+            let right = self.parse_expression(tokens, pos)?;
+            children.push(right);
 
-                // Handle multiple conditions with the same operator
-                while *pos < tokens.len() {
-                    if let Token::LogicalOp(next_op) = &tokens[*pos] {
-                        if std::mem::discriminant(next_op) == std::mem::discriminant(&operator) {
-                            *pos += 1;
-                            let next_term = self.parse_expression(tokens, pos)?;
-                            children.push(next_term);
-                        } else {
-                            break;
-                        }
+            // Handle multiple conditions with the same operator
+            while *pos < tokens.len() {
+                if let Token::LogicalOp(next_op) = &tokens[*pos] {
+                    if std::mem::discriminant(next_op) == std::mem::discriminant(&operator) {
+                        *pos += 1;
+                        let next_term = self.parse_expression(tokens, pos)?;
+                        children.push(next_term);
                     } else {
                         break;
                     }
+                } else {
+                    break;
                 }
-
-                return Ok(ConditionNode::Group { operator, children });
             }
+
+            return Ok(ConditionNode::Group { operator, children });
+        }
 
         Ok(left)
     }
@@ -1380,8 +1460,10 @@ impl ExpressionParser {
                         FilterOperator::NotStartsWith => FilterOperator::StartsWith,
                         FilterOperator::NotEndsWith => FilterOperator::EndsWith,
                         // Comparison operators don't have negated versions, so return error
-                        FilterOperator::GreaterThan | FilterOperator::LessThan | 
-                        FilterOperator::GreaterThanOrEqual | FilterOperator::LessThanOrEqual => {
+                        FilterOperator::GreaterThan
+                        | FilterOperator::LessThan
+                        | FilterOperator::GreaterThanOrEqual
+                        | FilterOperator::LessThanOrEqual => {
                             return Err(anyhow!("Cannot negate comparison operators"));
                         }
                     }
@@ -1472,8 +1554,10 @@ impl ExpressionParser {
                         FilterOperator::NotStartsWith => FilterOperator::StartsWith,
                         FilterOperator::NotEndsWith => FilterOperator::EndsWith,
                         // Comparison operators don't have negated versions, so return error
-                        FilterOperator::GreaterThan | FilterOperator::LessThan | 
-                        FilterOperator::GreaterThanOrEqual | FilterOperator::LessThanOrEqual => {
+                        FilterOperator::GreaterThan
+                        | FilterOperator::LessThan
+                        | FilterOperator::GreaterThanOrEqual
+                        | FilterOperator::LessThanOrEqual => {
                             return Err(anyhow!("Cannot negate comparison operators"));
                         }
                     }
@@ -1595,8 +1679,6 @@ impl ExpressionParser {
             value,
         })
     }
-
-
 }
 
 #[derive(Debug, Clone)]
@@ -1786,7 +1868,9 @@ mod tests {
         let parser = FilterParser::new();
 
         // Test starts_with
-        let result = parser.parse("channel_name starts_with \"StreamCast\"").unwrap();
+        let result = parser
+            .parse("channel_name starts_with \"StreamCast\"")
+            .unwrap();
         match result.root {
             ConditionNode::Condition {
                 operator,
@@ -2024,11 +2108,19 @@ mod tests {
         let parser = FilterParser::new();
 
         // Valid action should pass validation
-        assert!(parser.validate("channel_name contains \"sport\" SET group_title = \"Sports\"").is_valid);
+        assert!(
+            parser
+                .validate("channel_name contains \"sport\" SET group_title = \"Sports\"")
+                .is_valid
+        );
 
         // Note: Field validation is not enabled by default in FilterParser::new()
         // so any field name is accepted - this is the correct behavior
-        assert!(parser.validate("channel_name contains \"sport\" SET invalid_field = \"value\"").is_valid);
+        assert!(
+            parser
+                .validate("channel_name contains \"sport\" SET invalid_field = \"value\"")
+                .is_valid
+        );
 
         // Too long value should fail validation
         let long_value = "a".repeat(300);
@@ -2162,7 +2254,10 @@ mod tests {
                     ConditionNode::Condition {
                         operator, negate, ..
                     } => {
-                        assert!(matches!(operator, crate::models::FilterOperator::NotMatches));
+                        assert!(matches!(
+                            operator,
+                            crate::models::FilterOperator::NotMatches
+                        ));
                         assert!(!*negate); // NotMatches operator with negate = false
                     }
                     _ => panic!("Expected condition with NotMatches operator"),
@@ -2233,9 +2328,7 @@ mod tests {
         // Empty group
         assert!(
             !parser
-                .validate(
-                    "() AND (channel_name contains \"test\" SET group_title = \"Test\")"
-                )
+                .validate("() AND (channel_name contains \"test\" SET group_title = \"Test\")")
                 .is_valid
         );
 
@@ -2615,7 +2708,11 @@ mod tests {
 
         // Note: Field validation is not enabled by default in FilterParser::new()
         // so any field name is accepted - this is the correct behavior
-        assert!(parser.validate("invalid_field contains \"test\" SET group_title = \"Test\"").is_valid);
+        assert!(
+            parser
+                .validate("invalid_field contains \"test\" SET group_title = \"Test\"")
+                .is_valid
+        );
     }
 
     #[test]
@@ -2633,9 +2730,13 @@ mod tests {
         assert!(parser.validate("group_title equals \"Sports\"").is_valid);
         assert!(parser.validate("stream_url starts_with \"https\"").is_valid);
 
-        // Test valid complex expressions  
+        // Test valid complex expressions
         assert!(parser.validate("(channel_name contains \"HD\" OR group_title equals \"Movies\") AND stream_url starts_with \"https\"").is_valid);
-        assert!(parser.validate("channel_name not contains \"SD\" AND tvg_id matches \"^[0-9]+$\"").is_valid);
+        assert!(
+            parser
+                .validate("channel_name not contains \"SD\" AND tvg_id matches \"^[0-9]+$\"")
+                .is_valid
+        );
 
         // Test invalid field names (should fail with proper field validation)
         assert!(!parser.validate("invalid_field contains \"test\"").is_valid);
@@ -2659,33 +2760,46 @@ mod tests {
 
     #[test]
     fn test_field_validation_edge_cases() {
-        let valid_fields = vec![
-            "channel_name".to_string(),
-            "group_title".to_string(),
-        ];
+        let valid_fields = vec!["channel_name".to_string(), "group_title".to_string()];
         let parser = ExpressionParser::new().with_fields(valid_fields);
 
         // Test case sensitivity in field names
         assert!(!parser.validate("CHANNEL_NAME contains \"HD\"").is_valid);
         assert!(!parser.validate("Channel_Name contains \"HD\"").is_valid);
-        
+
         // Test partial field name matches (should fail)
         assert!(!parser.validate("channel contains \"HD\"").is_valid);
         assert!(!parser.validate("name contains \"HD\"").is_valid);
-        
+
         // Test field names with special characters (valid fields should work)
         let special_parser = ExpressionParser::new().with_fields(vec![
             "field-with-dash".to_string(),
             "field_with_underscore".to_string(),
             "field123".to_string(),
         ]);
-        assert!(special_parser.validate("field-with-dash contains \"test\"").is_valid);
-        assert!(special_parser.validate("field_with_underscore contains \"test\"").is_valid);
-        assert!(special_parser.validate("field123 contains \"test\"").is_valid);
-        
+        assert!(
+            special_parser
+                .validate("field-with-dash contains \"test\"")
+                .is_valid
+        );
+        assert!(
+            special_parser
+                .validate("field_with_underscore contains \"test\"")
+                .is_valid
+        );
+        assert!(
+            special_parser
+                .validate("field123 contains \"test\"")
+                .is_valid
+        );
+
         // Test completely empty field list (should skip validation)
         let no_fields_parser = ExpressionParser::new().with_fields(vec![]);
-        assert!(no_fields_parser.validate("any_field contains \"test\"").is_valid);
+        assert!(
+            no_fields_parser
+                .validate("any_field contains \"test\"")
+                .is_valid
+        );
     }
 
     #[test]
@@ -2698,44 +2812,68 @@ mod tests {
         let parser = ExpressionParser::new().with_fields(valid_fields);
 
         // Test valid expressions with actions
-        assert!(parser.validate("channel_name contains \"HD\" SET group_title = \"High Definition\"").is_valid);
+        assert!(
+            parser
+                .validate("channel_name contains \"HD\" SET group_title = \"High Definition\"")
+                .is_valid
+        );
         // Note: Complex string functions like SUBSTRING are not supported by the current parser
-        assert!(parser.validate("stream_url starts_with \"http\" SET stream_url = \"https://example.com\"").is_valid);
+        assert!(
+            parser
+                .validate(
+                    "stream_url starts_with \"http\" SET stream_url = \"https://example.com\""
+                )
+                .is_valid
+        );
 
         // Test invalid field in condition
-        assert!(!parser.validate("invalid_field contains \"test\" SET group_title = \"Test\"").is_valid);
-        
+        assert!(
+            !parser
+                .validate("invalid_field contains \"test\" SET group_title = \"Test\"")
+                .is_valid
+        );
+
         // Test invalid field in action
-        assert!(!parser.validate("channel_name contains \"test\" SET invalid_field = \"Test\"").is_valid);
-        
+        assert!(
+            !parser
+                .validate("channel_name contains \"test\" SET invalid_field = \"Test\"")
+                .is_valid
+        );
+
         // Test valid condition with invalid action field
-        assert!(!parser.validate("channel_name contains \"HD\" SET unknown_field = \"Test\"").is_valid);
+        assert!(
+            !parser
+                .validate("channel_name contains \"HD\" SET unknown_field = \"Test\"")
+                .is_valid
+        );
     }
 
-    #[test] 
+    #[test]
     fn test_validation_error_messages() {
-        let valid_fields = vec![
-            "channel_name".to_string(),
-            "group_title".to_string(),
-        ];
+        let valid_fields = vec!["channel_name".to_string(), "group_title".to_string()];
         let parser = ExpressionParser::new().with_fields(valid_fields);
 
         // Test that error messages contain helpful information
         let result = parser.validate("invalid_field contains \"test\"");
-        assert!(!result.is_valid, "Expected validation to fail for invalid field");
+        assert!(
+            !result.is_valid,
+            "Expected validation to fail for invalid field"
+        );
         assert!(!result.errors.is_empty());
         let error_msg = result.errors[0].message.clone();
         assert!(error_msg.contains("Unknown field") || error_msg.contains("Field"));
 
         // Test syntax error messages
         let result = parser.validate("channel_name contains");
-        assert!(!result.is_valid, "Expected validation to fail for incomplete expression");
+        assert!(
+            !result.is_valid,
+            "Expected validation to fail for incomplete expression"
+        );
         assert!(!result.errors.is_empty());
         let error_msg = result.errors[0].message.clone();
         // Should contain some indication of syntax error
         assert!(!error_msg.is_empty());
     }
-
 
     #[test]
     fn test_complex_nested_expressions() {
@@ -2813,12 +2951,19 @@ mod tests {
         let parser = ExpressionParser::new();
 
         // Test invalid logical operator
-        let result = parser.validate("channel_name contains \"test\" && group_title equals \"value\"");
+        let result =
+            parser.validate("channel_name contains \"test\" && group_title equals \"value\"");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Operator);
         assert_eq!(result.errors[0].error_type, "invalid_logical_operator");
-        assert!(result.errors[0].suggestion.as_ref().unwrap().contains("AND"));
+        assert!(
+            result.errors[0]
+                .suggestion
+                .as_ref()
+                .unwrap()
+                .contains("AND")
+        );
 
         // Test operator typo
         let result = parser.validate("channel_name containz \"test\"");
@@ -2826,7 +2971,13 @@ mod tests {
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Operator);
         assert_eq!(result.errors[0].error_type, "operator_typo");
-        assert!(result.errors[0].suggestion.as_ref().unwrap().contains("contains"));
+        assert!(
+            result.errors[0]
+                .suggestion
+                .as_ref()
+                .unwrap()
+                .contains("contains")
+        );
     }
 
     #[test]
@@ -2839,7 +2990,11 @@ mod tests {
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Value);
         assert_eq!(result.errors[0].error_type, "invalid_regex");
-        assert!(result.errors[0].message.contains("Invalid regular expression"));
+        assert!(
+            result.errors[0]
+                .message
+                .contains("Invalid regular expression")
+        );
     }
 
     #[test]
@@ -2856,7 +3011,7 @@ mod tests {
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].category, ExpressionErrorCategory::Field);
-        
+
         // Should suggest similar field name
         let suggestion = result.errors[0].suggestion.as_ref().unwrap();
         assert!(suggestion.contains("channel_name") || suggestion.contains("Available fields"));
@@ -2884,14 +3039,12 @@ mod tests {
 
     #[test]
     fn test_structured_validation_actions() {
-        let valid_fields = vec![
-            "channel_name".to_string(),
-            "group_title".to_string(),
-        ];
+        let valid_fields = vec!["channel_name".to_string(), "group_title".to_string()];
         let parser = ExpressionParser::new().with_fields(valid_fields);
 
         // Test valid action expression
-        let result = parser.validate("channel_name contains \"HD\" SET group_title = \"High Definition\"");
+        let result =
+            parser.validate("channel_name contains \"HD\" SET group_title = \"High Definition\"");
         assert!(result.is_valid);
         assert!(result.errors.is_empty());
         assert!(result.expression_tree.is_some());
@@ -2920,12 +3073,12 @@ mod tests {
         let result = parser.validate("channel_name containz");
         assert!(!result.is_valid);
         assert_eq!(result.errors.len(), 1);
-        
+
         let error = &result.errors[0];
         assert!(error.context.is_some());
         assert!(error.suggestion.is_some());
         assert!(error.details.is_some());
-        
+
         // Position should be provided for tokenization errors
         if error.error_type == "operator_typo" {
             assert!(error.position.is_some());
@@ -2942,25 +3095,31 @@ mod tests {
         #[test]
         fn test_time_helper_with_parse_flexible() {
             let parser = FilterParser::new();
-            
+
             // Test various time formats that should work with parse_flexible()
             let time_formats = [
-                "@time:2024-01-15T10:30:00Z",           // RFC3339
-                "@time:2024-01-15 10:30:00",            // SQLite format
-                "@time:15/01/2024 10:30:00",            // European format
-                "@time:01/15/2024 10:30:00",            // US format
-                "@time:20240115103000 +0000",           // XMLTV format
-                "@time:1705315800",                      // Unix timestamp
+                "@time:2024-01-15T10:30:00Z", // RFC3339
+                "@time:2024-01-15 10:30:00",  // SQLite format
+                "@time:15/01/2024 10:30:00",  // European format
+                "@time:01/15/2024 10:30:00",  // US format
+                "@time:20240115103000 +0000", // XMLTV format
+                "@time:1705315800",           // Unix timestamp
             ];
-            
+
             for time_format in &time_formats {
                 let expr = format!("last_updated greater_than \"{time_format}\"");
                 let result = parser.parse(&expr);
-                
+
                 assert!(result.is_ok(), "Failed to parse time format: {time_format}");
-                
+
                 if let Ok(parsed) = result {
-                    if let ConditionNode::Condition { field, operator, value, .. } = &parsed.root {
+                    if let ConditionNode::Condition {
+                        field,
+                        operator,
+                        value,
+                        ..
+                    } = &parsed.root
+                    {
                         assert_eq!(field, "last_updated");
                         assert!(matches!(operator, FilterOperator::GreaterThan));
                         assert!(value.starts_with("@time:"));
@@ -2975,41 +3134,47 @@ mod tests {
         #[test]
         fn test_time_helper_validation() {
             let parser = ExpressionParser::new();
-            
+
             // Test valid time expressions
             let valid_expressions = [
                 "last_updated greater_than \"@time:2024-01-15T10:30:00Z\"",
                 "created_at greater_than_or_equal \"@time:1705315800\"",
                 "updated_at less_than \"@time:2024-01-15 10:30:00\"",
             ];
-            
+
             for expr in &valid_expressions {
                 let result = parser.validate(expr);
                 assert!(result.is_valid, "Valid time expression should pass: {expr}");
             }
-            
+
             // Test that "not" modifier syntax also works
             let test_expr = "channel_name not contains \"HD\"";
             let result = parser.validate(test_expr);
-            assert!(result.is_valid, "Not modifier syntax should work: {test_expr}");
+            assert!(
+                result.is_valid,
+                "Not modifier syntax should work: {test_expr}"
+            );
         }
 
         /// Test time helper error handling
         #[test]
         fn test_time_helper_error_handling() {
             let parser = FilterParser::new();
-            
+
             // Test time helpers that might cause parsing issues
             let expressions_with_potential_issues = [
                 "last_updated greater_than \"@time:invalid-date\"",
-                "created_at greater_than_or_equal \"@time:\"",  // Empty time value
-                "updated_at less_than \"@time:2024-99-99\"", // Invalid date
+                "created_at greater_than_or_equal \"@time:\"", // Empty time value
+                "updated_at less_than \"@time:2024-99-99\"",   // Invalid date
             ];
-            
+
             for expr in &expressions_with_potential_issues {
                 let result = parser.parse(expr);
                 // Should parse successfully (validation happens during execution)
-                assert!(result.is_ok(), "Expression should parse even with potentially invalid time: {expr}");
+                assert!(
+                    result.is_ok(),
+                    "Expression should parse even with potentially invalid time: {expr}"
+                );
             }
         }
 
@@ -3017,25 +3182,37 @@ mod tests {
         #[test]
         fn test_time_helper_with_comparison_operators() {
             let parser = FilterParser::new();
-            
+
             // Test time range queries
             let expr = "last_updated greater_than_or_equal \"@time:2024-01-01T00:00:00Z\" AND last_updated less_than_or_equal \"@time:2024-12-31T23:59:59Z\"";
             let result = parser.parse(expr).unwrap();
-            
+
             // Use logical expression helper to validate structure
             if let ConditionNode::Group { operator, children } = &result.root {
                 assert!(matches!(operator, LogicalOperator::And));
                 assert_eq!(children.len(), 2);
-                
+
                 // Validate first condition
-                if let ConditionNode::Condition { field, operator, value, .. } = &children[0] {
+                if let ConditionNode::Condition {
+                    field,
+                    operator,
+                    value,
+                    ..
+                } = &children[0]
+                {
                     assert_eq!(field, "last_updated");
                     assert!(matches!(operator, FilterOperator::GreaterThanOrEqual));
                     assert!(value.contains("2024-01-01"));
                 }
-                
+
                 // Validate second condition
-                if let ConditionNode::Condition { field, operator, value, .. } = &children[1] {
+                if let ConditionNode::Condition {
+                    field,
+                    operator,
+                    value,
+                    ..
+                } = &children[1]
+                {
                     assert_eq!(field, "last_updated");
                     assert!(matches!(operator, FilterOperator::LessThanOrEqual));
                     assert!(value.contains("2024-12-31"));
@@ -3049,20 +3226,26 @@ mod tests {
         #[test]
         fn test_time_helper_in_data_mapping() {
             let parser = FilterParser::new();
-            
+
             let expr = "last_updated greater_than \"@time:2024-01-01T00:00:00Z\" SET group_title = \"Recent Content\"";
             let result = parser.parse_extended(expr).unwrap();
-            
+
             match result {
                 ExtendedExpression::ConditionWithActions { condition, actions } => {
-                    if let ConditionNode::Condition { field, operator, value, .. } = &condition.root {
+                    if let ConditionNode::Condition {
+                        field,
+                        operator,
+                        value,
+                        ..
+                    } = &condition.root
+                    {
                         assert_eq!(field, "last_updated");
                         assert!(matches!(operator, FilterOperator::GreaterThan));
                         assert!(value.starts_with("@time:"));
                     } else {
                         panic!("Expected condition node");
                     }
-                    
+
                     assert_eq!(actions.len(), 1);
                     assert_eq!(actions[0].field, "group_title");
                 }

@@ -3,12 +3,12 @@
 //! This provides a database-agnostic repository for LastKnownCodec operations using SeaORM.
 
 use anyhow::Result;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, ColumnTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::entities::{prelude::LastKnownCodecs, last_known_codecs};
-use crate::models::last_known_codec::{LastKnownCodec, CreateLastKnownCodecRequest, ProbeMethod};
+use crate::entities::{last_known_codecs, prelude::LastKnownCodecs};
+use crate::models::last_known_codec::{CreateLastKnownCodecRequest, LastKnownCodec, ProbeMethod};
 
 /// SeaORM-based repository for LastKnownCodec operations
 pub struct LastKnownCodecSeaOrmRepository {
@@ -22,7 +22,11 @@ impl LastKnownCodecSeaOrmRepository {
     }
 
     /// Create or update codec information for a stream (upsert operation)
-    pub async fn upsert_codec_info(&self, stream_url: &str, request: CreateLastKnownCodecRequest) -> Result<LastKnownCodec> {
+    pub async fn upsert_codec_info(
+        &self,
+        stream_url: &str,
+        request: CreateLastKnownCodecRequest,
+    ) -> Result<LastKnownCodec> {
         // Check if there's already a codec record for this stream
         let existing = LastKnownCodecs::find()
             .filter(last_known_codecs::Column::StreamUrl.eq(stream_url))
@@ -35,7 +39,7 @@ impl LastKnownCodecSeaOrmRepository {
             Some(existing_model) => {
                 // Update existing record
                 let mut active_model: last_known_codecs::ActiveModel = existing_model.into();
-                
+
                 active_model.video_codec = Set(request.video_codec);
                 active_model.audio_codec = Set(request.audio_codec);
                 active_model.container_format = Set(request.container_format);
@@ -57,7 +61,7 @@ impl LastKnownCodecSeaOrmRepository {
             None => {
                 // Create new record
                 let id = Uuid::new_v4();
-                
+
                 let active_model = last_known_codecs::ActiveModel {
                     id: Set(id),
                     stream_url: Set(stream_url.to_string()),
@@ -105,16 +109,16 @@ impl LastKnownCodecSeaOrmRepository {
     /// Convert SeaORM model to domain model
     fn model_to_domain(&self, model: last_known_codecs::Model) -> Result<LastKnownCodec> {
         use std::str::FromStr;
-        
+
         let id = model.id;
         let stream_url = model.stream_url;
         let detected_at = model.detected_at;
         let created_at = model.created_at;
         let updated_at = model.updated_at;
-        
+
         let probe_method = ProbeMethod::from_str(&model.probe_method)
             .map_err(|e| anyhow::anyhow!("Invalid probe method: {}", e))?;
-        
+
         Ok(LastKnownCodec {
             id,
             stream_url,

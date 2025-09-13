@@ -4,12 +4,12 @@
 //! that works across SQLite, PostgreSQL, and MySQL databases.
 
 use anyhow::Result;
-use sea_orm::{DatabaseConnection, EntityTrait, QueryOrder, ActiveModelTrait, Set, ModelTrait};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, ModelTrait, QueryOrder, Set};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::entities::{relay_profiles, prelude::*};
-use crate::models::relay::{RelayProfile, CreateRelayProfileRequest, UpdateRelayProfileRequest};
+use crate::entities::{prelude::*, relay_profiles};
+use crate::models::relay::{CreateRelayProfileRequest, RelayProfile, UpdateRelayProfileRequest};
 
 /// SeaORM-based Relay repository
 #[derive(Clone)]
@@ -40,7 +40,9 @@ impl RelaySeaOrmRepository {
             audio_bitrate: Set(request.audio_bitrate.map(|v| v as i32)),
             audio_sample_rate: Set(request.audio_sample_rate.map(|v| v as i32)),
             audio_channels: Set(request.audio_channels.map(|v| v as i32)),
-            enable_hardware_acceleration: Set(request.enable_hardware_acceleration.unwrap_or(false)),
+            enable_hardware_acceleration: Set(request
+                .enable_hardware_acceleration
+                .unwrap_or(false)),
             preferred_hwaccel: Set(request.preferred_hwaccel.clone()),
             manual_args: Set(request.manual_args.clone()),
             output_format: Set(request.output_format.to_string()),
@@ -70,18 +72,25 @@ impl RelaySeaOrmRepository {
             .all(&*self.connection)
             .await?;
 
-        Ok(models.into_iter().map(|m| self.model_to_domain(m)).collect())
+        Ok(models
+            .into_iter()
+            .map(|m| self.model_to_domain(m))
+            .collect())
     }
 
     /// Update relay profile
-    pub async fn update(&self, id: Uuid, request: UpdateRelayProfileRequest) -> Result<RelayProfile> {
+    pub async fn update(
+        &self,
+        id: Uuid,
+        request: UpdateRelayProfileRequest,
+    ) -> Result<RelayProfile> {
         let model = RelayProfiles::find_by_id(id)
             .one(&*self.connection)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Relay profile not found"))?;
 
         let mut active_model: relay_profiles::ActiveModel = model.into();
-        
+
         if let Some(name) = request.name {
             active_model.name = Set(name);
         }
@@ -114,17 +123,15 @@ impl RelaySeaOrmRepository {
 
     /// Convert SeaORM model to domain model (only enum parsing needed)
     fn model_to_domain(&self, model: relay_profiles::Model) -> RelayProfile {
+        use crate::models::relay::{AudioCodec, RelayOutputFormat, VideoCodec};
         use std::str::FromStr;
-        use crate::models::relay::{VideoCodec, AudioCodec, RelayOutputFormat};
-        
+
         RelayProfile {
             id: model.id,
             name: model.name,
             description: model.description,
-            video_codec: VideoCodec::from_str(&model.video_codec)
-                .unwrap_or(VideoCodec::H264), // graceful fallback
-            audio_codec: AudioCodec::from_str(&model.audio_codec)
-                .unwrap_or(AudioCodec::AAC), // graceful fallback  
+            video_codec: VideoCodec::from_str(&model.video_codec).unwrap_or(VideoCodec::H264), // graceful fallback
+            audio_codec: AudioCodec::from_str(&model.audio_codec).unwrap_or(AudioCodec::AAC), // graceful fallback
             video_profile: model.video_profile,
             video_preset: model.video_preset,
             video_bitrate: model.video_bitrate.map(|v| v as u32),

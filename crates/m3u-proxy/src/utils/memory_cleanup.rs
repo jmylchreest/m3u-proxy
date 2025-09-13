@@ -163,10 +163,11 @@ impl MemoryCleanupCoordinator {
             let status = std::fs::read_to_string("/proc/self/status")?;
             for line in status.lines() {
                 if line.starts_with("VmRSS:")
-                    && let Some(kb_str) = line.split_whitespace().nth(1) {
-                        let kb: f64 = kb_str.parse()?;
-                        return Ok(kb / 1024.0); // Convert KB to MB
-                    }
+                    && let Some(kb_str) = line.split_whitespace().nth(1)
+                {
+                    let kb: f64 = kb_str.parse()?;
+                    return Ok(kb / 1024.0); // Convert KB to MB
+                }
             }
         }
 

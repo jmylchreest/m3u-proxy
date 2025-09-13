@@ -9,26 +9,25 @@ use crate::{
     config::StorageConfig,
     data_mapping::DataMappingService,
     database::Database,
-    errors::types::AppError,
-    logo_assets::service::LogoAssetService,
-    models::{
-        GenerationOutput, StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest,
-    },
     // TODO: Remove - superseded by pipeline-based filtering
     database::repositories::{
-        ChannelSeaOrmRepository, FilterSeaOrmRepository, StreamProxySeaOrmRepository, StreamSourceSeaOrmRepository,
+        ChannelSeaOrmRepository, FilterSeaOrmRepository, StreamProxySeaOrmRepository,
+        StreamSourceSeaOrmRepository,
     },
+    errors::types::AppError,
+    logo_assets::service::LogoAssetService,
+    models::{GenerationOutput, StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest},
     web::handlers::proxies::{PreviewProxyRequest, PreviewProxyResponse, StreamProxyResponse},
 };
 use sandboxed_file_manager::SandboxedManager;
 
 pub struct StreamProxyService {
     proxy_repo: StreamProxySeaOrmRepository,
-    
+
     channel_repo: ChannelSeaOrmRepository,
     filter_repo: FilterSeaOrmRepository,
     stream_source_repo: StreamSourceSeaOrmRepository,
-    
+
     // TODO: Remove - superseded by pipeline-based filtering
     database: Database,
     preview_file_manager: SandboxedManager,
@@ -40,7 +39,6 @@ pub struct StreamProxyService {
     proxy_output_file_manager: SandboxedManager,
     _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
-
 
 /// Builder for StreamProxyService with many dependencies
 pub struct StreamProxyServiceBuilder {
@@ -69,7 +67,7 @@ impl StreamProxyService {
     pub fn new(builder: StreamProxyServiceBuilder) -> Self {
         Self::new_from_builder(builder)
     }
-    
+
     fn new_from_builder(builder: StreamProxyServiceBuilder) -> Self {
         Self {
             proxy_repo: builder.proxy_repo,
@@ -99,7 +97,11 @@ impl StreamProxyService {
 
         // Extract relationship IDs from request
         let source_ids: Vec<Uuid> = request.stream_sources.iter().map(|s| s.source_id).collect();
-        let epg_source_ids: Vec<Uuid> = request.epg_sources.iter().map(|e| e.epg_source_id).collect();
+        let epg_source_ids: Vec<Uuid> = request
+            .epg_sources
+            .iter()
+            .map(|e| e.epg_source_id)
+            .collect();
 
         // Create the proxy with all relationships
         let proxy = self
@@ -135,7 +137,11 @@ impl StreamProxyService {
 
         // Extract relationship IDs from request
         let source_ids: Vec<Uuid> = request.stream_sources.iter().map(|s| s.source_id).collect();
-        let epg_source_ids: Vec<Uuid> = request.epg_sources.iter().map(|e| e.epg_source_id).collect();
+        let epg_source_ids: Vec<Uuid> = request
+            .epg_sources
+            .iter()
+            .map(|e| e.epg_source_id)
+            .collect();
 
         // Update the proxy with all relationships
         let proxy = self
@@ -188,14 +194,10 @@ impl StreamProxyService {
         _offset: Option<usize>,
     ) -> Result<Vec<StreamProxyResponse>, AppError> {
         tracing::debug!("StreamProxyService::list called");
-        let proxies = self
-            .proxy_repo
-            .find_all()
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to find all proxies: {}", e);
-                AppError::Repository(crate::errors::RepositoryError::UuidParse(e))
-            })?;
+        let proxies = self.proxy_repo.find_all().await.map_err(|e| {
+            tracing::error!("Failed to find all proxies: {}", e);
+            AppError::Repository(crate::errors::RepositoryError::UuidParse(e))
+        })?;
 
         tracing::debug!("Found {} proxies", proxies.len());
         let mut responses = Vec::new();
@@ -326,11 +328,8 @@ impl StreamProxyService {
             included_channels: proxy_generation.filtered_channels,
             // Enhanced pipeline metrics from GenerationStats (fix types)
             pipeline_stages: generation_stats.map(|gs| gs.stage_timings.len()),
-            filter_execution_time: generation_stats.and_then(|gs| {
-                gs.stage_timings
-                    .get("filtering")
-                    .map(|&t| format!("{t}ms"))
-            }),
+            filter_execution_time: generation_stats
+                .and_then(|gs| gs.stage_timings.get("filtering").map(|&t| format!("{t}ms"))),
             processing_rate: generation_stats
                 .map(|gs| format!("{:.1} ch/s", gs.channels_per_second)),
             pipeline_stages_detail: generation_stats.map(|gs| {
@@ -499,9 +498,10 @@ impl StreamProxyService {
     fn extract_attribute(line: &str, attr: &str) -> Option<String> {
         let pattern = format!(r#"{attr}="([^"]*)""#);
         if let Ok(re) = Regex::new(&pattern)
-            && let Some(captures) = re.captures(line) {
-                return captures.get(1).map(|m| m.as_str().to_string());
-            }
+            && let Some(captures) = re.captures(line)
+        {
+            return captures.get(1).map(|m| m.as_str().to_string());
+        }
         None
     }
 
@@ -597,8 +597,16 @@ impl StreamProxyService {
             stream_sources,
             epg_sources,
             filters,
-            m3u8_url: format!("{}/proxy/{}/m3u8", self.app_config.web.base_url.trim_end_matches('/'), crate::utils::uuid_parser::uuid_to_base64(&proxy.id)),
-            xmltv_url: format!("{}/proxy/{}/xmltv", self.app_config.web.base_url.trim_end_matches('/'), crate::utils::uuid_parser::uuid_to_base64(&proxy.id)),
+            m3u8_url: format!(
+                "{}/proxy/{}/m3u8",
+                self.app_config.web.base_url.trim_end_matches('/'),
+                crate::utils::uuid_parser::uuid_to_base64(&proxy.id)
+            ),
+            xmltv_url: format!(
+                "{}/proxy/{}/xmltv",
+                self.app_config.web.base_url.trim_end_matches('/'),
+                crate::utils::uuid_parser::uuid_to_base64(&proxy.id)
+            ),
         };
 
         Ok(response)

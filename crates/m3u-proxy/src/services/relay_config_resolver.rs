@@ -8,9 +8,9 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::{
-    errors::types::AppError,
-    models::relay::{ResolvedRelayConfig, ChannelRelayConfig},
     database::repositories::relay::RelaySeaOrmRepository,
+    errors::types::AppError,
+    models::relay::{ChannelRelayConfig, ResolvedRelayConfig},
 };
 
 /// Service for resolving relay configurations from database
@@ -41,7 +41,9 @@ impl RelayConfigResolver {
             .relay_repo
             .find_by_id(relay_profile_id)
             .await
-            .map_err(|e| AppError::Internal { message: format!("Repository error: {e}") })?
+            .map_err(|e| AppError::Internal {
+                message: format!("Repository error: {e}"),
+            })?
             .ok_or_else(|| AppError::NotFound {
                 resource: "relay_profile".to_string(),
                 id: relay_profile_id.to_string(),
@@ -50,12 +52,15 @@ impl RelayConfigResolver {
         // For now, always create temporary channel config since find_channel_config is not implemented
         // TODO: Implement find_channel_config in RelaySeaOrmRepository
         debug!("Creating temporary channel relay config");
-        let channel_config = self.create_temporary_channel_config(proxy_id, channel_id, relay_profile_id);
+        let channel_config =
+            self.create_temporary_channel_config(proxy_id, channel_id, relay_profile_id);
 
         // Create resolved configuration
-        let resolved_config = ResolvedRelayConfig::new(channel_config, relay_profile)
-            .map_err(|e| AppError::Internal {
-                message: format!("Failed to resolve relay configuration: {e}"),
+        let resolved_config =
+            ResolvedRelayConfig::new(channel_config, relay_profile).map_err(|e| {
+                AppError::Internal {
+                    message: format!("Failed to resolve relay configuration: {e}"),
+                }
             })?;
 
         info!(
@@ -76,7 +81,7 @@ impl RelayConfigResolver {
         // Generate deterministic UUID for consistent identification
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let deterministic_id = {
             let mut hasher = DefaultHasher::new();
             proxy_id.hash(&mut hasher);
@@ -108,7 +113,10 @@ impl RelayConfigResolver {
             });
         }
 
-        debug!("Relay configuration validated: profile='{}'", config.profile.name);
+        debug!(
+            "Relay configuration validated: profile='{}'",
+            config.profile.name
+        );
         Ok(())
     }
 }
@@ -116,7 +124,7 @@ impl RelayConfigResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::relay::{RelayProfile, VideoCodec, AudioCodec, RelayOutputFormat};
+    use crate::models::relay::{AudioCodec, RelayOutputFormat, RelayProfile, VideoCodec};
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -142,8 +150,11 @@ mod tests {
         profile_id.hash(&mut hasher2);
         let hash2 = hasher2.finish();
         let id2 = Uuid::from_u128(hash2 as u128);
-        
-        assert_eq!(expected_id, id2, "Same inputs should produce same deterministic ID");
+
+        assert_eq!(
+            expected_id, id2,
+            "Same inputs should produce same deterministic ID"
+        );
 
         // Test different inputs produce different IDs
         let different_proxy_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440999").unwrap();
@@ -153,8 +164,11 @@ mod tests {
         profile_id.hash(&mut hasher3);
         let hash3 = hasher3.finish();
         let id3 = Uuid::from_u128(hash3 as u128);
-        
-        assert_ne!(expected_id, id3, "Different inputs should produce different IDs");
+
+        assert_ne!(
+            expected_id, id3,
+            "Different inputs should produce different IDs"
+        );
     }
 
     fn create_test_relay_profile(id: Uuid, name: &str) -> RelayProfile {
@@ -207,19 +221,21 @@ mod tests {
     async fn test_validate_config_with_active_config() {
         // Test the validation logic without requiring a database
         // Since validate_config doesn't use the repository, we can test it in isolation
-        
+
         // Create test data
         let profile = create_test_relay_profile(Uuid::new_v4(), "test-profile");
-        let mut channel_config = create_test_channel_config(Uuid::new_v4(), Uuid::new_v4(), profile.id);
+        let mut channel_config =
+            create_test_channel_config(Uuid::new_v4(), Uuid::new_v4(), profile.id);
         channel_config.is_active = true;
 
         let resolved_config = ResolvedRelayConfig::new(channel_config, profile).unwrap();
-        
+
         // Create a dummy resolver (we won't use the repository part)
         use sea_orm::Database;
-        let dummy_connection = Database::connect("sqlite::memory:")
-            .await.unwrap();
-        let dummy_repo = crate::database::repositories::relay::RelaySeaOrmRepository::new(dummy_connection.into());
+        let dummy_connection = Database::connect("sqlite::memory:").await.unwrap();
+        let dummy_repo = crate::database::repositories::relay::RelaySeaOrmRepository::new(
+            dummy_connection.into(),
+        );
         let resolver = RelayConfigResolver::new(dummy_repo);
 
         let result = resolver.validate_config(&resolved_config);
@@ -230,29 +246,34 @@ mod tests {
     async fn test_validate_config_with_inactive_config() {
         // Test the validation logic with inactive config
         let profile = create_test_relay_profile(Uuid::new_v4(), "test-profile");
-        let mut channel_config = create_test_channel_config(Uuid::new_v4(), Uuid::new_v4(), profile.id);
+        let mut channel_config =
+            create_test_channel_config(Uuid::new_v4(), Uuid::new_v4(), profile.id);
         channel_config.is_active = false;
 
         let resolved_config = ResolvedRelayConfig::new(channel_config, profile).unwrap();
-        
+
         // Create a dummy resolver (we won't use the repository part)
         use sea_orm::Database;
-        let dummy_connection = Database::connect("sqlite::memory:")
-            .await.unwrap();
-        let dummy_repo = crate::database::repositories::relay::RelaySeaOrmRepository::new(dummy_connection.into());
+        let dummy_connection = Database::connect("sqlite::memory:").await.unwrap();
+        let dummy_repo = crate::database::repositories::relay::RelaySeaOrmRepository::new(
+            dummy_connection.into(),
+        );
         let resolver = RelayConfigResolver::new(dummy_repo);
 
         let result = resolver.validate_config(&resolved_config);
         assert!(result.is_err(), "Inactive config should fail validation");
-        
+
         match result {
             Err(AppError::Internal { message }) => {
-                assert!(message.contains("not active"), "Error should mention inactive state");
+                assert!(
+                    message.contains("not active"),
+                    "Error should mention inactive state"
+                );
             }
             _ => panic!("Expected Internal error for inactive config"),
         }
     }
 
-    // Note: Integration tests that require full database functionality would be placed 
+    // Note: Integration tests that require full database functionality would be placed
     // in integration test files to test the complete resolve_relay_config workflow
 }

@@ -4,14 +4,14 @@
 //! for the web layer, ensuring consistent API responses across all endpoints.
 
 use axum::{
-    http::{StatusCode, HeaderMap, HeaderValue},
-    response::{IntoResponse, Response},
     Json,
+    http::{HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use utoipa::ToSchema;
-use sha2::{Sha256, Digest};
 
 use crate::errors::{AppError, AppResult};
 
@@ -60,7 +60,10 @@ where
     }
 
     /// Create an error response with details
-    pub fn error_with_details(message: String, details: HashMap<String, String>) -> ApiResponse<()> {
+    pub fn error_with_details(
+        message: String,
+        details: HashMap<String, String>,
+    ) -> ApiResponse<()> {
         ApiResponse {
             success: false,
             data: None,
@@ -133,7 +136,11 @@ where
     T: Serialize,
 {
     match result {
-        Ok(data) => (StatusCode::OK, with_default_headers(Json(ApiResponse::success(data)))).into_response(),
+        Ok(data) => (
+            StatusCode::OK,
+            with_default_headers(Json(ApiResponse::success(data))),
+        )
+            .into_response(),
         Err(error) => handle_error(error).into_response(),
     }
 }
@@ -141,11 +148,7 @@ where
 /// Convert AppError to appropriate HTTP response
 pub fn handle_error(error: AppError) -> impl IntoResponse {
     let (status, message, details) = match &error {
-        AppError::Validation { message } => (
-            StatusCode::BAD_REQUEST,
-            message.clone(),
-            None,
-        ),
+        AppError::Validation { message } => (StatusCode::BAD_REQUEST, message.clone(), None),
         AppError::NotFound { resource, id } => (
             StatusCode::NOT_FOUND,
             format!("{resource} with id '{id}' not found"),
@@ -191,7 +194,10 @@ pub fn handle_error(error: AppError) -> impl IntoResponse {
             "Web request processing failed".to_string(),
             None,
         ),
-        AppError::OperationInProgress { operation_type, resource } => (
+        AppError::OperationInProgress {
+            operation_type,
+            resource,
+        } => (
             StatusCode::CONFLICT,
             format!("Operation already in progress: {operation_type} on {resource}"),
             None,
@@ -214,20 +220,32 @@ pub fn handle_error(error: AppError) -> impl IntoResponse {
 
 /// Success response helpers
 pub fn ok<T: Serialize>(data: T) -> impl IntoResponse {
-    (StatusCode::OK, with_default_headers(Json(ApiResponse::success(data))))
+    (
+        StatusCode::OK,
+        with_default_headers(Json(ApiResponse::success(data))),
+    )
 }
 
 pub fn created<T: Serialize>(data: T) -> impl IntoResponse {
-    (StatusCode::CREATED, with_default_headers(Json(ApiResponse::success(data))))
+    (
+        StatusCode::CREATED,
+        with_default_headers(Json(ApiResponse::success(data))),
+    )
 }
 
 /// Success response with custom cache control
 pub fn ok_with_cache<T: Serialize>(data: T, cache_control: CacheControl) -> impl IntoResponse {
-    (StatusCode::OK, with_cache_headers(Json(ApiResponse::success(data)), cache_control))
+    (
+        StatusCode::OK,
+        with_cache_headers(Json(ApiResponse::success(data)), cache_control),
+    )
 }
 
 pub fn created_with_cache<T: Serialize>(data: T, cache_control: CacheControl) -> impl IntoResponse {
-    (StatusCode::CREATED, with_cache_headers(Json(ApiResponse::success(data)), cache_control))
+    (
+        StatusCode::CREATED,
+        with_cache_headers(Json(ApiResponse::success(data)), cache_control),
+    )
 }
 
 pub fn no_content() -> impl IntoResponse {
@@ -245,7 +263,9 @@ pub fn bad_request(message: &str) -> impl IntoResponse {
 pub fn not_found(resource: &str, id: &str) -> impl IntoResponse {
     (
         StatusCode::NOT_FOUND,
-        with_default_headers(Json(ApiResponse::<()>::error(format!("{resource} with id '{id}' not found")))),
+        with_default_headers(Json(ApiResponse::<()>::error(format!(
+            "{resource} with id '{id}' not found"
+        )))),
     )
 }
 
@@ -510,40 +530,44 @@ where
     T: Serialize,
 {
     let mut headers = HeaderMap::new();
-    
+
     // Add cache-control header
     if let Ok(cache_value) = HeaderValue::from_str(&cache_control.header_value()) {
         headers.insert("cache-control", cache_value);
     }
-    
+
     // Add ETag header - serialize the inner value for ETag generation
     let etag = generate_etag(&response.0);
     if let Ok(etag_value) = HeaderValue::from_str(&etag) {
         headers.insert("etag", etag_value);
     }
-    
+
     (headers, response)
 }
 
 /// Add cache headers and ETag to raw bytes response
-pub fn with_cache_headers_bytes(data: Vec<u8>, cache_control: CacheControl, content_type: &str) -> (HeaderMap, Vec<u8>) {
+pub fn with_cache_headers_bytes(
+    data: Vec<u8>,
+    cache_control: CacheControl,
+    content_type: &str,
+) -> (HeaderMap, Vec<u8>) {
     let mut headers = HeaderMap::new();
-    
+
     // Add cache-control header
     if let Ok(cache_value) = HeaderValue::from_str(&cache_control.header_value()) {
         headers.insert("cache-control", cache_value);
     }
-    
+
     // Add ETag header
     let etag = generate_etag_bytes(&data);
     if let Ok(etag_value) = HeaderValue::from_str(&etag) {
         headers.insert("etag", etag_value);
     }
-    
+
     // Add content-type header
     if let Ok(content_type_value) = HeaderValue::from_str(content_type) {
         headers.insert("content-type", content_type_value);
     }
-    
+
     (headers, data)
 }

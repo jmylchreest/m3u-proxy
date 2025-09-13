@@ -15,15 +15,15 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
 
 use crate::errors::{AppError, AppResult};
-use crate::models::{EpgSource, EpgSourceType, EpgProgram};
+use crate::models::{EpgProgram, EpgSource, EpgSourceType};
 use crate::sources::traits::{
-    EpgSourceHandler, EpgProgramIngestor, FullEpgSourceHandler, SourceValidationResult,
-    EpgSourceCapabilities, EpgSourceHandlerSummary,
+    EpgProgramIngestor, EpgSourceCapabilities, EpgSourceHandler, EpgSourceHandlerSummary,
+    FullEpgSourceHandler, SourceValidationResult,
 };
-use crate::utils::url::UrlUtils;
-use crate::utils::human_format::format_memory;
-use crate::utils::{StandardHttpClient, HttpClientFactory};
 use crate::utils::http_client::DecompressingHttpClient;
+use crate::utils::human_format::format_memory;
+use crate::utils::url::UrlUtils;
+use crate::utils::{HttpClientFactory, StandardHttpClient};
 
 /// Xtream Codes EPG source handler implementation
 pub struct XtreamEpgHandler {
@@ -39,19 +39,21 @@ impl XtreamEpgHandler {
                 .await,
         }
     }
-    
 
     /// Build the Xtream EPG URL with authentication
     fn build_epg_url(&self, source: &EpgSource) -> AppResult<String> {
-        source.build_epg_url()
+        source
+            .build_epg_url()
             .map_err(|e| AppError::source_error(format!("Failed to build EPG URL: {e}")))
     }
 
     /// Fetch EPG content from Xtream API with HTTPS/HTTP fallback and automatic decompression
     async fn fetch_xtream_epg_content(&self, source: &EpgSource) -> AppResult<String> {
         let epg_url = self.build_epg_url(source)?;
-        debug!("Fetching Xtream EPG content from: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&epg_url));
-
+        debug!(
+            "Fetching Xtream EPG content from: {}",
+            crate::utils::url::UrlUtils::obfuscate_credentials(&epg_url)
+        );
 
         // Try the original URL first - use circuit breaker-wrapped HTTP client
         match self.http_client.fetch_text(&epg_url).await {
@@ -59,24 +61,33 @@ impl XtreamEpgHandler {
             Err(e) => {
                 // If HTTPS failed and URL started with https://, try HTTP fallback
                 if epg_url.starts_with("https://") {
-                    warn!("HTTPS EPG fetch failed for '{}', trying HTTP fallback", source.name);
-                    
+                    warn!(
+                        "HTTPS EPG fetch failed for '{}', trying HTTP fallback",
+                        source.name
+                    );
+
                     let http_url = epg_url.replace("https://", "http://");
-                    debug!("Fetching Xtream EPG content from HTTP fallback: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&http_url));
-                    
+                    debug!(
+                        "Fetching Xtream EPG content from HTTP fallback: {}",
+                        crate::utils::url::UrlUtils::obfuscate_credentials(&http_url)
+                    );
+
                     match self.http_client.fetch_text(&http_url).await {
                         Ok(content) => {
-                            info!("Successfully fetched {} of Xtream EPG content using HTTP fallback", format_memory(content.len() as f64));
+                            info!(
+                                "Successfully fetched {} of Xtream EPG content using HTTP fallback",
+                                format_memory(content.len() as f64)
+                            );
                             Ok(content)
                         }
-                        Err(fallback_e) => {
-                            Err(AppError::source_error(format!(
-                                "Failed to fetch Xtream EPG: HTTPS error: {e}, HTTP fallback error: {fallback_e}"
-                            )))
-                        }
+                        Err(fallback_e) => Err(AppError::source_error(format!(
+                            "Failed to fetch Xtream EPG: HTTPS error: {e}, HTTP fallback error: {fallback_e}"
+                        ))),
                     }
                 } else {
-                    Err(AppError::source_error(format!("Failed to fetch Xtream EPG: {e}")))
+                    Err(AppError::source_error(format!(
+                        "Failed to fetch Xtream EPG: {e}"
+                    )))
                 }
             }
         }
@@ -90,38 +101,51 @@ impl XtreamEpgHandler {
     ) -> AppResult<String> {
         let epg_url = self.build_epg_url(source)?;
         let source_name = source.name.clone(); // Clone to avoid lifetime issues
-        
+
         // Update progress: Starting download
         if let Some(updater) = progress_updater {
-            updater.update_progress(10.0, "Downloading EPG data...").await;
+            updater
+                .update_progress(10.0, "Downloading EPG data...")
+                .await;
         }
-        
-        debug!("Fetching Xtream EPG content from: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&epg_url));
 
+        debug!(
+            "Fetching Xtream EPG content from: {}",
+            crate::utils::url::UrlUtils::obfuscate_credentials(&epg_url)
+        );
 
         match self.http_client.fetch_text(&epg_url).await {
             Ok(content) => Ok(content),
             Err(e) => {
                 // If HTTPS failed and URL started with https://, try HTTP fallback
                 if epg_url.starts_with("https://") {
-                    warn!("HTTPS EPG fetch failed for '{}', trying HTTP fallback", source_name);
-                    
+                    warn!(
+                        "HTTPS EPG fetch failed for '{}', trying HTTP fallback",
+                        source_name
+                    );
+
                     let http_url = epg_url.replace("https://", "http://");
-                    debug!("Fetching Xtream EPG content from HTTP fallback: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&http_url));
-                    
+                    debug!(
+                        "Fetching Xtream EPG content from HTTP fallback: {}",
+                        crate::utils::url::UrlUtils::obfuscate_credentials(&http_url)
+                    );
+
                     match self.http_client.fetch_text(&http_url).await {
                         Ok(content) => {
-                            info!("Successfully fetched {} of Xtream EPG content using HTTP fallback", format_memory(content.len() as f64));
+                            info!(
+                                "Successfully fetched {} of Xtream EPG content using HTTP fallback",
+                                format_memory(content.len() as f64)
+                            );
                             Ok(content)
                         }
-                        Err(fallback_e) => {
-                            Err(AppError::source_error(format!(
-                                "Failed to fetch Xtream EPG: HTTPS error: {e}, HTTP fallback error: {fallback_e}"
-                            )))
-                        }
+                        Err(fallback_e) => Err(AppError::source_error(format!(
+                            "Failed to fetch Xtream EPG: HTTPS error: {e}, HTTP fallback error: {fallback_e}"
+                        ))),
                     }
                 } else {
-                    Err(AppError::source_error(format!("Failed to fetch Xtream EPG: {e}")))
+                    Err(AppError::source_error(format!(
+                        "Failed to fetch Xtream EPG: {e}"
+                    )))
                 }
             }
         }
@@ -133,48 +157,63 @@ impl XtreamEpgHandler {
         source: &EpgSource,
         content: &str,
     ) -> AppResult<Vec<EpgProgram>> {
-
         // Parse using our custom quick-xml parser
         let xmltv_programs = crate::utils::xmltv_parser::parse_xmltv_programs(content)?;
 
         // Skip channel processing - programs-only approach for database-first generation
 
-
         // Convert from SimpleXmltvProgram to EpgProgram
         let mut epg_programs = Vec::new();
         let mut seen_programs = HashSet::new();
         let mut duplicate_program_count = 0;
-        
+
         for xmltv_program in xmltv_programs {
             // Create deduplication key: channel_id + start_time + program_title
-            let program_title = xmltv_program.title.as_deref()
-                .unwrap_or("Unknown Program");
-            let dedup_key = format!("{}|{}|{}", 
-                xmltv_program.channel,
-                xmltv_program.start,
-                program_title
+            let program_title = xmltv_program.title.as_deref().unwrap_or("Unknown Program");
+            let dedup_key = format!(
+                "{}|{}|{}",
+                xmltv_program.channel, xmltv_program.start, program_title
             );
-            
+
             // Skip duplicate programs
             if seen_programs.contains(&dedup_key) {
                 duplicate_program_count += 1;
-                debug!("Skipping duplicate program '{}' on channel '{}' at {}", 
-                       program_title, xmltv_program.channel, xmltv_program.start);
+                debug!(
+                    "Skipping duplicate program '{}' on channel '{}' at {}",
+                    program_title, xmltv_program.channel, xmltv_program.start
+                );
                 continue;
             }
             seen_programs.insert(dedup_key);
-            
+
             // Parse start and stop times (Xtream usually provides proper timezone info)
-            let start_time = chrono::DateTime::parse_from_str(&xmltv_program.start, "%Y%m%d%H%M%S %z")
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&xmltv_program.start, "%Y%m%d%H%M%S")
-                    .map(|dt| dt.and_utc().with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())))
-                .map_err(|e| AppError::source_error(format!("Failed to parse start time '{}': {}", xmltv_program.start, e)))?;
+            let start_time =
+                chrono::DateTime::parse_from_str(&xmltv_program.start, "%Y%m%d%H%M%S %z")
+                    .or_else(|_| {
+                        chrono::NaiveDateTime::parse_from_str(&xmltv_program.start, "%Y%m%d%H%M%S")
+                            .map(|dt| {
+                                dt.and_utc()
+                                    .with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())
+                            })
+                    })
+                    .map_err(|e| {
+                        AppError::source_error(format!(
+                            "Failed to parse start time '{}': {}",
+                            xmltv_program.start, e
+                        ))
+                    })?;
 
             let end_time = if let Some(ref stop) = xmltv_program.stop {
                 chrono::DateTime::parse_from_str(stop, "%Y%m%d%H%M%S %z")
-                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(stop, "%Y%m%d%H%M%S")
-                        .map(|dt| dt.and_utc().with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())))
-                    .map_err(|e| AppError::source_error(format!("Failed to parse stop time '{stop}': {e}")))?
+                    .or_else(|_| {
+                        chrono::NaiveDateTime::parse_from_str(stop, "%Y%m%d%H%M%S").map(|dt| {
+                            dt.and_utc()
+                                .with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())
+                        })
+                    })
+                    .map_err(|e| {
+                        AppError::source_error(format!("Failed to parse stop time '{stop}': {e}"))
+                    })?
             } else {
                 // If no stop time, estimate 30 minutes duration
                 start_time + chrono::Duration::minutes(30)
@@ -188,7 +227,9 @@ impl XtreamEpgHandler {
                 source_id: source.id,
                 channel_id: xmltv_program.channel,
                 channel_name,
-                program_title: xmltv_program.title.unwrap_or_else(|| "Unknown Program".to_string()),
+                program_title: xmltv_program
+                    .title
+                    .unwrap_or_else(|| "Unknown Program".to_string()),
                 program_description: xmltv_program.description,
                 program_category: xmltv_program.category,
                 start_time: start_time.with_timezone(&chrono::Utc),
@@ -205,17 +246,16 @@ impl XtreamEpgHandler {
             };
             epg_programs.push(epg_program);
         }
-        
+
         // Clean up deduplication set to free memory
         drop(seen_programs);
-        
+
         if duplicate_program_count > 0 {
             info!(
-                "Removed {} duplicate program entries from Xtream EPG feed for source '{}'", 
+                "Removed {} duplicate program entries from Xtream EPG feed for source '{}'",
                 duplicate_program_count, source.name
             );
         }
-
 
         info!(
             "Parsed Xtream EPG for source '{}': {} programs",
@@ -229,51 +269,56 @@ impl XtreamEpgHandler {
     /// Test Xtream authentication by making a simple API call
     async fn test_xtream_auth(&self, source: &EpgSource) -> AppResult<bool> {
         use tracing::warn;
-        
+
         if let (Some(username), Some(password)) = (&source.username, &source.password) {
             // Only skip if username is empty (password can be empty for some services)
             if username.trim().is_empty() {
-                warn!("EPG source '{}' has empty username, skipping authentication test", source.name);
+                warn!(
+                    "EPG source '{}' has empty username, skipping authentication test",
+                    source.name
+                );
                 return Ok(false);
             }
-            
+
             // Ensure URL has proper scheme (same logic as stream source handler)
-            let base_url = if source.url.starts_with("http://") || source.url.starts_with("https://") {
-                source.url.clone()
-            } else {
-                // Default to HTTPS for security
-                format!("https://{}", source.url)
-            };
-            
+            let base_url =
+                if source.url.starts_with("http://") || source.url.starts_with("https://") {
+                    source.url.clone()
+                } else {
+                    // Default to HTTPS for security
+                    format!("https://{}", source.url)
+                };
+
             let test_url = format!(
                 "{}/player_api.php?username={}&password={}&action=get_user_info",
                 base_url.trim_end_matches('/'),
                 username,
                 password
             );
-            
+
             // Try HTTPS first, fallback to HTTP if it fails (same as stream source handler)
-            
+
             match self.http_client.inner_client().get(&test_url).send().await {
                 Ok(response) => {
-                    
                     if !response.status().is_success() {
-                        warn!("EPG auth failed for source '{}' with HTTP status: {} {} - URL: {}", 
-                            source.name, 
-                            response.status().as_u16(), 
-                            response.status().canonical_reason().unwrap_or("Unknown"), 
-                            crate::utils::url::UrlUtils::obfuscate_credentials(&test_url));
+                        warn!(
+                            "EPG auth failed for source '{}' with HTTP status: {} {} - URL: {}",
+                            source.name,
+                            response.status().as_u16(),
+                            response.status().canonical_reason().unwrap_or("Unknown"),
+                            crate::utils::url::UrlUtils::obfuscate_credentials(&test_url)
+                        );
                         return Ok(false);
                     }
-                    
+
                     // Parse the response to check if authentication actually succeeded
                     match response.json::<serde_json::Value>().await {
                         Ok(json) => {
-                            
                             // Check if we have user_info and if the status is "Active"
                             if let Some(user_info) = json.get("user_info")
                                 && let Some(status) = user_info.get("status")
-                                && let Some(status_str) = status.as_str() {
+                                && let Some(status_str) = status.as_str()
+                            {
                                 let is_active = status_str == "Active";
                                 return Ok(is_active);
                             }
@@ -290,8 +335,11 @@ impl XtreamEpgHandler {
                 Err(e) => {
                     // If HTTPS failed and URL started with https://, try HTTP fallback
                     if base_url.starts_with("https://") {
-                        warn!("HTTPS EPG auth failed for '{}', trying HTTP fallback", source.name);
-                        
+                        warn!(
+                            "HTTPS EPG auth failed for '{}', trying HTTP fallback",
+                            source.name
+                        );
+
                         let http_url = base_url.replace("https://", "http://");
                         let fallback_test_url = format!(
                             "{}/player_api.php?username={}&password={}&action=get_user_info",
@@ -299,23 +347,31 @@ impl XtreamEpgHandler {
                             username,
                             password
                         );
-                        
-                        match self.http_client.inner_client().get(&fallback_test_url).send().await {
+
+                        match self
+                            .http_client
+                            .inner_client()
+                            .get(&fallback_test_url)
+                            .send()
+                            .await
+                        {
                             Ok(response) => {
-                                
                                 if !response.status().is_success() {
-                                    warn!("EPG auth fallback failed with HTTP status: {}", response.status());
+                                    warn!(
+                                        "EPG auth fallback failed with HTTP status: {}",
+                                        response.status()
+                                    );
                                     return Ok(false);
                                 }
-                                
+
                                 // Parse the response to check if authentication actually succeeded
                                 match response.json::<serde_json::Value>().await {
                                     Ok(json) => {
-                                        
                                         // Check if we have user_info and if the status is "Active"
                                         if let Some(user_info) = json.get("user_info")
                                             && let Some(status) = user_info.get("status")
-                                            && let Some(status_str) = status.as_str() {
+                                            && let Some(status_str) = status.as_str()
+                                        {
                                             let is_active = status_str == "Active";
                                             return Ok(is_active);
                                         }
@@ -324,32 +380,45 @@ impl XtreamEpgHandler {
                                         Ok(false)
                                     }
                                     Err(e) => {
-                                        warn!("Failed to parse EPG auth fallback response JSON: {}", e);
+                                        warn!(
+                                            "Failed to parse EPG auth fallback response JSON: {}",
+                                            e
+                                        );
                                         Ok(false)
                                     }
                                 }
                             }
                             Err(fallback_e) => {
-                                let obfuscated_error = crate::utils::url::UrlUtils::obfuscate_credentials(&fallback_e.to_string());
+                                let obfuscated_error =
+                                    crate::utils::url::UrlUtils::obfuscate_credentials(
+                                        &fallback_e.to_string(),
+                                    );
                                 warn!("EPG auth fallback also failed: {}", obfuscated_error);
                                 Ok(false)
                             }
                         }
                     } else {
-                        let obfuscated_error = crate::utils::url::UrlUtils::obfuscate_credentials(&e.to_string());
+                        let obfuscated_error =
+                            crate::utils::url::UrlUtils::obfuscate_credentials(&e.to_string());
                         warn!("EPG auth network request failed: {}", obfuscated_error);
                         Ok(false)
                     }
                 }
             }
         } else {
-            warn!("EPG source '{}' missing credentials: username={:?}, password={:?}", 
-                  source.name, source.username, source.password.as_ref().map(|p| format!("{}chars", p.len())));
+            warn!(
+                "EPG source '{}' missing credentials: username={:?}, password={:?}",
+                source.name,
+                source.username,
+                source
+                    .password
+                    .as_ref()
+                    .map(|p| format!("{}chars", p.len()))
+            );
             Ok(false)
         }
     }
 }
-
 
 #[async_trait]
 impl EpgSourceHandler for XtreamEpgHandler {
@@ -359,17 +428,20 @@ impl EpgSourceHandler for XtreamEpgHandler {
 
     async fn validate_epg_source(&self, source: &EpgSource) -> AppResult<SourceValidationResult> {
         let mut validation = SourceValidationResult::success();
-        
+
         // Validate EPG source type
         if source.source_type != EpgSourceType::Xtream {
-            return Ok(SourceValidationResult::failure(vec![
-                format!("Expected Xtream source type, got {:?}", source.source_type),
-            ]));
+            return Ok(SourceValidationResult::failure(vec![format!(
+                "Expected Xtream source type, got {:?}",
+                source.source_type
+            )]));
         }
 
         // Validate URL
         if source.url.is_empty() {
-            validation.errors.push("URL is required for Xtream sources".to_string());
+            validation
+                .errors
+                .push("URL is required for Xtream sources".to_string());
             validation.is_valid = false;
         } else {
             // Check URL format
@@ -386,11 +458,15 @@ impl EpgSourceHandler for XtreamEpgHandler {
 
         // Validate authentication (required for Xtream)
         if source.username.is_none() || source.password.is_none() {
-            validation.errors.push("Username and password are required for Xtream sources".to_string());
+            validation
+                .errors
+                .push("Username and password are required for Xtream sources".to_string());
             validation.is_valid = false;
         } else if let (Some(username), Some(password)) = (&source.username, &source.password) {
             if username.is_empty() || password.is_empty() {
-                validation.errors.push("Username and password cannot be empty for Xtream sources".to_string());
+                validation
+                    .errors
+                    .push("Username and password cannot be empty for Xtream sources".to_string());
                 validation.is_valid = false;
             } else {
                 validation = validation.with_context("authentication", "provided");
@@ -412,12 +488,10 @@ impl EpgSourceHandler for XtreamEpgHandler {
 
         // Try to fetch a small amount of EPG data to test the endpoint
         match self.build_epg_url(source) {
-            Ok(epg_url) => {
-                match self.http_client.inner_client().head(&epg_url).send().await {
-                    Ok(response) => Ok(response.status().is_success()),
-                    Err(_) => Ok(false),
-                }
-            }
+            Ok(epg_url) => match self.http_client.inner_client().head(&epg_url).send().await {
+                Ok(response) => Ok(response.status().is_success()),
+                Err(_) => Ok(false),
+            },
             Err(_) => Ok(false),
         }
     }
@@ -426,7 +500,7 @@ impl EpgSourceHandler for XtreamEpgHandler {
         let mut info = HashMap::new();
         info.insert("source_type".to_string(), "xtream".to_string());
         info.insert("url".to_string(), source.url.clone());
-        
+
         if let (Some(username), Some(_)) = (&source.username, &source.password) {
             info.insert("username".to_string(), username.clone());
             info.insert("has_password".to_string(), "true".to_string());
@@ -446,9 +520,12 @@ impl EpgProgramIngestor for XtreamEpgHandler {
     async fn ingest_epg_programs(&self, source: &EpgSource) -> AppResult<Vec<EpgProgram>> {
         // Authenticate and fetch EPG content directly
         if !self.test_xtream_auth(source).await? {
-            return Err(AppError::source_error(format!("Xtream authentication failed for source: {}", source.name)));
+            return Err(AppError::source_error(format!(
+                "Xtream authentication failed for source: {}",
+                source.name
+            )));
         }
-        
+
         let content = self.fetch_xtream_epg_content(source).await?;
         self.parse_xtream_epg_content(source, &content).await
     }
@@ -461,22 +538,27 @@ impl EpgProgramIngestor for XtreamEpgHandler {
     ) -> AppResult<Vec<EpgProgram>> {
         // Authenticate and fetch EPG content with progress updates
         if !self.test_xtream_auth(source).await? {
-            return Err(AppError::source_error(format!("Xtream authentication failed for source: {}", source.name)));
+            return Err(AppError::source_error(format!(
+                "Xtream authentication failed for source: {}",
+                source.name
+            )));
         }
-        
-        let content = self.fetch_xtream_epg_content_with_progress(source, progress_updater).await?;
+
+        let content = self
+            .fetch_xtream_epg_content_with_progress(source, progress_updater)
+            .await?;
         self.parse_xtream_epg_content(source, &content).await
     }
-
 
     async fn estimate_program_count(&self, source: &EpgSource) -> AppResult<Option<u32>> {
         // For Xtream, we could potentially get some info from the API
         // but for now, we'll return None like XMLTV
-        debug!("Program count estimation not available for Xtream source: {}", source.name);
+        debug!(
+            "Program count estimation not available for Xtream source: {}",
+            source.name
+        );
         Ok(None)
     }
-
-
 }
 
 impl FullEpgSourceHandler for XtreamEpgHandler {

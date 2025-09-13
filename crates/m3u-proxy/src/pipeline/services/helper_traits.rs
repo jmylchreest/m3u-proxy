@@ -6,7 +6,7 @@
 use crate::models::Channel;
 use crate::pipeline::engines::rule_processor::EpgProgram as PipelineEpgProgram;
 use crate::pipeline::services::helper_processor::{
-    HelperDetectable, HelperProcessable, HelperField, HelperProcessor,
+    HelperDetectable, HelperField, HelperProcessable, HelperProcessor,
 };
 
 // Implementation for Channel model
@@ -20,7 +20,7 @@ impl HelperDetectable for Channel {
                 }
             }
         }
-        
+
         // Check tvg_shift field for time helpers
         if let Some(shift) = &self.tvg_shift {
             for processor in processors {
@@ -29,7 +29,7 @@ impl HelperDetectable for Channel {
                 }
             }
         }
-        
+
         false
     }
 }
@@ -37,7 +37,7 @@ impl HelperDetectable for Channel {
 impl HelperProcessable for Channel {
     fn get_helper_processable_fields(&self) -> Vec<HelperField> {
         let mut fields = Vec::new();
-        
+
         // Add tvg_logo field
         if let Some(logo) = &self.tvg_logo {
             fields.push(HelperField {
@@ -45,7 +45,7 @@ impl HelperProcessable for Channel {
                 value: Some(logo.clone()),
             });
         }
-        
+
         // Add tvg_shift field (for potential @time: helpers)
         if let Some(shift) = &self.tvg_shift {
             fields.push(HelperField {
@@ -53,10 +53,10 @@ impl HelperProcessable for Channel {
                 value: Some(shift.clone()),
             });
         }
-        
+
         fields
     }
-    
+
     fn update_from_helper_fields(&mut self, fields: Vec<HelperField>) {
         for field in fields {
             match field.name.as_str() {
@@ -74,7 +74,7 @@ impl HelperProcessable for Channel {
     }
 }
 
-// Implementation for Pipeline EpgProgram model  
+// Implementation for Pipeline EpgProgram model
 impl HelperDetectable for PipelineEpgProgram {
     fn contains_any_helpers(&self, processors: &[Box<dyn HelperProcessor>]) -> bool {
         // Check description field for any helpers
@@ -85,14 +85,14 @@ impl HelperDetectable for PipelineEpgProgram {
                 }
             }
         }
-        
+
         // Check title field for any helpers
         for processor in processors {
             if processor.contains_helper(&self.title) {
                 return true;
             }
         }
-        
+
         // Check new extended fields for helpers
         if let Some(category) = &self.program_category {
             for processor in processors {
@@ -101,7 +101,7 @@ impl HelperDetectable for PipelineEpgProgram {
                 }
             }
         }
-        
+
         if let Some(subtitles) = &self.subtitles {
             for processor in processors {
                 if processor.contains_helper(subtitles) {
@@ -109,7 +109,7 @@ impl HelperDetectable for PipelineEpgProgram {
                 }
             }
         }
-        
+
         false
     }
 }
@@ -117,13 +117,13 @@ impl HelperDetectable for PipelineEpgProgram {
 impl HelperProcessable for PipelineEpgProgram {
     fn get_helper_processable_fields(&self) -> Vec<HelperField> {
         let mut fields = Vec::new();
-        
+
         // Add title field
         fields.push(HelperField {
             name: "title".to_string(),
             value: Some(self.title.clone()),
         });
-        
+
         // Add description field
         if let Some(description) = &self.description {
             fields.push(HelperField {
@@ -131,7 +131,7 @@ impl HelperProcessable for PipelineEpgProgram {
                 value: Some(description.clone()),
             });
         }
-        
+
         // Add extended XMLTV fields
         if let Some(category) = &self.program_category {
             fields.push(HelperField {
@@ -139,45 +139,45 @@ impl HelperProcessable for PipelineEpgProgram {
                 value: Some(category.clone()),
             });
         }
-        
+
         if let Some(subtitles) = &self.subtitles {
             fields.push(HelperField {
                 name: "subtitles".to_string(),
                 value: Some(subtitles.clone()),
             });
         }
-        
+
         if let Some(episode_num) = &self.episode_num {
             fields.push(HelperField {
                 name: "episode_num".to_string(),
                 value: Some(episode_num.clone()),
             });
         }
-        
+
         if let Some(season_num) = &self.season_num {
             fields.push(HelperField {
                 name: "season_num".to_string(),
                 value: Some(season_num.clone()),
             });
         }
-        
+
         if let Some(language) = &self.language {
             fields.push(HelperField {
                 name: "language".to_string(),
                 value: Some(language.clone()),
             });
         }
-        
+
         if let Some(rating) = &self.rating {
             fields.push(HelperField {
                 name: "rating".to_string(),
                 value: Some(rating.clone()),
             });
         }
-        
+
         fields
     }
-    
+
     fn update_from_helper_fields(&mut self, fields: Vec<HelperField>) {
         for field in fields {
             match field.name.as_str() {
@@ -226,7 +226,7 @@ impl HelperDetectable for crate::models::EpgProgram {
                 }
             }
         }
-        
+
         // Check program_description field for any helpers
         if let Some(description) = &self.program_description {
             for processor in processors {
@@ -235,14 +235,14 @@ impl HelperDetectable for crate::models::EpgProgram {
                 }
             }
         }
-        
-        // Check program_title field for any helpers  
+
+        // Check program_title field for any helpers
         for processor in processors {
             if processor.contains_helper(&self.program_title) {
                 return true;
             }
         }
-        
+
         false
     }
 }
@@ -250,13 +250,13 @@ impl HelperDetectable for crate::models::EpgProgram {
 impl HelperProcessable for crate::models::EpgProgram {
     fn get_helper_processable_fields(&self) -> Vec<HelperField> {
         let mut fields = Vec::new();
-        
+
         // Add program_title field
         fields.push(HelperField {
             name: "program_title".to_string(),
             value: Some(self.program_title.clone()),
         });
-        
+
         // Add program_description field
         if let Some(description) = &self.program_description {
             fields.push(HelperField {
@@ -264,7 +264,7 @@ impl HelperProcessable for crate::models::EpgProgram {
                 value: Some(description.clone()),
             });
         }
-        
+
         // Add program_icon field (for logo helpers)
         if let Some(icon) = &self.program_icon {
             fields.push(HelperField {
@@ -272,10 +272,10 @@ impl HelperProcessable for crate::models::EpgProgram {
                 value: Some(icon.clone()),
             });
         }
-        
+
         fields
     }
-    
+
     fn update_from_helper_fields(&mut self, fields: Vec<HelperField>) {
         for field in fields {
             match field.name.as_str() {
@@ -303,7 +303,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use uuid::Uuid;
-    
+
     #[test]
     fn test_channel_helper_detection() {
         let _channel = Channel {
@@ -325,14 +325,14 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        
+
         // Mock processors vector - would need actual processors for real test
         let _processors: Vec<Box<dyn HelperProcessor>> = vec![];
-        
+
         // This would return true if we had actual logo helper processor
         // assert!(channel.contains_any_helpers(&processors));
     }
-    
+
     #[test]
     fn test_channel_helper_fields() {
         let mut channel = Channel {
@@ -354,27 +354,33 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        
+
         let fields = channel.get_helper_processable_fields();
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].name, "tvg_logo");
-        assert_eq!(fields[0].value, Some("@logo:550e8400-e29b-41d4-a716-446655440000".to_string()));
-        
+        assert_eq!(
+            fields[0].value,
+            Some("@logo:550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+
         // Test updating from fields
         let updated_fields = vec![HelperField {
             name: "tvg_logo".to_string(),
             value: Some("https://example.com/logo.png".to_string()),
         }];
-        
+
         channel.update_from_helper_fields(updated_fields);
-        assert_eq!(channel.tvg_logo, Some("https://example.com/logo.png".to_string()));
-        
+        assert_eq!(
+            channel.tvg_logo,
+            Some("https://example.com/logo.png".to_string())
+        );
+
         // Test removing field by setting to None
         let remove_fields = vec![HelperField {
             name: "tvg_logo".to_string(),
             value: None,
         }];
-        
+
         channel.update_from_helper_fields(remove_fields);
         assert_eq!(channel.tvg_logo, None);
     }

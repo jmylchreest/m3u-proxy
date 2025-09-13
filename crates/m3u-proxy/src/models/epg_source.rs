@@ -8,10 +8,7 @@ use tracing::warn;
 impl EpgSource {
     /// Detect timezone from EPG content (simplified after migration 004)
     /// Note: Timezone handling was simplified - all times are normalized to UTC
-    pub async fn detect_timezone_from_content(
-        &self,
-        epg_content: &str,
-    ) -> Result<Option<String>> {
+    pub async fn detect_timezone_from_content(&self, epg_content: &str) -> Result<Option<String>> {
         let detected_tz = match self.source_type {
             EpgSourceType::Xmltv => detect_timezone_from_xmltv(epg_content),
             EpgSourceType::Xtream => {
@@ -59,16 +56,17 @@ impl EpgSource {
                     format!("https://{}", self.url)
                 };
                 Ok(url)
-            },
+            }
             EpgSourceType::Xtream => {
                 if let (Some(username), Some(password)) = (&self.username, &self.password) {
                     // Ensure Xtream URLs have proper scheme
-                    let base_url = if self.url.starts_with("http://") || self.url.starts_with("https://") {
-                        self.url.clone()
-                    } else {
-                        format!("https://{}", self.url)
-                    };
-                    
+                    let base_url =
+                        if self.url.starts_with("http://") || self.url.starts_with("https://") {
+                            self.url.clone()
+                        } else {
+                            format!("https://{}", self.url)
+                        };
+
                     Ok(format!(
                         "{}/xmltv.php?username={}&password={}",
                         base_url.trim_end_matches('/'),

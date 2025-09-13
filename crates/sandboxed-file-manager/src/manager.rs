@@ -319,14 +319,13 @@ impl SandboxedManager {
 
         // Create parent directories if they don't exist
         if let Some(parent) = full_path.parent()
-            && !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    SandboxedFileError::DirectoryCreation {
-                        path: parent.to_path_buf(),
-                        source: e,
-                    }
-                })?;
-            }
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| SandboxedFileError::DirectoryCreation {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
+        }
 
         // Use OS to resolve the actual path the file would have
         let resolved_path = if full_path.exists() {
@@ -394,7 +393,11 @@ impl SandboxedManager {
         let suspension_until = std::time::Instant::now() + ttl;
         let mut suspension = self.cleanup_suspension.write().await;
         *suspension = Some(suspension_until);
-        tracing::debug!("Cleanup suspended for {:?} (until {:?})", ttl, suspension_until);
+        tracing::debug!(
+            "Cleanup suspended for {:?} (until {:?})",
+            ttl,
+            suspension_until
+        );
         Ok(())
     }
 
@@ -405,10 +408,13 @@ impl SandboxedManager {
         let suspension_until = std::time::Instant::now() + duration_from_now;
         let mut suspension = self.cleanup_suspension.write().await;
         *suspension = Some(suspension_until);
-        tracing::trace!("Cleanup suspension updated to {:?} from now (until {:?})", duration_from_now, suspension_until);
+        tracing::trace!(
+            "Cleanup suspension updated to {:?} from now (until {:?})",
+            duration_from_now,
+            suspension_until
+        );
         Ok(())
     }
-
 
     /// Resume cleanup operations immediately, clearing any active suspension.
     pub async fn resume_cleanup(&self) {
@@ -531,28 +537,29 @@ impl SandboxedManager {
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.is_file()
-                && let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                    // Use the filename as both ID and original name
-                    let filename = file_name.to_string();
-                    let metadata = entry.metadata().await?;
-                    let created_at =
-                        DateTime::from(metadata.created().unwrap_or(std::time::UNIX_EPOCH));
+                && let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+            {
+                // Use the filename as both ID and original name
+                let filename = file_name.to_string();
+                let metadata = entry.metadata().await?;
+                let created_at =
+                    DateTime::from(metadata.created().unwrap_or(std::time::UNIX_EPOCH));
 
-                    let content_type = "application/octet-stream".to_string();
+                let content_type = "application/octet-stream".to_string();
 
-                    let file_info = FileInfo {
-                        id: filename.clone(),
-                        file_path: path.clone(),
-                        created_at,
-                        last_accessed: created_at,
-                        size_bytes: metadata.len(),
-                        content_type,
-                        original_name: Some(filename.clone()),
-                    };
+                let file_info = FileInfo {
+                    id: filename.clone(),
+                    file_path: path.clone(),
+                    created_at,
+                    last_accessed: created_at,
+                    size_bytes: metadata.len(),
+                    content_type,
+                    original_name: Some(filename.clone()),
+                };
 
-                    self.file_registry.write().await.insert(filename, file_info);
-                    loaded_count += 1;
-                }
+                self.file_registry.write().await.insert(filename, file_info);
+                loaded_count += 1;
+            }
         }
 
         if loaded_count > 0 {
@@ -566,7 +573,7 @@ impl SandboxedManager {
     pub async fn exists<P: AsRef<str>>(&self, path: P) -> Result<bool> {
         let path_str = path.as_ref();
         let file_path = self.validate_and_get_path(path_str)?;
-        
+
         Ok(file_path.exists())
     }
 
@@ -582,32 +589,34 @@ impl SandboxedManager {
     pub async fn list_files<P: AsRef<str>>(&self, dir_path: P) -> Result<Vec<String>> {
         let dir_str = dir_path.as_ref();
         let full_dir_path = self.validate_and_get_path(dir_str)?;
-        
+
         let mut files = Vec::new();
-        
+
         if full_dir_path.is_dir() {
             let mut entries = fs::read_dir(&full_dir_path).await?;
-            
+
             while let Some(entry) = entries.next_entry().await? {
                 let entry_path = entry.path();
-                
+
                 // Get relative path from the sandbox base
                 if let Ok(relative) = entry_path.strip_prefix(&self.base_dir)
-                    && let Some(path_str) = relative.to_str() {
-                        // Skip empty paths (files in root directory)
-                        if !path_str.is_empty() {
-                            files.push(path_str.to_string());
-                        } else {
-                            // For files in root directory, use just the filename
-                            if let Some(filename) = entry_path.file_name()
-                                && let Some(filename_str) = filename.to_str() {
-                                    files.push(filename_str.to_string());
-                                }
+                    && let Some(path_str) = relative.to_str()
+                {
+                    // Skip empty paths (files in root directory)
+                    if !path_str.is_empty() {
+                        files.push(path_str.to_string());
+                    } else {
+                        // For files in root directory, use just the filename
+                        if let Some(filename) = entry_path.file_name()
+                            && let Some(filename_str) = filename.to_str()
+                        {
+                            files.push(filename_str.to_string());
                         }
                     }
+                }
             }
         }
-        
+
         Ok(files)
     }
 
@@ -809,8 +818,13 @@ mod tests {
         );
 
         // The file should have been removed (either filesystem atime or in-memory time should be old enough)
-        assert!(removed > 0, "Expected at least 1 file to be removed, but removed: {}. Before cleanup: {}, After cleanup: {}",
-            removed, before_cleanup_stats.total_files, after_cleanup_stats.total_files);
+        assert!(
+            removed > 0,
+            "Expected at least 1 file to be removed, but removed: {}. Before cleanup: {}, After cleanup: {}",
+            removed,
+            before_cleanup_stats.total_files,
+            after_cleanup_stats.total_files
+        );
 
         // File should be gone
         assert!(manager.read_to_string(filename).await.is_err());

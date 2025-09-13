@@ -1,13 +1,12 @@
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
 use crate::utils::jitter::generate_jitter_percent;
 
 use crate::models::*;
-
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProcessingInfo {
@@ -52,8 +51,6 @@ impl IngestionStateManager {
         }
     }
 
-
-
     /// Try to start processing for a source. Returns true if processing was started,
     /// false if already processing or in backoff period.
     pub async fn try_start_processing(&self, source_id: Uuid, trigger: ProcessingTrigger) -> bool {
@@ -67,12 +64,13 @@ impl IngestionStateManager {
                 // Still actively processing
                 return false;
             }
-            
+
             // Check if we're in backoff period
             if let Some(retry_after) = existing_info.next_retry_after
-                && now < retry_after {
-                    return false; // Still in backoff period
-                }
+                && now < retry_after
+            {
+                return false; // Still in backoff period
+            }
         }
 
         // Start processing - preserve failure count from any existing entry
@@ -224,12 +222,20 @@ impl IngestionStateManager {
     }
 
     pub async fn complete_ingestion(&self, source_id: Uuid, channels_saved: usize) {
-        self.complete_ingestion_with_programs(source_id, channels_saved, None).await;
+        self.complete_ingestion_with_programs(source_id, channels_saved, None)
+            .await;
     }
 
-    pub async fn complete_ingestion_with_programs(&self, source_id: Uuid, channels_saved: usize, programs_saved: Option<usize>) {
+    pub async fn complete_ingestion_with_programs(
+        &self,
+        source_id: Uuid,
+        channels_saved: usize,
+        programs_saved: Option<usize>,
+    ) {
         let current_step = match programs_saved {
-            Some(programs) => format!("Completed - {channels_saved} channels and {programs} programs saved"),
+            Some(programs) => {
+                format!("Completed - {channels_saved} channels and {programs} programs saved")
+            }
             None => format!("Completed - {channels_saved} channels saved"),
         };
 
@@ -304,25 +310,29 @@ impl IngestionStateManager {
         let mut cancelled_count = 0;
         for (source_id, tx) in tokens.iter() {
             let _ = tx.send(());
-            
+
             // Update the state to show cancellation
             let mut states = self.states.write().await;
             if let Some(progress) = states.get_mut(source_id) {
                 progress.state = crate::models::IngestionState::Error;
-                progress.error = Some("Operation cancelled due to application shutdown".to_string());
+                progress.error =
+                    Some("Operation cancelled due to application shutdown".to_string());
                 progress.completed_at = Some(chrono::Utc::now());
                 progress.updated_at = chrono::Utc::now();
-                
+
                 // Broadcast the cancellation
                 let _ = self.progress_tx.send(progress.clone());
             }
-            
+
             cancelled_count += 1;
             tracing::info!("Cancelled ingestion for source: {}", source_id);
         }
 
         if cancelled_count > 0 {
-            tracing::info!("Cancelled {} active ingestion(s) due to application shutdown", cancelled_count);
+            tracing::info!(
+                "Cancelled {} active ingestion(s) due to application shutdown",
+                cancelled_count
+            );
         }
 
         cancelled_count
@@ -331,11 +341,11 @@ impl IngestionStateManager {
     /// Check if there are any active ingestions in progress
     pub async fn has_active_ingestions(&self) -> Result<bool, Box<dyn std::error::Error>> {
         let states = self.states.read().await;
-        
+
         for (source_id, progress) in states.iter() {
             match progress.state {
-                crate::models::IngestionState::Idle 
-                | crate::models::IngestionState::Completed 
+                crate::models::IngestionState::Idle
+                | crate::models::IngestionState::Completed
                 | crate::models::IngestionState::Error => {
                     // These are not active
                     continue;
@@ -346,33 +356,40 @@ impl IngestionStateManager {
                 | crate::models::IngestionState::Saving
                 | crate::models::IngestionState::Processing => {
                     // These are active ingestion states
-                    tracing::info!("Found active ingestion: source_id={}, state={:?}, updated={:?}", 
-                        source_id, progress.state, progress.updated_at);
+                    tracing::info!(
+                        "Found active ingestion: source_id={}, state={:?}, updated={:?}",
+                        source_id,
+                        progress.state,
+                        progress.updated_at
+                    );
                     return Ok(true);
                 }
             }
         }
-        
+
         Ok(false)
     }
 
     /// Check if there are any active ingestions in progress (enhanced version)
     /// This method also checks the ProgressService for active database operations
-    pub async fn has_active_ingestions_enhanced(&self, progress_service: Option<&crate::services::progress_service::ProgressService>) -> Result<bool, Box<dyn std::error::Error>> {
+    pub async fn has_active_ingestions_enhanced(
+        &self,
+        progress_service: Option<&crate::services::progress_service::ProgressService>,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         // First check the traditional IngestionState tracking
         if self.has_active_ingestions().await? {
             return Ok(true);
         }
-        
+
         // Also check the new ProgressService for active database operations
         if let Some(service) = progress_service
-            && service.has_active_database_operations().await {
-                return Ok(true);
-            }
-        
+            && service.has_active_database_operations().await
+        {
+            return Ok(true);
+        }
+
         Ok(false)
     }
-
 }
 
 impl Default for IngestionStateManager {

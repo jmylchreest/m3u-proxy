@@ -1,5 +1,8 @@
 use anyhow::Result;
-use figment::{Figment, providers::{Toml, Env, Format}};
+use figment::{
+    Figment,
+    providers::{Env, Format, Toml},
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -8,11 +11,6 @@ pub mod duration_serde;
 pub mod file_categories;
 
 use defaults::*;
-
-
-
-
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -38,11 +36,12 @@ pub struct FeaturesConfig {
     /// Example: debug-frontend = true, experimental-ui = false
     #[serde(default)]
     pub flags: std::collections::HashMap<String, bool>,
-    
+
     /// Per-feature configuration settings
     /// Example: config.debug-frontend.level = "verbose", config.video-player.buffer-size = 1024
     #[serde(default)]
-    pub config: std::collections::HashMap<String, std::collections::HashMap<String, serde_json::Value>>,
+    pub config:
+        std::collections::HashMap<String, std::collections::HashMap<String, serde_json::Value>>,
 }
 
 impl FeaturesConfig {
@@ -50,32 +49,40 @@ impl FeaturesConfig {
     pub fn is_feature_enabled(&self, feature_name: &str) -> bool {
         self.flags.get(feature_name).copied().unwrap_or(false)
     }
-    
+
     /// Get configuration for a specific feature (returns empty map if not found)
-    pub fn get_feature_config(&self, feature_name: &str) -> &std::collections::HashMap<String, serde_json::Value> {
+    pub fn get_feature_config(
+        &self,
+        feature_name: &str,
+    ) -> &std::collections::HashMap<String, serde_json::Value> {
         use std::sync::LazyLock;
-        static EMPTY_CONFIG: LazyLock<std::collections::HashMap<String, serde_json::Value>> = LazyLock::new(std::collections::HashMap::new);
+        static EMPTY_CONFIG: LazyLock<std::collections::HashMap<String, serde_json::Value>> =
+            LazyLock::new(std::collections::HashMap::new);
         self.config.get(feature_name).unwrap_or(&EMPTY_CONFIG)
     }
-    
+
     /// Get a specific config value for a feature (returns None if not found)
-    pub fn get_feature_config_value(&self, feature_name: &str, config_key: &str) -> Option<&serde_json::Value> {
+    pub fn get_feature_config_value(
+        &self,
+        feature_name: &str,
+        config_key: &str,
+    ) -> Option<&serde_json::Value> {
         self.get_feature_config(feature_name).get(config_key)
     }
-    
+
     /// Get a config value as a string (returns None if not found or not a string)
     pub fn get_config_string(&self, feature_name: &str, config_key: &str) -> Option<String> {
         self.get_feature_config_value(feature_name, config_key)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
-    
+
     /// Get a config value as a number (returns None if not found or not a number)
     pub fn get_config_number(&self, feature_name: &str, config_key: &str) -> Option<f64> {
         self.get_feature_config_value(feature_name, config_key)
             .and_then(|v| v.as_f64())
     }
-    
+
     /// Get a config value as a boolean (returns None if not found or not a boolean)
     pub fn get_config_bool(&self, feature_name: &str, config_key: &str) -> Option<bool> {
         self.get_feature_config_value(feature_name, config_key)
@@ -88,15 +95,15 @@ pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: Option<u32>,
     pub batch_sizes: Option<DatabaseBatchConfig>,
-    
+
     /// SQLite-specific configuration
     #[serde(default)]
     pub sqlite: SqliteConfig,
-    
+
     /// PostgreSQL-specific configuration  
     #[serde(default)]
     pub postgresql: PostgreSqlConfig,
-    
+
     /// MySQL-specific configuration
     #[serde(default)]
     pub mysql: MySqlConfig,
@@ -169,32 +176,30 @@ pub struct StorageConfig {
     pub m3u_retention: String,
     #[serde(default = "default_m3u_cleanup_interval")]
     pub m3u_cleanup_interval: String,
-    
+
     #[serde(default = "default_uploaded_logo_path")]
     pub uploaded_logo_path: PathBuf,
-    
+
     #[serde(default = "default_cached_logo_path")]
     pub cached_logo_path: PathBuf,
     #[serde(default = "default_cached_logo_retention")]
     pub cached_logo_retention: String,
     #[serde(default = "default_cached_logo_cleanup_interval")]
     pub cached_logo_cleanup_interval: String,
-    
-    
+
     #[serde(default = "default_temp_path")]
     pub temp_path: Option<String>,
     #[serde(default = "default_temp_retention")]
     pub temp_retention: String,
     #[serde(default = "default_temp_cleanup_interval")]
     pub temp_cleanup_interval: String,
-    
+
     #[serde(default = "default_pipeline_path")]
     pub pipeline_path: PathBuf,
     #[serde(default = "default_pipeline_retention")]
     pub pipeline_retention: String,
     #[serde(default = "default_pipeline_cleanup_interval")]
     pub pipeline_cleanup_interval: String,
-
 }
 
 impl Default for StorageConfig {
@@ -216,7 +221,6 @@ impl Default for StorageConfig {
         }
     }
 }
-
 
 // Web defaults
 fn default_host() -> String {
@@ -287,11 +291,6 @@ fn default_interactive_timeout() -> Option<u32> {
     Some(28800)
 }
 
-
-
-
-
-
 fn default_analyzeduration() -> String {
     "10s".to_string()
 }
@@ -299,7 +298,6 @@ fn default_analyzeduration() -> String {
 fn default_probesize() -> String {
     "10MB".to_string()
 }
-
 
 // Storage defaults
 fn default_m3u_path() -> PathBuf {
@@ -314,7 +312,6 @@ fn default_cached_logo_path() -> PathBuf {
     PathBuf::from(DEFAULT_CACHED_LOGO_PATH)
 }
 
-
 fn default_temp_path() -> Option<String> {
     Some(DEFAULT_TEMP_PATH.to_string())
 }
@@ -322,7 +319,6 @@ fn default_temp_path() -> Option<String> {
 fn default_pipeline_path() -> PathBuf {
     PathBuf::from(DEFAULT_PIPELINE_PATH)
 }
-
 
 // Storage retention defaults
 fn default_m3u_retention() -> String {
@@ -341,7 +337,6 @@ fn default_cached_logo_cleanup_interval() -> String {
     "12h".to_string()
 }
 
-
 fn default_temp_retention() -> String {
     "5m".to_string()
 }
@@ -351,11 +346,11 @@ fn default_temp_cleanup_interval() -> String {
 }
 
 fn default_pipeline_retention() -> String {
-    "10m".to_string()  // Slightly longer than temp for pipeline execution
+    "10m".to_string() // Slightly longer than temp for pipeline execution
 }
 
 fn default_pipeline_cleanup_interval() -> String {
-    "2m".to_string()   // Less frequent than temp cleanup
+    "2m".to_string() // Less frequent than temp cleanup
 }
 
 // Ingestion defaults
@@ -407,7 +402,6 @@ impl Default for IngestionConfig {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingEngineConfig {
     /// Special characters used for regex precheck filtering
@@ -438,7 +432,7 @@ pub struct CircuitBreakerConfig {
     /// Global circuit breaker settings that apply to all profiles unless overridden
     #[serde(default)]
     pub global: CircuitBreakerProfileConfig,
-    
+
     /// Named circuit breaker profiles for different services
     /// Example: rssafe, database, http_client
     #[serde(default)]
@@ -450,23 +444,23 @@ pub struct CircuitBreakerProfileConfig {
     /// Circuit breaker implementation type: "rssafe" or "noop"
     #[serde(default = "default_circuit_breaker_type")]
     pub implementation_type: String,
-    
+
     /// Number of consecutive failures before opening the circuit
     #[serde(default = "default_failure_threshold")]
     pub failure_threshold: u32,
-    
+
     /// Timeout duration for individual operations (e.g., "5s", "30s")
     #[serde(default = "default_operation_timeout")]
     pub operation_timeout: String,
-    
+
     /// How long to wait before attempting to close the circuit (e.g., "30s", "1m")
     #[serde(default = "default_reset_timeout")]
     pub reset_timeout: String,
-    
+
     /// Number of consecutive successes needed to close circuit from half-open state
     #[serde(default = "default_success_threshold")]
     pub success_threshold: u32,
-    
+
     /// HTTP status codes that should NOT trigger circuit breaker failures
     /// Supports wildcards: "2xx" matches 200-299, "404" matches exact, etc.
     /// Default includes all 2xx responses and common expected errors
@@ -511,15 +505,13 @@ impl Default for CircuitBreakerProfileConfig {
     }
 }
 
-
-
 impl DatabaseBatchConfig {
     /// SQLite variable limit (32,766 in 3.32.0+, 999 in older versions)
     const SQLITE_MAX_VARIABLES: usize = 32766;
-    
+
     /// PostgreSQL variable limit (65,535 parameters per query)
     const POSTGRES_MAX_VARIABLES: usize = 65535;
-    
+
     /// MySQL variable limit (65,535 placeholders per prepared statement)
     const MYSQL_MAX_VARIABLES: usize = 65535;
 
@@ -562,18 +554,22 @@ impl DatabaseBatchConfig {
     /// Get safe batch size for EPG programs based on database backend
     pub fn safe_epg_program_batch_size(&self, backend: sea_orm::DatabaseBackend) -> usize {
         let default_size = match backend {
-            sea_orm::DatabaseBackend::Sqlite => 2000,    // Conservative for SQLite
-            sea_orm::DatabaseBackend::Postgres => 4000,  // More aggressive for PostgreSQL
-            sea_orm::DatabaseBackend::MySql => 3000,     // Moderate for MySQL
+            sea_orm::DatabaseBackend::Sqlite => 2000, // Conservative for SQLite
+            sea_orm::DatabaseBackend::Postgres => 4000, // More aggressive for PostgreSQL
+            sea_orm::DatabaseBackend::MySql => 3000,  // Moderate for MySQL
         };
-        
+
         let configured = self.epg_programs.unwrap_or(default_size);
         let max_safe = match backend {
-            sea_orm::DatabaseBackend::Sqlite => Self::SQLITE_MAX_VARIABLES / Self::EPG_PROGRAM_FIELDS,
-            sea_orm::DatabaseBackend::Postgres => Self::POSTGRES_MAX_VARIABLES / Self::EPG_PROGRAM_FIELDS,
+            sea_orm::DatabaseBackend::Sqlite => {
+                Self::SQLITE_MAX_VARIABLES / Self::EPG_PROGRAM_FIELDS
+            }
+            sea_orm::DatabaseBackend::Postgres => {
+                Self::POSTGRES_MAX_VARIABLES / Self::EPG_PROGRAM_FIELDS
+            }
             sea_orm::DatabaseBackend::MySql => Self::MYSQL_MAX_VARIABLES / Self::EPG_PROGRAM_FIELDS,
         };
-        
+
         configured.min(max_safe)
     }
 
@@ -585,18 +581,24 @@ impl DatabaseBatchConfig {
     /// Get safe batch size for stream channels based on database backend
     pub fn safe_stream_channel_batch_size(&self, backend: sea_orm::DatabaseBackend) -> usize {
         let default_size = match backend {
-            sea_orm::DatabaseBackend::Sqlite => 2000,    // Conservative for SQLite
-            sea_orm::DatabaseBackend::Postgres => 4000,  // More aggressive for PostgreSQL
-            sea_orm::DatabaseBackend::MySql => 3000,     // Moderate for MySQL
+            sea_orm::DatabaseBackend::Sqlite => 2000, // Conservative for SQLite
+            sea_orm::DatabaseBackend::Postgres => 4000, // More aggressive for PostgreSQL
+            sea_orm::DatabaseBackend::MySql => 3000,  // Moderate for MySQL
         };
-        
+
         let configured = self.stream_channels.unwrap_or(default_size);
         let max_safe = match backend {
-            sea_orm::DatabaseBackend::Sqlite => Self::SQLITE_MAX_VARIABLES / Self::STREAM_CHANNEL_FIELDS,
-            sea_orm::DatabaseBackend::Postgres => Self::POSTGRES_MAX_VARIABLES / Self::STREAM_CHANNEL_FIELDS,
-            sea_orm::DatabaseBackend::MySql => Self::MYSQL_MAX_VARIABLES / Self::STREAM_CHANNEL_FIELDS,
+            sea_orm::DatabaseBackend::Sqlite => {
+                Self::SQLITE_MAX_VARIABLES / Self::STREAM_CHANNEL_FIELDS
+            }
+            sea_orm::DatabaseBackend::Postgres => {
+                Self::POSTGRES_MAX_VARIABLES / Self::STREAM_CHANNEL_FIELDS
+            }
+            sea_orm::DatabaseBackend::MySql => {
+                Self::MYSQL_MAX_VARIABLES / Self::STREAM_CHANNEL_FIELDS
+            }
         };
-        
+
         configured.min(max_safe)
     }
 }
@@ -612,7 +614,6 @@ impl Default for DatabaseBatchConfig {
         }
     }
 }
-
 
 impl Default for SqliteConfig {
     fn default() -> Self {
@@ -654,7 +655,6 @@ impl Default for DataMappingEngineConfig {
     }
 }
 
-
 /// Relay system configuration for FFmpeg-based stream processing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayConfig {
@@ -663,21 +663,21 @@ pub struct RelayConfig {
     /// The system will search $PATH if not a full path
     #[serde(default = "default_ffmpeg_command")]
     pub ffmpeg_command: String,
-    
+
     /// FFprobe command to use for stream probing operations
     /// Can be a full path (/usr/bin/ffprobe) or command name (ffprobe)
     /// The system will search $PATH if not a full path
     #[serde(default = "default_ffprobe_command")]
     pub ffprobe_command: String,
-    
+
     /// Stream analysis duration for FFmpeg
     #[serde(default = "default_analyzeduration")]
     pub analyzeduration: String,
-    
+
     /// Stream probe size for FFmpeg
     #[serde(default = "default_probesize")]
     pub probesize: String,
-    
+
     /// Cyclic buffer configuration for in-memory stream buffering
     #[serde(default)]
     pub buffer: BufferConfig,
@@ -709,27 +709,27 @@ pub struct BufferConfig {
     /// Maximum buffer size in bytes (default: 50MB)
     #[serde(default = "default_max_buffer_size")]
     pub max_buffer_size: usize,
-    
+
     /// Maximum number of chunks to keep in memory (default: 1000)
     #[serde(default = "default_max_chunks")]
     pub max_chunks: usize,
-    
+
     /// How long to keep chunks in memory in seconds (default: 60)
     #[serde(default = "default_chunk_timeout_seconds")]
     pub chunk_timeout_seconds: u64,
-    
+
     /// How long to wait for slow clients in seconds (default: 30)
     #[serde(default = "default_client_timeout_seconds")]
     pub client_timeout_seconds: u64,
-    
+
     /// How often to cleanup old chunks in seconds (default: 5)
     #[serde(default = "default_cleanup_interval_seconds")]
     pub cleanup_interval_seconds: u64,
-    
+
     /// Enable file spill to disk when buffer is full (default: false)
     #[serde(default = "default_enable_file_spill")]
     pub enable_file_spill: bool,
-    
+
     /// Maximum file spill size in bytes (default: 500MB)
     #[serde(default = "default_max_file_spill_size")]
     pub max_file_spill_size: usize,
@@ -740,19 +740,19 @@ pub struct JobSchedulingConfig {
     /// Global maximum number of concurrent jobs (default: 4)
     #[serde(default = "default_global_max_jobs")]
     pub global_max_jobs: usize,
-    
+
     /// Maximum concurrent stream ingestion jobs (default: 1)
     #[serde(default = "default_stream_ingestion_limit")]
     pub stream_ingestion_limit: usize,
-    
+
     /// Maximum concurrent EPG ingestion jobs (default: 1)  
     #[serde(default = "default_epg_ingestion_limit")]
     pub epg_ingestion_limit: usize,
-    
+
     /// Maximum concurrent proxy regeneration jobs (default: 2)
     #[serde(default = "default_proxy_regeneration_limit")]
     pub proxy_regeneration_limit: usize,
-    
+
     /// Maximum concurrent maintenance jobs (default: 1)
     #[serde(default = "default_maintenance_limit")]
     pub maintenance_limit: usize,
@@ -770,19 +770,43 @@ impl Default for JobSchedulingConfig {
     }
 }
 
-fn default_global_max_jobs() -> usize { 3 }
-fn default_stream_ingestion_limit() -> usize { 1 }
-fn default_epg_ingestion_limit() -> usize { 1 }
-fn default_proxy_regeneration_limit() -> usize { 1 }
-fn default_maintenance_limit() -> usize { 1 }
+fn default_global_max_jobs() -> usize {
+    3
+}
+fn default_stream_ingestion_limit() -> usize {
+    1
+}
+fn default_epg_ingestion_limit() -> usize {
+    1
+}
+fn default_proxy_regeneration_limit() -> usize {
+    1
+}
+fn default_maintenance_limit() -> usize {
+    1
+}
 
-fn default_max_buffer_size() -> usize { 50 * 1024 * 1024 }  // 50MB
-fn default_max_chunks() -> usize { 1000 }
-fn default_chunk_timeout_seconds() -> u64 { 60 }
-fn default_client_timeout_seconds() -> u64 { 30 }
-fn default_cleanup_interval_seconds() -> u64 { 5 }
-fn default_enable_file_spill() -> bool { false }
-fn default_max_file_spill_size() -> usize { 500 * 1024 * 1024 }  // 500MB
+fn default_max_buffer_size() -> usize {
+    50 * 1024 * 1024
+} // 50MB
+fn default_max_chunks() -> usize {
+    1000
+}
+fn default_chunk_timeout_seconds() -> u64 {
+    60
+}
+fn default_client_timeout_seconds() -> u64 {
+    30
+}
+fn default_cleanup_interval_seconds() -> u64 {
+    5
+}
+fn default_enable_file_spill() -> bool {
+    false
+}
+fn default_max_file_spill_size() -> usize {
+    500 * 1024 * 1024
+} // 500MB
 
 impl Default for BufferConfig {
     fn default() -> Self {
@@ -850,7 +874,6 @@ impl Default for Config {
     }
 }
 
-
 impl Config {
     pub fn load() -> Result<Self> {
         let config_file =
@@ -861,24 +884,27 @@ impl Config {
     pub fn load_from_file(config_file: &str) -> Result<Self> {
         // Check if config file exists
         if !std::path::Path::new(config_file).exists() {
-            tracing::warn!("Config file '{}' not found, using default configuration values", config_file);
-            
+            tracing::warn!(
+                "Config file '{}' not found, using default configuration values",
+                config_file
+            );
+
             // Start with default config and merge environment variables
             let default_config = Self::default();
             let config: Config = Figment::new()
                 .merge(figment::providers::Serialized::defaults(default_config))
                 .merge(Env::prefixed("M3U_PROXY_").split("__"))
                 .extract()?;
-                
+
             return Ok(config);
         }
-        
+
         // Load config with figment (TOML file + environment variables)
         let config: Config = Figment::new()
             .merge(Toml::file(config_file))
             .merge(Env::prefixed("M3U_PROXY_").split("__"))
             .extract()?;
-            
+
         Ok(config)
     }
 }
@@ -910,7 +936,7 @@ mod tests {
 
         assert!(safe_programs * 12 <= 32766); // Use actual EPG_PROGRAM_FIELDS constant
 
-        // Should cap to maximum safe values  
+        // Should cap to maximum safe values
         assert_eq!(safe_programs, 32766 / 12); // 2730 (using actual EPG_PROGRAM_FIELDS constant)
     }
 

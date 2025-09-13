@@ -25,30 +25,35 @@
 use anyhow::Result;
 use axum::{
     Router,
-    routing::{get, post, put, delete},
+    routing::{delete, get, post, put},
 };
-use std::net::SocketAddr;
+use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
 use std::collections::HashSet;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
-use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
 
 use crate::{
     config::Config,
     data_mapping::DataMappingService,
     database::Database,
-    ingestor::{IngestionStateManager, scheduler::{CacheInvalidationSender, SchedulerEvent}},
-    job_scheduling::{job_scheduler::JobScheduler, job_queue::JobQueue, job_queue_runner::JobQueueRunner},
+    ingestor::{
+        IngestionStateManager,
+        scheduler::{CacheInvalidationSender, SchedulerEvent},
+    },
+    job_scheduling::{
+        job_queue::JobQueue, job_queue_runner::JobQueueRunner, job_scheduler::JobScheduler,
+    },
     logo_assets::{LogoAssetService, LogoAssetStorage},
     observability::AppObservability,
     runtime_settings::RuntimeSettingsStore,
     services::{ProxyRegenerationService, progress_service::ProgressService},
 };
-use tokio::sync::mpsc;
 use sandboxed_file_manager::SandboxedManager;
 use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 
 pub mod api;
 pub mod extractors;
@@ -60,7 +65,10 @@ pub mod utils;
 
 // Re-export commonly used types
 pub use extractors::{ListParams, PaginationParams, RequestContext, SearchParams};
-pub use responses::{ApiResponse, PaginatedResponse, handle_error, handle_result, CacheControl, with_cache_headers, ok_with_cache};
+pub use responses::{
+    ApiResponse, CacheControl, PaginatedResponse, handle_error, handle_result, ok_with_cache,
+    with_cache_headers,
+};
 
 /// Web server configuration and setup
 pub struct WebServer {
@@ -97,7 +105,8 @@ pub struct WebServerBuilder {
     pub job_queue: Arc<JobQueue>,
     pub job_queue_runner: Arc<JobQueueRunner>,
     pub logo_cache_service: Arc<crate::services::logo_cache::LogoCacheService>,
-    pub logo_cache_maintenance_service: Arc<crate::services::logo_cache_maintenance::LogoCacheMaintenanceService>,
+    pub logo_cache_maintenance_service:
+        Arc<crate::services::logo_cache_maintenance::LogoCacheMaintenanceService>,
 }
 
 impl WebServerBuilder {
@@ -111,7 +120,7 @@ impl WebServer {
     pub async fn new(builder: WebServerBuilder) -> Result<Self> {
         Self::new_from_builder(builder).await
     }
-    
+
     /// Create a new web server from builder (internal implementation)
     async fn new_from_builder(builder: WebServerBuilder) -> Result<Self> {
         tracing::info!("WebServer using native pipeline");
@@ -119,12 +128,17 @@ impl WebServer {
         // The new LogoCacheService is already available in the builder
 
         let source_linking_service = {
-            use crate::database::repositories::{StreamSourceSeaOrmRepository, EpgSourceSeaOrmRepository};
-            
-            let stream_source_repo = StreamSourceSeaOrmRepository::new(builder.database.connection().clone());
-            let epg_source_repo = EpgSourceSeaOrmRepository::new(builder.database.connection().clone());
-            let url_linking_service = crate::services::UrlLinkingService::new(stream_source_repo, epg_source_repo);
-            
+            use crate::database::repositories::{
+                EpgSourceSeaOrmRepository, StreamSourceSeaOrmRepository,
+            };
+
+            let stream_source_repo =
+                StreamSourceSeaOrmRepository::new(builder.database.connection().clone());
+            let epg_source_repo =
+                EpgSourceSeaOrmRepository::new(builder.database.connection().clone());
+            let url_linking_service =
+                crate::services::UrlLinkingService::new(stream_source_repo, epg_source_repo);
+
             std::sync::Arc::new(crate::services::SourceLinkingService::new(
                 StreamSourceSeaOrmRepository::new(builder.database.connection().clone()),
                 EpgSourceSeaOrmRepository::new(builder.database.connection().clone()),
@@ -179,7 +193,8 @@ impl WebServer {
         })
         .await;
 
-        let addr: SocketAddr = format!("{}:{}", builder.config.web.host, builder.config.web.port).parse()?;
+        let addr: SocketAddr =
+            format!("{}:{}", builder.config.web.host, builder.config.web.port).parse()?;
 
         Ok(Self { app, addr })
     }
@@ -197,7 +212,10 @@ impl WebServer {
             // API v1 routes
             .nest("/api/v1", Self::api_v1_routes())
             // Proxy/Streaming endpoints (non-API content serving)
-            .route("/proxy/{ulid}/m3u8", get(handlers::proxies::serve_proxy_m3u))
+            .route(
+                "/proxy/{ulid}/m3u8",
+                get(handlers::proxies::serve_proxy_m3u),
+            )
             .route(
                 "/proxy/{ulid}/xmltv",
                 get(handlers::proxies::serve_proxy_xmltv),
@@ -223,11 +241,13 @@ impl WebServer {
             // OpenTelemetry tracing middleware (should be outer layer to capture all requests)
             .layer(OtelAxumLayer::default())
             // Security headers middleware
-            .layer(axum::middleware::from_fn(middleware::security_headers_middleware))
+            .layer(axum::middleware::from_fn(
+                middleware::security_headers_middleware,
+            ))
             // Conditional request logging middleware (respects runtime settings)
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
-                middleware::conditional_request_logging_middleware
+                middleware::conditional_request_logging_middleware,
             ))
             // Shared state
             .with_state(state)
@@ -236,15 +256,17 @@ impl WebServer {
     /// OpenAPI documentation routes
     fn openapi_routes() -> Router<AppState> {
         use utoipa_swagger_ui::SwaggerUi;
-        
+
         Router::new()
             // Swagger UI integration - automatically serves both /docs and /api/openapi.json
-            .merge(SwaggerUi::new("/docs")
-                .url("/api/openapi.json", openapi::get_comprehensive_openapi_spec()))
+            .merge(SwaggerUi::new("/docs").url(
+                "/api/openapi.json",
+                openapi::get_comprehensive_openapi_spec(),
+            ))
     }
 
     /// API v1 routes with standard Axum routing
-    fn api_v1_routes() -> Router<AppState> {        
+    fn api_v1_routes() -> Router<AppState> {
         Router::new()
             // Stream Sources routes (with utoipa annotations)
             .route(
@@ -302,8 +324,11 @@ impl WebServer {
             // Unified sources
             .route("/sources", get(api::list_all_sources))
             // Progress events SSE endpoint
-            .route("/progress/events", get(api::progress_events::progress_events_stream))
-            // Progress operations REST endpoint  
+            .route(
+                "/progress/events",
+                get(api::progress_events::progress_events_stream),
+            )
+            // Progress operations REST endpoint
             .route("/progress/operations", get(api::get_operation_progress))
             // Logo assets
             .route("/logos", get(api::list_logo_assets))
@@ -332,9 +357,18 @@ impl WebServer {
             .route("/logos/cached/{cache_id}", get(api::get_cached_logo_asset))
             // Expression validation (generalized endpoints)
             .route("/expressions/validate", post(api::validate_expression))
-            .route("/expressions/validate/stream", post(api::validate_stream_expression))
-            .route("/expressions/validate/epg", post(api::validate_epg_expression))
-            .route("/expressions/validate/data-mapping", post(api::validate_data_mapping_expression))
+            .route(
+                "/expressions/validate/stream",
+                post(api::validate_stream_expression),
+            )
+            .route(
+                "/expressions/validate/epg",
+                post(api::validate_epg_expression),
+            )
+            .route(
+                "/expressions/validate/data-mapping",
+                post(api::validate_data_mapping_expression),
+            )
             // Filters
             .route("/filters", get(api::list_filters).post(api::create_filter))
             .route(
@@ -359,8 +393,14 @@ impl WebServer {
             )
             .route("/data-mapping/test", post(api::test_data_mapping_rule))
             .route("/data-mapping/helpers", get(api::get_data_mapping_helpers))
-            .route("/data-mapping/helpers/logo/search", get(api::search_logo_assets_for_helper))
-            .route("/data-mapping/helpers/date/complete", post(api::get_date_completion_options))
+            .route(
+                "/data-mapping/helpers/logo/search",
+                get(api::search_logo_assets_for_helper),
+            )
+            .route(
+                "/data-mapping/helpers/date/complete",
+                post(api::get_date_completion_options),
+            )
             .route(
                 "/data-mapping/preview",
                 get(api::apply_data_mapping_rules).post(api::apply_data_mapping_rules_post),
@@ -369,11 +409,23 @@ impl WebServer {
                 "/data-mapping/reorder",
                 post(api::reorder_data_mapping_rules).put(api::reorder_data_mapping_rules),
             )
-            .route("/data-mapping/fields/stream", get(api::get_data_mapping_stream_fields))
-            .route("/data-mapping/fields/epg", get(api::get_data_mapping_epg_fields))
+            .route(
+                "/data-mapping/fields/stream",
+                get(api::get_data_mapping_stream_fields),
+            )
+            .route(
+                "/data-mapping/fields/epg",
+                get(api::get_data_mapping_epg_fields),
+            )
             // Generalized pipeline validation endpoints
-            .route("/pipeline/validate", post(api::validate_pipeline_expression))
-            .route("/pipeline/fields/{stage}", get(api::get_pipeline_stage_fields))
+            .route(
+                "/pipeline/validate",
+                post(api::validate_pipeline_expression),
+            )
+            .route(
+                "/pipeline/fields/{stage}",
+                get(api::get_pipeline_stage_fields),
+            )
             // Proxies
             .route(
                 "/proxies",
@@ -394,7 +446,10 @@ impl WebServer {
                 get(handlers::proxies::preview_existing_proxy),
             )
             .route("/proxies/{id}/regenerate", post(api::regenerate_proxy))
-            .route("/proxies/regeneration/status", get(api::get_regeneration_queue_status))
+            .route(
+                "/proxies/regeneration/status",
+                get(api::get_regeneration_queue_status),
+            )
             // Relay system endpoints
             .merge(api::relay::relay_routes())
             // Metrics and analytics
@@ -408,29 +463,63 @@ impl WebServer {
             .route("/settings", put(api::settings::update_settings))
             .route("/settings/info", get(api::settings::get_settings_info))
             // Job scheduling settings endpoints
-            .route("/settings/job-scheduling", get(api::settings::get_job_scheduling_config))
-            .route("/settings/job-scheduling", put(api::settings::update_job_scheduling_config))
+            .route(
+                "/settings/job-scheduling",
+                get(api::settings::get_job_scheduling_config),
+            )
+            .route(
+                "/settings/job-scheduling",
+                put(api::settings::update_job_scheduling_config),
+            )
             // Feature flags endpoints
-            .route("/features", get(handlers::features::get_features)
-                .put(handlers::features::update_features))
+            .route(
+                "/features",
+                get(handlers::features::get_features).put(handlers::features::update_features),
+            )
             // Channel browser endpoints
             .route("/channels", get(handlers::channels::list_channels))
-            .route("/channels/proxy/{proxy_id}", get(handlers::channels::get_proxy_channels))
-            .route("/channels/{channel_id}/stream", get(handlers::channels::get_channel_stream))
-            .route("/channels/{channel_id}/probe", post(handlers::channels::probe_channel_codecs))
+            .route(
+                "/channels/proxy/{proxy_id}",
+                get(handlers::channels::get_proxy_channels),
+            )
+            .route(
+                "/channels/{channel_id}/stream",
+                get(handlers::channels::get_channel_stream),
+            )
+            .route(
+                "/channels/{channel_id}/probe",
+                post(handlers::channels::probe_channel_codecs),
+            )
             // EPG viewer endpoints
             .route("/epg/programs", get(handlers::epg::list_epg_programs))
-            .route("/epg/programs/{source_id}", get(handlers::epg::get_source_epg_programs))
+            .route(
+                "/epg/programs/{source_id}",
+                get(handlers::epg::get_source_epg_programs),
+            )
             .route("/epg/sources", get(handlers::epg::list_epg_sources))
             .route("/epg/guide", get(handlers::epg::get_epg_guide))
             // Circuit breaker management endpoints
-            .route("/circuit-breakers", get(handlers::circuit_breaker::get_circuit_breaker_stats))
-            .route("/circuit-breakers/config", 
+            .route(
+                "/circuit-breakers",
+                get(handlers::circuit_breaker::get_circuit_breaker_stats),
+            )
+            .route(
+                "/circuit-breakers/config",
                 get(handlers::circuit_breaker::get_circuit_breaker_config)
-                .put(handlers::circuit_breaker::update_circuit_breaker_config))
-            .route("/circuit-breakers/services", get(handlers::circuit_breaker::list_active_services))
-            .route("/circuit-breakers/services/{service_name}", put(handlers::circuit_breaker::update_service_profile))
-            .route("/circuit-breakers/services/{service_name}/force", post(handlers::circuit_breaker::force_circuit_state))
+                    .put(handlers::circuit_breaker::update_circuit_breaker_config),
+            )
+            .route(
+                "/circuit-breakers/services",
+                get(handlers::circuit_breaker::list_active_services),
+            )
+            .route(
+                "/circuit-breakers/services/{service_name}",
+                put(handlers::circuit_breaker::update_service_profile),
+            )
+            .route(
+                "/circuit-breakers/services/{service_name}/force",
+                post(handlers::circuit_breaker::force_circuit_state),
+            )
     }
 
     /// Start the web server
@@ -463,15 +552,19 @@ impl WebServer {
                 let shutdown_signal = async move {
                     if let Some(token) = &cancellation_token {
                         token.cancelled().await;
-                        tracing::info!("Web server received cancellation signal, shutting down gracefully");
+                        tracing::info!(
+                            "Web server received cancellation signal, shutting down gracefully"
+                        );
                     } else {
                         // Fallback to signal handling if no cancellation token provided
                         #[cfg(unix)]
                         {
-                            use tokio::signal::unix::{signal, SignalKind};
-                            let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-                            let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
-                            
+                            use tokio::signal::unix::{SignalKind, signal};
+                            let mut sigterm = signal(SignalKind::terminate())
+                                .expect("failed to install SIGTERM handler");
+                            let mut sigint = signal(SignalKind::interrupt())
+                                .expect("failed to install SIGINT handler");
+
                             tokio::select! {
                                 _ = sigterm.recv() => {
                                     tracing::info!("Received SIGTERM, shutting down gracefully");
@@ -481,11 +574,13 @@ impl WebServer {
                                 }
                             }
                         }
-                        
+
                         #[cfg(not(unix))]
                         {
                             use tokio::signal;
-                            signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+                            signal::ctrl_c()
+                                .await
+                                .expect("failed to install Ctrl+C handler");
                             tracing::info!("Received Ctrl+C, shutting down gracefully");
                         }
                     }
@@ -515,7 +610,7 @@ impl WebServer {
     pub fn port(&self) -> u16 {
         self.addr.port()
     }
-    
+
     /// Wire up duplicate protection between API requests and background auto-regeneration
     /// This prevents race conditions where manual and automatic regenerations run simultaneously
     pub async fn wire_duplicate_protection(&mut self) {
@@ -569,7 +664,8 @@ pub struct AppState {
     /// Logo cache service for ultra-compact indexing
     pub logo_cache_service: Arc<crate::services::logo_cache::LogoCacheService>,
     /// Logo cache maintenance service
-    pub logo_cache_maintenance_service: Arc<crate::services::logo_cache_maintenance::LogoCacheMaintenanceService>,
+    pub logo_cache_maintenance_service:
+        Arc<crate::services::logo_cache_maintenance::LogoCacheMaintenanceService>,
 }
 
 impl AppState {}

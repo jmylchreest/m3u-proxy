@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::errors::AppResult;
-use crate::models::{StreamSource, Channel, StreamSourceType, EpgSource, EpgProgram, EpgSourceType};
+use crate::models::{
+    Channel, EpgProgram, EpgSource, EpgSourceType, StreamSource, StreamSourceType,
+};
 
 /// Source validation result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,9 +115,6 @@ impl SourceCapabilities {
     }
 }
 
-
-
-
 /// Core source handler trait
 ///
 /// This trait defines the essential operations that all source handlers must implement.
@@ -148,13 +147,9 @@ pub trait ChannelIngestor: Send + Sync {
     /// Ingest channels from a source
     async fn ingest_channels(&self, source: &StreamSource) -> AppResult<Vec<Channel>>;
 
-
-
-
     /// Estimate the number of channels available (for progress reporting)
     async fn estimate_channel_count(&self, source: &StreamSource) -> AppResult<Option<u32>>;
 }
-
 
 /// URL generation trait
 ///
@@ -176,11 +171,7 @@ pub trait StreamUrlGenerator: Send + Sync {
     ) -> AppResult<HashMap<String, String>>;
 
     /// Validate that a generated URL is accessible
-    async fn validate_stream_url(
-        &self,
-        source: &StreamSource,
-        url: &str,
-    ) -> AppResult<bool>;
+    async fn validate_stream_url(&self, source: &StreamSource, url: &str) -> AppResult<bool>;
 }
 
 /// Authentication trait
@@ -192,7 +183,10 @@ pub trait Authenticator: Send + Sync {
     async fn authenticate(&self, source: &StreamSource) -> AppResult<AuthenticationResult>;
 
     /// Refresh authentication if needed
-    async fn refresh_authentication(&self, source: &StreamSource) -> AppResult<AuthenticationResult>;
+    async fn refresh_authentication(
+        &self,
+        source: &StreamSource,
+    ) -> AppResult<AuthenticationResult>;
 
     /// Check if current authentication is valid
     async fn is_authenticated(&self, source: &StreamSource) -> AppResult<bool>;
@@ -217,12 +211,8 @@ pub struct AuthenticationResult {
 ///
 /// This trait combines all the individual traits for sources that support
 /// all functionality. Implementing this trait indicates a fully-featured source.
-pub trait FullSourceHandler: 
-    SourceHandler + 
-    ChannelIngestor + 
-    StreamUrlGenerator + 
-    Send + 
-    Sync 
+pub trait FullSourceHandler:
+    SourceHandler + ChannelIngestor + StreamUrlGenerator + Send + Sync
 {
     /// Get a comprehensive source summary
     fn get_handler_summary(&self) -> SourceHandlerSummary {
@@ -253,19 +243,19 @@ pub struct SourceHandlerSummary {
 pub enum SourceError {
     #[error("Source type '{0:?}' is not supported")]
     UnsupportedSourceType(StreamSourceType),
-    
+
     #[error("Source configuration is invalid: {0}")]
     InvalidConfiguration(String),
-    
+
     #[error("Authentication failed: {0}")]
     AuthenticationFailed(String),
-    
+
     #[error("Source is not reachable: {0}")]
     ConnectionFailed(String),
-    
+
     #[error("Ingestion failed: {0}")]
     IngestionFailed(String),
-    
+
     #[error("URL generation failed: {0}")]
     UrlGenerationFailed(String),
 }
@@ -305,9 +295,6 @@ pub trait EpgSourceHandler: Send + Sync {
 pub trait EpgProgramIngestor: Send + Sync {
     /// Ingest EPG programs from a source (programs-only mode)
     async fn ingest_epg_programs(&self, source: &EpgSource) -> AppResult<Vec<EpgProgram>>;
-
-
-
 
     /// Ingest EPG programs with ProgressStageUpdater (new API)
     async fn ingest_epg_programs_with_progress_updater(
@@ -374,18 +361,11 @@ impl EpgSourceCapabilities {
     }
 }
 
-
-
 /// Composite trait for full-featured EPG source handlers
 ///
 /// This trait combines all the individual EPG traits for sources that support
 /// all EPG functionality. Implementing this trait indicates a fully-featured EPG source.
-pub trait FullEpgSourceHandler: 
-    EpgSourceHandler + 
-    EpgProgramIngestor + 
-    Send + 
-    Sync 
-{
+pub trait FullEpgSourceHandler: EpgSourceHandler + EpgProgramIngestor + Send + Sync {
     /// Get a comprehensive EPG source summary
     fn get_epg_handler_summary(&self) -> EpgSourceHandlerSummary {
         EpgSourceHandlerSummary {

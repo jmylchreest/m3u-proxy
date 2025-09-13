@@ -1,11 +1,11 @@
+use crate::expression_parser::ExpressionParser;
+use crate::models::{Action, ActionOperator, ExtendedExpression};
+use crate::utils::regex_preprocessor::RegexPreprocessor;
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use crate::expression_parser::ExpressionParser;
-use crate::models::{ExtendedExpression, ActionOperator, Action};
-use crate::utils::regex_preprocessor::RegexPreprocessor;
 use tracing::{trace, warn};
-use regex::Regex;
 
 /// Type alias for regex evaluation result with captures
 type RegexCaptureResult = Result<(bool, Option<Vec<String>>), Box<dyn std::error::Error>>;
@@ -50,43 +50,60 @@ impl RegexEvaluator {
     pub fn new(preprocessor: RegexPreprocessor) -> Self {
         Self { preprocessor }
     }
-    
-    pub fn evaluate_with_preprocessing(&self, pattern: &str, text: &str, context: &str) -> Result<bool, Box<dyn std::error::Error>> {
+
+    pub fn evaluate_with_preprocessing(
+        &self,
+        pattern: &str,
+        text: &str,
+        context: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         // Use preprocessor to check if regex should run
         if !self.preprocessor.should_run_regex(text, pattern, context) {
             return Ok(false);
         }
-        
+
         // Run the actual regex
         match Regex::new(pattern) {
             Ok(regex) => Ok(regex.is_match(text)),
             Err(e) => {
-                warn!("Invalid regex pattern '{}': {}, falling back to contains", pattern, e);
+                warn!(
+                    "Invalid regex pattern '{}': {}, falling back to contains",
+                    pattern, e
+                );
                 Ok(text.contains(pattern))
             }
         }
     }
-    
-    pub fn evaluate_with_captures(&self, pattern: &str, text: &str, context: &str) -> RegexCaptureResult {
+
+    pub fn evaluate_with_captures(
+        &self,
+        pattern: &str,
+        text: &str,
+        context: &str,
+    ) -> RegexCaptureResult {
         // Use preprocessor to check if regex should run
         if !self.preprocessor.should_run_regex(text, pattern, context) {
             return Ok((false, None));
         }
-        
+
         // Run the actual regex with captures
         match Regex::new(pattern) {
             Ok(regex) => {
                 if let Some(caps) = regex.captures(text) {
-                    let capture_strings: Vec<String> = caps.iter()
+                    let capture_strings: Vec<String> = caps
+                        .iter()
                         .map(|m| m.map_or("".to_string(), |m| m.as_str().to_string()))
                         .collect();
                     Ok((true, Some(capture_strings)))
                 } else {
                     Ok((false, None))
                 }
-            },
+            }
             Err(e) => {
-                warn!("Invalid regex pattern '{}': {}, falling back to contains", pattern, e);
+                warn!(
+                    "Invalid regex pattern '{}': {}, falling back to contains",
+                    pattern, e
+                );
                 Ok((text.contains(pattern), None))
             }
         }
@@ -102,7 +119,12 @@ pub struct StreamRuleProcessor {
 }
 
 impl StreamRuleProcessor {
-    pub fn new(rule_id: String, rule_name: String, expression: String, regex_evaluator: RegexEvaluator) -> Self {
+    pub fn new(
+        rule_id: String,
+        rule_name: String,
+        expression: String,
+        regex_evaluator: RegexEvaluator,
+    ) -> Self {
         // Parse expression once during initialization
         let parsed_expression = if expression.trim().is_empty() {
             None
@@ -116,13 +138,13 @@ impl StreamRuleProcessor {
                 "channel_name".to_string(),
                 "stream_url".to_string(),
             ];
-            
+
             let parser = ExpressionParser::new().with_fields(channel_fields);
             match parser.parse_extended(&expression) {
                 Ok(parsed) => {
                     trace!("Successfully pre-parsed expression for rule {}", rule_id);
                     Some(parsed)
-                },
+                }
                 Err(e) => {
                     warn!("Failed to pre-parse expression for rule {}: {}", rule_id, e);
                     None
@@ -138,44 +160,65 @@ impl StreamRuleProcessor {
             regex_evaluator,
         }
     }
-    
+
     /// Evaluate the expression against a channel record using the cached parsed expression
-    fn evaluate_expression(&self, record: &crate::models::Channel) -> Result<(crate::models::Channel, Vec<FieldModification>), Box<dyn std::error::Error>> {
+    fn evaluate_expression(
+        &self,
+        record: &crate::models::Channel,
+    ) -> Result<(crate::models::Channel, Vec<FieldModification>), Box<dyn std::error::Error>> {
         let mut modified_record = record.clone();
         let mut modifications = Vec::new();
-        
+
         // Use cached parsed expression
         let parsed_expression = match &self.parsed_expression {
             Some(expr) => expr,
             None => {
-                trace!("Rule {} has no valid parsed expression, skipping", self.rule_id);
+                trace!(
+                    "Rule {} has no valid parsed expression, skipping",
+                    self.rule_id
+                );
                 return Ok((modified_record, modifications));
             }
         };
-        
+
         trace!("Evaluating rule {} against channel", self.rule_id);
-        
+
         // Evaluate the parsed expression
         match parsed_expression {
             ExtendedExpression::ConditionWithActions { condition, actions } => {
                 // Check if we need captures (only for regex operations)
                 let needs_captures = self.condition_tree_needs_captures(condition);
-                
-                
+
                 if needs_captures {
                     // Use captures version for regex-based conditions
-                    let (condition_result, captures) = self.evaluate_condition_tree_with_captures(condition, record)?;
-                    
-                    
-                    trace!("Rule {} condition evaluation result: {} captures: {:?}", self.rule_id, condition_result, captures);
-                    
+                    let (condition_result, captures) =
+                        self.evaluate_condition_tree_with_captures(condition, record)?;
+
+                    trace!(
+                        "Rule {} condition evaluation result: {} captures: {:?}",
+                        self.rule_id, condition_result, captures
+                    );
+
                     if condition_result {
-                        trace!("Rule {} condition matched, applying {} actions with captures", self.rule_id, actions.len());
+                        trace!(
+                            "Rule {} condition matched, applying {} actions with captures",
+                            self.rule_id,
+                            actions.len()
+                        );
                         for action in actions {
-                            if let Some(modification) = self.apply_parsed_action_with_captures(action, &mut modified_record, &record.channel_name, &captures)? {
-                                trace!("Rule {} applied action: {} {:?} -> {:?}", 
-                                       self.rule_id, &modification.field_name, 
-                                       &modification.modification_type, &modification.new_value);
+                            if let Some(modification) = self.apply_parsed_action_with_captures(
+                                action,
+                                &mut modified_record,
+                                &record.channel_name,
+                                &captures,
+                            )? {
+                                trace!(
+                                    "Rule {} applied action: {} {:?} -> {:?}",
+                                    self.rule_id,
+                                    &modification.field_name,
+                                    &modification.modification_type,
+                                    &modification.new_value
+                                );
                                 modifications.push(modification);
                             }
                         }
@@ -185,15 +228,30 @@ impl StreamRuleProcessor {
                 } else {
                     // Use simpler/faster version for non-regex conditions
                     let condition_result = self.evaluate_condition_tree(condition, record)?;
-                    trace!("Rule {} condition evaluation result: {} (fast path)", self.rule_id, condition_result);
-                    
+                    trace!(
+                        "Rule {} condition evaluation result: {} (fast path)",
+                        self.rule_id, condition_result
+                    );
+
                     if condition_result {
-                        trace!("Rule {} condition matched, applying {} actions (fast path)", self.rule_id, actions.len());
+                        trace!(
+                            "Rule {} condition matched, applying {} actions (fast path)",
+                            self.rule_id,
+                            actions.len()
+                        );
                         for action in actions {
-                            if let Some(modification) = self.apply_parsed_action(action, &mut modified_record, &record.channel_name)? {
-                                trace!("Rule {} applied action: {} {:?} -> {:?}", 
-                                       self.rule_id, &modification.field_name, 
-                                       &modification.modification_type, &modification.new_value);
+                            if let Some(modification) = self.apply_parsed_action(
+                                action,
+                                &mut modified_record,
+                                &record.channel_name,
+                            )? {
+                                trace!(
+                                    "Rule {} applied action: {} {:?} -> {:?}",
+                                    self.rule_id,
+                                    &modification.field_name,
+                                    &modification.modification_type,
+                                    &modification.new_value
+                                );
                                 modifications.push(modification);
                             }
                         }
@@ -211,21 +269,32 @@ impl StreamRuleProcessor {
                 // Process each conditional action group
                 for group in groups {
                     let needs_captures = self.condition_tree_needs_captures(&group.conditions);
-                    
+
                     if needs_captures {
-                        let (condition_result, group_captures) = self.evaluate_condition_tree_with_captures(&group.conditions, record)?;
+                        let (condition_result, group_captures) =
+                            self.evaluate_condition_tree_with_captures(&group.conditions, record)?;
                         if condition_result {
                             for action in &group.actions {
-                                if let Some(modification) = self.apply_parsed_action_with_captures(action, &mut modified_record, &record.channel_name, &group_captures)? {
+                                if let Some(modification) = self.apply_parsed_action_with_captures(
+                                    action,
+                                    &mut modified_record,
+                                    &record.channel_name,
+                                    &group_captures,
+                                )? {
                                     modifications.push(modification);
                                 }
                             }
                         }
                     } else {
-                        let condition_result = self.evaluate_condition_tree(&group.conditions, record)?;
+                        let condition_result =
+                            self.evaluate_condition_tree(&group.conditions, record)?;
                         if condition_result {
                             for action in &group.actions {
-                                if let Some(modification) = self.apply_parsed_action(action, &mut modified_record, &record.channel_name)? {
+                                if let Some(modification) = self.apply_parsed_action(
+                                    action,
+                                    &mut modified_record,
+                                    &record.channel_name,
+                                )? {
                                     modifications.push(modification);
                                 }
                             }
@@ -234,175 +303,262 @@ impl StreamRuleProcessor {
                 }
             }
         }
-        
+
         Ok((modified_record, modifications))
     }
-    
+
     /// Evaluate a condition tree (parsed expression structure)
-    fn evaluate_condition_tree(&self, condition: &crate::models::ConditionTree, record: &crate::models::Channel) -> Result<bool, Box<dyn std::error::Error>> {
+    fn evaluate_condition_tree(
+        &self,
+        condition: &crate::models::ConditionTree,
+        record: &crate::models::Channel,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         self.evaluate_condition_node(&condition.root, record)
     }
-    
+
     /// Evaluate a condition tree and return captures from regex matches
-    fn evaluate_condition_tree_with_captures(&self, condition: &crate::models::ConditionTree, record: &crate::models::Channel) -> RegexCaptureResult {
+    fn evaluate_condition_tree_with_captures(
+        &self,
+        condition: &crate::models::ConditionTree,
+        record: &crate::models::Channel,
+    ) -> RegexCaptureResult {
         self.evaluate_condition_node_with_captures(&condition.root, record)
     }
-    
+
     /// Check if a condition tree contains regex operators that need capture groups
     fn condition_tree_needs_captures(&self, condition: &crate::models::ConditionTree) -> bool {
         self.condition_node_needs_captures(&condition.root)
     }
-    
+
     #[allow(clippy::only_used_in_recursion)]
     /// Check if a condition node contains regex operators recursively
     fn condition_node_needs_captures(&self, node: &crate::models::ConditionNode) -> bool {
         use crate::models::FilterOperator;
-        
+
         match node {
             crate::models::ConditionNode::Condition { operator, .. } => {
-                matches!(operator, FilterOperator::Matches | FilterOperator::NotMatches)
+                matches!(
+                    operator,
+                    FilterOperator::Matches | FilterOperator::NotMatches
+                )
             }
-            crate::models::ConditionNode::Group { children, .. } => {
-                children.iter().any(|child| self.condition_node_needs_captures(child))
-            }
+            crate::models::ConditionNode::Group { children, .. } => children
+                .iter()
+                .any(|child| self.condition_node_needs_captures(child)),
         }
     }
-    
+
     /// Evaluate a condition node recursively  
-    fn evaluate_condition_node(&self, node: &crate::models::ConditionNode, record: &crate::models::Channel) -> Result<bool, Box<dyn std::error::Error>> {
-        self.evaluate_condition_node_with_captures(node, record).map(|(result, _)| result)
+    fn evaluate_condition_node(
+        &self,
+        node: &crate::models::ConditionNode,
+        record: &crate::models::Channel,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        self.evaluate_condition_node_with_captures(node, record)
+            .map(|(result, _)| result)
     }
 
     /// Evaluate a condition node and return captures for regex matches
-    fn evaluate_condition_node_with_captures(&self, node: &crate::models::ConditionNode, record: &crate::models::Channel) -> RegexCaptureResult {
-        use crate::models::{LogicalOperator, FilterOperator};
-        
+    fn evaluate_condition_node_with_captures(
+        &self,
+        node: &crate::models::ConditionNode,
+        record: &crate::models::Channel,
+    ) -> RegexCaptureResult {
+        use crate::models::{FilterOperator, LogicalOperator};
+
         match node {
-            crate::models::ConditionNode::Condition { field, operator, value, .. } => {
+            crate::models::ConditionNode::Condition {
+                field,
+                operator,
+                value,
+                ..
+            } => {
                 let field_value = self.get_field_value(field, record)?;
                 let field_value_str = field_value.unwrap_or_default();
-                
-                
-                trace!("Evaluating condition: field='{}' operator='{:?}' value='{}' field_value='{}'", 
-                       field, operator, value, field_value_str);
-                
-                
+
+                trace!(
+                    "Evaluating condition: field='{}' operator='{:?}' value='{}' field_value='{}'",
+                    field, operator, value, field_value_str
+                );
+
                 let (matches, captures) = match operator {
                     FilterOperator::Equals => (field_value_str.eq_ignore_ascii_case(value), None),
-                    FilterOperator::NotEquals => (!field_value_str.eq_ignore_ascii_case(value), None),
-                    FilterOperator::Contains => (field_value_str.to_lowercase().contains(&value.to_lowercase()), None),
-                    FilterOperator::NotContains => (!field_value_str.to_lowercase().contains(&value.to_lowercase()), None),
-                    FilterOperator::StartsWith => (field_value_str.to_lowercase().starts_with(&value.to_lowercase()), None),
-                    FilterOperator::NotStartsWith => (!field_value_str.to_lowercase().starts_with(&value.to_lowercase()), None),
-                    FilterOperator::EndsWith => (field_value_str.to_lowercase().ends_with(&value.to_lowercase()), None),
-                    FilterOperator::NotEndsWith => (!field_value_str.to_lowercase().ends_with(&value.to_lowercase()), None),
+                    FilterOperator::NotEquals => {
+                        (!field_value_str.eq_ignore_ascii_case(value), None)
+                    }
+                    FilterOperator::Contains => (
+                        field_value_str
+                            .to_lowercase()
+                            .contains(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::NotContains => (
+                        !field_value_str
+                            .to_lowercase()
+                            .contains(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::StartsWith => (
+                        field_value_str
+                            .to_lowercase()
+                            .starts_with(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::NotStartsWith => (
+                        !field_value_str
+                            .to_lowercase()
+                            .starts_with(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::EndsWith => (
+                        field_value_str
+                            .to_lowercase()
+                            .ends_with(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::NotEndsWith => (
+                        !field_value_str
+                            .to_lowercase()
+                            .ends_with(&value.to_lowercase()),
+                        None,
+                    ),
                     FilterOperator::Matches => {
                         let context = format!("data_mapping_rule_{}", self.rule_name);
-                        match self.regex_evaluator.evaluate_with_captures(value, &field_value_str, &context) {
+                        match self.regex_evaluator.evaluate_with_captures(
+                            value,
+                            &field_value_str,
+                            &context,
+                        ) {
                             Ok((matches, captures)) => (matches, captures),
                             Err(e) => {
-                                warn!("RULE_PROCESSOR:   > Regex evaluation failed for pattern '{}': {}", value, e);
+                                warn!(
+                                    "RULE_PROCESSOR:   > Regex evaluation failed for pattern '{}': {}",
+                                    value, e
+                                );
                                 (false, None)
                             }
                         }
-                    },
+                    }
                     FilterOperator::NotMatches => {
                         let context = format!("data_mapping_rule_{}", self.rule_name);
-                        match self.regex_evaluator.evaluate_with_preprocessing(value, &field_value_str, &context) {
+                        match self.regex_evaluator.evaluate_with_preprocessing(
+                            value,
+                            &field_value_str,
+                            &context,
+                        ) {
                             Ok(matches) => {
                                 let not_matches = !matches;
-                                trace!("Regex evaluation (NOT): pattern='{}' text='{}' matches={}", value, field_value_str, not_matches);
+                                trace!(
+                                    "Regex evaluation (NOT): pattern='{}' text='{}' matches={}",
+                                    value, field_value_str, not_matches
+                                );
                                 (not_matches, None)
-                            },
+                            }
                             Err(e) => {
-                                warn!("RULE_PROCESSOR:   > Regex evaluation failed for pattern '{}': {}", value, e);
+                                warn!(
+                                    "RULE_PROCESSOR:   > Regex evaluation failed for pattern '{}': {}",
+                                    value, e
+                                );
                                 (false, None)
                             }
                         }
-                    },
+                    }
                     FilterOperator::GreaterThan => {
-                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Greater) {
+                        match self.compare_values(
+                            &field_value_str,
+                            value,
+                            std::cmp::Ordering::Greater,
+                        ) {
                             Ok(result) => (result, None),
                             Err(e) => {
                                 warn!("RULE_PROCESSOR:   > Comparison failed: {}", e);
                                 (false, None)
                             }
                         }
-                    },
+                    }
                     FilterOperator::LessThan => {
-                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Less) {
+                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Less)
+                        {
                             Ok(result) => (result, None),
                             Err(e) => {
                                 warn!("RULE_PROCESSOR:   > Comparison failed: {}", e);
                                 (false, None)
                             }
                         }
-                    },
+                    }
                     FilterOperator::GreaterThanOrEqual => {
-                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Greater) {
+                        match self.compare_values(
+                            &field_value_str,
+                            value,
+                            std::cmp::Ordering::Greater,
+                        ) {
                             Ok(result) => {
                                 let equal = field_value_str.eq_ignore_ascii_case(value);
                                 (result || equal, None)
-                            },
+                            }
                             Err(e) => {
                                 warn!("RULE_PROCESSOR:   > Comparison failed: {}", e);
                                 (false, None)
                             }
                         }
-                    },
+                    }
                     FilterOperator::LessThanOrEqual => {
-                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Less) {
+                        match self.compare_values(&field_value_str, value, std::cmp::Ordering::Less)
+                        {
                             Ok(result) => {
                                 let equal = field_value_str.eq_ignore_ascii_case(value);
                                 (result || equal, None)
-                            },
+                            }
                             Err(e) => {
                                 warn!("RULE_PROCESSOR:   > Comparison failed: {}", e);
                                 (false, None)
                             }
                         }
-                    },
+                    }
                 };
-                
-                
+
                 trace!("Condition evaluation result: {}", matches);
-                
-                
+
                 Ok((matches, captures))
             }
             crate::models::ConditionNode::Group { operator, children } => {
                 if children.is_empty() {
                     return Ok((true, None)); // Empty group defaults to true
                 }
-                
+
                 let mut results = Vec::new();
                 let mut all_captures: Option<Vec<String>> = None;
-                
+
                 for child in children {
-                    let (child_result, child_captures) = self.evaluate_condition_node_with_captures(child, record)?;
+                    let (child_result, child_captures) =
+                        self.evaluate_condition_node_with_captures(child, record)?;
                     results.push(child_result);
-                    
+
                     // Collect the first non-None captures we find (from regex matches)
                     if all_captures.is_none() && child_captures.is_some() {
                         all_captures = child_captures;
                     }
                 }
-                
+
                 let group_result = match operator {
                     LogicalOperator::And => results.iter().all(|&r| r),
                     LogicalOperator::Or => results.iter().any(|&r| r),
                 };
-                
+
                 Ok((group_result, all_captures))
             }
         }
     }
-    
+
     /// Apply a parsed action
-    fn apply_parsed_action(&self, action: &Action, record: &mut crate::models::Channel, _channel_name: &str) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
+    fn apply_parsed_action(
+        &self,
+        action: &Action,
+        record: &mut crate::models::Channel,
+        _channel_name: &str,
+    ) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
         let old_value = self.get_field_value(&action.field, record)?;
-        
-        
+
         let modification_type = match &action.operator {
             ActionOperator::Set => ModificationType::Set,
             ActionOperator::SetIfEmpty => {
@@ -410,54 +566,57 @@ impl StreamRuleProcessor {
                     return Ok(None); // Don't modify if field has a value
                 }
                 ModificationType::SetIfEmpty
-            },
+            }
             ActionOperator::Append => ModificationType::Append,
             ActionOperator::Remove => ModificationType::Remove,
             ActionOperator::Delete => ModificationType::Delete,
         };
-        
+
         match &action.operator {
             ActionOperator::Set | ActionOperator::SetIfEmpty => {
                 match &action.value {
                     crate::models::ActionValue::Literal(new_value) => {
                         self.set_field_value(&action.field, new_value, record)?;
-                        
-                        
+
                         Ok(Some(FieldModification {
                             field_name: action.field.clone(),
                             old_value: old_value.clone(),
                             new_value: Some(new_value.clone()),
                             modification_type,
                         }))
-                    },
+                    }
                     crate::models::ActionValue::Null => {
                         // Set field to None/empty
-                        self.apply_parsed_action(&Action {
-                            field: action.field.clone(),
-                            operator: ActionOperator::Delete,
-                            value: action.value.clone(),
-                        }, record, _channel_name)
-                    },
+                        self.apply_parsed_action(
+                            &Action {
+                                field: action.field.clone(),
+                                operator: ActionOperator::Delete,
+                                value: action.value.clone(),
+                            },
+                            record,
+                            _channel_name,
+                        )
+                    }
                     _ => Ok(None), // Other action value types not implemented yet
                 }
-            },
+            }
             ActionOperator::Append => {
                 match &action.value {
                     crate::models::ActionValue::Literal(append_value) => {
                         let current_value = old_value.as_deref().unwrap_or_default();
                         let new_value = format!("{current_value}{append_value}");
                         self.set_field_value(&action.field, &new_value, record)?;
-                        
+
                         Ok(Some(FieldModification {
                             field_name: action.field.clone(),
                             old_value: old_value.clone(),
                             new_value: Some(new_value),
                             modification_type,
                         }))
-                    },
+                    }
                     _ => Ok(None), // Other action value types not supported for append
                 }
-            },
+            }
             ActionOperator::Delete => {
                 // For optional fields, set to None; for required fields, set to empty string
                 match action.field.as_str() {
@@ -469,7 +628,7 @@ impl StreamRuleProcessor {
                             new_value: Some("".to_string()),
                             modification_type,
                         }))
-                    },
+                    }
                     _ => {
                         // Set optional field to None
                         self.set_optional_field_none(&action.field, record)?;
@@ -481,23 +640,32 @@ impl StreamRuleProcessor {
                         }))
                     }
                 }
-            },
+            }
             ActionOperator::Remove => {
                 // Remove specific value from field - for simplicity, treat as delete for now
-                self.apply_parsed_action(&Action {
-                    field: action.field.clone(),
-                    operator: ActionOperator::Delete,
-                    value: action.value.clone(),
-                }, record, _channel_name)
+                self.apply_parsed_action(
+                    &Action {
+                        field: action.field.clone(),
+                        operator: ActionOperator::Delete,
+                        value: action.value.clone(),
+                    },
+                    record,
+                    _channel_name,
+                )
             }
         }
     }
-    
+
     /// Apply a parsed action with capture group substitution
-    fn apply_parsed_action_with_captures(&self, action: &Action, record: &mut crate::models::Channel, _channel_name: &str, captures: &Option<Vec<String>>) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
+    fn apply_parsed_action_with_captures(
+        &self,
+        action: &Action,
+        record: &mut crate::models::Channel,
+        _channel_name: &str,
+        captures: &Option<Vec<String>>,
+    ) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
         let old_value = self.get_field_value(&action.field, record)?;
-        
-        
+
         let modification_type = match &action.operator {
             ActionOperator::Set => ModificationType::Set,
             ActionOperator::SetIfEmpty => {
@@ -505,12 +673,12 @@ impl StreamRuleProcessor {
                     return Ok(None); // Don't modify if field has a value
                 }
                 ModificationType::SetIfEmpty
-            },
+            }
             ActionOperator::Append => ModificationType::Append,
             ActionOperator::Remove => ModificationType::Remove,
             ActionOperator::Delete => ModificationType::Delete,
         };
-        
+
         match &action.operator {
             ActionOperator::Set | ActionOperator::SetIfEmpty => {
                 match &action.value {
@@ -518,44 +686,49 @@ impl StreamRuleProcessor {
                         // Process capture group substitutions
                         let processed_value = self.substitute_capture_groups(new_value, captures);
                         self.set_field_value(&action.field, &processed_value, record)?;
-                        
-                        
+
                         Ok(Some(FieldModification {
                             field_name: action.field.clone(),
                             old_value: old_value.clone(),
                             new_value: Some(processed_value),
                             modification_type,
                         }))
-                    },
+                    }
                     crate::models::ActionValue::Null => {
                         // Set field to None/empty
-                        self.apply_parsed_action_with_captures(&Action {
-                            field: action.field.clone(),
-                            operator: ActionOperator::Delete,
-                            value: action.value.clone(),
-                        }, record, _channel_name, captures)
-                    },
+                        self.apply_parsed_action_with_captures(
+                            &Action {
+                                field: action.field.clone(),
+                                operator: ActionOperator::Delete,
+                                value: action.value.clone(),
+                            },
+                            record,
+                            _channel_name,
+                            captures,
+                        )
+                    }
                     _ => Ok(None), // Other action value types not implemented yet
                 }
-            },
+            }
             ActionOperator::Append => {
                 match &action.value {
                     crate::models::ActionValue::Literal(append_value) => {
-                        let processed_value = self.substitute_capture_groups(append_value, captures);
+                        let processed_value =
+                            self.substitute_capture_groups(append_value, captures);
                         let current_value = old_value.as_deref().unwrap_or_default();
                         let new_value = format!("{current_value}{processed_value}");
                         self.set_field_value(&action.field, &new_value, record)?;
-                        
+
                         Ok(Some(FieldModification {
                             field_name: action.field.clone(),
                             old_value: old_value.clone(),
                             new_value: Some(new_value),
                             modification_type,
                         }))
-                    },
+                    }
                     _ => Ok(None), // Other action value types not supported for append
                 }
-            },
+            }
             ActionOperator::Delete => {
                 // For optional fields, set to None; for required fields, set to empty string
                 match action.field.as_str() {
@@ -567,7 +740,7 @@ impl StreamRuleProcessor {
                             new_value: Some("".to_string()),
                             modification_type,
                         }))
-                    },
+                    }
                     _ => {
                         // Set optional field to None
                         self.set_optional_field_none(&action.field, record)?;
@@ -579,41 +752,48 @@ impl StreamRuleProcessor {
                         }))
                     }
                 }
-            },
+            }
             ActionOperator::Remove => {
                 // Remove specific value from field - for simplicity, treat as delete for now
-                self.apply_parsed_action_with_captures(&Action {
-                    field: action.field.clone(),
-                    operator: ActionOperator::Delete,
-                    value: action.value.clone(),
-                }, record, _channel_name, captures)
+                self.apply_parsed_action_with_captures(
+                    &Action {
+                        field: action.field.clone(),
+                        operator: ActionOperator::Delete,
+                        value: action.value.clone(),
+                    },
+                    record,
+                    _channel_name,
+                    captures,
+                )
             }
         }
     }
-    
+
     /// Substitute capture groups ($1, $2, etc.) in a string with actual captured values
     fn substitute_capture_groups(&self, input: &str, captures: &Option<Vec<String>>) -> String {
         if let Some(capture_list) = captures {
             let mut result = input.to_string();
-            
-            
+
             // Replace $1, $2, $3, etc. with captured groups
             // Note: captures[0] is the full match, captures[1] is the first group, etc.
-            for (i, capture) in capture_list.iter().enumerate().skip(1) { // Skip index 0 (full match)
+            for (i, capture) in capture_list.iter().enumerate().skip(1) {
+                // Skip index 0 (full match)
                 let placeholder = format!("${i}");
                 result = result.replace(&placeholder, capture);
             }
-            
-            
+
             result
         } else {
             input.to_string()
         }
     }
-    
+
     /// Get a field value from a channel record
-    fn get_field_value(&self, field_name: &str, record: &crate::models::Channel) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        
+    fn get_field_value(
+        &self,
+        field_name: &str,
+        record: &crate::models::Channel,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         let result = match field_name {
             "tvg_id" => Ok(record.tvg_id.clone()),
             "tvg_name" => Ok(record.tvg_name.clone()),
@@ -624,18 +804,25 @@ impl StreamRuleProcessor {
             "stream_url" => Ok(Some(record.stream_url.clone())),
             _ => Err(anyhow::anyhow!("Unknown field: {}", field_name).into()),
         };
-        
+
         // Add trace logging to debug field value extraction
         if let Ok(ref value) = result {
-            trace!("FIELD_VALUE_DEBUG: field='{}' value='{:?}' channel_name='{}'", 
-                   field_name, value, record.channel_name);
+            trace!(
+                "FIELD_VALUE_DEBUG: field='{}' value='{:?}' channel_name='{}'",
+                field_name, value, record.channel_name
+            );
         }
-        
+
         result
     }
-    
+
     /// Set a field value on a channel record
-    fn set_field_value(&self, field_name: &str, value: &str, record: &mut crate::models::Channel) -> Result<(), Box<dyn std::error::Error>> {
+    fn set_field_value(
+        &self,
+        field_name: &str,
+        value: &str,
+        record: &mut crate::models::Channel,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match field_name {
             "tvg_id" => record.tvg_id = Some(value.to_string()),
             "tvg_name" => record.tvg_name = Some(value.to_string()),
@@ -648,52 +835,70 @@ impl StreamRuleProcessor {
         }
         Ok(())
     }
-    
+
     /// Set an optional field to None
-    fn set_optional_field_none(&self, field_name: &str, record: &mut crate::models::Channel) -> Result<(), Box<dyn std::error::Error>> {
+    fn set_optional_field_none(
+        &self,
+        field_name: &str,
+        record: &mut crate::models::Channel,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match field_name {
             "tvg_id" => record.tvg_id = None,
             "tvg_name" => record.tvg_name = None,
             "tvg_logo" => record.tvg_logo = None,
             "tvg_shift" => record.tvg_shift = None,
             "group_title" => record.group_title = None,
-            "channel_name" | "stream_url" => return Err(anyhow::anyhow!("Cannot set required field '{}' to None", field_name).into()),
+            "channel_name" | "stream_url" => {
+                return Err(
+                    anyhow::anyhow!("Cannot set required field '{}' to None", field_name).into(),
+                );
+            }
             _ => return Err(anyhow::anyhow!("Cannot clear unknown field: {}", field_name).into()),
         }
         Ok(())
     }
-    
+
     /// Compare two values using numeric or datetime comparison
     /// First tries to parse as Unix timestamps, then falls back to string comparison
-    fn compare_values(&self, field_value: &str, expected_value: &str, ordering: std::cmp::Ordering) -> Result<bool, Box<dyn std::error::Error>> {
-        use crate::utils::time::{resolve_time_functions, parse_time_string};
-        
+    fn compare_values(
+        &self,
+        field_value: &str,
+        expected_value: &str,
+        ordering: std::cmp::Ordering,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        use crate::utils::time::{parse_time_string, resolve_time_functions};
+
         // Resolve any @time: functions in the expected value
         let resolved_expected = resolve_time_functions(expected_value)?;
-        
+
         // Try numeric comparison first (Unix timestamps)
         if let (Ok(field_num), Ok(expected_num)) = (
             parse_time_string(field_value),
-            parse_time_string(&resolved_expected)
+            parse_time_string(&resolved_expected),
         ) {
             return Ok(field_num.cmp(&expected_num) == ordering);
         }
-        
+
         // Fall back to lexicographic string comparison
         Ok(field_value.cmp(&resolved_expected) == ordering)
     }
 }
 
 impl RuleProcessor<crate::models::Channel> for StreamRuleProcessor {
-    fn process_record(&mut self, record: crate::models::Channel) -> Result<(crate::models::Channel, RuleResult), Box<dyn std::error::Error>> {
+    fn process_record(
+        &mut self,
+        record: crate::models::Channel,
+    ) -> Result<(crate::models::Channel, RuleResult), Box<dyn std::error::Error>> {
         let start = std::time::Instant::now();
-        
-        
+
         // Parse and evaluate the expression
         let (modified_record, modifications) = match self.evaluate_expression(&record) {
             Ok((rec, mods)) => (rec, mods),
             Err(e) => {
-                warn!("RULE_PROCESSOR: Rule evaluation failed: rule_id={} error={}", self.rule_id, e);
+                warn!(
+                    "RULE_PROCESSOR: Rule evaluation failed: rule_id={} error={}",
+                    self.rule_id, e
+                );
                 let result = RuleResult {
                     rule_applied: false,
                     field_modifications: vec![],
@@ -703,30 +908,34 @@ impl RuleProcessor<crate::models::Channel> for StreamRuleProcessor {
                 return Ok((record, result));
             }
         };
-        
+
         let execution_time = start.elapsed();
         let rule_applied = !modifications.is_empty();
-        
+
         // Only log when rule actually modifies data
         if rule_applied {
-            trace!("RULE_PROCESSOR: {} applied {} modifications to '{}'", 
-                   self.rule_name, modifications.len(), record.channel_name);
+            trace!(
+                "RULE_PROCESSOR: {} applied {} modifications to '{}'",
+                self.rule_name,
+                modifications.len(),
+                record.channel_name
+            );
         }
-        
+
         let result = RuleResult {
             rule_applied,
             field_modifications: modifications,
             execution_time,
             error: None,
         };
-        
+
         Ok((modified_record, result))
     }
-    
+
     fn get_rule_name(&self) -> &str {
         &self.rule_name
     }
-    
+
     fn get_rule_id(&self) -> &str {
         &self.rule_id
     }
@@ -760,15 +969,21 @@ impl EpgRuleProcessor {
                 "rating".to_string(),
                 "aspect_ratio".to_string(),
             ];
-            
+
             let parser = ExpressionParser::new().with_fields(epg_fields);
             match parser.parse_extended(&expression) {
                 Ok(parsed) => {
-                    trace!("Successfully pre-parsed EPG expression for rule {}", rule_id);
+                    trace!(
+                        "Successfully pre-parsed EPG expression for rule {}",
+                        rule_id
+                    );
                     Some(parsed)
-                },
+                }
                 Err(e) => {
-                    warn!("Failed to pre-parse EPG expression for rule {}: {}", rule_id, e);
+                    warn!(
+                        "Failed to pre-parse EPG expression for rule {}: {}",
+                        rule_id, e
+                    );
                     None
                 }
             }
@@ -799,48 +1014,54 @@ pub struct EpgProgram {
     #[serde(deserialize_with = "crate::utils::datetime::deserialize_datetime")]
     pub end_time: DateTime<Utc>,
     // Extended XMLTV fields for rich metadata support and rule processing
-    pub program_category: Option<String>,      // <category>
-    pub subtitles: Option<String>,             // <sub-title> (episode subtitle)
-    pub episode_num: Option<String>,           // Episode number for <episode-num>
-    pub season_num: Option<String>,            // Season number for <episode-num>
-    pub language: Option<String>,              // <language>
-    pub rating: Option<String>,                // <rating>
-    pub aspect_ratio: Option<String>,          // Video aspect ratio metadata
+    pub program_category: Option<String>, // <category>
+    pub subtitles: Option<String>,        // <sub-title> (episode subtitle)
+    pub episode_num: Option<String>,      // Episode number for <episode-num>
+    pub season_num: Option<String>,       // Season number for <episode-num>
+    pub language: Option<String>,         // <language>
+    pub rating: Option<String>,           // <rating>
+    pub aspect_ratio: Option<String>,     // Video aspect ratio metadata
 }
 
 impl RuleProcessor<EpgProgram> for EpgRuleProcessor {
-    fn process_record(&mut self, record: EpgProgram) -> Result<(EpgProgram, RuleResult), Box<dyn std::error::Error>> {
+    fn process_record(
+        &mut self,
+        record: EpgProgram,
+    ) -> Result<(EpgProgram, RuleResult), Box<dyn std::error::Error>> {
         let start = std::time::Instant::now();
-        
+
         // Evaluate expression using cached parsed expression (same pattern as StreamRuleProcessor)
         let (modified_record, field_modifications) = match self.evaluate_expression(&record) {
             Ok((modified, modifications)) => (modified, modifications),
             Err(e) => {
-                return Ok((record, RuleResult {
-                    rule_applied: false,
-                    field_modifications: vec![],
-                    execution_time: start.elapsed(),
-                    error: Some(e.to_string()),
-                }));
+                return Ok((
+                    record,
+                    RuleResult {
+                        rule_applied: false,
+                        field_modifications: vec![],
+                        execution_time: start.elapsed(),
+                        error: Some(e.to_string()),
+                    },
+                ));
             }
         };
-        
+
         let rule_applied = !field_modifications.is_empty();
-        
+
         let result = RuleResult {
             rule_applied,
             field_modifications,
             execution_time: start.elapsed(),
             error: None,
         };
-        
+
         Ok((modified_record, result))
     }
-    
+
     fn get_rule_name(&self) -> &str {
         &self.rule_name
     }
-    
+
     fn get_rule_id(&self) -> &str {
         &self.rule_id
     }
@@ -848,40 +1069,63 @@ impl RuleProcessor<EpgProgram> for EpgRuleProcessor {
 
 impl EpgRuleProcessor {
     /// Evaluate the expression against an EPG program record using the cached parsed expression
-    fn evaluate_expression(&self, record: &EpgProgram) -> Result<(EpgProgram, Vec<FieldModification>), Box<dyn std::error::Error>> {
+    fn evaluate_expression(
+        &self,
+        record: &EpgProgram,
+    ) -> Result<(EpgProgram, Vec<FieldModification>), Box<dyn std::error::Error>> {
         let mut modified_record = record.clone();
         let mut modifications = Vec::new();
-        
+
         // Use cached parsed expression (same pattern as StreamRuleProcessor)
         let parsed_expression = match &self.parsed_expression {
             Some(expr) => expr,
             None => {
-                trace!("EPG Rule {} has no valid parsed expression, skipping", self.rule_id);
+                trace!(
+                    "EPG Rule {} has no valid parsed expression, skipping",
+                    self.rule_id
+                );
                 return Ok((modified_record, modifications));
             }
         };
-        
+
         trace!("Evaluating EPG rule {} against program", self.rule_id);
-        
+
         // Evaluate the parsed expression (same structure as StreamRuleProcessor)
         match parsed_expression {
             ExtendedExpression::ConditionWithActions { condition, actions } => {
                 // Check if we need captures (only for regex operations)
                 let needs_captures = self.condition_tree_needs_captures(condition);
-                
+
                 if needs_captures {
                     // Use captures version for regex-based conditions
-                    let (condition_result, captures) = self.evaluate_condition_tree_with_captures(condition, record)?;
-                    
-                    trace!("EPG Rule {} condition evaluation result: {} captures: {:?}", self.rule_id, condition_result, captures);
-                    
+                    let (condition_result, captures) =
+                        self.evaluate_condition_tree_with_captures(condition, record)?;
+
+                    trace!(
+                        "EPG Rule {} condition evaluation result: {} captures: {:?}",
+                        self.rule_id, condition_result, captures
+                    );
+
                     if condition_result {
-                        trace!("EPG Rule {} condition matched, applying {} actions with captures", self.rule_id, actions.len());
+                        trace!(
+                            "EPG Rule {} condition matched, applying {} actions with captures",
+                            self.rule_id,
+                            actions.len()
+                        );
                         for action in actions {
-                            if let Some(modification) = self.apply_parsed_action_with_captures(action, &mut modified_record, &record.title, &captures)? {
-                                trace!("EPG Rule {} applied action: {} {:?} -> {:?}", 
-                                       self.rule_id, &modification.field_name, 
-                                       &modification.modification_type, &modification.new_value);
+                            if let Some(modification) = self.apply_parsed_action_with_captures(
+                                action,
+                                &mut modified_record,
+                                &record.title,
+                                &captures,
+                            )? {
+                                trace!(
+                                    "EPG Rule {} applied action: {} {:?} -> {:?}",
+                                    self.rule_id,
+                                    &modification.field_name,
+                                    &modification.modification_type,
+                                    &modification.new_value
+                                );
                                 modifications.push(modification);
                             }
                         }
@@ -891,15 +1135,30 @@ impl EpgRuleProcessor {
                 } else {
                     // Use simpler/faster version for non-regex conditions
                     let condition_result = self.evaluate_condition_tree(condition, record)?;
-                    trace!("EPG Rule {} condition evaluation result: {} (fast path)", self.rule_id, condition_result);
-                    
+                    trace!(
+                        "EPG Rule {} condition evaluation result: {} (fast path)",
+                        self.rule_id, condition_result
+                    );
+
                     if condition_result {
-                        trace!("EPG Rule {} condition matched, applying {} actions (fast path)", self.rule_id, actions.len());
+                        trace!(
+                            "EPG Rule {} condition matched, applying {} actions (fast path)",
+                            self.rule_id,
+                            actions.len()
+                        );
                         for action in actions {
-                            if let Some(modification) = self.apply_parsed_action(action, &mut modified_record, &record.title)? {
-                                trace!("EPG Rule {} applied action: {} {:?} -> {:?}", 
-                                       self.rule_id, &modification.field_name, 
-                                       &modification.modification_type, &modification.new_value);
+                            if let Some(modification) = self.apply_parsed_action(
+                                action,
+                                &mut modified_record,
+                                &record.title,
+                            )? {
+                                trace!(
+                                    "EPG Rule {} applied action: {} {:?} -> {:?}",
+                                    self.rule_id,
+                                    &modification.field_name,
+                                    &modification.modification_type,
+                                    &modification.new_value
+                                );
                                 modifications.push(modification);
                             }
                         }
@@ -917,21 +1176,32 @@ impl EpgRuleProcessor {
                 // Process each conditional action group
                 for group in groups {
                     let needs_captures = self.condition_tree_needs_captures(&group.conditions);
-                    
+
                     if needs_captures {
-                        let (condition_result, group_captures) = self.evaluate_condition_tree_with_captures(&group.conditions, record)?;
+                        let (condition_result, group_captures) =
+                            self.evaluate_condition_tree_with_captures(&group.conditions, record)?;
                         if condition_result {
                             for action in &group.actions {
-                                if let Some(modification) = self.apply_parsed_action_with_captures(action, &mut modified_record, &record.title, &group_captures)? {
+                                if let Some(modification) = self.apply_parsed_action_with_captures(
+                                    action,
+                                    &mut modified_record,
+                                    &record.title,
+                                    &group_captures,
+                                )? {
                                     modifications.push(modification);
                                 }
                             }
                         }
                     } else {
-                        let condition_result = self.evaluate_condition_tree(&group.conditions, record)?;
+                        let condition_result =
+                            self.evaluate_condition_tree(&group.conditions, record)?;
                         if condition_result {
                             for action in &group.actions {
-                                if let Some(modification) = self.apply_parsed_action(action, &mut modified_record, &record.title)? {
+                                if let Some(modification) = self.apply_parsed_action(
+                                    action,
+                                    &mut modified_record,
+                                    &record.title,
+                                )? {
                                     modifications.push(modification);
                                 }
                             }
@@ -940,89 +1210,148 @@ impl EpgRuleProcessor {
                 }
             }
         }
-        
+
         Ok((modified_record, modifications))
     }
-    
+
     /// Evaluate a condition tree (parsed expression structure)
-    fn evaluate_condition_tree(&self, condition: &crate::models::ConditionTree, record: &EpgProgram) -> Result<bool, Box<dyn std::error::Error>> {
+    fn evaluate_condition_tree(
+        &self,
+        condition: &crate::models::ConditionTree,
+        record: &EpgProgram,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         self.evaluate_condition_node(&condition.root, record)
     }
-    
+
     /// Evaluate a condition tree and return captures from regex matches
-    fn evaluate_condition_tree_with_captures(&self, condition: &crate::models::ConditionTree, record: &EpgProgram) -> RegexCaptureResult {
+    fn evaluate_condition_tree_with_captures(
+        &self,
+        condition: &crate::models::ConditionTree,
+        record: &EpgProgram,
+    ) -> RegexCaptureResult {
         self.evaluate_condition_node_with_captures(&condition.root, record)
     }
-    
+
     /// Check if a condition tree contains regex operators that need capture groups
     fn condition_tree_needs_captures(&self, condition: &crate::models::ConditionTree) -> bool {
         Self::condition_node_needs_captures(&condition.root)
     }
-    
+
     /// Check if a condition node contains regex operators recursively
     fn condition_node_needs_captures(node: &crate::models::ConditionNode) -> bool {
         use crate::models::FilterOperator;
-        
+
         match node {
             crate::models::ConditionNode::Condition { operator, .. } => {
-                matches!(operator, FilterOperator::Matches | FilterOperator::NotMatches)
+                matches!(
+                    operator,
+                    FilterOperator::Matches | FilterOperator::NotMatches
+                )
             }
             crate::models::ConditionNode::Group { children, .. } => {
                 children.iter().any(Self::condition_node_needs_captures)
             }
         }
     }
-    
+
     /// Evaluate a condition node recursively  
-    fn evaluate_condition_node(&self, node: &crate::models::ConditionNode, record: &EpgProgram) -> Result<bool, Box<dyn std::error::Error>> {
-        self.evaluate_condition_node_with_captures(node, record).map(|(result, _)| result)
+    fn evaluate_condition_node(
+        &self,
+        node: &crate::models::ConditionNode,
+        record: &EpgProgram,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        self.evaluate_condition_node_with_captures(node, record)
+            .map(|(result, _)| result)
     }
 
     /// Evaluate a condition node and return captures for regex matches
-    fn evaluate_condition_node_with_captures(&self, node: &crate::models::ConditionNode, record: &EpgProgram) -> RegexCaptureResult {
-        use crate::models::{LogicalOperator, FilterOperator};
-        
+    fn evaluate_condition_node_with_captures(
+        &self,
+        node: &crate::models::ConditionNode,
+        record: &EpgProgram,
+    ) -> RegexCaptureResult {
+        use crate::models::{FilterOperator, LogicalOperator};
+
         match node {
-            crate::models::ConditionNode::Condition { field, operator, value, .. } => {
+            crate::models::ConditionNode::Condition {
+                field,
+                operator,
+                value,
+                ..
+            } => {
                 let field_value = self.get_field_value(field, record)?;
                 let field_value_str = field_value.unwrap_or_default();
-                
-                trace!("Evaluating EPG condition: field='{}' operator='{:?}' value='{}' field_value='{}'", 
-                       field, operator, value, field_value_str);
-                
+
+                trace!(
+                    "Evaluating EPG condition: field='{}' operator='{:?}' value='{}' field_value='{}'",
+                    field, operator, value, field_value_str
+                );
+
                 let (matches, captures) = match operator {
                     FilterOperator::Equals => (field_value_str.eq_ignore_ascii_case(value), None),
-                    FilterOperator::NotEquals => (!field_value_str.eq_ignore_ascii_case(value), None),
-                    FilterOperator::Contains => (field_value_str.to_lowercase().contains(&value.to_lowercase()), None),
-                    FilterOperator::NotContains => (!field_value_str.to_lowercase().contains(&value.to_lowercase()), None),
-                    FilterOperator::StartsWith => (field_value_str.to_lowercase().starts_with(&value.to_lowercase()), None),
-                    FilterOperator::NotStartsWith => (!field_value_str.to_lowercase().starts_with(&value.to_lowercase()), None),
-                    FilterOperator::EndsWith => (field_value_str.to_lowercase().ends_with(&value.to_lowercase()), None),
-                    FilterOperator::NotEndsWith => (!field_value_str.to_lowercase().ends_with(&value.to_lowercase()), None),
-                    FilterOperator::Matches => {
-                        match Regex::new(value) {
-                            Ok(regex) => {
-                                if let Some(caps) = regex.captures(&field_value_str) {
-                                    let capture_strings: Vec<String> = caps.iter()
-                                        .map(|m| m.map_or("".to_string(), |m| m.as_str().to_string()))
-                                        .collect();
-                                    (true, Some(capture_strings))
-                                } else {
-                                    (false, None)
-                                }
-                            },
-                            Err(e) => {
-                                warn!("Invalid regex pattern '{}': {}, falling back to contains", value, e);
-                                (field_value_str.contains(value), None)
+                    FilterOperator::NotEquals => {
+                        (!field_value_str.eq_ignore_ascii_case(value), None)
+                    }
+                    FilterOperator::Contains => (
+                        field_value_str
+                            .to_lowercase()
+                            .contains(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::NotContains => (
+                        !field_value_str
+                            .to_lowercase()
+                            .contains(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::StartsWith => (
+                        field_value_str
+                            .to_lowercase()
+                            .starts_with(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::NotStartsWith => (
+                        !field_value_str
+                            .to_lowercase()
+                            .starts_with(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::EndsWith => (
+                        field_value_str
+                            .to_lowercase()
+                            .ends_with(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::NotEndsWith => (
+                        !field_value_str
+                            .to_lowercase()
+                            .ends_with(&value.to_lowercase()),
+                        None,
+                    ),
+                    FilterOperator::Matches => match Regex::new(value) {
+                        Ok(regex) => {
+                            if let Some(caps) = regex.captures(&field_value_str) {
+                                let capture_strings: Vec<String> = caps
+                                    .iter()
+                                    .map(|m| m.map_or("".to_string(), |m| m.as_str().to_string()))
+                                    .collect();
+                                (true, Some(capture_strings))
+                            } else {
+                                (false, None)
                             }
                         }
-                    },
-                    FilterOperator::NotMatches => {
-                        match Regex::new(value) {
-                            Ok(regex) => (!regex.is_match(&field_value_str), None),
-                            Err(_) => (!field_value_str.contains(value), None)
+                        Err(e) => {
+                            warn!(
+                                "Invalid regex pattern '{}': {}, falling back to contains",
+                                value, e
+                            );
+                            (field_value_str.contains(value), None)
                         }
-                    }
+                    },
+                    FilterOperator::NotMatches => match Regex::new(value) {
+                        Ok(regex) => (!regex.is_match(&field_value_str), None),
+                        Err(_) => (!field_value_str.contains(value), None),
+                    },
                     // For EPG programs, these comparison operators may not be relevant in most cases
                     // but we'll provide basic string comparison fallbacks
                     FilterOperator::GreaterThan => (field_value_str > *value, None),
@@ -1030,25 +1359,26 @@ impl EpgRuleProcessor {
                     FilterOperator::GreaterThanOrEqual => (field_value_str >= *value, None),
                     FilterOperator::LessThanOrEqual => (field_value_str <= *value, None),
                 };
-                
+
                 trace!("EPG condition result: {}", matches);
                 Ok((matches, captures))
             }
             crate::models::ConditionNode::Group { operator, children } => {
                 let mut group_result = match operator {
-                    LogicalOperator::And => true,  // Start true for AND
-                    LogicalOperator::Or => false,  // Start false for OR
+                    LogicalOperator::And => true, // Start true for AND
+                    LogicalOperator::Or => false, // Start false for OR
                 };
                 let mut group_captures: Option<Vec<String>> = None;
-                
+
                 for child in children {
-                    let (child_result, child_captures) = self.evaluate_condition_node_with_captures(child, record)?;
-                    
+                    let (child_result, child_captures) =
+                        self.evaluate_condition_node_with_captures(child, record)?;
+
                     // Collect captures from first matching child (for capture group substitution)
                     if child_captures.is_some() && group_captures.is_none() {
                         group_captures = child_captures;
                     }
-                    
+
                     match operator {
                         LogicalOperator::And => {
                             group_result = group_result && child_result;
@@ -1064,14 +1394,18 @@ impl EpgRuleProcessor {
                         }
                     }
                 }
-                
+
                 Ok((group_result, group_captures))
             }
         }
     }
-    
+
     /// Get field value from EPG program record
-    fn get_field_value(&self, field_name: &str, record: &EpgProgram) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    fn get_field_value(
+        &self,
+        field_name: &str,
+        record: &EpgProgram,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         let result = match field_name {
             "id" => Some(record.id.clone()),
             "channel_id" => Some(record.channel_id.clone()),
@@ -1088,14 +1422,19 @@ impl EpgRuleProcessor {
             "aspect_ratio" => record.aspect_ratio.clone(),
             _ => return Err(anyhow::anyhow!("Unknown EPG field: {}", field_name).into()),
         };
-        
+
         Ok(result)
     }
-    
+
     /// Apply parsed action without capture groups
-    fn apply_parsed_action(&self, action: &crate::models::Action, record: &mut EpgProgram, _context: &str) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
+    fn apply_parsed_action(
+        &self,
+        action: &crate::models::Action,
+        record: &mut EpgProgram,
+        _context: &str,
+    ) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
         let old_value = self.get_field_value(&action.field, record)?;
-        
+
         let modification_type = match action.operator {
             ActionOperator::Set => ModificationType::Set,
             ActionOperator::SetIfEmpty => {
@@ -1103,68 +1442,69 @@ impl EpgRuleProcessor {
                     return Ok(None); // Don't modify if field has a value
                 }
                 ModificationType::SetIfEmpty
-            },
+            }
             ActionOperator::Append => ModificationType::Append,
             ActionOperator::Remove => ModificationType::Remove,
             ActionOperator::Delete => ModificationType::Delete,
         };
-        
+
         match &action.operator {
             ActionOperator::Set | ActionOperator::SetIfEmpty => {
                 match &action.value {
                     crate::models::ActionValue::Literal(new_value) => {
                         self.set_field_value(&action.field, new_value, record)?;
-                        
+
                         Ok(Some(FieldModification {
                             field_name: action.field.clone(),
                             old_value: old_value.clone(),
                             new_value: Some(new_value.clone()),
                             modification_type,
                         }))
-                    },
+                    }
                     crate::models::ActionValue::Null => {
                         // Set field to None/empty
                         self.set_field_value(&action.field, "", record)?;
-                        
+
                         Ok(Some(FieldModification {
                             field_name: action.field.clone(),
                             old_value: old_value.clone(),
                             new_value: None,
                             modification_type,
                         }))
-                    },
+                    }
                     _ => {
-                        trace!("Unsupported action value type for EPG rule {}", self.rule_id);
+                        trace!(
+                            "Unsupported action value type for EPG rule {}",
+                            self.rule_id
+                        );
                         Ok(None)
                     }
                 }
             }
-            ActionOperator::Append => {
-                match &action.value {
-                    crate::models::ActionValue::Literal(append_value) => {
-                        let current_value = old_value.as_deref().unwrap_or("");
-                        let new_value = if current_value.is_empty() {
-                            append_value.clone()
-                        } else {
-                            format!("{} {}", current_value, append_value)
-                        };
-                        
-                        self.set_field_value(&action.field, &new_value, record)?;
-                        
-                        Ok(Some(FieldModification {
-                            field_name: action.field.clone(),
-                            old_value: old_value.clone(),
-                            new_value: Some(new_value),
-                            modification_type,
-                        }))
-                    },
-                    _ => Ok(None)
+            ActionOperator::Append => match &action.value {
+                crate::models::ActionValue::Literal(append_value) => {
+                    let current_value = old_value.as_deref().unwrap_or("");
+                    let new_value = if current_value.is_empty() {
+                        append_value.clone()
+                    } else {
+                        format!("{} {}", current_value, append_value)
+                    };
+
+                    self.set_field_value(&action.field, &new_value, record)?;
+
+                    Ok(Some(FieldModification {
+                        field_name: action.field.clone(),
+                        old_value: old_value.clone(),
+                        new_value: Some(new_value),
+                        modification_type,
+                    }))
                 }
-            }
+                _ => Ok(None),
+            },
             ActionOperator::Remove => {
                 // For EPG, remove means clear the field
                 self.set_field_value(&action.field, "", record)?;
-                
+
                 Ok(Some(FieldModification {
                     field_name: action.field.clone(),
                     old_value: old_value.clone(),
@@ -1175,7 +1515,7 @@ impl EpgRuleProcessor {
             ActionOperator::Delete => {
                 // Delete means set to None
                 self.set_field_value(&action.field, "", record)?;
-                
+
                 Ok(Some(FieldModification {
                     field_name: action.field.clone(),
                     old_value: old_value.clone(),
@@ -1185,11 +1525,17 @@ impl EpgRuleProcessor {
             }
         }
     }
-    
+
     /// Apply parsed action with capture groups
-    fn apply_parsed_action_with_captures(&self, action: &crate::models::Action, record: &mut EpgProgram, context: &str, captures: &Option<Vec<String>>) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
+    fn apply_parsed_action_with_captures(
+        &self,
+        action: &crate::models::Action,
+        record: &mut EpgProgram,
+        context: &str,
+        captures: &Option<Vec<String>>,
+    ) -> Result<Option<FieldModification>, Box<dyn std::error::Error>> {
         let old_value = self.get_field_value(&action.field, record)?;
-        
+
         let modification_type = match action.operator {
             ActionOperator::Set => ModificationType::Set,
             ActionOperator::SetIfEmpty => {
@@ -1197,12 +1543,12 @@ impl EpgRuleProcessor {
                     return Ok(None); // Don't modify if field has a value
                 }
                 ModificationType::SetIfEmpty
-            },
+            }
             ActionOperator::Append => ModificationType::Append,
             ActionOperator::Remove => ModificationType::Remove,
             ActionOperator::Delete => ModificationType::Delete,
         };
-        
+
         match &action.operator {
             ActionOperator::Set | ActionOperator::SetIfEmpty => {
                 match &action.value {
@@ -1210,23 +1556,27 @@ impl EpgRuleProcessor {
                         // Process capture group substitutions
                         let processed_value = self.substitute_capture_groups(new_value, captures);
                         self.set_field_value(&action.field, &processed_value, record)?;
-                        
+
                         Ok(Some(FieldModification {
                             field_name: action.field.clone(),
                             old_value: old_value.clone(),
                             new_value: Some(processed_value),
                             modification_type,
                         }))
-                    },
+                    }
                     crate::models::ActionValue::Null => {
                         // Set field to None/empty
-                        self.apply_parsed_action(&crate::models::Action {
-                            field: action.field.clone(),
-                            operator: action.operator.clone(),
-                            value: crate::models::ActionValue::Null,
-                        }, record, context)
-                    },
-                    _ => Ok(None)
+                        self.apply_parsed_action(
+                            &crate::models::Action {
+                                field: action.field.clone(),
+                                operator: action.operator.clone(),
+                                value: crate::models::ActionValue::Null,
+                            },
+                            record,
+                            context,
+                        )
+                    }
+                    _ => Ok(None),
                 }
             }
             _ => {
@@ -1235,26 +1585,31 @@ impl EpgRuleProcessor {
             }
         }
     }
-    
-    /// Substitute capture groups in a string 
+
+    /// Substitute capture groups in a string
     fn substitute_capture_groups(&self, input: &str, captures: &Option<Vec<String>>) -> String {
         if let Some(capture_list) = captures {
             let mut result = input.to_string();
-            
+
             // Replace $1, $2, $3, etc. with captured groups
             for (i, capture) in capture_list.iter().enumerate().skip(1) {
                 let placeholder = format!("${}", i);
                 result = result.replace(&placeholder, capture);
             }
-            
+
             result
         } else {
             input.to_string()
         }
     }
-    
+
     /// Set field value in EPG program record
-    fn set_field_value(&self, field_name: &str, value: &str, record: &mut EpgProgram) -> Result<(), Box<dyn std::error::Error>> {
+    fn set_field_value(
+        &self,
+        field_name: &str,
+        value: &str,
+        record: &mut EpgProgram,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match field_name {
             "id" => {
                 record.id = value.to_string();
@@ -1333,7 +1688,7 @@ impl EpgRuleProcessor {
             }
             _ => return Err(anyhow::anyhow!("Unknown EPG field: {}", field_name).into()),
         }
-        
+
         Ok(())
     }
 }

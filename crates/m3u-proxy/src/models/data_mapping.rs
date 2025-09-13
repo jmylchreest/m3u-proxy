@@ -19,8 +19,17 @@ pub struct DataMappingRule {
     pub updated_at: DateTime<Utc>,
 }
 
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema, sea_orm::DeriveActiveEnum, strum::EnumIter)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    ToSchema,
+    sea_orm::DeriveActiveEnum,
+    strum::EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 pub enum DataMappingSourceType {
@@ -38,8 +47,6 @@ impl std::fmt::Display for DataMappingSourceType {
         }
     }
 }
-
-
 
 pub struct StreamMappingFields;
 
@@ -68,20 +75,20 @@ impl EpgMappingFields {
         vec![
             // Core EPG fields
             "channel_id",
-            "channel_name", 
+            "channel_name",
             "channel_logo",
             "channel_group",
-            "title",                    // Program title
-            "description",              // Program description
-            "program_icon",             // Program icon/thumbnail
+            "title",        // Program title
+            "description",  // Program description
+            "program_icon", // Program icon/thumbnail
             // Extended XMLTV metadata fields
-            "program_category",         // <category> - program category
-            "subtitles",               // <sub-title> - episode subtitle  
-            "episode_num",             // Episode number for <episode-num>
-            "season_num",              // Season number for <episode-num>
-            "language",                // <language> - program language
-            "rating",                  // <rating> - content rating
-            "aspect_ratio",            // Video aspect ratio metadata
+            "program_category", // <category> - program category
+            "subtitles",        // <sub-title> - episode subtitle
+            "episode_num",      // Episode number for <episode-num>
+            "season_num",       // Season number for <episode-num>
+            "language",         // <language> - program language
+            "rating",           // <rating> - content rating
+            "aspect_ratio",     // Video aspect ratio metadata
         ]
     }
 
@@ -286,7 +293,6 @@ pub struct MappedChannel {
     pub capture_group_values: HashMap<String, HashMap<String, String>>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MappedEpgProgram {
     #[serde(flatten)]
@@ -343,8 +349,6 @@ pub struct DataMappingTestChannel {
     pub applied_actions: Vec<String>,
 }
 
-
-
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DataMappingPreviewRequest {
     pub source_type: DataMappingSourceType,
@@ -365,7 +369,6 @@ pub struct StreamDataMappingPreview {
     pub preview_channels: Vec<MappedChannel>,
     pub applied_rules: Vec<String>,
 }
-
 
 impl DataMappingRuleCreateRequest {
     pub fn from_expression(
@@ -395,14 +398,14 @@ impl DataMappingRuleCreateRequest {
     }
 }
 
-
 impl DataMappingRuleUpdateRequest {
     pub fn validate_expression(&self) -> Result<(), String> {
         if let Some(expression) = &self.expression
-            && expression.trim().is_empty() {
-                return Err("Expression cannot be empty".to_string());
-            }
-            // Add more expression validation logic here as needed
+            && expression.trim().is_empty()
+        {
+            return Err("Expression cannot be empty".to_string());
+        }
+        // Add more expression validation logic here as needed
         Ok(())
     }
 }

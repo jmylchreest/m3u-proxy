@@ -3,21 +3,18 @@
 //! Serves the embedded dashboard HTML as the index page.
 
 use axum::{
+    extract::State,
     http::StatusCode,
     response::{Html, IntoResponse},
-    extract::State,
 };
 
 use crate::{
     assets::StaticAssets,
-    web::{extractors::RequestContext, AppState},
+    web::{AppState, extractors::RequestContext},
 };
 
 /// Serve the index page from embedded static assets
-pub async fn index(
-    State(_state): State<AppState>,
-    _context: RequestContext,
-) -> impl IntoResponse {
+pub async fn index(State(_state): State<AppState>, _context: RequestContext) -> impl IntoResponse {
     match StaticAssets::get_asset("static/index.html") {
         Some(file) => {
             let content = String::from_utf8_lossy(&file.data);

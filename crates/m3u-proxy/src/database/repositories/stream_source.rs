@@ -3,7 +3,9 @@
 //! This provides a database-agnostic repository for StreamSource operations using SeaORM.
 
 use anyhow::Result;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, ColumnTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -93,7 +95,7 @@ impl StreamSourceSeaOrmRepository {
                 last_ingested_at: m.last_ingested_at.as_ref().map(|time| *time),
                 is_active: m.is_active,
             })),
-            None => Ok(None)
+            None => Ok(None),
         }
     }
 
@@ -101,7 +103,8 @@ impl StreamSourceSeaOrmRepository {
     pub async fn find_all(&self) -> Result<Vec<StreamSource>> {
         let models = StreamSources::find()
             .order_by_asc(stream_sources::Column::Name)
-            .all(&*self.connection).await?;
+            .all(&*self.connection)
+            .await?;
         let mut results = Vec::new();
         for m in models {
             results.push(StreamSource {
@@ -125,14 +128,18 @@ impl StreamSourceSeaOrmRepository {
     }
 
     /// Find stream sources by URL and source type (for URL-based linking)
-    pub async fn find_by_url_and_type(&self, url: &str, source_type: StreamSourceType) -> Result<Vec<StreamSource>> {
+    pub async fn find_by_url_and_type(
+        &self,
+        url: &str,
+        source_type: StreamSourceType,
+    ) -> Result<Vec<StreamSource>> {
         let models = StreamSources::find()
             .filter(stream_sources::Column::Url.eq(url))
             .filter(stream_sources::Column::SourceType.eq(source_type))
             .filter(stream_sources::Column::IsActive.eq(true))
             .all(&*self.connection)
             .await?;
-        
+
         let mut results = Vec::new();
         for m in models {
             results.push(StreamSource {
@@ -156,11 +163,14 @@ impl StreamSourceSeaOrmRepository {
     }
 
     /// Update the last ingested timestamp for a stream source
-    pub async fn update_last_ingested_at(&self, id: &Uuid) -> Result<chrono::DateTime<chrono::Utc>> {
-        use sea_orm::{Set, ActiveModelTrait};
-        
+    pub async fn update_last_ingested_at(
+        &self,
+        id: &Uuid,
+    ) -> Result<chrono::DateTime<chrono::Utc>> {
+        use sea_orm::{ActiveModelTrait, Set};
+
         let now = chrono::Utc::now();
-        
+
         // Find the existing source
         let existing = StreamSources::find_by_id(id.to_owned())
             .one(&*self.connection)
@@ -178,7 +188,7 @@ impl StreamSourceSeaOrmRepository {
 
     /// Get channel count for a stream source
     pub async fn get_channel_count_for_source(&self, source_id: &Uuid) -> Result<u64> {
-        use crate::entities::{prelude::Channels, channels};
+        use crate::entities::{channels, prelude::Channels};
         use sea_orm::PaginatorTrait;
 
         let count = Channels::find()
@@ -221,9 +231,13 @@ impl StreamSourceSeaOrmRepository {
     }
 
     /// Update a stream source
-    pub async fn update(&self, id: &Uuid, request: crate::models::StreamSourceUpdateRequest) -> Result<StreamSource> {
-        use sea_orm::{Set, ActiveModelTrait, ActiveValue};
-        
+    pub async fn update(
+        &self,
+        id: &Uuid,
+        request: crate::models::StreamSourceUpdateRequest,
+    ) -> Result<StreamSource> {
+        use sea_orm::{ActiveModelTrait, ActiveValue, Set};
+
         let active_model = stream_sources::ActiveModel {
             id: Set(*id),
             name: Set(request.name),
@@ -245,7 +259,7 @@ impl StreamSourceSeaOrmRepository {
         };
 
         let updated_model = active_model.update(&*self.connection).await?;
-        
+
         Ok(StreamSource {
             id: updated_model.id,
             name: updated_model.name,
@@ -266,7 +280,9 @@ impl StreamSourceSeaOrmRepository {
 
     /// Delete a stream source
     pub async fn delete(&self, id: &Uuid) -> Result<()> {
-        let result = StreamSources::delete_by_id(*id).exec(&*self.connection).await?;
+        let result = StreamSources::delete_by_id(*id)
+            .exec(&*self.connection)
+            .await?;
         if result.rows_affected == 0 {
             return Err(anyhow::anyhow!("Stream source not found"));
         }
@@ -277,40 +293,43 @@ impl StreamSourceSeaOrmRepository {
     pub async fn list_with_stats(&self) -> Result<Vec<crate::models::StreamSourceWithStats>> {
         let sources = self.find_active().await?;
         let mut results = Vec::new();
-        
+
         for source in sources {
             let channel_count = self.get_channel_count_for_source(&source.id).await?;
-            
+
             // Calculate next scheduled update from cron expression
             let next_scheduled_update = if source.is_active {
                 Self::calculate_next_update_time(&source.update_cron, source.last_ingested_at)
             } else {
                 None
             };
-            
+
             results.push(crate::models::StreamSourceWithStats {
                 source,
                 channel_count: channel_count as i64,
                 next_scheduled_update,
             });
         }
-        
+
         Ok(results)
     }
-    
+
     /// Calculate next scheduled update time from cron expression
-    fn calculate_next_update_time(cron_expr: &str, last_ingested_at: Option<chrono::DateTime<chrono::Utc>>) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn calculate_next_update_time(
+        cron_expr: &str,
+        last_ingested_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        use chrono::Utc;
         use cron::Schedule;
         use std::str::FromStr;
-        use chrono::Utc;
-        
+
         match Schedule::from_str(cron_expr) {
             Ok(schedule) => {
                 let now = Utc::now();
                 if let Some(last_ingested) = last_ingested_at {
                     // Find next update after last ingestion
                     let next_after_ingestion = schedule.after(&last_ingested).next();
-                    
+
                     // If the calculated next time is in the past, calculate from now instead
                     match next_after_ingestion {
                         Some(next_time) if next_time > now => Some(next_time),
@@ -327,30 +346,27 @@ impl StreamSourceSeaOrmRepository {
             }
         }
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::IngestionConfig,
-        database::Database,
-    };
+    use crate::{config::IngestionConfig, database::Database};
 
     async fn create_test_db() -> Result<Database> {
         // For unit tests, we'll use the actual database structure but skip problematic migrations
         // This is acceptable for unit tests that only test repository logic
         use sea_orm::*;
         use std::sync::Arc;
-        
+
         let connection = sea_orm::Database::connect("sqlite::memory:").await?;
         let arc_connection = Arc::new(connection);
-        
+
         // Create minimal table structure for testing
-        arc_connection.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            r#"
+        arc_connection
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                r#"
             CREATE TABLE stream_sources (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -381,9 +397,11 @@ mod tests {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            "#.to_string()
-        )).await?;
-        
+            "#
+                .to_string(),
+            ))
+            .await?;
+
         // Create a minimal database wrapper for testing
         let db = crate::database::Database {
             connection: arc_connection.clone(),
@@ -392,7 +410,7 @@ mod tests {
             backend: DatabaseBackend::Sqlite,
             ingestion_config: IngestionConfig::default(),
         };
-        
+
         Ok(db)
     }
 
@@ -441,4 +459,3 @@ mod tests {
     // Circuit breaker integration test removed - repositories no longer have direct circuit breakers
     // Circuit breakers are now managed at the service level through HttpClientFactory
 }
-

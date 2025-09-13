@@ -8,13 +8,12 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::{
+    database::repositories::{
+        filter::FilterSeaOrmRepository, stream_proxy::StreamProxySeaOrmRepository,
+        stream_source::StreamSourceSeaOrmRepository,
+    },
     errors::types::AppError,
     models::*,
-    database::repositories::{
-        stream_source::StreamSourceSeaOrmRepository,
-        stream_proxy::StreamProxySeaOrmRepository,
-        filter::FilterSeaOrmRepository,
-    },
     web::handlers::proxies::PreviewProxyRequest,
 };
 
@@ -75,10 +74,12 @@ impl ProxyConfigResolver {
                     debug!("Filtering out inactive source '{}'", source.name);
                     continue;
                 }
-                
-                info!("Found source for proxy id={}: source_id={} source_name={} source_type=stream priority={}", 
-                      proxy_id, source.id, source.name, proxy_source.priority_order);
-                
+
+                info!(
+                    "Found source for proxy id={}: source_id={} source_name={} source_type=stream priority={}",
+                    proxy_id, source.id, source.name, proxy_source.priority_order
+                );
+
                 sources.push(ProxySourceConfig {
                     source,
                     priority_order: proxy_source.priority_order,
@@ -109,7 +110,7 @@ impl ProxyConfigResolver {
 
         // Resolve EPG source configurations
         let mut epg_sources = Vec::new();
-        
+
         for proxy_epg_source in proxy_epg_sources {
             if let Some(epg_source) = self
                 .proxy_repo
@@ -122,16 +123,21 @@ impl ProxyConfigResolver {
                     debug!("Filtering out inactive EPG source '{}'", epg_source.name);
                     continue;
                 }
-                
-                info!("Found source for proxy id={}: source_id={} source_name={} source_type=epg priority={}", 
-                      proxy_id, epg_source.id, epg_source.name, proxy_epg_source.priority_order);
-                
+
+                info!(
+                    "Found source for proxy id={}: source_id={} source_name={} source_type=epg priority={}",
+                    proxy_id, epg_source.id, epg_source.name, proxy_epg_source.priority_order
+                );
+
                 epg_sources.push(ProxyEpgSourceConfig {
                     epg_source,
                     priority_order: proxy_epg_source.priority_order,
                 });
             } else {
-                debug!("Skipping missing EPG source {}", proxy_epg_source.epg_source_id);
+                debug!(
+                    "Skipping missing EPG source {}",
+                    proxy_epg_source.epg_source_id
+                );
             }
         }
 
@@ -181,7 +187,7 @@ impl ProxyConfigResolver {
             last_generated_at: None,
             cache_channel_logos: true, // Default value, field was added later
             cache_program_logos: false, // Default value, field was added later
-            relay_profile_id: None, // Not used for preview proxies
+            relay_profile_id: None,    // Not used for preview proxies
         };
 
         // Resolve source configurations
@@ -195,13 +201,18 @@ impl ProxyConfigResolver {
             {
                 // Filter out inactive sources entirely
                 if !source.is_active {
-                    debug!("Filtering out inactive source '{}' from preview", source.name);
+                    debug!(
+                        "Filtering out inactive source '{}' from preview",
+                        source.name
+                    );
                     continue;
                 }
-                
-                info!("Found source for proxy id={}: source_id={} source_name={} source_type=stream priority={}", 
-                      temp_proxy.id, source.id, source.name, source_req.priority_order);
-                
+
+                info!(
+                    "Found source for proxy id={}: source_id={} source_name={} source_type=stream priority={}",
+                    temp_proxy.id, source.id, source.name, source_req.priority_order
+                );
+
                 sources.push(ProxySourceConfig {
                     source,
                     priority_order: source_req.priority_order,
@@ -251,13 +262,18 @@ impl ProxyConfigResolver {
             {
                 // Filter out inactive EPG sources entirely
                 if !epg_source.is_active {
-                    debug!("Filtering out inactive EPG source '{}' from preview", epg_source.name);
+                    debug!(
+                        "Filtering out inactive EPG source '{}' from preview",
+                        epg_source.name
+                    );
                     continue;
                 }
-                
-                info!("Found source for proxy id={}: source_id={} source_name={} source_type=epg priority={}", 
-                      temp_proxy.id, epg_source.id, epg_source.name, epg_source_req.priority_order);
-                
+
+                info!(
+                    "Found source for proxy id={}: source_id={} source_name={} source_type=epg priority={}",
+                    temp_proxy.id, epg_source.id, epg_source.name, epg_source_req.priority_order
+                );
+
                 epg_sources.push(ProxyEpgSourceConfig {
                     epg_source,
                     priority_order: epg_source_req.priority_order,
@@ -300,7 +316,10 @@ impl ProxyConfigResolver {
 
         // All sources in the resolved config are guaranteed to be active
         // since inactive sources are filtered out during resolution
-        debug!("Configuration validated: {} active sources", config.sources.len());
+        debug!(
+            "Configuration validated: {} active sources",
+            config.sources.len()
+        );
 
         Ok(())
     }

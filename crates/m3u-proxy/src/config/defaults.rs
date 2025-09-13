@@ -1,5 +1,5 @@
 /// Configuration default values
-/// 
+///
 /// This module contains all the default values for configuration options,
 /// making them easily changeable in one central location.
 // Database defaults
@@ -24,7 +24,6 @@ pub const DEFAULT_PIPELINE_PATH: &str = "./data/pipeline";
 // Ingestion defaults
 pub const DEFAULT_PROGRESS_UPDATE_INTERVAL: usize = 1000;
 pub const DEFAULT_RUN_MISSED_IMMEDIATELY: bool = true;
-
 
 // Data mapping engine defaults
 pub const DEFAULT_PRECHECK_SPECIAL_CHARS: &str = "+-@#$%&*=<>!~`€£{}[].";

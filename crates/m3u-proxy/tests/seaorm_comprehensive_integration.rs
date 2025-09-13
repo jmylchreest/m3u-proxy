@@ -6,10 +6,10 @@
 use anyhow::Result;
 // Removed unused import
 use m3u_proxy::{
-    config::{DatabaseConfig, IngestionConfig, SqliteConfig, PostgreSqlConfig, MySqlConfig},
-    database::{Database, repositories::*},
-    models::{StreamSourceType, EpgSourceType, StreamSourceCreateRequest, EpgSourceCreateRequest},
+    config::{DatabaseConfig, IngestionConfig, MySqlConfig, PostgreSqlConfig, SqliteConfig},
     database::repositories::channel::ChannelCreateRequest,
+    database::{Database, repositories::*},
+    models::{EpgSourceCreateRequest, EpgSourceType, StreamSourceCreateRequest, StreamSourceType},
 };
 
 /// Test comprehensive SeaORM functionality with all repositories
@@ -22,16 +22,28 @@ async fn test_seaorm_comprehensive_integration() -> Result<()> {
 
     // Test PostgreSQL (if container is running)
     println!("Testing PostgreSQL comprehensive integration...");
-    match test_database_comprehensive("postgresql://testuser:testpass@localhost:15432/m3u_proxy_test").await {
+    match test_database_comprehensive(
+        "postgresql://testuser:testpass@localhost:15432/m3u_proxy_test",
+    )
+    .await
+    {
         Ok(_) => println!("[SUCCESS] PostgreSQL comprehensive integration successful"),
-        Err(e) => println!("[WARNING] PostgreSQL integration failed (container might not be running): {}", e),
+        Err(e) => println!(
+            "[WARNING] PostgreSQL integration failed (container might not be running): {}",
+            e
+        ),
     }
 
     // Test MySQL (if container is running)
     println!("Testing MySQL comprehensive integration...");
-    match test_database_comprehensive("mysql://testuser:testpass@localhost:13306/m3u_proxy_test").await {
+    match test_database_comprehensive("mysql://testuser:testpass@localhost:13306/m3u_proxy_test")
+        .await
+    {
         Ok(_) => println!("[SUCCESS] MySQL comprehensive integration successful"),
-        Err(e) => println!("[WARNING] MySQL integration failed (container might not be running): {}", e),
+        Err(e) => println!(
+            "[WARNING] MySQL integration failed (container might not be running): {}",
+            e
+        ),
     }
 
     Ok(())
@@ -47,10 +59,10 @@ async fn test_database_comprehensive(database_url: &str) -> Result<()> {
         postgresql: PostgreSqlConfig::default(),
         mysql: MySqlConfig::default(),
     };
-    
+
     let ingestion_config = IngestionConfig::default();
     let db = Database::new(&config, &ingestion_config).await?;
-    
+
     // Skip migrations for SQLite to avoid foreign key constraint issues
     // For PostgreSQL and MySQL, migrations should run normally (if containers are available)
     if !database_url.starts_with("sqlite:") {
@@ -58,9 +70,11 @@ async fn test_database_comprehensive(database_url: &str) -> Result<()> {
     } else {
         // Create minimal tables for SQLite testing
         use sea_orm::*;
-        db.connection().as_ref().execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            r#"
+        db.connection()
+            .as_ref()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                r#"
             CREATE TABLE stream_sources (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -106,15 +120,17 @@ async fn test_database_comprehensive(database_url: &str) -> Result<()> {
                 last_ingested_at TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1
             );
-            "#.to_string()
-        )).await?;
+            "#
+                .to_string(),
+            ))
+            .await?;
     }
-    
+
     // Create repositories
     let stream_source_repo = StreamSourceSeaOrmRepository::new(db.connection().clone());
     let channel_repo = ChannelSeaOrmRepository::new(db.connection().clone());
     let epg_source_repo = EpgSourceSeaOrmRepository::new(db.connection().clone());
-    
+
     // Test StreamSource operations
     let stream_source_request = StreamSourceCreateRequest {
         name: "Test M3U Source".to_string(),
@@ -127,11 +143,11 @@ async fn test_database_comprehensive(database_url: &str) -> Result<()> {
         field_map: None,
         ignore_channel_numbers: false,
     };
-    
+
     let stream_source = stream_source_repo.create(stream_source_request).await?;
     assert_eq!(stream_source.name, "Test M3U Source");
     assert_eq!(stream_source.source_type, StreamSourceType::M3u);
-    
+
     // Test Channel operations with the stream source
     let channel_request = ChannelCreateRequest {
         source_id: stream_source.id,
@@ -144,11 +160,11 @@ async fn test_database_comprehensive(database_url: &str) -> Result<()> {
         channel_name: "Test Channel".to_string(),
         stream_url: "http://example.com/stream".to_string(),
     };
-    
+
     let channel = channel_repo.create(channel_request).await?;
     assert_eq!(channel.channel_name, "Test Channel");
     assert_eq!(channel.source_id, stream_source.id);
-    
+
     // Test EPG Source operations
     let epg_source_request = EpgSourceCreateRequest {
         name: "Test EPG Source".to_string(),
@@ -160,55 +176,55 @@ async fn test_database_comprehensive(database_url: &str) -> Result<()> {
         timezone: Some("UTC".to_string()),
         time_offset: Some("+00:00".to_string()),
     };
-    
+
     let epg_source = epg_source_repo.create(epg_source_request).await?;
     assert_eq!(epg_source.name, "Test EPG Source");
     assert_eq!(epg_source.source_type, EpgSourceType::Xmltv);
-    
+
     // Test repository relationships - channels belong to stream sources
     let source_channels = channel_repo.find_by_source_id(&stream_source.id).await?;
     assert_eq!(source_channels.len(), 1);
     assert_eq!(source_channels[0].id, channel.id);
-    
+
     // Test finding by different criteria
     let found_stream_source = stream_source_repo.find_by_id(&stream_source.id).await?;
     assert!(found_stream_source.is_some());
-    
+
     let found_channel = channel_repo.find_by_id(&channel.id).await?;
     assert!(found_channel.is_some());
-    
+
     let found_epg_source = epg_source_repo.find_by_id(&epg_source.id).await?;
     assert!(found_epg_source.is_some());
-    
+
     // Test type-based queries
     let xmltv_sources = epg_source_repo.find_by_type(&EpgSourceType::Xmltv).await?;
     assert_eq!(xmltv_sources.len(), 1);
     assert_eq!(xmltv_sources[0].id, epg_source.id);
-    
+
     // Test group-based queries for channels
     let group_channels = channel_repo.find_by_group_title("Test Group").await?;
     assert_eq!(group_channels.len(), 1);
     assert_eq!(group_channels[0].id, channel.id);
-    
+
     // Test active queries
     let active_epg_sources = epg_source_repo.find_active().await?;
     assert_eq!(active_epg_sources.len(), 1);
     assert_eq!(active_epg_sources[0].id, epg_source.id);
-    
+
     // Test find_all operations
     let all_stream_sources = stream_source_repo.find_all().await?;
     assert_eq!(all_stream_sources.len(), 1);
-    
+
     let all_channels = channel_repo.find_all().await?;
     assert_eq!(all_channels.len(), 1);
-    
+
     let all_epg_sources = epg_source_repo.find_all().await?;
     assert_eq!(all_epg_sources.len(), 1);
-    
+
     println!("    [OK] All repository operations working correctly");
     println!("    [OK] Migration system functioning properly");
     println!("    [OK] Database-agnostic operations successful");
-    
+
     Ok(())
 }
 
@@ -223,16 +239,18 @@ async fn test_seaorm_migration_system() -> Result<()> {
         postgresql: PostgreSqlConfig::default(),
         mysql: MySqlConfig::default(),
     };
-    
+
     let ingestion_config = IngestionConfig::default();
     let db = Database::new(&config, &ingestion_config).await?;
-    
+
     // Skip migration for SQLite to avoid foreign key constraint issues
     // Create minimal tables for testing instead
-    use sea_orm::{Statement, DatabaseBackend, ConnectionTrait};
-    db.connection().as_ref().execute(Statement::from_string(
-        DatabaseBackend::Sqlite,
-        r#"
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    db.connection()
+        .as_ref()
+        .execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            r#"
         CREATE TABLE stream_sources (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -249,9 +267,11 @@ async fn test_seaorm_migration_system() -> Result<()> {
             last_ingested_at TEXT,
             is_active INTEGER NOT NULL DEFAULT 1
         );
-        "#.to_string()
-    )).await?;
-    
+        "#
+            .to_string(),
+        ))
+        .await?;
+
     // Create some test data
     let stream_source_repo = StreamSourceSeaOrmRepository::new(db.connection().clone());
     let stream_source_request = StreamSourceCreateRequest {
@@ -265,14 +285,14 @@ async fn test_seaorm_migration_system() -> Result<()> {
         field_map: None,
         ignore_channel_numbers: false,
     };
-    
+
     let stream_source = stream_source_repo.create(stream_source_request).await?;
-    
+
     // Verify data exists
     let found_source = stream_source_repo.find_by_id(&stream_source.id).await?;
     assert!(found_source.is_some());
-    
+
     println!("[SUCCESS] Migration system test successful");
-    
+
     Ok(())
 }

@@ -2,17 +2,12 @@
 //!
 //! This module provides endpoints for managing runtime feature flags.
 
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{Json, extract::State, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::{self, ToSchema};
 
-use crate::web::{
-    AppState,
-    extractors::RequestContext,
-    responses::ok,
-    utils::log_request,
-};
+use crate::web::{AppState, extractors::RequestContext, responses::ok, utils::log_request};
 
 /// Get current feature flags configuration
 ///
@@ -40,18 +35,18 @@ pub async fn get_features(
     // Get feature flags and config from runtime store (with fallback to static config)
     let runtime_flags = state.runtime_settings_store.get_feature_flags().await;
     let runtime_config = state.runtime_settings_store.get_feature_config().await;
-    
+
     // If runtime store is empty, fall back to static config
     let (flags, config) = if runtime_flags.is_empty() && runtime_config.is_empty() {
         match &state.config.features {
             Some(features_config) => (
                 features_config.flags.clone(),
-                features_config.config.clone()
+                features_config.config.clone(),
             ),
             None => (
                 std::collections::HashMap::new(),
-                std::collections::HashMap::new()
-            )
+                std::collections::HashMap::new(),
+            ),
         }
     } else {
         (runtime_flags, runtime_config)
@@ -98,7 +93,8 @@ pub async fn update_features(
     );
 
     // Update the runtime configuration using RuntimeSettingsStore
-    let success = state.runtime_settings_store
+    let success = state
+        .runtime_settings_store
         .update_feature_flags(request.flags.clone(), request.config.clone())
         .await;
 

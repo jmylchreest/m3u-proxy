@@ -18,7 +18,7 @@ use crate::models::{EpgSource, EpgSourceType};
 use crate::web::{
     AppState,
     extractors::{EpgSourceFilterParams, ListParams, RequestContext},
-    responses::{ok, ApiResponse, PaginatedResponse},
+    responses::{ApiResponse, PaginatedResponse, ok},
     utils::{extract_uuid_param, log_request},
 };
 
@@ -145,7 +145,6 @@ impl From<EpgSource> for EpgSourceResponse {
         }
     }
 }
-
 
 /// List all EPG sources with utoipa automatic discovery
 #[utoipa::path(
@@ -490,4 +489,3 @@ pub async fn validate_epg_source(
         }
     }
 }
-

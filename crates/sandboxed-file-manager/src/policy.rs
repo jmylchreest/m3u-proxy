@@ -5,18 +5,16 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Defines which timestamp to use for cleanup decisions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TimeMatch {
     /// Use last access time - tries filesystem atime, falls back to in-memory tracking, then mtime
     #[default]
     LastAccess,
-    /// Use modification time (mtime) 
+    /// Use modification time (mtime)
     Modified,
     /// Use creation time (ctime)
     Created,
 }
-
 
 /// Configuration for automatic file cleanup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +30,7 @@ pub struct CleanupPolicy {
 
 impl CleanupPolicy {
     /// Create a new cleanup policy with default settings.
-    /// 
+    ///
     /// Default: 24 hours retention based on last access time.
     pub fn new() -> Self {
         Self {
@@ -78,47 +76,48 @@ impl CleanupPolicy {
             infinite_retention: true,
         }
     }
-    
+
     /// Calculate an appropriate cleanup interval based on retention duration.
     /// For precise cleanup, we want to check more frequently for shorter retention periods.
-    /// 
+    ///
     /// Rules:
     /// - For retention < 1 hour: check every 1 minute (max 1 minute drift)
-    /// - For retention < 1 day: check every 10 minutes (max 10 minute drift)  
+    /// - For retention < 1 day: check every 10 minutes (max 10 minute drift)
     /// - For retention < 7 days: check every 1 hour (max 1 hour drift)
     /// - For retention < 30 days: check every 4 hours (max 4 hour drift)
     /// - For retention >= 30 days: check every 12 hours (max 12 hour drift)
     pub fn recommended_cleanup_interval(&self) -> Duration {
         let retention_secs = self.retention_duration.as_secs();
-        
+
         match retention_secs {
             0..=3600 => Duration::from_secs(60), // <= 1 hour: check every minute
             3601..=86400 => Duration::from_secs(600), // <= 1 day: check every 10 minutes
             86401..=604_800 => Duration::from_secs(3600), // <= 7 days: check every hour
             604_801..=2_592_000 => Duration::from_secs(14400), // <= 30 days: check every 4 hours
-            _ => Duration::from_secs(43200), // > 30 days: check every 12 hours
+            _ => Duration::from_secs(43200),     // > 30 days: check every 12 hours
         }
     }
 
     /// Check if a file should be cleaned up based on this policy.
     /// For LastAccess mode, prefers filesystem_atime if available, falls back to in_memory_access, then modified.
     pub fn should_cleanup(
-        &self, 
+        &self,
         filesystem_atime: Option<DateTime<Utc>>,
-        in_memory_access: DateTime<Utc>, 
-        modified: DateTime<Utc>, 
-        created: DateTime<Utc>
+        in_memory_access: DateTime<Utc>,
+        modified: DateTime<Utc>,
+        created: DateTime<Utc>,
     ) -> bool {
         if self.infinite_retention {
             return false;
         }
 
-        let cutoff = Utc::now() - chrono::Duration::from_std(self.retention_duration).unwrap_or_default();
-        
+        let cutoff =
+            Utc::now() - chrono::Duration::from_std(self.retention_duration).unwrap_or_default();
+
         let timestamp = match self.time_match {
             TimeMatch::LastAccess => {
                 let unix_epoch_utc: DateTime<Utc> = DateTime::from(std::time::UNIX_EPOCH);
-                
+
                 // Prefer filesystem atime if available and seems valid (not Unix epoch)
                 if let Some(fs_atime) = filesystem_atime {
                     if fs_atime > unix_epoch_utc {
@@ -139,7 +138,7 @@ impl CleanupPolicy {
                         modified
                     }
                 }
-            },
+            }
             TimeMatch::Modified => modified,
             TimeMatch::Created => created,
         };
@@ -171,10 +170,10 @@ mod tests {
 
         // Should cleanup old file (using in-memory access time)
         assert!(policy.should_cleanup(None, old_time, now, now));
-        
+
         // Should not cleanup recent file
         assert!(!policy.should_cleanup(None, recent_time, now, now));
-        
+
         // Should prefer filesystem atime if available
         let old_fs_atime = now - ChronoDuration::hours(3);
         assert!(policy.should_cleanup(Some(old_fs_atime), recent_time, now, now));
@@ -184,7 +183,7 @@ mod tests {
     fn test_cleanup_policy_disabled() {
         let policy = CleanupPolicy::disabled();
         let old_time = Utc::now() - ChronoDuration::days(365);
-        
+
         // Should never cleanup when disabled
         assert!(!policy.should_cleanup(None, old_time, old_time, old_time));
     }
@@ -197,7 +196,7 @@ mod tests {
 
         let now = Utc::now();
         let old_access = now - ChronoDuration::days(2);
-        let old_modified = now - ChronoDuration::days(2); 
+        let old_modified = now - ChronoDuration::days(2);
         let old_created = now - ChronoDuration::days(2);
         let recent = now - ChronoDuration::minutes(1);
 
@@ -205,7 +204,7 @@ mod tests {
         assert!(policy_atime.should_cleanup(None, old_access, recent, recent));
         assert!(!policy_atime.should_cleanup(None, recent, old_modified, old_created));
 
-        // Test modified time matching  
+        // Test modified time matching
         assert!(policy_mtime.should_cleanup(None, recent, old_modified, recent));
         assert!(!policy_mtime.should_cleanup(None, old_access, recent, old_created));
 

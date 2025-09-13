@@ -8,11 +8,10 @@ use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::database::Database;
-use crate::models::{EpgSource, EpgSourceType, StreamSource, StreamSourceType};
 use crate::database::repositories::{
-    stream_source::StreamSourceSeaOrmRepository,
-    epg_source::EpgSourceSeaOrmRepository,
+    epg_source::EpgSourceSeaOrmRepository, stream_source::StreamSourceSeaOrmRepository,
 };
+use crate::models::{EpgSource, EpgSourceType, StreamSource, StreamSourceType};
 use crate::services::UrlLinkingService;
 
 /// Service for managing links between stream and EPG sources
@@ -49,10 +48,8 @@ impl SourceLinkingService {
     pub fn new_legacy(database: Database) -> Self {
         let stream_source_repo = StreamSourceSeaOrmRepository::new(database.connection().clone());
         let epg_source_repo = EpgSourceSeaOrmRepository::new(database.connection().clone());
-        let url_linking_service = UrlLinkingService::new(
-            stream_source_repo.clone(),
-            epg_source_repo.clone(),
-        );
+        let url_linking_service =
+            UrlLinkingService::new(stream_source_repo.clone(), epg_source_repo.clone());
         Self::new(stream_source_repo, epg_source_repo, url_linking_service)
     }
 
@@ -63,9 +60,15 @@ impl SourceLinkingService {
         let mut stats = LinkingStats::default();
 
         // Get all Xtream sources using repositories
-        let stream_sources = self.stream_source_repo.find_all().await
+        let stream_sources = self
+            .stream_source_repo
+            .find_all()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get stream sources: {}", e))?;
-        let epg_sources = self.epg_source_repo.find_all().await
+        let epg_sources = self
+            .epg_source_repo
+            .find_all()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get EPG sources: {}", e))?;
 
         let xtream_streams: Vec<_> = stream_sources
@@ -134,7 +137,11 @@ impl SourceLinkingService {
         epg_sources: &[EpgSource],
     ) -> Result<bool> {
         // Check if already linked using service pattern
-        let linked_epgs = self.url_linking_service.find_linked_epg_sources(stream_source).await.unwrap_or_default();
+        let linked_epgs = self
+            .url_linking_service
+            .find_linked_epg_sources(stream_source)
+            .await
+            .unwrap_or_default();
         if !linked_epgs.is_empty() {
             return Ok(false);
         }
@@ -155,14 +162,14 @@ impl SourceLinkingService {
                 .check_epg_availability(&stream_source.url, username, password)
                 .await?
         {
-                info!(
-                    "Stream source '{}' provides EPG data - creating EPG source",
-                    stream_source.name
-                );
-                let epg_source = self.create_epg_from_stream(stream_source).await?;
-                self.create_bidirectional_link(Some(stream_source.id), Some(epg_source.id))
-                    .await?;
-                return Ok(true);
+            info!(
+                "Stream source '{}' provides EPG data - creating EPG source",
+                stream_source.name
+            );
+            let epg_source = self.create_epg_from_stream(stream_source).await?;
+            self.create_bidirectional_link(Some(stream_source.id), Some(epg_source.id))
+                .await?;
+            return Ok(true);
         }
 
         Ok(false)
@@ -175,7 +182,11 @@ impl SourceLinkingService {
         stream_sources: &[StreamSource],
     ) -> Result<bool> {
         // Check if already linked using service pattern
-        let linked_streams = self.url_linking_service.find_linked_stream_sources(epg_source).await.unwrap_or_default();
+        let linked_streams = self
+            .url_linking_service
+            .find_linked_stream_sources(epg_source)
+            .await
+            .unwrap_or_default();
         if !linked_streams.is_empty() {
             return Ok(false);
         }
@@ -196,14 +207,14 @@ impl SourceLinkingService {
                 .check_stream_availability(&epg_source.url, username, password)
                 .await?
         {
-                info!(
-                    "EPG source '{}' provides stream data - creating stream source",
-                    epg_source.name
-                );
-                let stream_source = self.create_stream_from_epg(epg_source).await?;
-                self.create_bidirectional_link(Some(stream_source.id), Some(epg_source.id))
-                    .await?;
-                return Ok(true);
+            info!(
+                "EPG source '{}' provides stream data - creating stream source",
+                epg_source.name
+            );
+            let stream_source = self.create_stream_from_epg(epg_source).await?;
+            self.create_bidirectional_link(Some(stream_source.id), Some(epg_source.id))
+                .await?;
+            return Ok(true);
         }
 
         Ok(false)
@@ -312,7 +323,9 @@ impl SourceLinkingService {
         username: &str,
         password: &str,
     ) -> Result<bool> {
-        let stream_url = format!("{url}player_api.php?username={username}&password={password}&action=get_live_categories");
+        let stream_url = format!(
+            "{url}player_api.php?username={username}&password={password}&action=get_live_categories"
+        );
 
         match self.client.head(&stream_url).send().await {
             Ok(response) if response.status().is_success() => Ok(true),
@@ -332,11 +345,17 @@ impl SourceLinkingService {
 
         if let (Some(stream_id), Some(epg_id)) = (stream_source_id, epg_source_id) {
             // Get the stream and EPG sources to extract URL and credentials
-            let stream_source = self.stream_source_repo.find_by_id(&stream_id).await
+            let stream_source = self
+                .stream_source_repo
+                .find_by_id(&stream_id)
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to find stream source: {}", e))?
                 .ok_or_else(|| anyhow::anyhow!("Stream source not found: {}", stream_id))?;
-                
-            let epg_source = self.epg_source_repo.find_by_id(&epg_id).await
+
+            let epg_source = self
+                .epg_source_repo
+                .find_by_id(&epg_id)
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to find EPG source: {}", e))?
                 .ok_or_else(|| anyhow::anyhow!("EPG source not found: {}", epg_id))?;
 
@@ -349,7 +368,7 @@ impl SourceLinkingService {
                 stream_source.name, stream_id, epg_source.name, epg_id
             );
         }
-        
+
         Ok(())
     }
 
@@ -366,7 +385,9 @@ impl SourceLinkingService {
             time_offset: None,
         };
 
-        self.epg_source_repo.create(epg_request).await
+        self.epg_source_repo
+            .create(epg_request)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create EPG source: {}", e))
     }
 
@@ -384,22 +405,34 @@ impl SourceLinkingService {
             ignore_channel_numbers: true, // Default to true for Xtream sources
         };
 
-        self.stream_source_repo.create(stream_request).await
+        self.stream_source_repo
+            .create(stream_request)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create stream source: {}", e))
     }
 
     /// Get linking statistics
     pub async fn get_linking_stats(&self) -> Result<LinkingStats> {
         // Get counts using SeaORM repositories directly
-        let stream_sources_list = self.stream_source_repo.find_all().await
+        let stream_sources_list = self
+            .stream_source_repo
+            .find_all()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get stream sources for stats: {}", e))?;
-        let epg_sources_list = self.epg_source_repo.find_all().await
+        let epg_sources_list = self
+            .epg_source_repo
+            .find_all()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get EPG sources for stats: {}", e))?;
 
         // Calculate total links by counting relationships
         let mut total_links = 0u64;
         for stream_source in &stream_sources_list {
-            if let Ok(linked_epgs) = self.url_linking_service.find_linked_epg_sources(stream_source).await {
+            if let Ok(linked_epgs) = self
+                .url_linking_service
+                .find_linked_epg_sources(stream_source)
+                .await
+            {
                 total_links += linked_epgs.len() as u64;
             }
         }

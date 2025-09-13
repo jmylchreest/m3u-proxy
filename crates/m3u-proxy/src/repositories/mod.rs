@@ -45,8 +45,8 @@
 //! }
 //! ```
 
-pub mod traits;
 pub mod retry_wrapper;
+pub mod traits;
 
 // Re-export main traits and types
 pub use traits::*;

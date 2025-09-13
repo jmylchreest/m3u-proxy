@@ -62,8 +62,8 @@ impl JobType {
     /// Get the resource ID this job operates on
     pub fn resource_id(&self) -> Option<Uuid> {
         match self {
-            JobType::StreamIngestion(id) 
-            | JobType::EpgIngestion(id) 
+            JobType::StreamIngestion(id)
+            | JobType::EpgIngestion(id)
             | JobType::ProxyRegeneration(id) => Some(*id),
             JobType::Maintenance(_) => None,
         }
@@ -95,7 +95,11 @@ impl ScheduledJob {
     }
 
     /// Create a new scheduled job with specific time
-    pub fn new_scheduled(job_type: JobType, priority: JobPriority, scheduled_time: DateTime<Utc>) -> Self {
+    pub fn new_scheduled(
+        job_type: JobType,
+        priority: JobPriority,
+        scheduled_time: DateTime<Utc>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             job_type,
@@ -150,20 +154,20 @@ pub enum JobSchedulingError {
     /// Job already exists in the queue
     #[error("Job with key '{key}' already exists in queue")]
     DuplicateJob { key: String },
-    
+
     /// Job queue is full
     #[error("Job queue is full, cannot enqueue more jobs")]
     QueueFull,
-    
+
     /// Invalid job configuration
     #[error("Invalid job configuration: {reason}")]
     InvalidJob { reason: String },
-    
+
     /// Database operation failed
     #[error("Database operation failed: {source}")]
-    DatabaseError { 
+    DatabaseError {
         #[from]
-        source: anyhow::Error 
+        source: anyhow::Error,
     },
 }
 
@@ -201,54 +205,54 @@ mod tests {
     #[test]
     fn test_scheduled_job_ordering() {
         let now = Utc::now();
-        
+
         // Job with higher priority (lower enum value) should come first
         let critical_job = ScheduledJob::new_scheduled(
             JobType::Maintenance("test".to_string()),
             JobPriority::Critical,
             now + Duration::hours(1),
         );
-        
+
         let normal_job = ScheduledJob::new_scheduled(
             JobType::Maintenance("test2".to_string()),
             JobPriority::Normal,
             now,
         );
-        
+
         assert!(critical_job < normal_job);
-        
+
         // Jobs with same priority should be ordered by time
         let earlier_job = ScheduledJob::new_scheduled(
             JobType::Maintenance("earlier".to_string()),
             JobPriority::Normal,
             now,
         );
-        
+
         let later_job = ScheduledJob::new_scheduled(
             JobType::Maintenance("later".to_string()),
             JobPriority::Normal,
             now + Duration::minutes(10),
         );
-        
+
         assert!(earlier_job < later_job);
     }
 
     #[test]
     fn test_job_is_ready() {
         let now = Utc::now();
-        
+
         let ready_job = ScheduledJob::new_scheduled(
             JobType::Maintenance("ready".to_string()),
             JobPriority::Normal,
             now - Duration::minutes(1),
         );
-        
+
         let future_job = ScheduledJob::new_scheduled(
             JobType::Maintenance("future".to_string()),
             JobPriority::Normal,
             now + Duration::minutes(1),
         );
-        
+
         assert!(ready_job.is_ready(now));
         assert!(!future_job.is_ready(now));
     }

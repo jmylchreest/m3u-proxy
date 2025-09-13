@@ -1,8 +1,8 @@
 //! Integration tests for data mapping functionality
-//! 
+//!
 //! This module provides comprehensive integration tests for the data mapping
 //! functionality, focusing on testing SeaORM database operations and model validation.
-//! 
+//!
 //! This implementation demonstrates exemplary SeaORM testing patterns with:
 //! - Clean dependency injection through test helpers
 //! - SOLID principles in test design
@@ -10,30 +10,37 @@
 //! - Pure SeaORM entity operations
 //! - Comprehensive test coverage with maintainable patterns
 
-use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter, PaginatorTrait};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 use uuid::Uuid;
 
 use m3u_proxy::{
     database::Database,
+    database::repositories::{
+        channel::{ChannelCreateRequest, ChannelSeaOrmRepository},
+        stream_source::StreamSourceSeaOrmRepository,
+    },
+    entities::{channels, prelude::*},
     models::*,
-    entities::{prelude::*, channels},
-    database::repositories::{stream_source::StreamSourceSeaOrmRepository, channel::{ChannelSeaOrmRepository, ChannelCreateRequest}},
 };
 
 /// Helper to create test database with SeaORM connection
-/// 
+///
 /// This demonstrates the Single Responsibility Principle by providing
 /// a focused database setup helper that encapsulates all connection logic.
 async fn create_test_database() -> (Database, std::sync::Arc<DatabaseConnection>) {
     use sea_orm::*;
-    
+
     // Create database without migrations to avoid SQLite foreign key issues
-    let database = create_in_memory_database().await.expect("Failed to create test database");
-    
+    let database = create_in_memory_database()
+        .await
+        .expect("Failed to create test database");
+
     // Create minimal tables directly instead of running migrations
-    database.connection().execute(Statement::from_string(
-        DatabaseBackend::Sqlite,
-        r#"
+    database
+        .connection()
+        .execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            r#"
         CREATE TABLE stream_sources (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -64,22 +71,25 @@ async fn create_test_database() -> (Database, std::sync::Arc<DatabaseConnection>
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
-        "#.to_string()
-    )).await.expect("Failed to create tables");
-    
+        "#
+            .to_string(),
+        ))
+        .await
+        .expect("Failed to create tables");
+
     let connection = database.connection().clone();
     (database, connection)
 }
 
 /// Helper to create test stream sources using SeaORM repository
-/// 
+///
 /// This function demonstrates the Dependency Inversion Principle by accepting
 /// a DatabaseConnection interface rather than a concrete implementation.
 /// It follows the Open/Closed Principle by being extensible for new source types.
 async fn create_test_stream_sources(connection: &std::sync::Arc<DatabaseConnection>) -> Vec<Uuid> {
     let stream_source_repo = StreamSourceSeaOrmRepository::new(connection.clone());
     let mut source_ids = Vec::new();
-    
+
     // Create test stream sources with different configurations for comprehensive testing
     let sources = vec![
         StreamSourceCreateRequest {
@@ -105,41 +115,66 @@ async fn create_test_stream_sources(connection: &std::sync::Arc<DatabaseConnecti
             ignore_channel_numbers: false,
         },
     ];
-    
+
     for source_request in sources {
-        let created_source = stream_source_repo.create(source_request).await
+        let created_source = stream_source_repo
+            .create(source_request)
+            .await
             .expect("Failed to create test stream source");
         source_ids.push(created_source.id);
     }
-    
+
     source_ids
 }
 
 /// Helper to create test channels for sources using SeaORM repository
-/// 
+///
 /// This function demonstrates the Single Responsibility Principle by focusing solely
 /// on channel creation. It uses SeaORM entities and repositories for type-safe
 /// database operations, eliminating raw SQL and potential injection vulnerabilities.
-/// 
+///
 /// The function follows DRY principles by extracting common channel creation logic
 /// into reusable patterns.
-async fn create_test_channels(connection: &std::sync::Arc<DatabaseConnection>, source_ids: &[Uuid]) {
+async fn create_test_channels(
+    connection: &std::sync::Arc<DatabaseConnection>,
+    source_ids: &[Uuid],
+) {
     let channel_repo = ChannelSeaOrmRepository::new(connection.clone());
-    
+
     // Create channels for first source with diverse content types using sample data
     use m3u_proxy::utils::SampleDataGenerator;
     let mut generator = SampleDataGenerator::new();
     let entertainment_samples = generator.generate_sample_channels(2, Some("entertainment"));
     let sports_samples = generator.generate_sample_channels(1, Some("sports"));
     let mixed_samples = generator.generate_sample_channels(1, Some("movies"));
-    
+
     let channels_source1 = vec![
-        (entertainment_samples[0].channel_name.as_str(), entertainment_samples[0].tvg_id.as_str(), Some("101"), Some("Entertainment")),
-        (entertainment_samples[1].channel_name.as_str(), entertainment_samples[1].tvg_id.as_str(), Some("102"), Some("Entertainment")),
-        (sports_samples[0].channel_name.as_str(), sports_samples[0].tvg_id.as_str(), Some("401"), Some("Sports")),
-        (mixed_samples[0].channel_name.as_str(), mixed_samples[0].tvg_id.as_str(), Some("104"), Some("Movies")),
+        (
+            entertainment_samples[0].channel_name.as_str(),
+            entertainment_samples[0].tvg_id.as_str(),
+            Some("101"),
+            Some("Entertainment"),
+        ),
+        (
+            entertainment_samples[1].channel_name.as_str(),
+            entertainment_samples[1].tvg_id.as_str(),
+            Some("102"),
+            Some("Entertainment"),
+        ),
+        (
+            sports_samples[0].channel_name.as_str(),
+            sports_samples[0].tvg_id.as_str(),
+            Some("401"),
+            Some("Sports"),
+        ),
+        (
+            mixed_samples[0].channel_name.as_str(),
+            mixed_samples[0].tvg_id.as_str(),
+            Some("104"),
+            Some("Movies"),
+        ),
     ];
-    
+
     for (name, tvg_id, chno, group) in channels_source1 {
         let channel_request = ChannelCreateRequest {
             source_id: source_ids[0],
@@ -152,22 +187,44 @@ async fn create_test_channels(connection: &std::sync::Arc<DatabaseConnection>, s
             channel_name: name.to_string(),
             stream_url: "http://example.com/stream".to_string(),
         };
-        
-        channel_repo.create(channel_request).await
+
+        channel_repo
+            .create(channel_request)
+            .await
             .expect("Failed to create test channel");
     }
-    
+
     // Create channels for second source with different genre distribution using sample data
     let news_samples = generator.generate_sample_channels(2, Some("news"));
     let more_sports_samples = generator.generate_sample_channels(2, Some("sports"));
-    
+
     let channels_source2 = vec![
-        (news_samples[0].channel_name.as_str(), news_samples[0].tvg_id.as_str(), Some("201"), Some("News")),
-        (news_samples[1].channel_name.as_str(), news_samples[1].tvg_id.as_str(), Some("202"), Some("News")),
-        (more_sports_samples[0].channel_name.as_str(), more_sports_samples[0].tvg_id.as_str(), Some("301"), Some("Sports")),
-        (more_sports_samples[1].channel_name.as_str(), more_sports_samples[1].tvg_id.as_str(), Some("302"), Some("Sports")),
+        (
+            news_samples[0].channel_name.as_str(),
+            news_samples[0].tvg_id.as_str(),
+            Some("201"),
+            Some("News"),
+        ),
+        (
+            news_samples[1].channel_name.as_str(),
+            news_samples[1].tvg_id.as_str(),
+            Some("202"),
+            Some("News"),
+        ),
+        (
+            more_sports_samples[0].channel_name.as_str(),
+            more_sports_samples[0].tvg_id.as_str(),
+            Some("301"),
+            Some("Sports"),
+        ),
+        (
+            more_sports_samples[1].channel_name.as_str(),
+            more_sports_samples[1].tvg_id.as_str(),
+            Some("302"),
+            Some("Sports"),
+        ),
     ];
-    
+
     for (name, tvg_id, chno, group) in channels_source2 {
         let channel_request = ChannelCreateRequest {
             source_id: source_ids[1],
@@ -180,8 +237,10 @@ async fn create_test_channels(connection: &std::sync::Arc<DatabaseConnection>, s
             channel_name: name.to_string(),
             stream_url: "http://example.com/stream".to_string(),
         };
-        
-        channel_repo.create(channel_request).await
+
+        channel_repo
+            .create(channel_request)
+            .await
             .expect("Failed to create test channel");
     }
 }
@@ -191,55 +250,53 @@ async fn test_data_mapping_database_functionality() {
     let (_db, connection) = create_test_database().await;
     let source_ids = create_test_stream_sources(&connection).await;
     create_test_channels(&connection, &source_ids).await;
-    
+
     // Test that channels were created successfully using SeaORM entity queries
-    let count = Channels::find()
-        .count(connection.as_ref())
-        .await
-        .unwrap();
-    
+    let count = Channels::find().count(connection.as_ref()).await.unwrap();
+
     assert!(count > 0, "Channels should be created");
-    
+
     // Test basic channel query with HD filter using SeaORM's type-safe queries
     let hd_channels = Channels::find()
         .filter(channels::Column::ChannelName.contains("HD"))
         .all(connection.as_ref())
         .await
         .unwrap();
-    
+
     assert!(!hd_channels.is_empty(), "Should find HD channels");
-    
+
     // Test source relationships using SeaORM's relationship queries
-    let all_channels = Channels::find()
-        .all(connection.as_ref())
-        .await
-        .unwrap();
-    
+    let all_channels = Channels::find().all(connection.as_ref()).await.unwrap();
+
     let unique_source_ids: std::collections::HashSet<_> = all_channels
         .iter()
         .map(|channel| channel.source_id)
         .collect();
-    
-    assert_eq!(unique_source_ids.len(), 2, "Channels should belong to 2 sources");
+
+    assert_eq!(
+        unique_source_ids.len(),
+        2,
+        "Channels should belong to 2 sources"
+    );
 }
 
 #[tokio::test]
 async fn test_stream_source_repository_integration() {
     let (_db, connection) = create_test_database().await;
     let source_ids = create_test_stream_sources(&connection).await;
-    
+
     // Test SeaORM repository functionality with type-safe operations
     let repo = StreamSourceSeaOrmRepository::new(connection.clone());
-    
+
     // Test find_by_id using SeaORM repository pattern
     let source = repo.find_by_id(&source_ids[0]).await.unwrap();
     assert!(source.is_some());
-    
+
     let source = source.unwrap();
     assert_eq!(source.name, "Test Source 1");
     assert_eq!(source.source_type, StreamSourceType::M3u);
     assert_eq!(source.max_concurrent_streams, 10);
-    
+
     // Test update functionality using SeaORM's type-safe update operations
     let update_request = StreamSourceUpdateRequest {
         name: "Updated Test Source".to_string(),
@@ -254,7 +311,7 @@ async fn test_stream_source_repository_integration() {
         is_active: source.is_active,
         update_linked: true,
     };
-    
+
     let updated_source = repo.update(&source_ids[0], update_request).await.unwrap();
     assert_eq!(updated_source.name, "Updated Test Source");
     assert_eq!(updated_source.max_concurrent_streams, 15);
@@ -265,23 +322,20 @@ async fn test_channel_data_integrity() {
     let (_db, connection) = create_test_database().await;
     let source_ids = create_test_stream_sources(&connection).await;
     create_test_channels(&connection, &source_ids).await;
-    
+
     // Test grouping functionality using SeaORM's type-safe queries
     let sports_channels_count = Channels::find()
         .filter(channels::Column::GroupTitle.eq("Sports"))
         .count(connection.as_ref())
         .await
         .unwrap();
-    
+
     assert_eq!(sports_channels_count, 3, "Should have 3 sports channels");
-    
+
     // Test channel number ranges using SeaORM's comparison operators
     // Note: Converting to integer for comparison since tvg_chno is stored as text
-    let all_channels = Channels::find()
-        .all(connection.as_ref())
-        .await
-        .unwrap();
-    
+    let all_channels = Channels::find().all(connection.as_ref()).await.unwrap();
+
     let high_number_channels = all_channels
         .iter()
         .filter(|channel| {
@@ -292,14 +346,19 @@ async fn test_channel_data_integrity() {
             }
         })
         .count();
-    
-    assert_eq!(high_number_channels, 5, "Should have 5 channels with numbers > 200");
+
+    assert_eq!(
+        high_number_channels, 5,
+        "Should have 5 channels with numbers > 200"
+    );
 }
 
 /// Helper function to create in-memory database for testing
 async fn create_in_memory_database() -> anyhow::Result<Database> {
-    use m3u_proxy::config::{DatabaseConfig, IngestionConfig, SqliteConfig, PostgreSqlConfig, MySqlConfig};
-    
+    use m3u_proxy::config::{
+        DatabaseConfig, IngestionConfig, MySqlConfig, PostgreSqlConfig, SqliteConfig,
+    };
+
     let db_config = DatabaseConfig {
         url: "sqlite::memory:".to_string(),
         max_connections: Some(10),
@@ -308,19 +367,19 @@ async fn create_in_memory_database() -> anyhow::Result<Database> {
         postgresql: PostgreSqlConfig::default(),
         mysql: MySqlConfig::default(),
     };
-    
+
     let ingestion_config = IngestionConfig {
         progress_update_interval: 1000,
         run_missed_immediately: true,
         use_new_source_handlers: true,
     };
-    
+
     Database::new(&db_config, &ingestion_config).await
 }
 
 /// Additional exemplary SeaORM test helper functions demonstrating best practices
 /// Helper for advanced channel querying with builder pattern
-/// 
+///
 /// This demonstrates the Builder Pattern for constructing complex queries
 /// and showcases SeaORM's fluent query API for maintainable test code.
 #[derive(Debug, Default)]
@@ -339,68 +398,68 @@ impl<'a> ChannelQueryBuilder<'a> {
             ..Default::default()
         }
     }
-    
+
     pub fn filter_by_source(mut self, source_id: Uuid) -> Self {
         self.source_filter = Some(source_id);
         self
     }
-    
+
     pub fn filter_by_group(mut self, group: &'a str) -> Self {
         self.group_filter = Some(group);
         self
     }
-    
+
     pub fn name_contains(mut self, text: &'a str) -> Self {
         self.name_contains = Some(text);
         self
     }
-    
+
     pub fn limit(mut self, count: u64) -> Self {
         self.limit = Some(count);
         self
     }
-    
+
     pub async fn execute(self) -> anyhow::Result<Vec<channels::Model>> {
         let connection = self.connection.expect("Database connection required");
         let mut query = Channels::find();
-        
+
         if let Some(source_id) = self.source_filter {
             query = query.filter(channels::Column::SourceId.eq(source_id));
         }
-        
+
         if let Some(group) = self.group_filter {
             query = query.filter(channels::Column::GroupTitle.eq(group));
         }
-        
+
         if let Some(text) = self.name_contains {
             query = query.filter(channels::Column::ChannelName.contains(text));
         }
-        
+
         let mut all_results = query.all(connection).await?;
-        
+
         if let Some(limit) = self.limit {
             all_results.truncate(limit as usize);
         }
-        
+
         Ok(all_results)
     }
-    
+
     pub async fn count(self) -> anyhow::Result<u64> {
         let connection = self.connection.expect("Database connection required");
         let mut query = Channels::find();
-        
+
         if let Some(source_id) = self.source_filter {
             query = query.filter(channels::Column::SourceId.eq(source_id));
         }
-        
+
         if let Some(group) = self.group_filter {
             query = query.filter(channels::Column::GroupTitle.eq(group));
         }
-        
+
         if let Some(text) = self.name_contains {
             query = query.filter(channels::Column::ChannelName.contains(text));
         }
-        
+
         Ok(query.count(connection).await?)
     }
 }
@@ -411,7 +470,7 @@ async fn test_advanced_seaorm_query_patterns() {
     let (_db, connection) = create_test_database().await;
     let source_ids = create_test_stream_sources(&connection).await;
     create_test_channels(&connection, &source_ids).await;
-    
+
     // Test builder pattern for complex queries - search for sports channels containing "HD"
     let sports_hd_channels = ChannelQueryBuilder::new(&connection)
         .filter_by_group("Sports")
@@ -419,44 +478,64 @@ async fn test_advanced_seaorm_query_patterns() {
         .execute()
         .await
         .unwrap();
-    
+
     // Sample data generator creates sports channels, some of which contain "HD"
     // We should find at least 1, but the exact count depends on random generation
-    assert!(!sports_hd_channels.is_empty(), "Should find at least one Sports HD channel");
-    assert!(sports_hd_channels.iter().all(|ch| ch.group_title.as_ref().is_some_and(|g| g == "Sports")), "All channels should be Sports group");
-    assert!(sports_hd_channels.iter().all(|ch| ch.channel_name.contains("HD")), "All channels should contain 'HD' in name");
-    
+    assert!(
+        !sports_hd_channels.is_empty(),
+        "Should find at least one Sports HD channel"
+    );
+    assert!(
+        sports_hd_channels
+            .iter()
+            .all(|ch| ch.group_title.as_ref().is_some_and(|g| g == "Sports")),
+        "All channels should be Sports group"
+    );
+    assert!(
+        sports_hd_channels
+            .iter()
+            .all(|ch| ch.channel_name.contains("HD")),
+        "All channels should contain 'HD' in name"
+    );
+
     // Test count operations
     let entertainment_count = ChannelQueryBuilder::new(&connection)
         .filter_by_group("Entertainment")
         .count()
         .await
         .unwrap();
-    
-    assert_eq!(entertainment_count, 2, "Should have 2 entertainment channels");
-    
+
+    assert_eq!(
+        entertainment_count, 2,
+        "Should have 2 entertainment channels"
+    );
+
     // Test source-specific filtering
     let source1_channels = ChannelQueryBuilder::new(&connection)
         .filter_by_source(source_ids[0])
         .execute()
         .await
         .unwrap();
-    
-    assert_eq!(source1_channels.len(), 4, "First source should have 4 channels");
+
+    assert_eq!(
+        source1_channels.len(),
+        4,
+        "First source should have 4 channels"
+    );
 }
 
 /// Helper for transaction-based operations demonstrating SeaORM transaction patterns
-/// 
+///
 /// This shows proper transaction usage for atomic operations,
 /// which is crucial for data integrity in integration tests.
 async fn test_transaction_rollback_pattern(connection: &DatabaseConnection) -> anyhow::Result<()> {
-    use sea_orm::{TransactionTrait, PaginatorTrait};
-    
+    use sea_orm::{PaginatorTrait, TransactionTrait};
+
     let initial_count = Channels::find().paginate(connection, 1).num_items().await?;
-    
+
     // Start transaction
     let txn = connection.begin().await?;
-    
+
     // Create a test channel within transaction
     let test_channel = ChannelCreateRequest {
         source_id: Uuid::new_v4(),
@@ -469,11 +548,11 @@ async fn test_transaction_rollback_pattern(connection: &DatabaseConnection) -> a
         channel_name: "Test Rollback Channel".to_string(),
         stream_url: "http://example.com/test".to_string(),
     };
-    
+
     // Create channel directly using ActiveModel within transaction (proper SeaORM pattern)
     use m3u_proxy::entities::{channels, prelude::Channels};
     use sea_orm::{ActiveModelTrait, Set};
-    
+
     let channel_active = channels::ActiveModel {
         id: Set(Uuid::new_v4()),
         source_id: Set(test_channel.source_id),
@@ -488,20 +567,20 @@ async fn test_transaction_rollback_pattern(connection: &DatabaseConnection) -> a
         created_at: Set(chrono::Utc::now()),
         updated_at: Set(chrono::Utc::now()),
     };
-    
+
     let _created_channel = channel_active.insert(&txn).await?;
-    
+
     // Verify channel exists within transaction scope
     let count_in_txn = Channels::find().paginate(&txn, 1).num_items().await?;
     assert_eq!(count_in_txn, initial_count + 1);
-    
+
     // Rollback transaction
     txn.rollback().await?;
-    
+
     // Verify channel was rolled back
     let final_count = Channels::find().count(connection).await?;
     assert_eq!(final_count, initial_count, "Channel should be rolled back");
-    
+
     Ok(())
 }
 
@@ -511,40 +590,48 @@ async fn test_seaorm_transaction_integrity() {
     let (_db, connection) = create_test_database().await;
     let source_ids = create_test_stream_sources(&connection).await;
     create_test_channels(&connection, &source_ids).await;
-    
+
     // Test transaction rollback
-    test_transaction_rollback_pattern(&connection).await.unwrap();
+    test_transaction_rollback_pattern(&connection)
+        .await
+        .unwrap();
 }
 
 /// Helper demonstrating SeaORM relationship queries
-/// 
+///
 /// This shows how to leverage SeaORM's relationship features
 /// for efficient and type-safe joins and aggregations.
-async fn test_relationship_queries(connection: &DatabaseConnection, source_ids: &[Uuid]) -> anyhow::Result<()> {
+async fn test_relationship_queries(
+    connection: &DatabaseConnection,
+    source_ids: &[Uuid],
+) -> anyhow::Result<()> {
     // Find stream source with its channels using SeaORM relationships
     let source_with_channels = StreamSources::find_by_id(source_ids[0])
         .find_with_related(Channels)
         .all(connection)
         .await?;
-    
+
     assert_eq!(source_with_channels.len(), 1, "Should find one source");
     let (source, channels) = &source_with_channels[0];
     assert_eq!(source.name, "Test Source 1");
     assert_eq!(channels.len(), 4, "Source should have 4 channels");
-    
+
     // Test aggregation queries
     let channel_counts_by_source = StreamSources::find()
         .find_with_related(Channels)
         .all(connection)
         .await?;
-    
+
     let total_channels: usize = channel_counts_by_source
         .iter()
         .map(|(_, channels)| channels.len())
         .sum();
-    
-    assert_eq!(total_channels, 8, "Should have 8 total channels across all sources");
-    
+
+    assert_eq!(
+        total_channels, 8,
+        "Should have 8 total channels across all sources"
+    );
+
     Ok(())
 }
 
@@ -554,7 +641,9 @@ async fn test_seaorm_relationships_and_aggregations() {
     let (_db, connection) = create_test_database().await;
     let source_ids = create_test_stream_sources(&connection).await;
     create_test_channels(&connection, &source_ids).await;
-    
+
     // Test relationship queries
-    test_relationship_queries(&connection, &source_ids).await.unwrap();
+    test_relationship_queries(&connection, &source_ids)
+        .await
+        .unwrap();
 }

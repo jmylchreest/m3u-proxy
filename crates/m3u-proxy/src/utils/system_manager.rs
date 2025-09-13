@@ -20,7 +20,7 @@ impl SystemManager {
     pub fn new(refresh_interval: Duration) -> Self {
         let system = Arc::new(RwLock::new(System::new_all()));
         let refresh_task = Self::start_refresh_task(system.clone(), refresh_interval);
-        
+
         Self {
             system,
             _refresh_task: refresh_task,
@@ -33,14 +33,17 @@ impl SystemManager {
     }
 
     /// Start the background refresh task
-    fn start_refresh_task(system: Arc<RwLock<System>>, interval: Duration) -> tokio::task::JoinHandle<()> {
+    fn start_refresh_task(
+        system: Arc<RwLock<System>>,
+        interval: Duration,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut ticker = time::interval(interval);
             ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-            
+
             loop {
                 ticker.tick().await;
-                
+
                 // Refresh system info
                 let mut sys = system.write().await;
                 sys.refresh_all();

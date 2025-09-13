@@ -5,25 +5,25 @@
 
 use anyhow::Result;
 use futures::Stream;
+use std::pin::Pin;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
+use crate::config::BufferConfig;
+use crate::models::relay::ErrorFallbackConfig;
 use crate::models::relay::*;
 use crate::proxy::session_tracker::ClientInfo;
-use crate::services::cyclic_buffer::{CyclicBuffer, CyclicBufferConfig, BufferClient};
+use crate::services::cyclic_buffer::{BufferClient, CyclicBuffer, CyclicBufferConfig};
 use crate::services::error_fallback::{ErrorFallbackGenerator, StreamHealthMonitor};
-use crate::services::stream_prober::StreamProber;
 use crate::services::ffmpeg_command_builder::FFmpegCommandBuilder;
-use crate::models::relay::ErrorFallbackConfig;
-use crate::config::BufferConfig;
+use crate::services::stream_prober::StreamProber;
 use sandboxed_file_manager::SandboxedManager;
 
 /// A stream that continuously reads from the cyclic buffer
@@ -39,7 +39,11 @@ impl RelayStream {
         Self {
             buffer,
             client,
-            initial_data: if initial_data.is_empty() { None } else { Some(initial_data) },
+            initial_data: if initial_data.is_empty() {
+                None
+            } else {
+                Some(initial_data)
+            },
             receiver: None,
         }
     }
@@ -47,20 +51,24 @@ impl RelayStream {
 
 impl Stream for RelayStream {
     type Item = Result<bytes::Bytes, std::io::Error>;
-    
+
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Send initial data first if we have any
         if let Some(data) = self.initial_data.take() {
             let client_id = self.client.id;
-            tracing::info!("Sending {} bytes of initial data to client {}", data.len(), client_id);
+            tracing::info!(
+                "Sending {} bytes of initial data to client {}",
+                data.len(),
+                client_id
+            );
             return Poll::Ready(Some(Ok(bytes::Bytes::from(data))));
         }
-        
+
         // Initialize receiver if not already done
         if self.receiver.is_none() {
             self.receiver = Some(self.buffer.subscribe_to_new_chunks());
         }
-        
+
         // Poll the receiver for new chunks
         if let Some(ref mut receiver) = self.receiver {
             match receiver.try_recv() {
@@ -68,16 +76,21 @@ impl Stream for RelayStream {
                     if chunk.sequence > self.client.get_last_sequence() {
                         self.client.set_last_sequence(chunk.sequence);
                         self.client.add_bytes_read(chunk.data.len() as u64);
-                        
+
                         let client_id = self.client.id;
-                        tracing::trace!("Streaming chunk {} ({} bytes) to client {}", chunk.sequence, chunk.data.len(), client_id);
-                        
+                        tracing::trace!(
+                            "Streaming chunk {} ({} bytes) to client {}",
+                            chunk.sequence,
+                            chunk.data.len(),
+                            client_id
+                        );
+
                         // Update last read asynchronously
                         let client_clone = self.client.clone();
                         tokio::spawn(async move {
                             client_clone.update_last_read().await;
                         });
-                        
+
                         Poll::Ready(Some(Ok(chunk.data)))
                     } else {
                         // Skip this chunk and continue polling
@@ -114,11 +127,14 @@ impl Drop for RelayStream {
         // Clean up the client when the stream is dropped
         let client_id = self.client.id;
         let buffer = self.buffer.clone();
-        
+
         // Spawn a task to remove the client from the buffer
         tokio::spawn(async move {
             if buffer.remove_client(client_id).await {
-                tracing::info!("Removed client {} from cyclic buffer on stream drop", client_id);
+                tracing::info!(
+                    "Removed client {} from cyclic buffer on stream drop",
+                    client_id
+                );
             }
         });
     }
@@ -135,7 +151,13 @@ pub struct FFmpegProcessWrapper {
 }
 
 impl FFmpegProcessWrapper {
-    pub fn new(temp_manager: SandboxedManager, hwaccel_capabilities: HwAccelCapabilities, buffer_config: BufferConfig, stream_prober: Option<StreamProber>, ffmpeg_command: String) -> Self {
+    pub fn new(
+        temp_manager: SandboxedManager,
+        hwaccel_capabilities: HwAccelCapabilities,
+        buffer_config: BufferConfig,
+        stream_prober: Option<StreamProber>,
+        ffmpeg_command: String,
+    ) -> Self {
         // Create FFmpegCommandBuilder with its own stream prober instance
         // For now, we'll create a separate prober if one was provided
         let command_builder_prober = if stream_prober.is_some() {
@@ -145,7 +167,7 @@ impl FFmpegProcessWrapper {
             None
         };
         let command_builder = FFmpegCommandBuilder::new(command_builder_prober);
-        
+
         Self {
             temp_manager,
             hwaccel_capabilities,
@@ -173,37 +195,51 @@ impl FFmpegProcessWrapper {
         max_attempts: u32,
     ) -> Result<FFmpegProcess, RelayError> {
         let mut last_error = None;
-        
+
         for attempt in 1..=max_attempts {
-            debug!("Starting FFmpeg process attempt {} of {} for relay {}", 
-                   attempt, max_attempts, config.config.id);
-            
+            debug!(
+                "Starting FFmpeg process attempt {} of {} for relay {}",
+                attempt, max_attempts, config.config.id
+            );
+
             match self.try_start_process(config, input_url).await {
                 Ok(process) => {
                     if attempt > 1 {
-                        info!("FFmpeg process started successfully on attempt {} for relay {}", 
-                              attempt, config.config.id);
+                        info!(
+                            "FFmpeg process started successfully on attempt {} for relay {}",
+                            attempt, config.config.id
+                        );
                     }
                     return Ok(process);
                 }
                 Err(e) => {
-                    warn!("FFmpeg process start attempt {} failed for relay {}: {}", 
-                          attempt, config.config.id, e);
+                    warn!(
+                        "FFmpeg process start attempt {} failed for relay {}: {}",
+                        attempt, config.config.id, e
+                    );
                     last_error = Some(e);
-                    
+
                     // Apply backoff delay if not the last attempt
                     if attempt < max_attempts {
                         let delay_seconds = 5; // 5 seconds between retries
-                        debug!("Waiting {} seconds before retry attempt {} for relay {}", 
-                               delay_seconds, attempt + 1, config.config.id);
+                        debug!(
+                            "Waiting {} seconds before retry attempt {} for relay {}",
+                            delay_seconds,
+                            attempt + 1,
+                            config.config.id
+                        );
                         tokio::time::sleep(Duration::from_secs(delay_seconds)).await;
                     }
                 }
             }
         }
-        
-        error!("All {} attempts failed for relay {}", max_attempts, config.config.id);
-        Err(last_error.unwrap_or_else(|| RelayError::ProcessFailed("All retry attempts failed".to_string())))
+
+        error!(
+            "All {} attempts failed for relay {}",
+            max_attempts, config.config.id
+        );
+        Err(last_error
+            .unwrap_or_else(|| RelayError::ProcessFailed("All retry attempts failed".to_string())))
     }
 
     /// Single attempt to start an FFmpeg process
@@ -217,10 +253,14 @@ impl FFmpegProcessWrapper {
             debug!("Probing input stream before starting FFmpeg: {}", input_url);
             match prober.probe_input(input_url).await {
                 Ok(probe_result) => {
-                    debug!("Stream probe successful: has_video={}, has_audio={}, video_streams={}, audio_streams={}", 
-                           probe_result.has_video, probe_result.has_audio, 
-                           probe_result.video_streams.len(), probe_result.audio_streams.len());
-                    
+                    debug!(
+                        "Stream probe successful: has_video={}, has_audio={}, video_streams={}, audio_streams={}",
+                        probe_result.has_video,
+                        probe_result.has_audio,
+                        probe_result.video_streams.len(),
+                        probe_result.audio_streams.len()
+                    );
+
                     // Generate optimal mapping strategy
                     let strategy = prober.generate_mapping_strategy(
                         &probe_result,
@@ -229,14 +269,22 @@ impl FFmpegProcessWrapper {
                         config.profile.video_bitrate,
                         config.profile.audio_bitrate,
                     );
-                    
-                    debug!("Generated mapping strategy: video_mapping={:?}, audio_mapping={:?}, video_copy={}, audio_copy={}",
-                           strategy.video_mapping, strategy.audio_mapping, strategy.video_copy, strategy.audio_copy);
-                    
+
+                    debug!(
+                        "Generated mapping strategy: video_mapping={:?}, audio_mapping={:?}, video_copy={}, audio_copy={}",
+                        strategy.video_mapping,
+                        strategy.audio_mapping,
+                        strategy.video_copy,
+                        strategy.audio_copy
+                    );
+
                     Some(strategy)
                 }
                 Err(e) => {
-                    warn!("Stream probing failed for {}: {}. Falling back to traditional mapping.", input_url, e);
+                    warn!(
+                        "Stream probing failed for {}: {}. Falling back to traditional mapping.",
+                        input_url, e
+                    );
                     None
                 }
             }
@@ -255,8 +303,10 @@ impl FFmpegProcessWrapper {
             mapping_strategy.as_ref(),
         );
 
-        debug!("Starting FFmpeg process for relay {} with args: {:?}", 
-               config.config.id, resolved_args);
+        debug!(
+            "Starting FFmpeg process for relay {} with args: {:?}",
+            config.config.id, resolved_args
+        );
 
         // Build FFmpeg command using the configured command
         let mut cmd = TokioCommand::new(&self.ffmpeg_command);
@@ -271,7 +321,8 @@ impl FFmpegProcessWrapper {
         let bytes_served = Arc::new(AtomicU64::new(0));
 
         // Start the process
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| RelayError::ProcessFailed(format!("Failed to spawn FFmpeg: {e}")))?;
 
         // Create cyclic buffer for multi-client support using configured settings
@@ -279,64 +330,80 @@ impl FFmpegProcessWrapper {
             max_buffer_size: self.buffer_config.max_buffer_size,
             max_chunks: self.buffer_config.max_chunks,
             chunk_timeout: std::time::Duration::from_secs(self.buffer_config.chunk_timeout_seconds),
-            client_timeout: std::time::Duration::from_secs(self.buffer_config.client_timeout_seconds),
-            cleanup_interval: std::time::Duration::from_secs(self.buffer_config.cleanup_interval_seconds),
+            client_timeout: std::time::Duration::from_secs(
+                self.buffer_config.client_timeout_seconds,
+            ),
+            cleanup_interval: std::time::Duration::from_secs(
+                self.buffer_config.cleanup_interval_seconds,
+            ),
             enable_file_spill: self.buffer_config.enable_file_spill,
             max_file_spill_size: self.buffer_config.max_file_spill_size,
         };
-        let cyclic_buffer = Arc::new(CyclicBuffer::new(buffer_config, Some(self.temp_manager.clone())));
-        
+        let cyclic_buffer = Arc::new(CyclicBuffer::new(
+            buffer_config,
+            Some(self.temp_manager.clone()),
+        ));
+
         // Create error fallback system
         let fallback_config = ErrorFallbackConfig::default();
-        let error_fallback = Arc::new(ErrorFallbackGenerator::new(fallback_config.clone(), cyclic_buffer.clone()));
+        let error_fallback = Arc::new(ErrorFallbackGenerator::new(
+            fallback_config.clone(),
+            cyclic_buffer.clone(),
+        ));
         let health_monitor = Arc::new(StreamHealthMonitor::new(config.config.id, fallback_config));
-        
+
         // Start monitoring stderr for errors with message accumulation
         if let Some(stderr) = child.stderr.take() {
             let config_id = config.config.id;
             let error_count_clone = error_count.clone();
             let health_monitor_clone = health_monitor.clone();
             let error_fallback_clone = error_fallback.clone();
-            
+
             tokio::spawn(async move {
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
                 let mut accumulated_lines = Vec::new();
                 let mut last_flush = tokio::time::Instant::now();
                 let accumulation_period = tokio::time::Duration::from_millis(100);
-                
+
                 while let Ok(Some(line)) = lines.next_line().await {
                     let line_lower = line.to_lowercase();
                     accumulated_lines.push(line.clone());
-                    
+
                     // Handle critical errors immediately
-                    if line_lower.contains("error") || line_lower.contains("failed") || 
-                       line_lower.contains("invalid") || line_lower.contains("could not") ||
-                       line_lower.contains("unable to") || line_lower.contains("not found") {
-                        
+                    if line_lower.contains("error")
+                        || line_lower.contains("failed")
+                        || line_lower.contains("invalid")
+                        || line_lower.contains("could not")
+                        || line_lower.contains("unable to")
+                        || line_lower.contains("not found")
+                    {
                         // Flush accumulated messages as structured log
                         Self::flush_ffmpeg_messages(&accumulated_lines, config_id, "error").await;
                         accumulated_lines.clear();
                         last_flush = tokio::time::Instant::now();
-                        
+
                         // Increment error count
                         error_count_clone.fetch_add(1, Ordering::SeqCst);
-                        
+
                         // Update health monitor and check for fallback
                         let health = health_monitor_clone.record_error(&line).await;
                         if health_monitor_clone.should_activate_fallback() {
-                            warn!("relay_id={} status=fallback_activated health={:?}", config_id, health);
-                            
+                            warn!(
+                                "relay_id={} status=fallback_activated health={:?}",
+                                config_id, health
+                            );
+
                             // Start error fallback
-                            if let Err(e) = error_fallback_clone.start_fallback(&line, config_id).await {
+                            if let Err(e) =
+                                error_fallback_clone.start_fallback(&line, config_id).await
+                            {
                                 error!("relay_id={} status=fallback_failed error={}", config_id, e);
                             } else {
-                                
                                 // Mark health monitor as in fallback mode
                                 health_monitor_clone.mark_fallback(&line).await;
                             }
                         }
-                        
                     } else if line_lower.contains("warning") || line_lower.contains("deprecated") {
                         // Flush accumulated messages as warning
                         Self::flush_ffmpeg_messages(&accumulated_lines, config_id, "warning").await;
@@ -344,39 +411,48 @@ impl FFmpegProcessWrapper {
                         last_flush = tokio::time::Instant::now();
                     } else {
                         // Mark as healthy if we see good status messages
-                        if line_lower.contains("opening") || line_lower.contains("input") ||
-                           line_lower.contains("output") || line_lower.contains("stream") ||
-                           line_lower.contains("encoder") || line_lower.contains("decoder") {
+                        if line_lower.contains("opening")
+                            || line_lower.contains("input")
+                            || line_lower.contains("output")
+                            || line_lower.contains("stream")
+                            || line_lower.contains("encoder")
+                            || line_lower.contains("decoder")
+                        {
                             health_monitor_clone.mark_healthy().await;
                         }
-                        
+
                         // Check if we should flush accumulated messages
                         if last_flush.elapsed() >= accumulation_period {
                             if !accumulated_lines.is_empty() {
-                                Self::flush_ffmpeg_messages(&accumulated_lines, config_id, "status").await;
+                                Self::flush_ffmpeg_messages(
+                                    &accumulated_lines,
+                                    config_id,
+                                    "status",
+                                )
+                                .await;
                                 accumulated_lines.clear();
                             }
                             last_flush = tokio::time::Instant::now();
                         }
                     }
                 }
-                
+
                 // Flush any remaining messages
                 if !accumulated_lines.is_empty() {
                     Self::flush_ffmpeg_messages(&accumulated_lines, config_id, "status").await;
                 }
             });
         }
-        
+
         // Start reading from stdout and feeding to cyclic buffer
         if let Some(stdout) = child.stdout.take() {
             let buffer = cyclic_buffer.clone();
             let config_id = config.config.id;
-            
+
             tokio::spawn(async move {
                 let mut reader = tokio::io::BufReader::new(stdout);
                 let mut buffer_bytes = vec![0u8; 8192];
-                
+
                 loop {
                     match reader.read(&mut buffer_bytes).await {
                         Ok(0) => {
@@ -386,7 +462,10 @@ impl FFmpegProcessWrapper {
                         Ok(n) => {
                             let chunk = bytes::Bytes::copy_from_slice(&buffer_bytes[..n]);
                             if let Err(e) = buffer.write_chunk(chunk).await {
-                                error!("Failed to write to cyclic buffer for relay {}: {}", config_id, e);
+                                error!(
+                                    "Failed to write to cyclic buffer for relay {}: {}",
+                                    config_id, e
+                                );
                                 break;
                             }
                         }
@@ -421,8 +500,10 @@ impl FFmpegProcessWrapper {
         };
 
         // Single consolidated log with PID and command
-        info!("Started FFmpeg process for relay {} using profile '{}' with PID: {:?} command: {:?}", 
-              config.config.id, config.profile.name, process_id, resolved_args);
+        info!(
+            "Started FFmpeg process for relay {} using profile '{}' with PID: {:?} command: {:?}",
+            config.config.id, config.profile.name, process_id, resolved_args
+        );
 
         Ok(process)
     }
@@ -432,7 +513,7 @@ impl FFmpegProcessWrapper {
         if lines.is_empty() {
             return;
         }
-        
+
         // Extract key information from FFmpeg output
         let mut video_codec = None;
         let mut audio_codec = None;
@@ -440,11 +521,11 @@ impl FFmpegProcessWrapper {
         let mut fps = None;
         let mut bitrate = None;
         let mut input_info = None;
-        
+
         for line in lines {
             // All parsing is wrapped in safe blocks that never panic
             let line_lower = line.to_lowercase();
-            
+
             // Extract video codec info - safe string matching only
             if line_lower.contains("video:") {
                 if line_lower.contains("h264") {
@@ -455,8 +536,8 @@ impl FFmpegProcessWrapper {
                     video_codec = Some("av1");
                 }
             }
-            
-            // Extract audio codec info - safe string matching only  
+
+            // Extract audio codec info - safe string matching only
             if line_lower.contains("audio:") {
                 if line_lower.contains("aac") {
                     audio_codec = Some("aac");
@@ -466,66 +547,75 @@ impl FFmpegProcessWrapper {
                     audio_codec = Some("ac3");
                 }
             }
-            
+
             // Extract resolution - with safe bounds checking
-            if resolution.is_none() { // Only try once to avoid overwriting
+            if resolution.is_none() {
+                // Only try once to avoid overwriting
                 if let Some(res_start) = line.find(", ")
                     && let Some(res_end) = line.get(res_start..).and_then(|s| s.find(" ["))
                     && let Some(res_part) = line.get(res_start + 2..res_start + res_end)
-                    && res_part.contains("x") && 
-                       res_part.len() > 3 && res_part.len() < 20 && 
-                       res_part.chars().any(|c| c.is_ascii_digit()) {
-                        resolution = Some(res_part);
-                    }
+                    && res_part.contains("x")
+                    && res_part.len() > 3
+                    && res_part.len() < 20
+                    && res_part.chars().any(|c| c.is_ascii_digit())
+                {
+                    resolution = Some(res_part);
+                }
             }
-            
+
             // Extract FPS - with safe parsing
-            if fps.is_none() { // Only try once to avoid overwriting
+            if fps.is_none() {
+                // Only try once to avoid overwriting
                 if let Some(fps_pos) = line_lower.find(" fps")
                     && let Some(fps_start) = line.get(..fps_pos).and_then(|s| s.rfind(' '))
                     && let Some(fps_str) = line.get(fps_start + 1..fps_pos)
                     && let Ok(fps_val) = fps_str.parse::<f32>()
-                    && fps_val > 0.0 && fps_val < 1000.0 { // Reasonable bounds
-                        fps = Some(fps_val);
-                    }
+                    && fps_val > 0.0
+                    && fps_val < 1000.0
+                {
+                    // Reasonable bounds
+                    fps = Some(fps_val);
+                }
             }
-            
+
             // Extract bitrate from progress lines - with safe bounds
             if line_lower.contains("bitrate=")
                 && let Some(br_start) = line_lower.find("bitrate=")
-                && let Some(remaining) = line.get(br_start + 8..) {
-                    let br_value = if let Some(br_end) = remaining.find(" ") {
-                        remaining.get(..br_end).unwrap_or("").trim()
-                    } else {
-                        remaining.trim()
-                    };
-                    
-                    // Only set if non-empty and reasonable length
-                    if !br_value.is_empty() && br_value.len() < 50 {
-                        bitrate = Some(br_value);
-                    }
+                && let Some(remaining) = line.get(br_start + 8..)
+            {
+                let br_value = if let Some(br_end) = remaining.find(" ") {
+                    remaining.get(..br_end).unwrap_or("").trim()
+                } else {
+                    remaining.trim()
+                };
+
+                // Only set if non-empty and reasonable length
+                if !br_value.is_empty() && br_value.len() < 50 {
+                    bitrate = Some(br_value);
                 }
-            
+            }
+
             // Extract input info - safe string operations only
             if input_info.is_none() && line_lower.starts_with("input #") {
                 input_info = Some(line.trim());
             }
         }
-        
+
         // Create structured log entry - guaranteed to succeed
         let full_output = lines.join("\n");
-        
+
         // Skip logging if output is empty, only whitespace, or repetition messages
         let trimmed_output = full_output.trim();
-        if trimmed_output.is_empty() || 
-           trimmed_output.starts_with("Last message repeated") ||
-           trimmed_output.contains("message repeated") {
+        if trimmed_output.is_empty()
+            || trimmed_output.starts_with("Last message repeated")
+            || trimmed_output.contains("message repeated")
+        {
             return;
         }
-        
+
         // Build log message safely - each field is optional and safe
         let mut log_parts = vec![format!("relay_id={} event=ffmpeg_{}", relay_id, level)];
-        
+
         if let Some(v) = video_codec {
             log_parts.push(format!(" video_codec={v}"));
         }
@@ -546,17 +636,14 @@ impl FFmpegProcessWrapper {
             let escaped_input = i.replace('"', "'");
             log_parts.push(format!(" input=\"{escaped_input}\""));
         }
-        
+
         // Always add space before output= for proper formatting
-        let log_msg = format!("{} output={}", 
-            log_parts.join(""), 
-            full_output
-        );
-        
+        let log_msg = format!("{} output={}", log_parts.join(""), full_output);
+
         // Log at appropriate level - guaranteed to work
         match level {
             "error" => error!("{}", log_msg),
-            "warning" => warn!("{}", log_msg), 
+            "warning" => warn!("{}", log_msg),
             _ => info!("{}", log_msg),
         }
     }
@@ -585,65 +672,79 @@ pub struct FFmpegProcess {
 
 impl FFmpegProcess {
     /// Serve content from the relay process using the cyclic buffer
-    pub async fn serve_content(&mut self, path: &str, client_info: &ClientInfo) -> Result<RelayContent, RelayError> {
+    pub async fn serve_content(
+        &mut self,
+        path: &str,
+        client_info: &ClientInfo,
+    ) -> Result<RelayContent, RelayError> {
         // Update activity timestamp
         self.last_activity = Instant::now();
-        
+
         // Create a relay session ID for tracking
         let relay_session_id = format!("relay_{}_{}", self.config.config.id, Uuid::new_v4());
-        
 
         match self.config.profile.output_format {
             RelayOutputFormat::TransportStream => {
-                self.serve_transport_stream_buffered(path, &relay_session_id, client_info).await
+                self.serve_transport_stream_buffered(path, &relay_session_id, client_info)
+                    .await
             }
         }
     }
-    
+
     /// Serve transport stream content using the cyclic buffer
-    async fn serve_transport_stream_buffered(&self, path: &str, _session_id: &str, client_info: &ClientInfo) -> Result<RelayContent, RelayError> {
+    async fn serve_transport_stream_buffered(
+        &self,
+        path: &str,
+        _session_id: &str,
+        client_info: &ClientInfo,
+    ) -> Result<RelayContent, RelayError> {
         if !path.is_empty() && path != "stream.ts" {
             return Err(RelayError::InvalidPath(path.to_string()));
         }
-        
+
         // Add client to the cyclic buffer
-        let client = self.cyclic_buffer.add_client(
-            client_info.user_agent.clone(),
-            Some(client_info.ip.clone())
-        ).await;
-        
+        let client = self
+            .cyclic_buffer
+            .add_client(client_info.user_agent.clone(), Some(client_info.ip.clone()))
+            .await;
+
         // Create a continuous streaming response
         self.create_streaming_response(client).await
     }
-    
+
     /// Create a streaming response that continuously reads from the cyclic buffer
-    async fn create_streaming_response(&self, client: Arc<crate::services::cyclic_buffer::BufferClient>) -> Result<RelayContent, RelayError> {
-        
-        
+    async fn create_streaming_response(
+        &self,
+        client: Arc<crate::services::cyclic_buffer::BufferClient>,
+    ) -> Result<RelayContent, RelayError> {
         let buffer = self.cyclic_buffer.clone();
         let client_id = client.id;
-        
-        tracing::info!("Starting continuous streaming response for client {}", client_id);
-        
+
+        tracing::info!(
+            "Starting continuous streaming response for client {}",
+            client_id
+        );
+
         // First, send any existing chunks
         let existing_chunks = buffer.read_chunks_for_client(&client).await;
         let mut initial_data = Vec::new();
         for chunk in existing_chunks {
             initial_data.extend_from_slice(&chunk.data);
         }
-        
+
         if !initial_data.is_empty() {
-            tracing::info!("Returning {} bytes from existing chunks for client {}", initial_data.len(), client_id);
+            tracing::info!(
+                "Returning {} bytes from existing chunks for client {}",
+                initial_data.len(),
+                client_id
+            );
         }
-        
+
         // Create a simple stream implementation that is Unpin
         let relay_stream = RelayStream::new(buffer, client, initial_data);
-        
+
         Ok(RelayContent::Stream(Box::new(relay_stream)))
     }
-    
-
-
 
     /// Increment client count
     pub fn increment_client_count(&self) -> u32 {
@@ -652,7 +753,10 @@ impl FFmpegProcess {
 
     /// Decrement client count
     pub fn decrement_client_count(&self) -> u32 {
-        let remaining = self.client_count.fetch_sub(1, Ordering::Relaxed).saturating_sub(1);
+        let remaining = self
+            .client_count
+            .fetch_sub(1, Ordering::Relaxed)
+            .saturating_sub(1);
         if remaining == 0 {
             // Log that all clients have disconnected
         }
@@ -677,7 +781,7 @@ impl FFmpegProcess {
         let error_count = self.error_count.load(Ordering::Relaxed);
         let restart_count = self.restart_count.load(Ordering::Relaxed);
         let bytes_served = self.bytes_served.load(Ordering::Relaxed);
-        
+
         format!(
             "FFmpeg Process Status for relay {}:\n\
             - Profile: {}\n\
@@ -705,62 +809,87 @@ impl FFmpegProcess {
             Ok(Some(status)) => {
                 // Process has exited - log the exit status and potentially trigger fallback
                 if status.success() {
-                    info!("FFmpeg process for relay {} exited successfully", self.config.config.id);
+                    info!(
+                        "FFmpeg process for relay {} exited successfully",
+                        self.config.config.id
+                    );
                 } else {
-                    error!("FFmpeg process for relay {} exited with error: {:?}", self.config.config.id, status);
-                    
+                    error!(
+                        "FFmpeg process for relay {} exited with error: {:?}",
+                        self.config.config.id, status
+                    );
+
                     // Trigger error fallback for process exit
                     let error_message = format!("FFmpeg process exited with error: {status:?}");
                     let health_monitor = self.health_monitor.clone();
                     let error_fallback = self.error_fallback.clone();
                     let config_id = self.config.config.id;
-                    
+
                     tokio::spawn(async move {
                         // Record the error in health monitor
                         health_monitor.record_error(&error_message).await;
-                        
+
                         // Always trigger fallback on process exit
-                        warn!("Activating error fallback for relay {} due to process exit: {:?}", config_id, status);
-                        
-                        if let Err(e) = error_fallback.start_fallback(&error_message, config_id).await {
-                            error!("Failed to start error fallback for relay {}: {}", config_id, e);
+                        warn!(
+                            "Activating error fallback for relay {} due to process exit: {:?}",
+                            config_id, status
+                        );
+
+                        if let Err(e) = error_fallback
+                            .start_fallback(&error_message, config_id)
+                            .await
+                        {
+                            error!(
+                                "Failed to start error fallback for relay {}: {}",
+                                config_id, e
+                            );
                         } else {
                             // Log fallback activation
-                            
+
                             // Mark health monitor as in fallback mode
                             health_monitor.mark_fallback(&error_message).await;
                         }
-                        
                     });
                 }
                 false
             }
-            Ok(None) => true,     // Process is still running
+            Ok(None) => true, // Process is still running
             Err(e) => {
-                error!("Error checking FFmpeg process status for relay {}: {}", self.config.config.id, e);
-                
+                error!(
+                    "Error checking FFmpeg process status for relay {}: {}",
+                    self.config.config.id, e
+                );
+
                 // Trigger error fallback for process monitoring error
                 let error_message = format!("Error checking FFmpeg process status: {e}");
                 let health_monitor = self.health_monitor.clone();
                 let error_fallback = self.error_fallback.clone();
                 let config_id = self.config.config.id;
-                
+
                 tokio::spawn(async move {
                     // Record the error and check if fallback should be triggered
                     health_monitor.record_error(&error_message).await;
                     if health_monitor.should_activate_fallback() {
-                        warn!("Activating error fallback for relay {} due to process monitoring error", config_id);
-                        
-                        if let Err(e) = error_fallback.start_fallback(&error_message, config_id).await {
-                            error!("Failed to start error fallback for relay {}: {}", config_id, e);
+                        warn!(
+                            "Activating error fallback for relay {} due to process monitoring error",
+                            config_id
+                        );
+
+                        if let Err(e) = error_fallback
+                            .start_fallback(&error_message, config_id)
+                            .await
+                        {
+                            error!(
+                                "Failed to start error fallback for relay {}: {}",
+                                config_id, e
+                            );
                         } else {
-                            
                             // Mark health monitor as in fallback mode
                             health_monitor.mark_fallback(&error_message).await;
                         }
                     }
                 });
-                
+
                 false
             }
         }
@@ -770,12 +899,16 @@ impl FFmpegProcess {
     pub async fn kill(&mut self) -> Result<(), RelayError> {
         // Stop error fallback
         self.error_fallback.stop_fallback();
-        
-        if let Err(e) = self.child.kill().await {
-            warn!("Failed to kill FFmpeg process for relay {}: {}", self.config.config.id, e);
-            return Err(RelayError::ProcessFailed(format!("Failed to kill process: {e}")));
-        }
 
+        if let Err(e) = self.child.kill().await {
+            warn!(
+                "Failed to kill FFmpeg process for relay {}: {}",
+                self.config.config.id, e
+            );
+            return Err(RelayError::ProcessFailed(format!(
+                "Failed to kill process: {e}"
+            )));
+        }
 
         info!("Killed FFmpeg process for relay {}", self.config.config.id);
         Ok(())
@@ -786,7 +919,7 @@ impl Drop for FFmpegProcess {
     fn drop(&mut self) {
         // Stop error fallback
         self.error_fallback.stop_fallback();
-        
+
         // Ensure the child process is killed when the wrapper is dropped
         if let Err(e) = self.child.start_kill() {
             warn!("Failed to kill FFmpeg process in drop: {}", e);
@@ -805,7 +938,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: "Test Profile".to_string(),
             description: None,
-            
+
             // Codec settings
             video_codec: VideoCodec::H264,
             audio_codec: AudioCodec::AAC,
@@ -815,20 +948,20 @@ mod tests {
             audio_bitrate: Some(128),
             audio_sample_rate: Some(48000),
             audio_channels: Some(2),
-            
+
             // Hardware acceleration
             enable_hardware_acceleration: false,
             preferred_hwaccel: None,
-            
+
             // Manual override
             manual_args: None,
-            
+
             // Container settings
             output_format: RelayOutputFormat::TransportStream,
             segment_duration: None,
             max_segments: None,
             input_timeout: 30,
-            
+
             // System flags
             is_system_default: false,
             is_active: true,
@@ -855,14 +988,11 @@ mod tests {
     #[test]
     fn test_template_variable_resolution() {
         let config = create_test_config();
-        let resolved = config.resolve_template_variables(
-            "http://example.com/stream.ts",
-            "/tmp/output"
-        );
+        let resolved =
+            config.resolve_template_variables("http://example.com/stream.ts", "/tmp/output");
 
         // The config has no manual args set, so should return empty
         // This is the correct behavior - template resolution only works on configured args
         assert_eq!(resolved, Vec::<String>::new());
     }
-
 }

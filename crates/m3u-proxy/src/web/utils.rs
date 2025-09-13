@@ -61,11 +61,13 @@ pub fn validate_json_content_type(headers: &HeaderMap) -> Result<(), String> {
         let content_type_str = content_type
             .to_str()
             .map_err(|_| "Invalid content-type header")?;
-        
+
         if content_type_str.starts_with("application/json") {
             Ok(())
         } else {
-            Err(format!("Expected application/json, got: {content_type_str}"))
+            Err(format!(
+                "Expected application/json, got: {content_type_str}"
+            ))
         }
     } else {
         Err("Missing content-type header".to_string())
@@ -97,7 +99,7 @@ pub fn map_service_list_response<T, U>(
     mapper: impl Fn(T) -> U,
 ) -> crate::web::responses::PaginatedResponse<U> {
     let mapped_items: Vec<U> = service_response.items.into_iter().map(mapper).collect();
-    
+
     crate::web::responses::PaginatedResponse::new(
         mapped_items,
         service_response.total_count,
@@ -113,12 +115,26 @@ pub fn build_service_query_params(
     sort_ascending: bool,
     page: u32,
     limit: u32,
-) -> (Option<String>, Option<String>, bool, Option<u32>, Option<u32>) {
-    let sanitized_search = search.map(|s| sanitize_search_query(&s)).filter(|s| !s.is_empty());
+) -> (
+    Option<String>,
+    Option<String>,
+    bool,
+    Option<u32>,
+    Option<u32>,
+) {
+    let sanitized_search = search
+        .map(|s| sanitize_search_query(&s))
+        .filter(|s| !s.is_empty());
     let page_option = if page > 1 { Some(page) } else { None };
     let limit_option = if limit != 50 { Some(limit) } else { None };
-    
-    (sanitized_search, sort_by, sort_ascending, page_option, limit_option)
+
+    (
+        sanitized_search,
+        sort_by,
+        sort_ascending,
+        page_option,
+        limit_option,
+    )
 }
 
 /// Convert source type string to enum
@@ -130,13 +146,13 @@ pub fn parse_source_type(source_type: &str) -> Result<crate::models::StreamSourc
     }
 }
 
-
 /// Request size validation
 pub fn validate_request_size(content_length: Option<usize>, max_size: usize) -> Result<(), String> {
     if let Some(size) = content_length
-        && size > max_size {
-            return Err(format!("Request too large: {size} bytes (max: {max_size})"));
-        }
+        && size > max_size
+    {
+        return Err(format!("Request too large: {size} bytes (max: {max_size})"));
+    }
     Ok(())
 }
 
@@ -147,17 +163,38 @@ mod tests {
     #[test]
     fn test_sanitize_search_query() {
         assert_eq!(sanitize_search_query("normal query"), "normal query");
-        assert_eq!(sanitize_search_query("query-with_dashes"), "query-with_dashes");
-        assert_eq!(sanitize_search_query("'; DROP TABLE users; --"), "DROP TABLE users --");
-        assert_eq!(sanitize_search_query("<script>alert('xss')</script>"), "scriptalertxssscript");
+        assert_eq!(
+            sanitize_search_query("query-with_dashes"),
+            "query-with_dashes"
+        );
+        assert_eq!(
+            sanitize_search_query("'; DROP TABLE users; --"),
+            "DROP TABLE users --"
+        );
+        assert_eq!(
+            sanitize_search_query("<script>alert('xss')</script>"),
+            "scriptalertxssscript"
+        );
     }
 
     #[test]
     fn test_parse_source_type() {
-        assert!(matches!(parse_source_type("m3u"), Ok(crate::models::StreamSourceType::M3u)));
-        assert!(matches!(parse_source_type("M3U"), Ok(crate::models::StreamSourceType::M3u)));
-        assert!(matches!(parse_source_type("xtream"), Ok(crate::models::StreamSourceType::Xtream)));
-        assert!(matches!(parse_source_type("XTREAM"), Ok(crate::models::StreamSourceType::Xtream)));
+        assert!(matches!(
+            parse_source_type("m3u"),
+            Ok(crate::models::StreamSourceType::M3u)
+        ));
+        assert!(matches!(
+            parse_source_type("M3U"),
+            Ok(crate::models::StreamSourceType::M3u)
+        ));
+        assert!(matches!(
+            parse_source_type("xtream"),
+            Ok(crate::models::StreamSourceType::Xtream)
+        ));
+        assert!(matches!(
+            parse_source_type("XTREAM"),
+            Ok(crate::models::StreamSourceType::Xtream)
+        ));
         assert!(parse_source_type("invalid").is_err());
     }
 

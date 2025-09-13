@@ -1,7 +1,7 @@
+use async_trait::async_trait;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-use async_trait::async_trait;
 use tracing::warn;
 
 /// Generic result for circuit breaker operations
@@ -187,27 +187,28 @@ impl CircuitBreaker for Arc<ConcreteCircuitBreaker> {
 
 /// Parse a duration string (e.g., "5s", "30s", "1m") into a Duration
 fn parse_duration(duration_str: &str) -> Result<Duration, String> {
-    
     if duration_str.is_empty() {
         return Err("Duration string cannot be empty".to_string());
     }
-    
-    let (number_part, unit_part) = if let Some(pos) = duration_str.find(|c: char| c.is_alphabetic()) {
+
+    let (number_part, unit_part) = if let Some(pos) = duration_str.find(|c: char| c.is_alphabetic())
+    {
         (&duration_str[..pos], &duration_str[pos..])
     } else {
         return Err(format!("Invalid duration format: {}", duration_str));
     };
-    
-    let number: u64 = number_part.parse()
+
+    let number: u64 = number_part
+        .parse()
         .map_err(|_| format!("Invalid number in duration: {}", number_part))?;
-    
+
     let duration = match unit_part.to_lowercase().as_str() {
         "s" | "sec" | "secs" | "second" | "seconds" => Duration::from_secs(number),
         "m" | "min" | "mins" | "minute" | "minutes" => Duration::from_secs(number * 60),
         "h" | "hour" | "hours" => Duration::from_secs(number * 3600),
         _ => return Err(format!("Unsupported time unit: {}", unit_part)),
     };
-    
+
     Ok(duration)
 }
 
@@ -218,16 +219,21 @@ pub fn create_circuit_breaker_from_profile(
     let cb_type = match profile.implementation_type.as_str() {
         "simple" => CircuitBreakerType::Simple,
         "noop" => CircuitBreakerType::NoOp,
-        _ => return Err(format!("Unsupported circuit breaker type: {} (supported: simple, noop)", profile.implementation_type)),
+        _ => {
+            return Err(format!(
+                "Unsupported circuit breaker type: {} (supported: simple, noop)",
+                profile.implementation_type
+            ));
+        }
     };
-    
+
     let config = CircuitBreakerConfig {
         failure_threshold: profile.failure_threshold,
         timeout: parse_duration(&profile.operation_timeout)?,
         reset_timeout: parse_duration(&profile.reset_timeout)?,
         success_threshold: profile.success_threshold,
     };
-    
+
     Ok(create_circuit_breaker(cb_type, config))
 }
 
@@ -237,13 +243,17 @@ pub fn create_circuit_breaker_for_service(
     app_config: &crate::config::Config,
 ) -> Result<std::sync::Arc<ConcreteCircuitBreaker>, String> {
     let default_cb_config = crate::config::CircuitBreakerConfig::default();
-    let cb_config = app_config.circuitbreaker.as_ref()
+    let cb_config = app_config
+        .circuitbreaker
+        .as_ref()
         .unwrap_or(&default_cb_config);
-    
+
     // Try to get service-specific profile, fallback to global
-    let profile = cb_config.profiles.get(service_name)
+    let profile = cb_config
+        .profiles
+        .get(service_name)
         .unwrap_or(&cb_config.global);
-    
+
     create_circuit_breaker_from_profile(profile)
 }
 
@@ -253,17 +263,18 @@ pub fn create_circuit_breaker(
     config: CircuitBreakerConfig,
 ) -> std::sync::Arc<ConcreteCircuitBreaker> {
     use crate::utils::{
-        circuit_breaker_noop::NoOpCircuitBreaker,
-        circuit_breaker_simple::SimpleCircuitBreaker,
+        circuit_breaker_noop::NoOpCircuitBreaker, circuit_breaker_simple::SimpleCircuitBreaker,
     };
 
     let cb = match cb_type {
-        CircuitBreakerType::Simple => ConcreteCircuitBreaker::Simple(SimpleCircuitBreaker::new(config)),
+        CircuitBreakerType::Simple => {
+            ConcreteCircuitBreaker::Simple(SimpleCircuitBreaker::new(config))
+        }
         CircuitBreakerType::NoOp => {
             warn!("CREATING NOOP CIRCUIT BREAKER - THIS SHOULD NOT BE USED IN PRODUCTION!");
             ConcreteCircuitBreaker::NoOp(NoOpCircuitBreaker::new())
-        },
+        }
     };
-    
+
     std::sync::Arc::new(cb)
 }

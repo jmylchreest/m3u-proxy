@@ -440,7 +440,10 @@ impl Migration {
                 Table::create()
                     .table(StreamProxies::Table)
                     .if_not_exists()
-                    .col(self.create_id_column(manager, StreamProxies::Id).primary_key())
+                    .col(
+                        self.create_id_column(manager, StreamProxies::Id)
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(StreamProxies::Name).string().not_null())
                     .col(ColumnDef::new(StreamProxies::Description).string())
                     .col(
@@ -449,9 +452,21 @@ impl Migration {
                             .not_null()
                             .default("redirect"),
                     )
-                    .col(ColumnDef::new(StreamProxies::UpstreamTimeout).integer().default(30))
-                    .col(ColumnDef::new(StreamProxies::BufferSize).integer().default(8192))
-                    .col(ColumnDef::new(StreamProxies::MaxConcurrentStreams).integer().default(1))
+                    .col(
+                        ColumnDef::new(StreamProxies::UpstreamTimeout)
+                            .integer()
+                            .default(30),
+                    )
+                    .col(
+                        ColumnDef::new(StreamProxies::BufferSize)
+                            .integer()
+                            .default(8192),
+                    )
+                    .col(
+                        ColumnDef::new(StreamProxies::MaxConcurrentStreams)
+                            .integer()
+                            .default(1),
+                    )
                     .col(
                         ColumnDef::new(StreamProxies::StartingChannelNumber)
                             .integer()
@@ -460,7 +475,12 @@ impl Migration {
                     )
                     .col(self.create_timestamp_column(manager, StreamProxies::CreatedAt))
                     .col(self.create_timestamp_column(manager, StreamProxies::UpdatedAt))
-                    .col(self.create_nullable_timestamp_column(manager, StreamProxies::LastGeneratedAt))
+                    .col(
+                        self.create_nullable_timestamp_column(
+                            manager,
+                            StreamProxies::LastGeneratedAt,
+                        ),
+                    )
                     .col(
                         ColumnDef::new(StreamProxies::IsActive)
                             .boolean()
@@ -485,7 +505,9 @@ impl Migration {
                             .not_null()
                             .default(false),
                     )
-                    .col(self.create_nullable_uuid_fk_column(manager, StreamProxies::RelayProfileId))
+                    .col(
+                        self.create_nullable_uuid_fk_column(manager, StreamProxies::RelayProfileId),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_stream_proxies_relay_profile_id")
@@ -638,17 +660,37 @@ impl Migration {
             .col(self.create_id_column(manager, LogoAssets::Id).primary_key())
             .col(ColumnDef::new(LogoAssets::Name).string().not_null())
             .col(ColumnDef::new(LogoAssets::Description).string())
-            .col(ColumnDef::new(LogoAssets::FileName).string().not_null().default(""))
+            .col(
+                ColumnDef::new(LogoAssets::FileName)
+                    .string()
+                    .not_null()
+                    .default(""),
+            )
             .col(ColumnDef::new(LogoAssets::FilePath).string().not_null())
-            .col(ColumnDef::new(LogoAssets::FileHash).string().not_null().default(""))
+            .col(
+                ColumnDef::new(LogoAssets::FileHash)
+                    .string()
+                    .not_null()
+                    .default(""),
+            )
             .col(ColumnDef::new(LogoAssets::FileSize).integer().not_null())
             .col(ColumnDef::new(LogoAssets::MimeType).string().not_null())
-            .col(ColumnDef::new(LogoAssets::AssetType).string().not_null().default("original"))
+            .col(
+                ColumnDef::new(LogoAssets::AssetType)
+                    .string()
+                    .not_null()
+                    .default("original"),
+            )
             .col(ColumnDef::new(LogoAssets::SourceUrl).string())
             .col(ColumnDef::new(LogoAssets::Width).integer())
             .col(ColumnDef::new(LogoAssets::Height).integer())
             .col(ColumnDef::new(LogoAssets::ParentAssetId).uuid())
-            .col(ColumnDef::new(LogoAssets::FormatType).string().not_null().default("original"))
+            .col(
+                ColumnDef::new(LogoAssets::FormatType)
+                    .string()
+                    .not_null()
+                    .default("original"),
+            )
             .col(
                 ColumnDef::new(LogoAssets::IsSystem)
                     .boolean()
@@ -660,7 +702,10 @@ impl Migration {
             .to_owned();
 
         // For SQLite, add foreign key constraint during table creation
-        if matches!(manager.get_database_backend(), sea_orm::DatabaseBackend::Sqlite) {
+        if matches!(
+            manager.get_database_backend(),
+            sea_orm::DatabaseBackend::Sqlite
+        ) {
             table_create = table_create
                 .foreign_key(
                     ForeignKey::create()
@@ -676,7 +721,10 @@ impl Migration {
         manager.create_table(table_create).await?;
 
         // For PostgreSQL/MySQL, add foreign key constraint after table creation
-        if !matches!(manager.get_database_backend(), sea_orm::DatabaseBackend::Sqlite) {
+        if !matches!(
+            manager.get_database_backend(),
+            sea_orm::DatabaseBackend::Sqlite
+        ) {
             manager
                 .create_foreign_key(
                     ForeignKey::create()
@@ -1021,7 +1069,7 @@ impl Migration {
             .await?;
 
         // Additional performance optimization indexes
-        
+
         // Stream proxies relay profile foreign key
         manager
             .create_index(

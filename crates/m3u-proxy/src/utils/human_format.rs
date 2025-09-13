@@ -22,7 +22,6 @@ pub fn format_memory(bytes: f64) -> String {
     let sign = if bytes < 0.0 { "-" } else { "" };
 
     // Choose precision based on unit and size
-    
 
     if unit_index == 0 {
         // Bytes - no decimal places
@@ -47,11 +46,11 @@ impl DurationParser {
     /// Supports: "1.5s", "500ms", "200μs", "1m30s", "1h2m3s", "123" (assumes milliseconds), etc.
     pub fn parse_flexible(input: &str) -> Result<Duration, anyhow::Error> {
         let input = input.trim();
-        
+
         if input.is_empty() {
             return Err(anyhow::anyhow!("Empty duration string"));
         }
-        
+
         // Try parsing as a plain number (assume milliseconds)
         if let Ok(millis) = input.parse::<f64>() {
             if millis < 0.0 {
@@ -59,12 +58,12 @@ impl DurationParser {
             }
             return Ok(Duration::from_millis(millis as u64));
         }
-        
+
         // Parse complex duration strings like "1h2m3s", "1.5s", "500ms", etc.
         let mut total_micros = 0u128;
         let mut current_number = String::new();
         let mut chars = input.chars().peekable();
-        
+
         while let Some(ch) = chars.next() {
             if ch.is_ascii_digit() || ch == '.' {
                 current_number.push(ch);
@@ -73,18 +72,19 @@ impl DurationParser {
                 if current_number.is_empty() {
                     return Err(anyhow::anyhow!("Missing number before unit '{}'", ch));
                 }
-                
-                let number: f64 = current_number.parse()
+
+                let number: f64 = current_number
+                    .parse()
                     .map_err(|_| anyhow::anyhow!("Invalid number '{}'", current_number))?;
-                
+
                 if number < 0.0 {
                     return Err(anyhow::anyhow!("Negative duration not supported"));
                 }
-                
+
                 // Parse the unit
                 let mut unit = String::new();
                 unit.push(ch);
-                
+
                 // Collect the rest of the unit
                 while let Some(&next_ch) = chars.peek() {
                     if next_ch.is_alphabetic() || next_ch == 's' {
@@ -93,37 +93,47 @@ impl DurationParser {
                         break;
                     }
                 }
-                
+
                 // Convert to microseconds based on unit
                 let unit_micros = match unit.as_str() {
                     "μs" | "us" | "micros" | "microseconds" => number as u128,
                     "ms" | "millis" | "milliseconds" => (number * 1_000.0) as u128,
                     "s" | "sec" | "secs" | "second" | "seconds" => (number * 1_000_000.0) as u128,
-                    "m" | "min" | "mins" | "minute" | "minutes" => (number * 60.0 * 1_000_000.0) as u128,
-                    "h" | "hr" | "hrs" | "hour" | "hours" => (number * 3600.0 * 1_000_000.0) as u128,
+                    "m" | "min" | "mins" | "minute" | "minutes" => {
+                        (number * 60.0 * 1_000_000.0) as u128
+                    }
+                    "h" | "hr" | "hrs" | "hour" | "hours" => {
+                        (number * 3600.0 * 1_000_000.0) as u128
+                    }
                     "d" | "day" | "days" => (number * 24.0 * 3600.0 * 1_000_000.0) as u128,
                     _ => return Err(anyhow::anyhow!("Unknown time unit '{}'", unit)),
                 };
-                
+
                 total_micros += unit_micros;
                 current_number.clear();
             } else if ch.is_whitespace() {
                 // Skip whitespace
                 continue;
             } else {
-                return Err(anyhow::anyhow!("Invalid character '{}' in duration string", ch));
+                return Err(anyhow::anyhow!(
+                    "Invalid character '{}' in duration string",
+                    ch
+                ));
             }
         }
-        
+
         // Check if there's a trailing number without unit
         if !current_number.is_empty() {
-            return Err(anyhow::anyhow!("Number '{}' without unit at end of string", current_number));
+            return Err(anyhow::anyhow!(
+                "Number '{}' without unit at end of string",
+                current_number
+            ));
         }
-        
+
         if total_micros == 0 {
             return Err(anyhow::anyhow!("Duration cannot be zero"));
         }
-        
+
         Ok(Duration::from_micros(total_micros as u64))
     }
 }
@@ -131,11 +141,11 @@ impl DurationParser {
 /// Formats a std::time::Duration to a human-readable string with microsecond precision for very small durations
 pub fn format_duration_precise(duration: std::time::Duration) -> String {
     let micros = duration.as_micros();
-    
+
     if micros == 0 {
         return "0μs".to_string();
     }
-    
+
     if micros < 1000 {
         // Less than 1 millisecond - show microseconds
         format!("{micros}μs")
@@ -259,63 +269,114 @@ mod tests {
     #[test]
     fn test_format_duration_precise() {
         use std::time::Duration;
-        
+
         assert_eq!(format_duration_precise(Duration::from_micros(0)), "0μs");
         assert_eq!(format_duration_precise(Duration::from_micros(500)), "500μs");
         assert_eq!(format_duration_precise(Duration::from_micros(999)), "999μs");
         assert_eq!(format_duration_precise(Duration::from_micros(1000)), "1ms");
-        assert_eq!(format_duration_precise(Duration::from_micros(1500)), "1.500ms");
+        assert_eq!(
+            format_duration_precise(Duration::from_micros(1500)),
+            "1.500ms"
+        );
         assert_eq!(format_duration_precise(Duration::from_millis(1)), "1ms");
         assert_eq!(format_duration_precise(Duration::from_millis(999)), "999ms");
-        assert_eq!(format_duration_precise(Duration::from_millis(1000)), "1.00s");
-        assert_eq!(format_duration_precise(Duration::from_millis(1500)), "1.50s");
+        assert_eq!(
+            format_duration_precise(Duration::from_millis(1000)),
+            "1.00s"
+        );
+        assert_eq!(
+            format_duration_precise(Duration::from_millis(1500)),
+            "1.50s"
+        );
     }
 
     #[test]
     fn test_duration_parser_basic() {
         use std::time::Duration;
-        
+
         // Basic units
-        assert_eq!(DurationParser::parse_flexible("500μs").unwrap(), Duration::from_micros(500));
-        assert_eq!(DurationParser::parse_flexible("500us").unwrap(), Duration::from_micros(500));
-        assert_eq!(DurationParser::parse_flexible("100ms").unwrap(), Duration::from_millis(100));
-        assert_eq!(DurationParser::parse_flexible("1.5s").unwrap(), Duration::from_millis(1500));
-        assert_eq!(DurationParser::parse_flexible("2m").unwrap(), Duration::from_secs(120));
-        assert_eq!(DurationParser::parse_flexible("1h").unwrap(), Duration::from_secs(3600));
-        
+        assert_eq!(
+            DurationParser::parse_flexible("500μs").unwrap(),
+            Duration::from_micros(500)
+        );
+        assert_eq!(
+            DurationParser::parse_flexible("500us").unwrap(),
+            Duration::from_micros(500)
+        );
+        assert_eq!(
+            DurationParser::parse_flexible("100ms").unwrap(),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            DurationParser::parse_flexible("1.5s").unwrap(),
+            Duration::from_millis(1500)
+        );
+        assert_eq!(
+            DurationParser::parse_flexible("2m").unwrap(),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            DurationParser::parse_flexible("1h").unwrap(),
+            Duration::from_secs(3600)
+        );
+
         // Plain numbers (assumes milliseconds)
-        assert_eq!(DurationParser::parse_flexible("1000").unwrap(), Duration::from_millis(1000));
-        assert_eq!(DurationParser::parse_flexible("1500.5").unwrap(), Duration::from_millis(1500));
+        assert_eq!(
+            DurationParser::parse_flexible("1000").unwrap(),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            DurationParser::parse_flexible("1500.5").unwrap(),
+            Duration::from_millis(1500)
+        );
     }
-    
+
     #[test]
     fn test_duration_parser_complex() {
         use std::time::Duration;
-        
+
         // Complex formats
-        assert_eq!(DurationParser::parse_flexible("1h30m").unwrap(), Duration::from_secs(5400)); // 1.5 hours
-        assert_eq!(DurationParser::parse_flexible("1m30s").unwrap(), Duration::from_secs(90));
-        assert_eq!(DurationParser::parse_flexible("1h2m3s").unwrap(), Duration::from_secs(3723));
-        assert_eq!(DurationParser::parse_flexible("500ms200μs").unwrap(), Duration::from_micros(500200));
-        
+        assert_eq!(
+            DurationParser::parse_flexible("1h30m").unwrap(),
+            Duration::from_secs(5400)
+        ); // 1.5 hours
+        assert_eq!(
+            DurationParser::parse_flexible("1m30s").unwrap(),
+            Duration::from_secs(90)
+        );
+        assert_eq!(
+            DurationParser::parse_flexible("1h2m3s").unwrap(),
+            Duration::from_secs(3723)
+        );
+        assert_eq!(
+            DurationParser::parse_flexible("500ms200μs").unwrap(),
+            Duration::from_micros(500200)
+        );
+
         // With whitespace
-        assert_eq!(DurationParser::parse_flexible(" 1h 30m ").unwrap(), Duration::from_secs(5400));
-        assert_eq!(DurationParser::parse_flexible("1h 2m 3s").unwrap(), Duration::from_secs(3723));
+        assert_eq!(
+            DurationParser::parse_flexible(" 1h 30m ").unwrap(),
+            Duration::from_secs(5400)
+        );
+        assert_eq!(
+            DurationParser::parse_flexible("1h 2m 3s").unwrap(),
+            Duration::from_secs(3723)
+        );
     }
-    
+
     #[test]
     fn test_duration_parser_errors() {
         // Empty string
         assert!(DurationParser::parse_flexible("").is_err());
         assert!(DurationParser::parse_flexible("   ").is_err());
-        
+
         // Invalid formats
         assert!(DurationParser::parse_flexible("1x").is_err()); // Unknown unit
         assert!(DurationParser::parse_flexible("abc").is_err()); // Invalid number
         assert!(DurationParser::parse_flexible("1.2.3s").is_err()); // Invalid number
         assert!(DurationParser::parse_flexible("s1").is_err()); // Missing number before unit
         assert!(DurationParser::parse_flexible("123abc").is_err()); // Number without unit at end
-        
+
         // Negative durations
         assert!(DurationParser::parse_flexible("-1s").is_err());
         assert!(DurationParser::parse_flexible("-100").is_err());

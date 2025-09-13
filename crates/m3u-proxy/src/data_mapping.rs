@@ -7,4 +7,6 @@
 pub use crate::pipeline::services::seaorm_data_mapping::SeaOrmDataMappingService as DataMappingService;
 
 // Re-export engine components that may still be needed
-pub use crate::pipeline::engines::{DataMappingEngine, ChannelDataMappingEngine, ProgramDataMappingEngine};
+pub use crate::pipeline::engines::{
+    ChannelDataMappingEngine, DataMappingEngine, ProgramDataMappingEngine,
+};

@@ -4,11 +4,14 @@
 //! that works across SQLite, PostgreSQL, and MySQL databases.
 
 use anyhow::Result;
-use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, QueryOrder, ActiveModelTrait, Set, ModelTrait};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait, QueryFilter,
+    QueryOrder, Set,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::entities::{stream_proxies, prelude::*};
+use crate::entities::{prelude::*, stream_proxies};
 use crate::models::{StreamProxy, StreamProxyCreateRequest, StreamProxyUpdateRequest};
 
 /// SeaORM-based StreamProxy repository
@@ -70,7 +73,9 @@ impl StreamProxySeaOrmRepository {
 
     /// Find stream proxy by ID
     pub async fn find_by_id(&self, id: &Uuid) -> Result<Option<StreamProxy>> {
-        let model = StreamProxies::find_by_id(*id).one(&*self.connection).await?;
+        let model = StreamProxies::find_by_id(*id)
+            .one(&*self.connection)
+            .await?;
         match model {
             Some(m) => Ok(Some(StreamProxy {
                 id: m.id,
@@ -90,7 +95,7 @@ impl StreamProxySeaOrmRepository {
                 cache_program_logos: m.cache_program_logos,
                 relay_profile_id: m.relay_profile_id,
             })),
-            None => Ok(None)
+            None => Ok(None),
         }
     }
 
@@ -126,14 +131,18 @@ impl StreamProxySeaOrmRepository {
     }
 
     /// Update stream proxy
-    pub async fn update(&self, id: &Uuid, request: StreamProxyUpdateRequest) -> Result<StreamProxy> {
+    pub async fn update(
+        &self,
+        id: &Uuid,
+        request: StreamProxyUpdateRequest,
+    ) -> Result<StreamProxy> {
         let model = StreamProxies::find_by_id(*id)
             .one(&*self.connection)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Stream proxy not found"))?;
 
         let mut active_model: stream_proxies::ActiveModel = model.into();
-        
+
         active_model.name = Set(request.name);
         active_model.description = Set(request.description);
         active_model.proxy_mode = Set(request.proxy_mode);
@@ -182,8 +191,8 @@ impl StreamProxySeaOrmRepository {
 
     /// Update last_generated_at timestamp for a proxy
     pub async fn update_last_generated(&self, proxy_id: Uuid) -> Result<()> {
-        use sea_orm::{ActiveModelTrait, Set, EntityTrait};
-        
+        use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+
         let model = StreamProxies::find_by_id(proxy_id)
             .one(&*self.connection)
             .await?
@@ -192,7 +201,7 @@ impl StreamProxySeaOrmRepository {
         let mut active_model: stream_proxies::ActiveModel = model.into();
         active_model.last_generated_at = Set(Some(chrono::Utc::now()));
         active_model.updated_at = Set(chrono::Utc::now());
-        
+
         active_model.update(&*self.connection).await?;
         Ok(())
     }
@@ -206,7 +215,10 @@ impl StreamProxySeaOrmRepository {
     /// Get EPG source IDs for a proxy
     pub async fn get_epg_source_ids(&self, proxy_id: Uuid) -> Result<Vec<Uuid>> {
         let proxy_epg_sources = self.get_proxy_epg_sources(proxy_id).await?;
-        Ok(proxy_epg_sources.into_iter().map(|pes| pes.epg_source_id).collect())
+        Ok(proxy_epg_sources
+            .into_iter()
+            .map(|pes| pes.epg_source_id)
+            .collect())
     }
 
     /// Alias for find_by_id to maintain API consistency
@@ -221,12 +233,12 @@ impl StreamProxySeaOrmRepository {
 
     /// Create a stream proxy with relationships (sources, filters, epg sources)
     pub async fn create_with_relationships(
-        &self, 
+        &self,
         request: StreamProxyCreateRequest,
         source_ids: Vec<Uuid>,
-        epg_source_ids: Vec<Uuid>
+        epg_source_ids: Vec<Uuid>,
     ) -> Result<StreamProxy> {
-        use crate::entities::{proxy_sources, proxy_filters, proxy_epg_sources, stream_proxies};
+        use crate::entities::{proxy_epg_sources, proxy_filters, proxy_sources, stream_proxies};
         use sea_orm::{ActiveModelTrait, Set, TransactionTrait};
 
         // Start a transaction to ensure all relationships are created atomically
@@ -320,11 +332,13 @@ impl StreamProxySeaOrmRepository {
         &self,
         id: &Uuid,
         request: StreamProxyUpdateRequest,
-        source_ids: Vec<Uuid>, 
-        epg_source_ids: Vec<Uuid>
+        source_ids: Vec<Uuid>,
+        epg_source_ids: Vec<Uuid>,
     ) -> Result<StreamProxy> {
-        use crate::entities::{proxy_sources, proxy_filters, proxy_epg_sources, stream_proxies};
-        use sea_orm::{ActiveModelTrait, Set, TransactionTrait, EntityTrait, QueryFilter, ColumnTrait};
+        use crate::entities::{proxy_epg_sources, proxy_filters, proxy_sources, stream_proxies};
+        use sea_orm::{
+            ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait,
+        };
 
         // Start a transaction to ensure all updates are atomic
         let txn = self.connection.begin().await?;
@@ -336,7 +350,7 @@ impl StreamProxySeaOrmRepository {
             .ok_or_else(|| anyhow::anyhow!("Stream proxy not found"))?;
 
         let mut active_model: stream_proxies::ActiveModel = model.into();
-        
+
         active_model.name = Set(request.name);
         active_model.description = Set(request.description);
         active_model.proxy_mode = Set(request.proxy_mode);
@@ -427,9 +441,12 @@ impl StreamProxySeaOrmRepository {
     }
 
     /// Get proxy filters for a stream proxy
-    pub async fn get_proxy_filters(&self, proxy_id: Uuid) -> Result<Vec<crate::models::ProxyFilter>> {
-        use crate::entities::{proxy_filters, prelude::ProxyFilters};
-        
+    pub async fn get_proxy_filters(
+        &self,
+        proxy_id: Uuid,
+    ) -> Result<Vec<crate::models::ProxyFilter>> {
+        use crate::entities::{prelude::ProxyFilters, proxy_filters};
+
         let proxy_filter_models = ProxyFilters::find()
             .filter(proxy_filters::Column::ProxyId.eq(proxy_id))
             .filter(proxy_filters::Column::IsActive.eq(true))
@@ -451,9 +468,12 @@ impl StreamProxySeaOrmRepository {
     }
 
     /// Get proxy sources for a stream proxy
-    pub async fn get_proxy_sources(&self, proxy_id: Uuid) -> Result<Vec<crate::models::ProxySource>> {
-        use crate::entities::{proxy_sources, prelude::ProxySources};
-        
+    pub async fn get_proxy_sources(
+        &self,
+        proxy_id: Uuid,
+    ) -> Result<Vec<crate::models::ProxySource>> {
+        use crate::entities::{prelude::ProxySources, proxy_sources};
+
         let proxy_source_models = ProxySources::find()
             .filter(proxy_sources::Column::ProxyId.eq(proxy_id))
             .all(&*self.connection)
@@ -473,9 +493,12 @@ impl StreamProxySeaOrmRepository {
     }
 
     /// Get proxy EPG sources for a stream proxy
-    pub async fn get_proxy_epg_sources(&self, proxy_id: Uuid) -> Result<Vec<crate::models::ProxyEpgSource>> {
-        use crate::entities::{proxy_epg_sources, prelude::ProxyEpgSources};
-        
+    pub async fn get_proxy_epg_sources(
+        &self,
+        proxy_id: Uuid,
+    ) -> Result<Vec<crate::models::ProxyEpgSource>> {
+        use crate::entities::{prelude::ProxyEpgSources, proxy_epg_sources};
+
         let proxy_epg_source_models = ProxyEpgSources::find()
             .filter(proxy_epg_sources::Column::ProxyId.eq(proxy_id))
             .all(&*self.connection)
@@ -495,36 +518,42 @@ impl StreamProxySeaOrmRepository {
     }
 
     /// Find EPG source by ID using the EpgSourceSeaOrmRepository
-    pub async fn find_epg_source_by_id(&self, epg_source_id: Uuid) -> Result<Option<crate::models::EpgSource>> {
+    pub async fn find_epg_source_by_id(
+        &self,
+        epg_source_id: Uuid,
+    ) -> Result<Option<crate::models::EpgSource>> {
         use crate::database::repositories::epg_source::EpgSourceSeaOrmRepository;
-        
+
         let epg_repo = EpgSourceSeaOrmRepository::new(self.connection.clone());
         epg_repo.find_by_id(&epg_source_id).await
     }
 
     /// Get channel for proxy - check if channel belongs to sources linked to the proxy
-    pub async fn get_channel_for_proxy(&self, proxy_id: Uuid, channel_id: Uuid) -> Result<Option<crate::models::Channel>> {
-        use crate::entities::{prelude::ProxySources, proxy_sources};
+    pub async fn get_channel_for_proxy(
+        &self,
+        proxy_id: Uuid,
+        channel_id: Uuid,
+    ) -> Result<Option<crate::models::Channel>> {
         use crate::database::repositories::channel::ChannelSeaOrmRepository;
-        
+        use crate::entities::{prelude::ProxySources, proxy_sources};
+
         // First check if the channel exists and get its source_id
         let channel_repo = ChannelSeaOrmRepository::new(self.connection.clone());
         let channel = match channel_repo.find_by_id(&channel_id).await? {
             Some(channel) => channel,
             None => return Ok(None),
         };
-        
+
         // Then check if this channel's source is linked to the proxy
         let proxy_source_exists = ProxySources::find()
             .filter(proxy_sources::Column::ProxyId.eq(proxy_id))
             .filter(proxy_sources::Column::SourceId.eq(channel.source_id))
             .one(&*self.connection)
             .await?;
-            
+
         match proxy_source_exists {
             Some(_) => Ok(Some(channel)),
             None => Ok(None),
         }
     }
-
 }

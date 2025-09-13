@@ -4,7 +4,7 @@
 
 use axum::{
     extract::Request,
-    http::{StatusCode, HeaderMap},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 
@@ -21,13 +21,13 @@ pub async fn serve_embedded_asset(request: Request) -> impl IntoResponse {
     } else {
         format!("static/{}", path)
     };
-    
+
     match StaticAssets::get_asset(&asset_path) {
         Some(file) => {
             let content_type = StaticAssets::get_content_type(path);
             let mut headers = HeaderMap::new();
             headers.insert("content-type", content_type.parse().unwrap());
-            
+
             // Set cache duration based on file type
             let cache_control = if path.ends_with(".js") || path.ends_with(".css") {
                 "public, max-age=600" // 10 minutes for JS and CSS files
@@ -36,9 +36,9 @@ pub async fn serve_embedded_asset(request: Request) -> impl IntoResponse {
             } else {
                 "public, max-age=3600" // 1 hour for other static assets
             };
-            
+
             headers.insert("cache-control", cache_control.parse().unwrap());
-            
+
             (headers, file.data.to_vec()).into_response()
         }
         None => {
@@ -48,16 +48,18 @@ pub async fn serve_embedded_asset(request: Request) -> impl IntoResponse {
             } else {
                 format!("{}/index.html", asset_path)
             };
-            
+
             match StaticAssets::get_asset(&index_path) {
                 Some(file) => {
                     let mut headers = HeaderMap::new();
                     headers.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
                     headers.insert("cache-control", "no-cache".parse().unwrap()); // Don't cache SPA pages
-                    
+
                     (headers, file.data.to_vec()).into_response()
                 }
-                None => (StatusCode::NOT_FOUND, format!("Asset not found: {}", path)).into_response(),
+                None => {
+                    (StatusCode::NOT_FOUND, format!("Asset not found: {}", path)).into_response()
+                }
             }
         }
     }
@@ -70,7 +72,7 @@ pub async fn serve_favicon() -> impl IntoResponse {
             let mut headers = HeaderMap::new();
             headers.insert("content-type", "image/x-icon".parse().unwrap());
             headers.insert("cache-control", "public, max-age=86400".parse().unwrap());
-            
+
             (headers, file.data.to_vec()).into_response()
         }
         None => (StatusCode::NOT_FOUND, "Favicon not found").into_response(),

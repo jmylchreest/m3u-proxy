@@ -3,10 +3,10 @@
 //! Core traits for the pipeline system that provide clean abstractions
 //! for progress reporting and stage execution.
 
-use std::sync::Arc;
-use crate::services::progress_service::ProgressManager;
-use crate::pipeline::models::PipelineArtifact;
 use crate::pipeline::error::PipelineError;
+use crate::pipeline::models::PipelineArtifact;
+use crate::services::progress_service::ProgressManager;
+use std::sync::Arc;
 
 /// Trait for components that can report progress through ProgressManager
 pub trait ProgressAware {
@@ -27,38 +27,49 @@ impl<'a> ProgressReporter<'a> {
             progress_manager: component.get_progress_manager(),
         }
     }
-    
+
     /// Report progress for a specific stage
     pub async fn report_stage_progress(&self, stage_id: &str, percentage: f64, message: &str) {
         if let Some(pm) = self.progress_manager {
             if let Some(updater) = pm.get_stage_updater(stage_id).await {
                 updater.update_progress(percentage, message).await;
             } else {
-                tracing::debug!("Stage '{}' not found in ProgressManager, skipping progress update", stage_id);
+                tracing::debug!(
+                    "Stage '{}' not found in ProgressManager, skipping progress update",
+                    stage_id
+                );
             }
         }
     }
-    
+
     /// Report item-based progress (e.g., "processed 150 of 1000 channels")
-    pub async fn report_item_progress(&self, stage_id: &str, processed: usize, total: usize, message: &str) {
+    pub async fn report_item_progress(
+        &self,
+        stage_id: &str,
+        processed: usize,
+        total: usize,
+        message: &str,
+    ) {
         let percentage = if total > 0 {
             (processed as f64 / total as f64 * 100.0).clamp(0.0, 100.0)
         } else {
             0.0
         };
-        
+
         let detailed_message = format!("{message} ({processed}/{total} items)");
-        self.report_stage_progress(stage_id, percentage, &detailed_message).await;
+        self.report_stage_progress(stage_id, percentage, &detailed_message)
+            .await;
     }
-    
+
     /// Mark a stage as completed
     pub async fn complete_stage(&self, stage_id: &str, message: &str) {
         self.report_stage_progress(stage_id, 100.0, message).await;
-        
+
         if let Some(pm) = self.progress_manager
-            && let Some(updater) = pm.get_stage_updater(stage_id).await {
-                updater.complete_stage().await;
-            }
+            && let Some(updater) = pm.get_stage_updater(stage_id).await
+        {
+            updater.complete_stage().await;
+        }
     }
 }
 
@@ -66,20 +77,23 @@ impl<'a> ProgressReporter<'a> {
 #[async_trait::async_trait]
 pub trait PipelineStage: ProgressAware + Send + Sync {
     /// Execute this stage with the given input artifacts
-    async fn execute(&mut self, input: Vec<PipelineArtifact>) -> Result<Vec<PipelineArtifact>, PipelineError>;
-    
+    async fn execute(
+        &mut self,
+        input: Vec<PipelineArtifact>,
+    ) -> Result<Vec<PipelineArtifact>, PipelineError>;
+
     /// Get the unique identifier for this stage
     fn stage_id(&self) -> &'static str;
-    
+
     /// Get the human-readable name for this stage
     fn stage_name(&self) -> &'static str;
-    
+
     /// Cleanup any resources used by this stage
     async fn cleanup(&mut self) -> Result<(), PipelineError> {
         // Default implementation does nothing
         Ok(())
     }
-    
+
     /// Allow downcasting to concrete types for progress manager injection
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
@@ -89,8 +103,8 @@ pub trait PipelineStage: ProgressAware + Send + Sync {
 pub trait PipelineStageFactory {
     /// Create a new instance of a pipeline stage with progress manager injection
     async fn create_stage(
-        &self, 
+        &self,
         stage_id: &str,
-        progress_manager: Option<Arc<ProgressManager>>
+        progress_manager: Option<Arc<ProgressManager>>,
     ) -> Result<Box<dyn PipelineStage>, PipelineError>;
 }

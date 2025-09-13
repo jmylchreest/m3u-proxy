@@ -1,13 +1,13 @@
 //! Cleanup stage for pipeline processing
 //!
 //! This stage handles cleanup of temporary files and resources after pipeline execution.
-//! It supports both normal cleanup (after successful processing) and error cleanup 
+//! It supports both normal cleanup (after successful processing) and error cleanup
 //! (when pipeline stages fail).
 
 use anyhow::Result;
 use sandboxed_file_manager::SandboxedManager;
 use std::time::Instant;
-use tracing::{info, debug, warn, error};
+use tracing::{debug, error, info, warn};
 
 use crate::pipeline::models::PipelineArtifact;
 
@@ -40,7 +40,6 @@ impl CleanupStage {
         }
     }
 
-
     /// Execute cleanup based on the configured mode and pipeline state
     pub async fn process(
         &self,
@@ -48,22 +47,25 @@ impl CleanupStage {
         stage_error: Option<String>,
     ) -> Result<Vec<PipelineArtifact>> {
         let cleanup_start = Instant::now();
-        
+
         match self.cleanup_mode {
             CleanupMode::Success => {
                 info!(
                     "Cleanup stage (success): execution_prefix={} artifacts={}",
-                    self.pipeline_execution_prefix, input_artifacts.len()
+                    self.pipeline_execution_prefix,
+                    input_artifacts.len()
                 );
                 self.cleanup_successful_pipeline(input_artifacts).await
             }
             CleanupMode::Error => {
                 error!(
                     "Cleanup stage (error): execution_prefix={} artifacts={} error={:?}",
-                    self.pipeline_execution_prefix, input_artifacts.len(),
+                    self.pipeline_execution_prefix,
+                    input_artifacts.len(),
                     stage_error.as_ref().unwrap_or(&"Unknown error".to_string())
                 );
-                self.cleanup_failed_pipeline(input_artifacts, stage_error).await
+                self.cleanup_failed_pipeline(input_artifacts, stage_error)
+                    .await
             }
         }?;
 
@@ -73,7 +75,6 @@ impl CleanupStage {
             self.cleanup_mode,
             crate::utils::human_format::format_duration_precise(cleanup_duration)
         );
-
 
         // Return empty artifacts list as cleanup is final stage
         Ok(Vec::new())
@@ -134,7 +135,10 @@ impl CleanupStage {
                         total_bytes_cleaned += bytes;
 
                         // Check if this was a published file that needs reverting
-                        if matches!(artifact.artifact_type.stage, crate::pipeline::models::ProcessingStage::Published) {
+                        if matches!(
+                            artifact.artifact_type.stage,
+                            crate::pipeline::models::ProcessingStage::Published
+                        ) {
                             published_files_reverted += 1;
                             debug!("Reverted published file: {}", artifact.file_path);
                         }
@@ -171,16 +175,22 @@ impl CleanupStage {
         if success_mode {
             // In success mode, clean up temporary files but leave published files
             match artifact.artifact_type.stage {
-                ProcessingStage::Generated => true,  // Clean up temporary generated files
+                ProcessingStage::Generated => true, // Clean up temporary generated files
                 ProcessingStage::Published => false, // Keep published files
-                _ => artifact.file_path.contains("temp") || artifact.file_path.contains(&self.pipeline_execution_prefix),
+                _ => {
+                    artifact.file_path.contains("temp")
+                        || artifact.file_path.contains(&self.pipeline_execution_prefix)
+                }
             }
         } else {
             // In error mode, clean up all pipeline-related files including published ones
             match artifact.artifact_type.stage {
-                ProcessingStage::Generated => true,  // Clean up temporary files
-                ProcessingStage::Published => true,  // Revert published files on error
-                _ => artifact.file_path.contains("temp") || artifact.file_path.contains(&self.pipeline_execution_prefix),
+                ProcessingStage::Generated => true, // Clean up temporary files
+                ProcessingStage::Published => true, // Revert published files on error
+                _ => {
+                    artifact.file_path.contains("temp")
+                        || artifact.file_path.contains(&self.pipeline_execution_prefix)
+                }
             }
         }
     }
@@ -195,8 +205,16 @@ impl CleanupStage {
         });
 
         // Delete the file
-        self.pipeline_file_manager.remove_file(&artifact.file_path).await
-            .map_err(|e| anyhow::anyhow!("Failed to delete artifact file '{}': {}", artifact.file_path, e))?;
+        self.pipeline_file_manager
+            .remove_file(&artifact.file_path)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to delete artifact file '{}': {}",
+                    artifact.file_path,
+                    e
+                )
+            })?;
 
         debug!(
             "Cleaned up artifact file: {} ({} bytes) stage={:?}",
@@ -248,16 +266,22 @@ impl CleanupStage {
         pipeline_file_manager: SandboxedManager,
         pipeline_execution_prefix: String,
     ) -> Self {
-        Self::new(pipeline_file_manager, pipeline_execution_prefix, CleanupMode::Success)
+        Self::new(
+            pipeline_file_manager,
+            pipeline_execution_prefix,
+            CleanupMode::Success,
+        )
     }
-
 
     /// Create a cleanup stage for failed pipeline error recovery
     pub fn error(
         pipeline_file_manager: SandboxedManager,
         pipeline_execution_prefix: String,
     ) -> Self {
-        Self::new(pipeline_file_manager, pipeline_execution_prefix, CleanupMode::Error)
+        Self::new(
+            pipeline_file_manager,
+            pipeline_execution_prefix,
+            CleanupMode::Error,
+        )
     }
-
 }

@@ -6,17 +6,17 @@
 use axum::{
     extract::{Query, State},
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse,
+        sse::{Event, KeepAlive, Sse},
     },
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, error};
-use utoipa::{ToSchema, IntoParams};
+use utoipa::{IntoParams, ToSchema};
 
-use crate::web::AppState;
 use crate::services::progress_service::{OperationType, UniversalState};
+use crate::web::AppState;
 
 /// Convert operation type enum to lowercase string
 fn operation_type_to_string(op_type: &OperationType) -> String {
@@ -113,7 +113,7 @@ pub struct ProgressEvent {
 }
 
 /// Stream real-time progress events via SSE  
-/// 
+///
 /// This endpoint provides real-time progress updates only. Use GET /progress/operations
 /// to fetch initial state, then subscribe to this SSE stream for live updates.
 #[utoipa::path(
@@ -130,7 +130,10 @@ pub async fn progress_events_stream(
     Query(query): Query<ProgressEventQuery>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    debug!("Starting progress events SSE stream with filters: {:?}", query);
+    debug!(
+        "Starting progress events SSE stream with filters: {:?}",
+        query
+    );
 
     // Subscribe to progress updates from ProgressService
     let progress_service = state.progress_service.clone();
@@ -141,7 +144,7 @@ pub async fn progress_events_stream(
         yield Ok::<Event, axum::Error>(Event::default()
             .event("heartbeat")
             .data("connected"));
-            
+
         // Listen for real-time updates with graceful shutdown support
         loop {
             tokio::select! {
@@ -150,42 +153,42 @@ pub async fn progress_events_stream(
                     match recv_result {
                 Ok(progress) => {
                     // Only log meaningful state changes to reduce log noise
-                    if matches!(progress.state, crate::services::progress_service::UniversalState::Completed | 
+                    if matches!(progress.state, crate::services::progress_service::UniversalState::Completed |
                                                crate::services::progress_service::UniversalState::Error |
                                                crate::services::progress_service::UniversalState::Cancelled) {
-                        debug!("SSE progress update for operation {} ({:?}): {} -> {}", 
-                              progress.id, progress.operation_type, progress.current_stage, 
+                        debug!("SSE progress update for operation {} ({:?}): {} -> {}",
+                              progress.id, progress.operation_type, progress.current_stage,
                               universal_state_to_string(&progress.state));
                     }
-                    
+
                     // Apply filters (matching original logic)
                     if let Some(ref op_type) = query.operation_type {
                         let progress_op_type = operation_type_to_string(&progress.operation_type);
                         if progress_op_type != op_type.to_lowercase() {
-                            debug!("SSE filtering out progress update: type {} doesn't match filter {}", 
+                            debug!("SSE filtering out progress update: type {} doesn't match filter {}",
                                   progress_op_type, op_type);
                             continue;
                         }
                     }
-                    
+
                     if let Some(ref state_filter) = query.state {
                         let state_str = universal_state_to_string(&progress.state);
                         if state_str != state_filter.to_lowercase() {
                             continue;
                         }
                     }
-                    
+
                     // Support both resource_id and owner_id (for compatibility)
                     if let Some(ref resource_id) = query.resource_id
                         && progress.owner_id.to_string() != *resource_id {
                             continue;
                         }
-                    
+
                     if let Some(ref owner_id) = query.owner_id
                         && progress.owner_id.to_string() != *owner_id {
                             continue;
                         }
-                    
+
                     // Filter by completion status
                     if query.active_only.unwrap_or(false) {
                         use crate::services::progress_service::UniversalState;
@@ -196,7 +199,7 @@ pub async fn progress_events_stream(
                             _ => {}
                         }
                     }
-                    
+
 
                     // Convert stages from UniversalProgress to ProgressStageEvent
                     let stages: Vec<ProgressStageEvent> = progress.stages.iter().map(|stage| {
@@ -257,14 +260,13 @@ pub async fn progress_events_stream(
                 }
             }
         }
-        
+
         debug!("SSE progress events stream terminated");
     };
 
-    Sse::new(stream)
-        .keep_alive(
-            KeepAlive::new()
-                .interval(Duration::from_secs(30))
-                .text("heartbeat"),
-        )
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(30))
+            .text("heartbeat"),
+    )
 }

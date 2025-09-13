@@ -5,11 +5,13 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, QueryOrder, PaginatorTrait};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::entities::{prelude::EpgPrograms, epg_programs};
+use crate::entities::{epg_programs, prelude::EpgPrograms};
 use crate::models::EpgProgram;
 
 /// SeaORM repository for EPG programs with clean, focused interface
@@ -57,8 +59,8 @@ impl EpgProgramSeaOrmRepository {
         // - Program ends after the range start (still running or will run)
         // - AND program starts before the range end (not too far in the future)
         let mut query = EpgPrograms::find()
-            .filter(epg_programs::Column::EndTime.gt(*start_time))    // Program ends after range start
-            .filter(epg_programs::Column::StartTime.lt(*end_time));   // Program starts before range end
+            .filter(epg_programs::Column::EndTime.gt(*start_time)) // Program ends after range start
+            .filter(epg_programs::Column::StartTime.lt(*end_time)); // Program starts before range end
 
         if let Some(source_id) = source_id {
             query = query.filter(epg_programs::Column::SourceId.eq(*source_id));
@@ -118,24 +120,22 @@ impl EpgProgramSeaOrmRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::IngestionConfig,
-        database::Database,
-    };
+    use crate::{config::IngestionConfig, database::Database};
 
     async fn create_test_db() -> Result<Database> {
         // For unit tests, we'll use the actual database structure but skip problematic migrations
         // This is acceptable for unit tests that only test repository logic
         use sea_orm::*;
         use std::sync::Arc;
-        
+
         let connection = sea_orm::Database::connect("sqlite::memory:").await?;
         let arc_connection = Arc::new(connection);
-        
+
         // Create minimal table structure for testing
-        arc_connection.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            r#"
+        arc_connection
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                r#"
             CREATE TABLE epg_programs (
                 id TEXT PRIMARY KEY,
                 source_id TEXT NOT NULL,
@@ -156,9 +156,11 @@ mod tests {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            "#.to_string()
-        )).await?;
-        
+            "#
+                .to_string(),
+            ))
+            .await?;
+
         // Create a minimal database wrapper for testing
         let db = crate::database::Database {
             connection: arc_connection.clone(),
@@ -167,7 +169,7 @@ mod tests {
             backend: DatabaseBackend::Sqlite,
             ingestion_config: IngestionConfig::default(),
         };
-        
+
         Ok(db)
     }
 

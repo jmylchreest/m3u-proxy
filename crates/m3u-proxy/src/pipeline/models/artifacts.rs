@@ -54,62 +54,62 @@ impl ArtifactType {
     pub fn new(content: ContentType, stage: ProcessingStage) -> Self {
         Self { content, stage }
     }
-    
+
     /// Channel data after data mapping
     pub fn mapped_channels() -> Self {
         Self::new(ContentType::Channels, ProcessingStage::Mapped)
     }
-    
+
     /// EPG data after data mapping
     pub fn mapped_epg() -> Self {
         Self::new(ContentType::EpgPrograms, ProcessingStage::Mapped)
     }
-    
+
     /// Channel data after filtering
     pub fn filtered_channels() -> Self {
         Self::new(ContentType::Channels, ProcessingStage::Filtered)
     }
-    
+
     /// EPG data after filtering
     pub fn filtered_epg() -> Self {
         Self::new(ContentType::EpgPrograms, ProcessingStage::Filtered)
     }
-    
+
     /// Channel data after logo caching
     pub fn logo_cached_channels() -> Self {
         Self::new(ContentType::Channels, ProcessingStage::LogoCached)
     }
-    
+
     /// Channel data after numbering
     pub fn numbered_channels() -> Self {
         Self::new(ContentType::Channels, ProcessingStage::Numbered)
     }
-    
+
     /// Generated M3U playlist files
     pub fn generated_m3u() -> Self {
         Self::new(ContentType::M3uPlaylist, ProcessingStage::Generated)
     }
-    
+
     /// Generated XMLTV guide files
     pub fn generated_xmltv() -> Self {
         Self::new(ContentType::XmltvGuide, ProcessingStage::Generated)
     }
-    
+
     /// Published M3U playlist files
     pub fn published_m3u() -> Self {
         Self::new(ContentType::M3uPlaylist, ProcessingStage::Published)
     }
-    
+
     /// Published XMLTV guide files
     pub fn published_xmltv() -> Self {
         Self::new(ContentType::XmltvGuide, ProcessingStage::Published)
     }
-    
+
     /// Final generated proxy files - legacy
     pub fn generated_proxies() -> Self {
         Self::new(ContentType::ProxyFiles, ProcessingStage::Generated)
     }
-    
+
     /// Final generated EPG files - legacy
     pub fn generated_epg() -> Self {
         Self::new(ContentType::EpgFiles, ProcessingStage::Generated)
@@ -146,11 +146,7 @@ pub struct PipelineArtifact {
 }
 
 impl PipelineArtifact {
-    pub fn new(
-        artifact_type: ArtifactType,
-        file_path: String,
-        created_by_stage: String,
-    ) -> Self {
+    pub fn new(artifact_type: ArtifactType, file_path: String, created_by_stage: String) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             artifact_type,
@@ -162,17 +158,17 @@ impl PipelineArtifact {
             metadata: HashMap::new(),
         }
     }
-    
+
     pub fn with_record_count(mut self, count: usize) -> Self {
         self.record_count = Some(count);
         self
     }
-    
+
     pub fn with_file_size(mut self, size: u64) -> Self {
         self.file_size = Some(size);
         self
     }
-    
+
     pub fn with_metadata(mut self, key: String, value: serde_json::Value) -> Self {
         self.metadata.insert(key, value);
         self
@@ -198,82 +194,66 @@ impl ArtifactRegistry {
             by_stage: HashMap::new(),
         }
     }
-    
+
     /// Register a new artifact
     pub fn register(&mut self, artifact: PipelineArtifact) {
         let artifact_id = artifact.id.clone();
         let artifact_type = artifact.artifact_type.clone();
         let stage = artifact.created_by_stage.clone();
-        
+
         // Add to main registry
         self.artifacts.insert(artifact_id.clone(), artifact);
-        
+
         // Add to type index
         self.by_type
             .entry(artifact_type)
             .or_default()
             .push(artifact_id.clone());
-        
+
         // Add to stage index
-        self.by_stage
-            .entry(stage)
-            .or_default()
-            .push(artifact_id);
+        self.by_stage.entry(stage).or_default().push(artifact_id);
     }
-    
+
     /// Get all artifacts of a specific type
     pub fn get_by_type(&self, artifact_type: &ArtifactType) -> Vec<&PipelineArtifact> {
         self.by_type
             .get(artifact_type)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.artifacts.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.artifacts.get(id)).collect())
             .unwrap_or_default()
     }
-    
+
     /// Get all artifacts created by a specific stage
     pub fn get_by_stage(&self, stage: &str) -> Vec<&PipelineArtifact> {
         self.by_stage
             .get(stage)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.artifacts.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.artifacts.get(id)).collect())
             .unwrap_or_default()
     }
-    
+
     /// Get the most recent artifact of a specific type
     pub fn get_latest_by_type(&self, artifact_type: &ArtifactType) -> Option<&PipelineArtifact> {
         self.get_by_type(artifact_type)
             .into_iter()
             .max_by_key(|artifact| artifact.created_at)
     }
-    
+
     /// Get all artifact types currently registered
     pub fn get_available_types(&self) -> Vec<&ArtifactType> {
         self.by_type.keys().collect()
     }
-    
+
     /// Get summary statistics
     pub fn get_summary(&self) -> ArtifactSummary {
         let total_artifacts = self.artifacts.len();
-        let total_records: usize = self.artifacts
-            .values()
-            .filter_map(|a| a.record_count)
-            .sum();
-        let total_size_bytes: u64 = self.artifacts
-            .values()
-            .filter_map(|a| a.file_size)
-            .sum();
-        
-        let by_type: HashMap<ArtifactType, usize> = self.by_type
+        let total_records: usize = self.artifacts.values().filter_map(|a| a.record_count).sum();
+        let total_size_bytes: u64 = self.artifacts.values().filter_map(|a| a.file_size).sum();
+
+        let by_type: HashMap<ArtifactType, usize> = self
+            .by_type
             .iter()
             .map(|(t, ids)| (t.clone(), ids.len()))
             .collect();
-        
+
         ArtifactSummary {
             total_artifacts,
             total_records,
@@ -312,15 +292,16 @@ mod tests {
     #[test]
     fn test_artifact_registry() {
         let mut registry = ArtifactRegistry::new();
-        
+
         let artifact = PipelineArtifact::new(
             ArtifactType::mapped_channels(),
             "mapped_channels.jsonl".to_string(),
             "data_mapping".to_string(),
-        ).with_record_count(1000);
-        
+        )
+        .with_record_count(1000);
+
         registry.register(artifact);
-        
+
         let artifacts = registry.get_by_type(&ArtifactType::mapped_channels());
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].record_count, Some(1000));

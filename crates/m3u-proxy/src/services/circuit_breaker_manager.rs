@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 use crate::config::{CircuitBreakerConfig, CircuitBreakerProfileConfig};
-use crate::utils::circuit_breaker::{ConcreteCircuitBreaker, create_circuit_breaker_from_profile, CircuitBreaker};
+use crate::utils::circuit_breaker::{
+    CircuitBreaker, ConcreteCircuitBreaker, create_circuit_breaker_from_profile,
+};
 
 /// Manages circuit breakers and supports runtime configuration updates
 pub struct CircuitBreakerManager {
@@ -26,13 +28,18 @@ impl CircuitBreakerManager {
     /// Get the configuration profile for a service
     pub async fn get_service_profile(&self, service_name: &str) -> CircuitBreakerProfileConfig {
         let config = self.current_config.read().await;
-        config.profiles.get(service_name)
+        config
+            .profiles
+            .get(service_name)
             .unwrap_or(&config.global)
             .clone()
     }
 
     /// Get or create a circuit breaker for a service
-    pub async fn get_circuit_breaker(&self, service_name: &str) -> Result<Arc<ConcreteCircuitBreaker>, String> {
+    pub async fn get_circuit_breaker(
+        &self,
+        service_name: &str,
+    ) -> Result<Arc<ConcreteCircuitBreaker>, String> {
         // Check if we already have an active circuit breaker for this service
         {
             let breakers = self.active_breakers.read().await;
@@ -43,10 +50,12 @@ impl CircuitBreakerManager {
 
         // Create a new circuit breaker
         let config = self.current_config.read().await;
-        let profile = config.profiles.get(service_name)
-            .unwrap_or(&config.global);
-        
-        info!("Creating circuit breaker for service '{}' with profile: {:?}", service_name, profile);
+        let profile = config.profiles.get(service_name).unwrap_or(&config.global);
+
+        info!(
+            "Creating circuit breaker for service '{}' with profile: {:?}",
+            service_name, profile
+        );
         let breaker = create_circuit_breaker_from_profile(profile)?;
         info!("Circuit breaker created for service '{}'", service_name);
 
@@ -60,7 +69,10 @@ impl CircuitBreakerManager {
     }
 
     /// Update configuration and recreate affected circuit breakers
-    pub async fn update_configuration(&self, new_config: CircuitBreakerConfig) -> Result<Vec<String>, String> {
+    pub async fn update_configuration(
+        &self,
+        new_config: CircuitBreakerConfig,
+    ) -> Result<Vec<String>, String> {
         let mut updated_services = Vec::new();
 
         // Update the stored configuration
@@ -82,25 +94,33 @@ impl CircuitBreakerManager {
             let config = self.current_config.read().await;
 
             for service_name in &active_service_names {
-                let profile = config.profiles.get(service_name)
-                    .unwrap_or(&config.global);
+                let profile = config.profiles.get(service_name).unwrap_or(&config.global);
 
                 match create_circuit_breaker_from_profile(profile) {
                     Ok(new_breaker) => {
                         breakers.insert(service_name.clone(), new_breaker);
                         updated_services.push(service_name.clone());
-                        info!("Updated circuit breaker for service '{}' with new configuration", service_name);
+                        info!(
+                            "Updated circuit breaker for service '{}' with new configuration",
+                            service_name
+                        );
                     }
                     Err(e) => {
-                        warn!("Failed to update circuit breaker for service '{}': {}", service_name, e);
+                        warn!(
+                            "Failed to update circuit breaker for service '{}': {}",
+                            service_name, e
+                        );
                         // Keep the old circuit breaker in case of error
                     }
                 }
             }
         }
 
-        info!("Configuration update completed. Updated {} services: {:?}", 
-              updated_services.len(), updated_services);
+        info!(
+            "Configuration update completed. Updated {} services: {:?}",
+            updated_services.len(),
+            updated_services
+        );
 
         Ok(updated_services)
     }
@@ -112,7 +132,9 @@ impl CircuitBreakerManager {
     }
 
     /// Get statistics for all active circuit breakers
-    pub async fn get_all_stats(&self) -> HashMap<String, crate::utils::circuit_breaker::CircuitBreakerStats> {
+    pub async fn get_all_stats(
+        &self,
+    ) -> HashMap<String, crate::utils::circuit_breaker::CircuitBreakerStats> {
         let mut stats = HashMap::new();
         let breakers = self.active_breakers.read().await;
 
@@ -130,10 +152,16 @@ impl CircuitBreakerManager {
         match breakers.get(service_name) {
             Some(breaker) => {
                 breaker.force_open().await;
-                info!("Manually forced circuit breaker open for service '{}'", service_name);
+                info!(
+                    "Manually forced circuit breaker open for service '{}'",
+                    service_name
+                );
                 Ok(())
             }
-            None => Err(format!("No active circuit breaker found for service '{}'", service_name))
+            None => Err(format!(
+                "No active circuit breaker found for service '{}'",
+                service_name
+            )),
         }
     }
 
@@ -143,10 +171,16 @@ impl CircuitBreakerManager {
         match breakers.get(service_name) {
             Some(breaker) => {
                 breaker.force_closed().await;
-                info!("Manually forced circuit breaker closed for service '{}'", service_name);
+                info!(
+                    "Manually forced circuit breaker closed for service '{}'",
+                    service_name
+                );
                 Ok(())
             }
-            None => Err(format!("No active circuit breaker found for service '{}'", service_name))
+            None => Err(format!(
+                "No active circuit breaker found for service '{}'",
+                service_name
+            )),
         }
     }
 
@@ -157,11 +191,17 @@ impl CircuitBreakerManager {
     }
 
     /// Update a specific service's circuit breaker profile
-    pub async fn update_service_profile(&self, service_name: &str, profile: CircuitBreakerProfileConfig) -> Result<(), String> {
+    pub async fn update_service_profile(
+        &self,
+        service_name: &str,
+        profile: CircuitBreakerProfileConfig,
+    ) -> Result<(), String> {
         // Update the configuration
         {
             let mut config = self.current_config.write().await;
-            config.profiles.insert(service_name.to_string(), profile.clone());
+            config
+                .profiles
+                .insert(service_name.to_string(), profile.clone());
         }
 
         // Recreate the circuit breaker if it exists
@@ -171,16 +211,25 @@ impl CircuitBreakerManager {
                 match create_circuit_breaker_from_profile(&profile) {
                     Ok(new_breaker) => {
                         breakers.insert(service_name.to_string(), new_breaker);
-                        info!("Updated circuit breaker profile for service '{}': {:?}", service_name, profile);
+                        info!(
+                            "Updated circuit breaker profile for service '{}': {:?}",
+                            service_name, profile
+                        );
                         Ok(())
                     }
                     Err(e) => {
-                        error!("Failed to create circuit breaker with new profile for service '{}': {}", service_name, e);
+                        error!(
+                            "Failed to create circuit breaker with new profile for service '{}': {}",
+                            service_name, e
+                        );
                         Err(e)
                     }
                 }
             } else {
-                info!("Service '{}' profile updated but no active circuit breaker to recreate", service_name);
+                info!(
+                    "Service '{}' profile updated but no active circuit breaker to recreate",
+                    service_name
+                );
                 Ok(())
             }
         }

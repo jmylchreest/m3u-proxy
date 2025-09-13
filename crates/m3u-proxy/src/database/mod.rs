@@ -6,8 +6,8 @@
 //! - MySQL (with specific optimizations)
 
 use anyhow::{Context, Result};
-use std::error::Error;
 use sea_orm::{ConnectOptions, Database as SeaOrmDatabase, DatabaseBackend, DatabaseConnection};
+use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -42,10 +42,7 @@ pub enum DatabaseType {
 
 impl Database {
     /// Create a new database connection with proper optimizations
-    pub async fn new(
-        config: &DatabaseConfig, 
-        ingestion_config: &IngestionConfig
-    ) -> Result<Self> {
+    pub async fn new(config: &DatabaseConfig, ingestion_config: &IngestionConfig) -> Result<Self> {
         let database_type = Self::detect_database_type(&config.url)?;
         let backend = match database_type {
             DatabaseType::SQLite => DatabaseBackend::Sqlite,
@@ -68,8 +65,8 @@ impl Database {
         connect_options
             .max_connections(config.max_connections.unwrap_or(10))
             .min_connections(1)
-            .connect_timeout(Duration::from_secs(5))    // Fast fail for offline database
-            .acquire_timeout(Duration::from_secs(3))    // Fast fail for pool exhaustion
+            .connect_timeout(Duration::from_secs(5)) // Fast fail for offline database
+            .acquire_timeout(Duration::from_secs(3)) // Fast fail for pool exhaustion
             .idle_timeout(Duration::from_secs(600))
             .max_lifetime(Duration::from_secs(1800));
 
@@ -100,7 +97,11 @@ impl Database {
                     source = err.source();
                     level += 1;
                 }
-                return Err(anyhow::anyhow!("Failed to connect to database at '{}': {}", &config.url, e));
+                return Err(anyhow::anyhow!(
+                    "Failed to connect to database at '{}': {}",
+                    &config.url,
+                    e
+                ));
             }
         };
 
@@ -150,7 +151,7 @@ impl Database {
         };
 
         let path = std::path::Path::new(file_path);
-        
+
         // If file already exists, no modification needed
         if path.exists() {
             debug!("SQLite database file already exists: {}", file_path);
@@ -159,11 +160,19 @@ impl Database {
 
         // Create parent directories if they don't exist
         if let Some(parent) = path.parent()
-            && !parent.exists() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("Failed to create directory for SQLite database: {}", parent.display()))?;
-                info!("Created directory for SQLite database: {}", parent.display());
-            }
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed to create directory for SQLite database: {}",
+                    parent.display()
+                )
+            })?;
+            info!(
+                "Created directory for SQLite database: {}",
+                parent.display()
+            );
+        }
 
         // Add mode=rwc to enable auto-creation
         let auto_create_url = if url.contains('?') {
@@ -172,17 +181,18 @@ impl Database {
             format!("{}?mode=rwc", url)
         };
 
-        info!("Modified SQLite URL to enable auto-creation: {} -> {}", url, auto_create_url);
+        info!(
+            "Modified SQLite URL to enable auto-creation: {} -> {}",
+            url, auto_create_url
+        );
         Ok(auto_create_url)
     }
 
     /// Apply SQLite-specific optimizations
-    fn apply_sqlite_optimizations(
-        options: &mut ConnectOptions,
-    ) -> Result<()> {
+    fn apply_sqlite_optimizations(options: &mut ConnectOptions) -> Result<()> {
         // SeaORM and modern database configurations handle optimization automatically
         // Manual PRAGMA statements can conflict with SeaORM's built-in optimizations
-        
+
         // Only apply essential connection settings
         options.sqlx_logging_level(tracing::log::LevelFilter::Debug);
 
@@ -191,9 +201,7 @@ impl Database {
     }
 
     /// Apply PostgreSQL-specific optimizations
-    fn apply_postgresql_optimizations(
-        options: &mut ConnectOptions,
-    ) -> Result<()> {
+    fn apply_postgresql_optimizations(options: &mut ConnectOptions) -> Result<()> {
         // PostgreSQL-specific connection settings can be added here
         options.sqlx_logging_level(tracing::log::LevelFilter::Debug);
 
@@ -202,9 +210,7 @@ impl Database {
     }
 
     /// Apply MySQL-specific optimizations
-    fn apply_mysql_optimizations(
-        options: &mut ConnectOptions,
-    ) -> Result<()> {
+    fn apply_mysql_optimizations(options: &mut ConnectOptions) -> Result<()> {
         // MySQL-specific connection settings can be added here
         options.sqlx_logging_level(tracing::log::LevelFilter::Debug);
 
@@ -240,7 +246,6 @@ impl Database {
         self.read_connection.clone()
     }
 
-
     /// Get the database backend type
     pub fn backend(&self) -> DatabaseBackend {
         self.backend
@@ -271,16 +276,17 @@ impl Database {
         }
     }
 
-
     /// Get stream proxy by ID (convenience method)
-    pub async fn get_stream_proxy(&self, id: uuid::Uuid) -> Result<Option<crate::models::StreamProxy>> {
+    pub async fn get_stream_proxy(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<Option<crate::models::StreamProxy>> {
         use crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository;
-        
+
         let repo = StreamProxySeaOrmRepository::new(self.connection.clone());
         repo.find_by_id(&id).await
     }
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub enum DatabaseFeature {

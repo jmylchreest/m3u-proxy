@@ -4,8 +4,8 @@
 //! allow specific file types based on their MIME types (detected via magic numbers).
 
 use sandboxed_file_manager::{
-    file_types::{FileTypeConfigBuilder, FileTypeValidator},
     CleanupPolicy, SandboxedManager,
+    file_types::{FileTypeConfigBuilder, FileTypeValidator},
 };
 use std::collections::HashSet;
 

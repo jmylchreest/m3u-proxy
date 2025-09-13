@@ -26,7 +26,7 @@ impl DimensionEncoder {
             }
         }
     }
-    
+
     /// Decode 12-bit value back to approximate dimension
     pub fn decode(encoded: u16) -> Option<i32> {
         match encoded {
@@ -38,14 +38,14 @@ impl DimensionEncoder {
             _ => Some(3585 + ((4095 - 2049) * 8)), // Cap at maximum value
         }
     }
-    
+
     /// Get encoding error for validation (difference between original and decoded)
     pub fn encoding_error(original: i32) -> i32 {
         let encoded = Self::encode(Some(original));
         let decoded = Self::decode(encoded).unwrap_or(0);
         (original - decoded).abs()
     }
-    
+
     /// Check if dimension fits in 12-bit encoding without significant loss
     pub fn is_encodable_precisely(dimension: i32) -> bool {
         Self::encoding_error(dimension) <= 2
@@ -55,19 +55,20 @@ impl DimensionEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_small_dimensions_exact() {
         // Small dimensions should be encoded exactly
         for size in [16, 32, 64, 128, 256, 512] {
             assert_eq!(
-                DimensionEncoder::decode(DimensionEncoder::encode(Some(size))), 
+                DimensionEncoder::decode(DimensionEncoder::encode(Some(size))),
                 Some(size),
-                "Size {} should encode exactly", size
+                "Size {} should encode exactly",
+                size
             );
         }
     }
-    
+
     #[test]
     fn test_medium_dimensions_acceptable() {
         // Medium sizes should have acceptable approximation
@@ -76,7 +77,7 @@ mod tests {
             assert!(error <= 2, "Size {} error {} should be <= 2px", size, error);
         }
     }
-    
+
     #[test]
     fn test_large_dimensions_approximate() {
         // Large sizes have more approximation but still reasonable
@@ -85,7 +86,7 @@ mod tests {
             assert!(error <= 8, "Size {} error {} should be <= 8px", size, error);
         }
     }
-    
+
     #[test]
     fn test_none_encoding() {
         assert_eq!(DimensionEncoder::encode(None), 0);

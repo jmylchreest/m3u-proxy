@@ -3,6 +3,7 @@
 //! This service manages FFmpeg relay processes, including starting, stopping,
 //! and serving content from active relays.
 
+use crate::utils::SystemManager;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -12,17 +13,16 @@ use sysinfo::Pid;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
-use crate::utils::SystemManager;
 
 use crate::config::Config;
 use crate::database::Database;
-use crate::models::relay::*;
-use crate::proxy::session_tracker::ClientInfo;
 use crate::database::repositories::channel::ChannelSeaOrmRepository;
-use crate::services::ffmpeg_wrapper::{FFmpegProcess, FFmpegProcessWrapper};
+use crate::models::relay::*;
 use crate::observability::AppObservability;
-use sandboxed_file_manager::SandboxedManager;
+use crate::proxy::session_tracker::ClientInfo;
+use crate::services::ffmpeg_wrapper::{FFmpegProcess, FFmpegProcessWrapper};
 use opentelemetry::KeyValue;
+use sandboxed_file_manager::SandboxedManager;
 
 /// Manages FFmpeg relay processes with automatic lifecycle management
 pub struct RelayManager {
@@ -42,11 +42,7 @@ pub struct RelayManager {
 
 impl RelayManager {
     /// Create a new relay manager with its own system instance
-    pub async fn new(
-        database: Database,
-        temp_manager: SandboxedManager,
-        config: Config,
-    ) -> Self {
+    pub async fn new(database: Database, temp_manager: SandboxedManager, config: Config) -> Self {
         // Get FFmpeg command from config
         let ffmpeg_command = config
             .relay
@@ -88,7 +84,9 @@ impl RelayManager {
 
         // Create stream prober if ffprobe is available
         let stream_prober = if ffprobe_available {
-            Some(crate::services::StreamProber::new(Some(ffprobe_command.clone())))
+            Some(crate::services::StreamProber::new(Some(
+                ffprobe_command.clone(),
+            )))
         } else {
             None
         };
@@ -99,7 +97,11 @@ impl RelayManager {
             ffmpeg_wrapper: FFmpegProcessWrapper::new(
                 temp_manager,
                 hwaccel_capabilities.clone(),
-                config.relay.as_ref().map(|r| r.buffer.clone()).unwrap_or_default(),
+                config
+                    .relay
+                    .as_ref()
+                    .map(|r| r.buffer.clone())
+                    .unwrap_or_default(),
                 stream_prober,
                 ffmpeg_command.clone(),
             ),
@@ -116,7 +118,7 @@ impl RelayManager {
 
         // Start cleanup task
         manager.start_cleanup_task();
-        
+
         // Start periodic status logging task
         manager.start_status_logging_task();
 
@@ -143,22 +145,25 @@ impl RelayManager {
         // Check if already running
         if self.active_processes.read().await.contains_key(&config_id) {
             debug!("Relay {} already running", config_id);
-            
+
             // Record relay already running metric
             if let Some(obs) = &self.observability {
-                obs.batch_operations.add(1, &[
-                    KeyValue::new("operation", "ensure_relay_running"),
-                    KeyValue::new("result", "already_running"),
-                    KeyValue::new("config_id", config_id.to_string()),
-                ]);
+                obs.batch_operations.add(
+                    1,
+                    &[
+                        KeyValue::new("operation", "ensure_relay_running"),
+                        KeyValue::new("result", "already_running"),
+                        KeyValue::new("config_id", config_id.to_string()),
+                    ],
+                );
             }
-            
+
             return Ok(());
         }
 
         // Start new process
         let result = self.ffmpeg_wrapper.start_process(config, input_url).await;
-        
+
         match result {
             Ok(process) => {
                 // Store the process
@@ -170,18 +175,24 @@ impl RelayManager {
                 // Record successful relay start metrics
                 if let Some(obs) = &self.observability {
                     let duration = start_time.elapsed().as_secs_f64();
-                    
-                    obs.batch_operations.add(1, &[
-                        KeyValue::new("operation", "ensure_relay_running"),
-                        KeyValue::new("result", "started"),
-                        KeyValue::new("config_id", config_id.to_string()),
-                    ]);
-                    
-                    obs.relay_uptime.record(duration, &[
-                        KeyValue::new("config_id", config_id.to_string()),
-                        KeyValue::new("status", "success"),
-                    ]);
-                    
+
+                    obs.batch_operations.add(
+                        1,
+                        &[
+                            KeyValue::new("operation", "ensure_relay_running"),
+                            KeyValue::new("result", "started"),
+                            KeyValue::new("config_id", config_id.to_string()),
+                        ],
+                    );
+
+                    obs.relay_uptime.record(
+                        duration,
+                        &[
+                            KeyValue::new("config_id", config_id.to_string()),
+                            KeyValue::new("status", "success"),
+                        ],
+                    );
+
                     // Update active relay count
                     let active_count = self.active_processes.read().await.len() as i64;
                     obs.active_relays.add(active_count, &[]);
@@ -192,13 +203,16 @@ impl RelayManager {
             Err(e) => {
                 // Record relay start failure metrics
                 if let Some(obs) = &self.observability {
-                    obs.relay_errors.add(1, &[
-                        KeyValue::new("operation", "ensure_relay_running"),
-                        KeyValue::new("config_id", config_id.to_string()),
-                        KeyValue::new("error_type", "start_failed"),
-                    ]);
+                    obs.relay_errors.add(
+                        1,
+                        &[
+                            KeyValue::new("operation", "ensure_relay_running"),
+                            KeyValue::new("config_id", config_id.to_string()),
+                            KeyValue::new("error_type", "start_failed"),
+                        ],
+                    );
                 }
-                
+
                 Err(e)
             }
         }
@@ -216,42 +230,54 @@ impl RelayManager {
         if let Some(process) = processes.get_mut(&config_id) {
             // Get current client count from the cyclic buffer
             let buffer_client_count = process.cyclic_buffer.get_client_count().await;
-            
+
             // Update the atomic counter for backward compatibility
-            process.client_count.store(buffer_client_count as u32, Ordering::Relaxed);
-            
+            process
+                .client_count
+                .store(buffer_client_count as u32, Ordering::Relaxed);
+
             let content = process.serve_content(path, client_info).await?;
 
             // Record content serving metrics
             if let Some(obs) = &self.observability {
                 // Note: RelayContent is an enum - bytes will be tracked at stream level
-                obs.client_connections.add(1, &[
-                    KeyValue::new("operation", "serve_content"),
-                    KeyValue::new("config_id", config_id.to_string()),
-                    KeyValue::new("content_type", match &content {
-                        crate::models::relay::RelayContent::Stream(_) => "stream",
-                        crate::models::relay::RelayContent::Playlist(_) => "playlist", 
-                        crate::models::relay::RelayContent::Segment(_) => "segment",
-                    }),
-                ]);
-                
+                obs.client_connections.add(
+                    1,
+                    &[
+                        KeyValue::new("operation", "serve_content"),
+                        KeyValue::new("config_id", config_id.to_string()),
+                        KeyValue::new(
+                            "content_type",
+                            match &content {
+                                crate::models::relay::RelayContent::Stream(_) => "stream",
+                                crate::models::relay::RelayContent::Playlist(_) => "playlist",
+                                crate::models::relay::RelayContent::Segment(_) => "segment",
+                            },
+                        ),
+                    ],
+                );
+
                 // Update client count metric for this relay
-                obs.active_clients.add(buffer_client_count as i64, &[
-                    KeyValue::new("config_id", config_id.to_string()),
-                ]);
+                obs.active_clients.add(
+                    buffer_client_count as i64,
+                    &[KeyValue::new("config_id", config_id.to_string())],
+                );
             }
 
             Ok(content)
         } else {
             // Record relay not found error
             if let Some(obs) = &self.observability {
-                obs.relay_errors.add(1, &[
-                    KeyValue::new("operation", "serve_content"),
-                    KeyValue::new("config_id", config_id.to_string()),
-                    KeyValue::new("error_type", "process_not_found"),
-                ]);
+                obs.relay_errors.add(
+                    1,
+                    &[
+                        KeyValue::new("operation", "serve_content"),
+                        KeyValue::new("config_id", config_id.to_string()),
+                        KeyValue::new("error_type", "process_not_found"),
+                    ],
+                );
             }
-            
+
             Err(RelayError::ProcessNotFound(config_id))
         }
     }
@@ -260,29 +286,35 @@ impl RelayManager {
     pub async fn stop_relay(&self, config_id: Uuid) -> Result<(), RelayError> {
         if let Some(mut process) = self.active_processes.write().await.remove(&config_id) {
             process.kill().await?;
-            
+
             // Record relay stop metrics
             if let Some(obs) = &self.observability {
-                obs.batch_operations.add(1, &[
-                    KeyValue::new("operation", "stop_relay"),
-                    KeyValue::new("result", "stopped"),
-                    KeyValue::new("config_id", config_id.to_string()),
-                ]);
-                
+                obs.batch_operations.add(
+                    1,
+                    &[
+                        KeyValue::new("operation", "stop_relay"),
+                        KeyValue::new("result", "stopped"),
+                        KeyValue::new("config_id", config_id.to_string()),
+                    ],
+                );
+
                 // Update active relay count
                 let active_count = self.active_processes.read().await.len() as i64;
                 obs.active_relays.add(active_count, &[]);
             }
-            
+
             info!("Stopped relay process for config {}", config_id);
         } else {
             // Record stop attempt for non-existent relay
             if let Some(obs) = &self.observability {
-                obs.batch_operations.add(1, &[
-                    KeyValue::new("operation", "stop_relay"),
-                    KeyValue::new("result", "not_found"),
-                    KeyValue::new("config_id", config_id.to_string()),
-                ]);
+                obs.batch_operations.add(
+                    1,
+                    &[
+                        KeyValue::new("operation", "stop_relay"),
+                        KeyValue::new("result", "not_found"),
+                        KeyValue::new("config_id", config_id.to_string()),
+                    ],
+                );
             }
         }
         Ok(())
@@ -297,12 +329,16 @@ impl RelayManager {
             let buffer_stats = process.cyclic_buffer.get_stats().await;
             let client_count = buffer_stats.client_count as i32;
             let connected_clients = process.cyclic_buffer.get_connected_clients().await;
-            let bytes_delivered_downstream = connected_clients.iter().map(|c| c.bytes_served as i64).sum();
-            
+            let bytes_delivered_downstream = connected_clients
+                .iter()
+                .map(|c| c.bytes_served as i64)
+                .sum();
+
             let process_metrics = RelayProcessMetrics {
                 config_id: *config_id,
                 profile_name: process.config.profile.name.clone(),
-                channel_name: self.get_channel_name(process.config.config.channel_id)
+                channel_name: self
+                    .get_channel_name(process.config.config.channel_id)
                     .await
                     .unwrap_or_else(|| format!("Channel {}", process.config.config.channel_id)),
                 is_running: true, // If it's in the map, it's running
@@ -312,8 +348,14 @@ impl RelayManager {
                 bytes_delivered_downstream,
                 uptime_seconds: Some(process.get_uptime().as_secs() as i64),
                 last_heartbeat: Some(chrono::Utc::now()),
-                cpu_usage_percent: self.get_process_cpu_usage(process.child.id()).await.unwrap_or(0.0),
-                memory_usage_mb: self.get_process_memory_usage(process.child.id()).await.unwrap_or(0.0),
+                cpu_usage_percent: self
+                    .get_process_cpu_usage(process.child.id())
+                    .await
+                    .unwrap_or(0.0),
+                memory_usage_mb: self
+                    .get_process_memory_usage(process.child.id())
+                    .await
+                    .unwrap_or(0.0),
                 process_id: process.child.id(),
                 input_url: process.input_url.clone(),
                 config_snapshot: process.config_snapshot.clone(),
@@ -336,11 +378,14 @@ impl RelayManager {
             let connected_clients = process.cyclic_buffer.get_connected_clients().await;
             let client_count = connected_clients.len() as i32;
             let last_heartbeat = chrono::Utc::now(); // In real implementation, this would be from process monitoring
-            
+
             // Get traffic stats for this process
             let buffer_stats = process.cyclic_buffer.get_stats().await;
             let bytes_received_upstream = buffer_stats.bytes_received_from_upstream as i64;
-            let bytes_delivered_downstream = connected_clients.iter().map(|c| c.bytes_served).sum::<u64>() as i64;
+            let bytes_delivered_downstream = connected_clients
+                .iter()
+                .map(|c| c.bytes_served)
+                .sum::<u64>() as i64;
 
             // Determine health status
             let status = if true {
@@ -359,10 +404,12 @@ impl RelayManager {
             };
 
             let pid = process.child.id().unwrap_or(0);
-            
+
             // Get channel name from database
-            let channel_name = self.get_channel_name(process.config.config.channel_id).await;
-            
+            let channel_name = self
+                .get_channel_name(process.config.config.channel_id)
+                .await;
+
             let health = RelayProcessHealth {
                 config_id: *config_id,
                 profile_id: process.config.profile.id,
@@ -377,10 +424,7 @@ impl RelayManager {
                     .get_process_memory_usage(Some(pid))
                     .await
                     .unwrap_or(0.0),
-                cpu_usage_percent: self
-                    .get_process_cpu_usage(Some(pid))
-                    .await
-                    .unwrap_or(0.0),
+                cpu_usage_percent: self.get_process_cpu_usage(Some(pid)).await.unwrap_or(0.0),
                 bytes_received_upstream,
                 bytes_delivered_downstream,
                 connected_clients,
@@ -412,11 +456,14 @@ impl RelayManager {
             let connected_clients = process.cyclic_buffer.get_connected_clients().await;
             let client_count = connected_clients.len() as i32;
             let last_heartbeat = chrono::Utc::now();
-            
+
             // Get traffic stats for this process
             let buffer_stats = process.cyclic_buffer.get_stats().await;
             let bytes_received_upstream = buffer_stats.bytes_received_from_upstream as i64;
-            let bytes_delivered_downstream = connected_clients.iter().map(|c| c.bytes_served).sum::<u64>() as i64;
+            let bytes_delivered_downstream = connected_clients
+                .iter()
+                .map(|c| c.bytes_served)
+                .sum::<u64>() as i64;
 
             let status = if true {
                 // process.is_running() would need mutable access
@@ -430,10 +477,12 @@ impl RelayManager {
             };
 
             let pid = process.child.id().unwrap_or(0);
-            
+
             // Get channel name from database
-            let channel_name = self.get_channel_name(process.config.config.channel_id).await;
-            
+            let channel_name = self
+                .get_channel_name(process.config.config.channel_id)
+                .await;
+
             let health = RelayProcessHealth {
                 config_id,
                 profile_id: process.config.profile.id,
@@ -448,10 +497,7 @@ impl RelayManager {
                     .get_process_memory_usage(Some(pid))
                     .await
                     .unwrap_or(0.0),
-                cpu_usage_percent: self
-                    .get_process_cpu_usage(Some(pid))
-                    .await
-                    .unwrap_or(0.0),
+                cpu_usage_percent: self.get_process_cpu_usage(Some(pid)).await.unwrap_or(0.0),
                 bytes_received_upstream,
                 bytes_delivered_downstream,
                 connected_clients,
@@ -464,19 +510,23 @@ impl RelayManager {
         }
     }
 
-
     /// Get memory usage for a specific process (in MB)
     async fn get_process_memory_usage(&self, process_id: Option<u32>) -> Option<f64> {
         let process_id = process_id?;
         let system = self.system_manager.get_system();
         let mut system = system.write().await;
-        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(process_id)]), true);
+        system.refresh_processes(
+            sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(process_id)]),
+            true,
+        );
 
-        system.process(Pid::from_u32(process_id)).map(|process| process.memory() as f64 / 1024.0 / 1024.0)
+        system
+            .process(Pid::from_u32(process_id))
+            .map(|process| process.memory() as f64 / 1024.0 / 1024.0)
     }
 
     /// Get CPU usage for a specific process (percentage, normalized to 100%)
-    /// 
+    ///
     /// Returns CPU usage as a percentage where 100% means the process is using
     /// one full CPU core. On multi-core systems, values can exceed 100% if the
     /// process uses multiple cores.
@@ -489,7 +539,7 @@ impl RelayManager {
             // sysinfo's cpu_usage() returns percentage where 100% = 1 full CPU core
             // This is already normalized correctly for our purposes
             let cpu_usage = process.cpu_usage() as f64;
-            
+
             // Clamp to reasonable values (sometimes sysinfo can return slightly negative values)
             Some(cpu_usage.max(0.0))
         } else {
@@ -500,10 +550,10 @@ impl RelayManager {
     /// Get channel name from database using repository
     async fn get_channel_name(&self, channel_id: Uuid) -> Option<String> {
         let channel_repo = ChannelSeaOrmRepository::new(self.database.connection().clone());
-        let channel_name: Option<String> = (channel_repo.get_channel_name(channel_id).await).unwrap_or_default();
+        let channel_name: Option<String> =
+            (channel_repo.get_channel_name(channel_id).await).unwrap_or_default();
         channel_name
     }
-
 
     /// Start the cleanup task for idle processes
     fn start_cleanup_task(&self) {
@@ -529,12 +579,17 @@ impl RelayManager {
 
                         // Check if process is idle (no clients and no activity for a shorter time)
                         let buffer_client_count = process.cyclic_buffer.get_client_count().await;
-                        process.client_count.store(buffer_client_count as u32, Ordering::Relaxed);
-                        
+                        process
+                            .client_count
+                            .store(buffer_client_count as u32, Ordering::Relaxed);
+
                         if buffer_client_count == 0
                             && process.last_activity.elapsed() > Duration::from_secs(60)
                         {
-                            info!("Relay {} is idle (no clients for 1 minute), scheduling for cleanup", config_id);
+                            info!(
+                                "Relay {} is idle (no clients for 1 minute), scheduling for cleanup",
+                                config_id
+                            );
                             to_remove.push(*config_id);
                         }
                     }
@@ -560,53 +615,61 @@ impl RelayManager {
         let processes = self.active_processes.clone();
         let database = self.database.clone();
         let system = self.system_manager.get_system();
-        
+
         tokio::spawn(async move {
             let mut status_interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 status_interval.tick().await;
-                
+
                 let processes_guard = processes.read().await;
                 if processes_guard.is_empty() {
                     continue;
                 }
-                
+
                 for (config_id, process) in processes_guard.iter() {
                     let buffer_stats = process.cyclic_buffer.get_stats().await;
                     let client_count = buffer_stats.client_count;
                     let bytes_received = buffer_stats.bytes_received_from_upstream;
                     let bytes_delivered = buffer_stats.total_bytes_written;
-                    
+
                     // Get actual channel name using repository
                     let channel_repo = ChannelSeaOrmRepository::new(database.connection().clone());
-                    let channel_name = match channel_repo.get_channel_name(process.config.config.channel_id).await {
+                    let channel_name = match channel_repo
+                        .get_channel_name(process.config.config.channel_id)
+                        .await
+                    {
                         Ok(Some(name)) => name,
                         _ => format!("Channel {}", process.config.config.channel_id),
                     };
-                    
+
                     // Get FFmpeg PID and process stats if available using shared system manager
                     let (ffmpeg_pid, cpu_usage, memory_mb) = match process.child.id() {
                         Some(pid) => {
                             let pid_str = pid.to_string();
-                            
+
                             // Use the shared system manager for process stats
                             let system_guard = system.read().await;
-                            
+
                             if let Some(process_info) = system_guard.process(Pid::from_u32(pid)) {
                                 let cpu = format!("{:.1}%", process_info.cpu_usage());
-                                let memory = format!("{:.1}MB", process_info.memory() as f64 / 1024.0 / 1024.0);
+                                let memory = format!(
+                                    "{:.1}MB",
+                                    process_info.memory() as f64 / 1024.0 / 1024.0
+                                );
                                 (pid_str, cpu, memory)
                             } else {
                                 (pid_str, "N/A".to_string(), "N/A".to_string())
                             }
-                        },
-                        None => ("N/A".to_string(), "N/A".to_string(), "N/A".to_string())
+                        }
+                        None => ("N/A".to_string(), "N/A".to_string(), "N/A".to_string()),
                     };
-                    
+
                     // Format bandwidth in human-readable format
-                    let rx_formatted = crate::utils::human_format::format_memory(bytes_received as f64);
-                    let tx_formatted = crate::utils::human_format::format_memory(bytes_delivered as f64);
-                    
+                    let rx_formatted =
+                        crate::utils::human_format::format_memory(bytes_received as f64);
+                    let tx_formatted =
+                        crate::utils::human_format::format_memory(bytes_delivered as f64);
+
                     // Use structured logging with key-value pairs including process metrics
                     info!(
                         "relay_id={} channel=\"{}\" profile=\"{}\" clients={} ffmpeg_pid={} cpu_usage={} memory_usage={} stream_url=\"{}\" rx_total={} tx_total={}",
@@ -625,7 +688,6 @@ impl RelayManager {
             }
         });
     }
-
 
     /// Check if FFprobe is available and get version information (static version for initialization)
     async fn check_ffprobe_availability_static(ffprobe_command: &str) -> (bool, Option<String>) {
@@ -887,14 +949,11 @@ impl RelayManager {
             Err(_) => false, // Timeout
         }
     }
-    
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_relay_event_type_serialization() {

@@ -3,8 +3,8 @@
 //! This module defines the core traits that all repositories must implement,
 //! providing a consistent interface for data access operations.
 
-use async_trait::async_trait;
 use crate::errors::RepositoryResult;
+use async_trait::async_trait;
 use std::collections::HashMap;
 
 /// Core repository trait providing CRUD operations
@@ -162,7 +162,10 @@ pub trait BulkRepository<T, ID: Send + 'static>: Repository<T, ID> {
     ///
     /// * `Ok(Vec<T>)` - Updated entities
     /// * `Err(RepositoryError)` - Database error (all operations rolled back)
-    async fn update_bulk(&self, updates: HashMap<ID, Self::UpdateRequest>) -> RepositoryResult<Vec<T>>;
+    async fn update_bulk(
+        &self,
+        updates: HashMap<ID, Self::UpdateRequest>,
+    ) -> RepositoryResult<Vec<T>>;
 
     /// Delete multiple entities in a single transaction
     ///
@@ -343,12 +346,7 @@ pub struct PaginatedResult<T> {
 
 impl<T> PaginatedResult<T> {
     /// Create a new paginated result
-    pub fn new(
-        items: Vec<T>,
-        page: u32,
-        limit: u32,
-        total_count: u64,
-    ) -> Self {
+    pub fn new(items: Vec<T>, page: u32, limit: u32, total_count: u64) -> Self {
         let total_pages = ((total_count as f64) / (limit as f64)).ceil() as u32;
         let has_next = page < total_pages;
         let has_previous = page > 1;
@@ -377,21 +375,22 @@ impl RepositoryHelpers {
         source_id: uuid::Uuid,
     ) -> crate::errors::RepositoryResult<chrono::DateTime<chrono::Utc>> {
         let now = chrono::Utc::now();
-        let query = format!("UPDATE {table_name} SET last_ingested_at = ?, updated_at = ? WHERE id = ?");
-        
+        let query =
+            format!("UPDATE {table_name} SET last_ingested_at = ?, updated_at = ? WHERE id = ?");
+
         // Use SeaORM's raw query execution for generic table operations
-        use sea_orm::{Statement, ConnectionTrait};
-        
+        use sea_orm::{ConnectionTrait, Statement};
+
         let stmt = Statement::from_sql_and_values(
             sea_orm::DatabaseBackend::Sqlite,
             &query,
             vec![
                 now.to_rfc3339().into(),
-                now.to_rfc3339().into(), 
+                now.to_rfc3339().into(),
                 source_id.to_string().into(),
-            ]
+            ],
         );
-        
+
         db.execute(stmt).await?;
 
         Ok(now)
@@ -405,31 +404,30 @@ impl RepositoryHelpers {
         source_id: uuid::Uuid,
     ) -> crate::errors::RepositoryResult<i64> {
         let query = format!("SELECT COUNT(*) FROM {channel_table} WHERE source_id = ?");
-        
+
         // Use SeaORM's raw query for generic table operations
-        use sea_orm::{Statement, FromQueryResult};
-        
+        use sea_orm::{FromQueryResult, Statement};
+
         let stmt = Statement::from_sql_and_values(
             sea_orm::DatabaseBackend::Sqlite,
             &query,
-            vec![source_id.to_string().into()]
+            vec![source_id.to_string().into()],
         );
-        
+
         #[derive(FromQueryResult)]
         struct CountResult {
             #[sea_orm(column_name = "COUNT(*)")]
             count: i64,
         }
-        
+
         let result = CountResult::find_by_statement(stmt)
             .one(db)
             .await?
-            .ok_or_else(|| crate::errors::RepositoryError::NotFound { 
-                resource: channel_table.to_string(), 
-                id: source_id.to_string() 
+            .ok_or_else(|| crate::errors::RepositoryError::NotFound {
+                resource: channel_table.to_string(),
+                id: source_id.to_string(),
             })?;
 
         Ok(result.count)
     }
-
 }

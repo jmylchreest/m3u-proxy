@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use anyhow::{Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -33,12 +33,11 @@ impl FlexibleUuidSource for Uuid {
 /// - 22 characters base64: "VQ6EAOKbQdSnFkRmVUQAAA"
 pub fn parse_uuid_flexible(input: &str) -> Result<Uuid> {
     let trimmed = input.trim();
-    
+
     match trimmed.len() {
         36 => {
             // Standard UUID format with hyphens
-            Uuid::parse_str(trimmed)
-                .map_err(|e| anyhow!("Invalid 36-character UUID format: {}", e))
+            Uuid::parse_str(trimmed).map_err(|e| anyhow!("Invalid 36-character UUID format: {}", e))
         }
         32 => {
             // UUID without hyphens - insert hyphens at correct positions
@@ -62,22 +61,23 @@ pub fn parse_uuid_flexible(input: &str) -> Result<Uuid> {
             let decoded = URL_SAFE_NO_PAD
                 .decode(trimmed)
                 .map_err(|e| anyhow!("Invalid base64 UUID format: {}", e))?;
-            
+
             if decoded.len() != 16 {
-                return Err(anyhow!("Base64 UUID must decode to exactly 16 bytes, got {}", decoded.len()));
+                return Err(anyhow!(
+                    "Base64 UUID must decode to exactly 16 bytes, got {}",
+                    decoded.len()
+                ));
             }
-            
+
             let mut bytes = [0u8; 16];
             bytes.copy_from_slice(&decoded);
             Ok(Uuid::from_bytes(bytes))
         }
-        _ => {
-            Err(anyhow!(
-                "UUID must be 36 characters (with hyphens), 32 characters (without hyphens), or 22 characters (base64). Got {} characters: '{}'",
-                trimmed.len(),
-                trimmed
-            ))
-        }
+        _ => Err(anyhow!(
+            "UUID must be 36 characters (with hyphens), 32 characters (without hyphens), or 22 characters (base64). Got {} characters: '{}'",
+            trimmed.len(),
+            trimmed
+        )),
     }
 }
 
@@ -123,14 +123,12 @@ pub fn uuid_to_hex32(uuid: &Uuid) -> String {
 /// Serde helper for deserializing optional UUID fields that may contain empty strings
 ///
 /// Use with `#[serde(deserialize_with = "deserialize_optional_uuid")]`
-/// 
+///
 /// Handles:
 /// - null/missing: returns None
 /// - empty string "": returns None  
 /// - valid UUID string: returns Some(uuid)
-pub fn deserialize_optional_uuid<'de, D>(
-    deserializer: D,
-) -> Result<Option<Uuid>, D::Error>
+pub fn deserialize_optional_uuid<'de, D>(deserializer: D) -> Result<Option<Uuid>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -149,7 +147,6 @@ where
         None => Ok(None),
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -181,12 +178,12 @@ mod tests {
     #[test]
     fn test_roundtrip_conversions() {
         let original = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        
+
         // Test base64 roundtrip
         let base64 = uuid_to_base64(&original);
         let from_base64 = resolve_proxy_id(&base64).unwrap();
         assert_eq!(original, from_base64);
-        
+
         // Test 32-char hex roundtrip
         let hex32 = uuid_to_hex32(&original);
         let from_hex32 = resolve_proxy_id(&hex32).unwrap();
@@ -204,20 +201,26 @@ mod tests {
     #[test]
     fn test_parse_uuid_from_any() {
         let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        
+
         // Test with Uuid type
         assert_eq!(parse_uuid_from_any(uuid).unwrap(), uuid);
-        
+
         // Test with String
         let uuid_string = "550e8400-e29b-41d4-a716-446655440000".to_string();
         assert_eq!(parse_uuid_from_any(uuid_string).unwrap(), uuid);
-        
+
         // Test with &str
-        assert_eq!(parse_uuid_from_any("550e8400-e29b-41d4-a716-446655440000").unwrap(), uuid);
-        
+        assert_eq!(
+            parse_uuid_from_any("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            uuid
+        );
+
         // Test with 32-char string
-        assert_eq!(parse_uuid_from_any("550e8400e29b41d4a716446655440000").unwrap(), uuid);
-        
+        assert_eq!(
+            parse_uuid_from_any("550e8400e29b41d4a716446655440000").unwrap(),
+            uuid
+        );
+
         // Test with base64 string
         let base64_str = uuid_to_base64(&uuid);
         assert_eq!(parse_uuid_from_any(base64_str).unwrap(), uuid);

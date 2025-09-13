@@ -10,10 +10,12 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::errors::{AppError, AppResult};
-use crate::models::{StreamSource, StreamSourceType, Channel};
-use crate::utils::{DecompressingHttpClient, StandardHttpClient, generate_channel_uuid, HttpClientFactory};
 use super::traits::*;
+use crate::errors::{AppError, AppResult};
+use crate::models::{Channel, StreamSource, StreamSourceType};
+use crate::utils::{
+    DecompressingHttpClient, HttpClientFactory, StandardHttpClient, generate_channel_uuid,
+};
 
 /// M3U source handler
 ///
@@ -41,14 +43,21 @@ impl M3uSourceHandler {
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self { http_client, raw_client }
+        Self {
+            http_client,
+            raw_client,
+        }
     }
 
     /// Parse M3U content into channels
-    async fn parse_m3u_content(&self, content: &str, source: &StreamSource) -> AppResult<Vec<Channel>> {
+    async fn parse_m3u_content(
+        &self,
+        content: &str,
+        source: &StreamSource,
+    ) -> AppResult<Vec<Channel>> {
         let mut channels = Vec::new();
         let mut current_channel: Option<PartialChannel> = None;
-        
+
         // Track channels to prevent duplicates (based on stream URL + channel name)
         let mut seen_channels = std::collections::HashSet::new();
         let mut duplicate_count = 0;
@@ -57,7 +66,7 @@ impl M3uSourceHandler {
 
         for (line_num, line) in content.lines().enumerate() {
             let line = line.trim();
-            
+
             if line.is_empty() || line.starts_with('#') && !line.starts_with("#EXTINF") {
                 continue;
             }
@@ -69,35 +78,47 @@ impl M3uSourceHandler {
                 // This should be a stream URL
                 if let Some(mut channel) = current_channel.take() {
                     channel.url = line.to_string();
-                    
+
                     // Create deduplication key based on stream URL and channel name
                     let dedup_key = format!("{}|{}", channel.url, channel.name);
-                    
+
                     if seen_channels.contains(&dedup_key) {
                         duplicate_count += 1;
-                        debug!("Skipping duplicate channel '{}' with URL '{}' at line {}", 
-                               channel.name, channel.url, line_num + 1);
+                        debug!(
+                            "Skipping duplicate channel '{}' with URL '{}' at line {}",
+                            channel.name,
+                            channel.url,
+                            line_num + 1
+                        );
                         continue;
                     }
                     seen_channels.insert(dedup_key);
-                    
+
                     let complete_channel = self.complete_channel(channel, source, line_num + 1)?;
                     channels.push(complete_channel);
                 } else {
-                    warn!("Found stream URL without EXTINF metadata at line {}: {}", line_num + 1, line);
+                    warn!(
+                        "Found stream URL without EXTINF metadata at line {}: {}",
+                        line_num + 1,
+                        line
+                    );
                     // Create a basic channel without metadata
-                    
+
                     // Create deduplication key for basic channels too
                     let channel_name = line.split('/').next_back().unwrap_or("Unnamed Channel");
                     let dedup_key = format!("{}|{}", line, channel_name);
-                    
+
                     if seen_channels.contains(&dedup_key) {
                         duplicate_count += 1;
-                        debug!("Skipping duplicate basic channel with URL '{}' at line {}", line, line_num + 1);
+                        debug!(
+                            "Skipping duplicate basic channel with URL '{}' at line {}",
+                            line,
+                            line_num + 1
+                        );
                         continue;
                     }
                     seen_channels.insert(dedup_key);
-                    
+
                     let channel = self.create_basic_channel(line, source, line_num + 1)?;
                     channels.push(channel);
                 }
@@ -106,36 +127,48 @@ impl M3uSourceHandler {
 
         // Clean up deduplication set to free memory
         drop(seen_channels);
-        
+
         if duplicate_count > 0 {
-            info!("Removed {} duplicate channel entries from M3U source '{}'", duplicate_count, source.name);
+            info!(
+                "Removed {} duplicate channel entries from M3U source '{}'",
+                duplicate_count, source.name
+            );
         }
-        
-        info!("Parsed {} channels from M3U source: {}", channels.len(), source.name);
+
+        info!(
+            "Parsed {} channels from M3U source: {}",
+            channels.len(),
+            source.name
+        );
         Ok(channels)
     }
 
     /// Parse an EXTINF line to extract channel metadata
-    fn parse_extinf_line(&self, line: &str, source: &StreamSource) -> AppResult<Option<PartialChannel>> {
+    fn parse_extinf_line(
+        &self,
+        line: &str,
+        source: &StreamSource,
+    ) -> AppResult<Option<PartialChannel>> {
         // Format: #EXTINF:duration,title
         // Extended: #EXTINF:duration tvg-id="id" tvg-logo="logo" group-title="group",title
-        
+
         let extinf_content = line.strip_prefix("#EXTINF:").unwrap_or(line);
-        
+
         // Find the comma that separates duration from title/metadata
-        let comma_pos = extinf_content.rfind(',')
+        let comma_pos = extinf_content
+            .rfind(',')
             .ok_or_else(|| AppError::validation("Invalid EXTINF format: missing comma"))?;
-        
+
         let (duration_and_attrs, title) = extinf_content.split_at(comma_pos);
         let title = title.trim_start_matches(',').trim();
-        
+
         // Parse duration (first part before any attributes)
         let duration_str = duration_and_attrs.split_whitespace().next().unwrap_or("0");
         let _duration: f64 = duration_str.parse().unwrap_or(0.0);
-        
+
         // Parse attributes (tvg-id, tvg-logo, group-title, etc.)
         let attributes = self.parse_extinf_attributes(duration_and_attrs);
-        
+
         let mut channel = PartialChannel {
             name: title.to_string(),
             url: String::new(), // Will be set when we find the URL line
@@ -148,9 +181,10 @@ impl M3uSourceHandler {
 
         // Apply custom field mapping if configured
         if let Some(field_map_json) = &source.field_map
-            && let Ok(field_map) = serde_json::from_str::<HashMap<String, String>>(field_map_json) {
-                channel = self.apply_field_mapping(channel, &field_map);
-            }
+            && let Ok(field_map) = serde_json::from_str::<HashMap<String, String>>(field_map_json)
+        {
+            channel = self.apply_field_mapping(channel, &field_map);
+        }
 
         Ok(Some(channel))
     }
@@ -158,7 +192,7 @@ impl M3uSourceHandler {
     /// Parse attributes from EXTINF line (tvg-id="value" format)
     fn parse_extinf_attributes(&self, attrs_part: &str) -> HashMap<String, String> {
         let mut attributes = HashMap::new();
-        
+
         // Simple regex-free parsing for key="value" pairs
         let mut chars = attrs_part.chars().peekable();
         let mut current_key = String::new();
@@ -166,7 +200,7 @@ impl M3uSourceHandler {
         let mut in_quotes = false;
         let mut in_key = false;
         let mut in_value = false;
-        
+
         while let Some(ch) = chars.next() {
             match ch {
                 ' ' | '\t' if !in_quotes => {
@@ -211,17 +245,21 @@ impl M3uSourceHandler {
                 }
             }
         }
-        
+
         // Handle final unquoted value
         if in_value && !current_key.is_empty() && !current_value.is_empty() {
             attributes.insert(current_key, current_value);
         }
-        
+
         attributes
     }
 
     /// Apply custom field mapping to channel
-    fn apply_field_mapping(&self, mut channel: PartialChannel, field_map: &HashMap<String, String>) -> PartialChannel {
+    fn apply_field_mapping(
+        &self,
+        mut channel: PartialChannel,
+        field_map: &HashMap<String, String>,
+    ) -> PartialChannel {
         for (source_field, target_field) in field_map {
             if let Some(value) = channel.attributes.get(source_field) {
                 match target_field.as_str() {
@@ -232,7 +270,9 @@ impl M3uSourceHandler {
                     "tvg_name" => channel.tvg_name = Some(value.clone()),
                     _ => {
                         // Custom field mapping
-                        channel.attributes.insert(target_field.clone(), value.clone());
+                        channel
+                            .attributes
+                            .insert(target_field.clone(), value.clone());
                     }
                 }
             }
@@ -241,9 +281,14 @@ impl M3uSourceHandler {
     }
 
     /// Complete a partial channel by filling in required fields
-    fn complete_channel(&self, partial: PartialChannel, source: &StreamSource, _line_number: usize) -> AppResult<Channel> {
+    fn complete_channel(
+        &self,
+        partial: PartialChannel,
+        source: &StreamSource,
+        _line_number: usize,
+    ) -> AppResult<Channel> {
         let now = Utc::now();
-        
+
         Ok(Channel {
             id: generate_channel_uuid(&source.id, &partial.url, &partial.name),
             source_id: source.id,
@@ -266,9 +311,14 @@ impl M3uSourceHandler {
     }
 
     /// Create a basic channel without EXTINF metadata
-    fn create_basic_channel(&self, url: &str, source: &StreamSource, _line_number: usize) -> AppResult<Channel> {
+    fn create_basic_channel(
+        &self,
+        url: &str,
+        source: &StreamSource,
+        _line_number: usize,
+    ) -> AppResult<Channel> {
         let now = Utc::now();
-        
+
         // Try to extract a name from the URL
         let name = url
             .split('/')
@@ -278,7 +328,7 @@ impl M3uSourceHandler {
             .next()
             .unwrap_or("Unnamed Channel")
             .to_string();
-        
+
         Ok(Channel {
             id: generate_channel_uuid(&source.id, url, &name),
             source_id: source.id,
@@ -306,31 +356,40 @@ impl M3uSourceHandler {
 
         // Basic URL format validation
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            result.errors.push("M3U URL must use HTTP or HTTPS protocol".to_string());
+            result
+                .errors
+                .push("M3U URL must use HTTP or HTTPS protocol".to_string());
             result.is_valid = false;
         }
 
         // Check for typical M3U file extensions
         if !url.ends_with(".m3u") && !url.ends_with(".m3u8") && !url.contains("playlist") {
-            result = result.with_warning("URL doesn't have typical M3U extension (.m3u, .m3u8) or 'playlist' in the path");
+            result = result.with_warning(
+                "URL doesn't have typical M3U extension (.m3u, .m3u8) or 'playlist' in the path",
+            );
         }
 
         // Test connectivity
         match self.raw_client.head(url).send().await {
             Ok(response) => {
                 if !response.status().is_success() {
-                    result.errors.push(format!("HTTP error: {}", response.status()));
+                    result
+                        .errors
+                        .push(format!("HTTP error: {}", response.status()));
                     result.is_valid = false;
                 } else {
                     result = result.with_context("http_status", response.status().to_string());
-                    
+
                     // Check content type if available
                     if let Some(content_type) = response.headers().get("content-type") {
                         let content_type_str = content_type.to_str().unwrap_or("");
                         result = result.with_context("content_type", content_type_str.to_string());
-                        
-                        if !content_type_str.contains("text") && !content_type_str.contains("application") {
-                            result = result.with_warning("Content-Type doesn't appear to be text-based");
+
+                        if !content_type_str.contains("text")
+                            && !content_type_str.contains("application")
+                        {
+                            result =
+                                result.with_warning("Content-Type doesn't appear to be text-based");
                         }
                     }
                 }
@@ -364,13 +423,14 @@ impl SourceHandler for M3uSourceHandler {
 
     async fn validate_source(&self, source: &StreamSource) -> AppResult<SourceValidationResult> {
         debug!("Validating M3U source: {}", source.name);
-        
+
         let url_validation = self.validate_m3u_url(&source.url).await?;
         let mut result = url_validation;
 
         // Additional M3U-specific validations
         if source.username.is_some() || source.password.is_some() {
-            result = result.with_warning("M3U sources typically don't require authentication credentials");
+            result = result
+                .with_warning("M3U sources typically don't require authentication credentials");
         }
 
         // Validate field mapping if present
@@ -378,16 +438,20 @@ impl SourceHandler for M3uSourceHandler {
             match serde_json::from_str::<HashMap<String, String>>(field_map_json) {
                 Ok(field_map) => {
                     result = result.with_context("field_map_entries", field_map.len().to_string());
-                    
+
                     // Validate known field mappings
                     for (source_field, target_field) in &field_map {
                         if target_field.is_empty() {
-                            result = result.with_warning(format!("Empty target field mapping for '{source_field}'"));
+                            result = result.with_warning(format!(
+                                "Empty target field mapping for '{source_field}'"
+                            ));
                         }
                     }
                 }
                 Err(e) => {
-                    result.errors.push(format!("Invalid field mapping JSON: {e}"));
+                    result
+                        .errors
+                        .push(format!("Invalid field mapping JSON: {e}"));
                     result.is_valid = false;
                 }
             }
@@ -406,28 +470,37 @@ impl SourceHandler for M3uSourceHandler {
 
     async fn get_source_info(&self, source: &StreamSource) -> AppResult<HashMap<String, String>> {
         let mut info = HashMap::new();
-        
+
         match self.raw_client.head(&source.url).send().await {
             Ok(response) => {
                 info.insert("status".to_string(), response.status().to_string());
-                
+
                 if let Some(content_length) = response.headers().get("content-length") {
-                    info.insert("content_length".to_string(), content_length.to_str().unwrap_or("unknown").to_string());
+                    info.insert(
+                        "content_length".to_string(),
+                        content_length.to_str().unwrap_or("unknown").to_string(),
+                    );
                 }
-                
+
                 if let Some(last_modified) = response.headers().get("last-modified") {
-                    info.insert("last_modified".to_string(), last_modified.to_str().unwrap_or("unknown").to_string());
+                    info.insert(
+                        "last_modified".to_string(),
+                        last_modified.to_str().unwrap_or("unknown").to_string(),
+                    );
                 }
-                
+
                 if let Some(server) = response.headers().get("server") {
-                    info.insert("server".to_string(), server.to_str().unwrap_or("unknown").to_string());
+                    info.insert(
+                        "server".to_string(),
+                        server.to_str().unwrap_or("unknown").to_string(),
+                    );
                 }
             }
             Err(e) => {
                 info.insert("error".to_string(), e.to_string());
             }
         }
-        
+
         info.insert("source_type".to_string(), "M3U".to_string());
         Ok(info)
     }
@@ -437,20 +510,19 @@ impl SourceHandler for M3uSourceHandler {
 impl ChannelIngestor for M3uSourceHandler {
     async fn ingest_channels(&self, source: &StreamSource) -> AppResult<Vec<Channel>> {
         // Fetch and parse M3U content directly
-        let content = self.http_client.fetch_text(&source.url).await
+        let content = self
+            .http_client
+            .fetch_text(&source.url)
+            .await
             .map_err(|e| AppError::source_error(format!("Failed to fetch M3U: {e}")))?;
         self.parse_m3u_content(&content, source).await
     }
-
 
     async fn estimate_channel_count(&self, _source: &StreamSource) -> AppResult<Option<u32>> {
         // Channel counts should come from actual ingestion results, not HTTP estimation calls
         Ok(None)
     }
-
-
 }
-
 
 #[async_trait]
 impl StreamUrlGenerator for M3uSourceHandler {
@@ -470,20 +542,16 @@ impl StreamUrlGenerator for M3uSourceHandler {
         channel_ids: &[String],
     ) -> AppResult<HashMap<String, String>> {
         let mut urls = HashMap::new();
-        
+
         for channel_id in channel_ids {
             let url = self.generate_stream_url(source, channel_id).await?;
             urls.insert(channel_id.clone(), url);
         }
-        
+
         Ok(urls)
     }
 
-    async fn validate_stream_url(
-        &self,
-        _source: &StreamSource,
-        url: &str,
-    ) -> AppResult<bool> {
+    async fn validate_stream_url(&self, _source: &StreamSource, url: &str) -> AppResult<bool> {
         match self.raw_client.head(url).send().await {
             Ok(response) => Ok(response.status().is_success()),
             Err(_) => Ok(false),
@@ -492,4 +560,3 @@ impl StreamUrlGenerator for M3uSourceHandler {
 }
 
 impl FullSourceHandler for M3uSourceHandler {}
-

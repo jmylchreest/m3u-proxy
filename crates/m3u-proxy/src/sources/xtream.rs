@@ -11,10 +11,12 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::errors::{AppError, AppResult, SourceError};
-use crate::models::{StreamSource, StreamSourceType, Channel};
-use crate::utils::{DecompressingHttpClient, StandardHttpClient, generate_channel_uuid, HttpClientFactory};
 use super::traits::*;
+use crate::errors::{AppError, AppResult, SourceError};
+use crate::models::{Channel, StreamSource, StreamSourceType};
+use crate::utils::{
+    DecompressingHttpClient, HttpClientFactory, StandardHttpClient, generate_channel_uuid,
+};
 
 /// Xtream source handler
 ///
@@ -43,24 +45,32 @@ impl XtreamSourceHandler {
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self { http_client, raw_client }
+        Self {
+            http_client,
+            raw_client,
+        }
     }
 
     /// Get the base API URL for an Xtream source
     fn get_api_base_url(&self, source: &StreamSource) -> AppResult<String> {
         // If URL already has a scheme, use it as-is
-        let url_to_parse = if source.url.starts_with("http://") || source.url.starts_with("https://") {
-            source.url.clone()
-        } else {
-            // Default to HTTPS for security
-            format!("https://{}", source.url)
-        };
+        let url_to_parse =
+            if source.url.starts_with("http://") || source.url.starts_with("https://") {
+                source.url.clone()
+            } else {
+                // Default to HTTPS for security
+                format!("https://{}", source.url)
+            };
 
-        debug!("Parsing base URL from: {}", crate::utils::url::UrlUtils::obfuscate_credentials(&url_to_parse));
+        debug!(
+            "Parsing base URL from: {}",
+            crate::utils::url::UrlUtils::obfuscate_credentials(&url_to_parse)
+        );
 
         // Parse and validate the URL
-        let parsed = reqwest::Url::parse(&url_to_parse)
-            .map_err(|e| AppError::validation(format!("Invalid Xtream URL '{}': {}", source.url, e)))?;
+        let parsed = reqwest::Url::parse(&url_to_parse).map_err(|e| {
+            AppError::validation(format!("Invalid Xtream URL '{}': {}", source.url, e))
+        })?;
 
         // Build the base URL
         let base_url = if let Some(port) = parsed.port() {
@@ -81,19 +91,21 @@ impl XtreamSourceHandler {
         Ok(format!("{}/player_api.php", base_url.trim_end_matches('/')))
     }
 
-
-
     /// Build authentication parameters for API calls
     fn get_auth_params(&self, source: &StreamSource) -> AppResult<HashMap<String, String>> {
-        let username = source.username.as_ref()
+        let username = source
+            .username
+            .as_ref()
             .ok_or_else(|| AppError::validation("Xtream source requires username"))?;
-        let password = source.password.as_ref()
+        let password = source
+            .password
+            .as_ref()
             .ok_or_else(|| AppError::validation("Xtream source requires password"))?;
 
         let mut params = HashMap::new();
         params.insert("username".to_string(), username.clone());
         params.insert("password".to_string(), password.clone());
-        
+
         Ok(params)
     }
 
@@ -117,10 +129,16 @@ impl XtreamSourceHandler {
         // Check if authentication was successful
         if let Some(ref auth) = server_info.user_info {
             if auth.status != "Active" {
-                return Err(AppError::Source(SourceError::auth_failed("xtream", format!("user status is {}", auth.status))));
+                return Err(AppError::Source(SourceError::auth_failed(
+                    "xtream",
+                    format!("user status is {}", auth.status),
+                )));
             }
         } else {
-            return Err(AppError::Source(SourceError::auth_failed("xtream", "server did not return user information")));
+            return Err(AppError::Source(SourceError::auth_failed(
+                "xtream",
+                "server did not return user information",
+            )));
         }
 
         Ok(server_info)
@@ -138,29 +156,39 @@ impl XtreamSourceHandler {
         for (key, value) in &auth_params {
             url.query_pairs_mut().append_pair(key, value);
         }
-        url.query_pairs_mut().append_pair("action", "get_live_streams");
+        url.query_pairs_mut()
+            .append_pair("action", "get_live_streams");
 
         debug!("Fetching live channels from Xtream source: {}", source.name);
 
         let channels: Vec<XtreamChannel> = self.http_client.fetch_json(url.as_str()).await?; // Pass through the original HTTP error
 
-        info!("Retrieved {} live channels from Xtream source: {}", channels.len(), source.name);
+        info!(
+            "Retrieved {} live channels from Xtream source: {}",
+            channels.len(),
+            source.name
+        );
         Ok(channels)
     }
 
     /// Convert Xtream channel to internal Channel model
-    fn convert_xtream_channel(&self, xtream_channel: &XtreamChannel, source: &StreamSource) -> Channel {
+    fn convert_xtream_channel(
+        &self,
+        xtream_channel: &XtreamChannel,
+        source: &StreamSource,
+    ) -> Channel {
         let now = Utc::now();
-        
+
         // Handle channel number configuration
         let tvg_chno_value = if source.ignore_channel_numbers {
             None // Ignore channel numbers from Xtream API, allow numbering stage to assign
         } else {
             xtream_channel.num.map(|n| n.to_string()) // Preserve original channel numbers
         };
-        
-        let stream_url = self.generate_xtream_stream_url(source, &xtream_channel.stream_id.to_string());
-        
+
+        let stream_url =
+            self.generate_xtream_stream_url(source, &xtream_channel.stream_id.to_string());
+
         Channel {
             id: generate_channel_uuid(&source.id, &stream_url, &xtream_channel.name),
             source_id: source.id,
@@ -188,7 +216,7 @@ impl XtreamSourceHandler {
         let empty_string = String::new();
         let username = source.username.as_ref().unwrap_or(&empty_string);
         let password = source.password.as_ref().unwrap_or(&empty_string);
-        
+
         format!("{base_url}/live/{username}/{password}/{stream_id}.ts")
     }
 
@@ -198,28 +226,33 @@ impl XtreamSourceHandler {
 
         // Basic URL format validation
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            result.errors.push("Xtream URL must use HTTP or HTTPS protocol".to_string());
+            result
+                .errors
+                .push("Xtream URL must use HTTP or HTTPS protocol".to_string());
             result.is_valid = false;
         }
 
         // Check for typical Xtream patterns
-        if !url.contains("/player_api.php") && !url.contains("get.php") && !url.contains("xmltv.php") {
+        if !url.contains("/player_api.php")
+            && !url.contains("get.php")
+            && !url.contains("xmltv.php")
+        {
             result = result.with_warning("URL doesn't contain typical Xtream API endpoints");
         }
 
         // Check for port (many Xtream servers use non-standard ports)
         if let Ok(parsed_url) = reqwest::Url::parse(url)
-            && let Some(port) = parsed_url.port() {
-                result = result.with_context("port", port.to_string());
-                #[allow(unused_comparisons)]
-                if !(1024..=65535).contains(&port) {
-                    result = result.with_warning("Port number is outside typical range");
-                }
+            && let Some(port) = parsed_url.port()
+        {
+            result = result.with_context("port", port.to_string());
+            #[allow(unused_comparisons)]
+            if !(1024..=65535).contains(&port) {
+                result = result.with_warning("Port number is outside typical range");
             }
+        }
 
         Ok(result)
     }
-
 }
 
 /// Xtream server information response
@@ -289,7 +322,6 @@ struct XtreamChannel {
     pub direct_source: Option<String>,
 }
 
-
 // Helper functions for deserialization
 fn default_stream_type() -> String {
     "live".to_string()
@@ -300,16 +332,16 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::de::{self, Unexpected, Visitor};
-    
+
     struct StringOrIntVisitor;
-    
+
     impl<'de> Visitor<'de> for StringOrIntVisitor {
         type Value = i32;
-        
+
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a string or integer")
         }
-        
+
         fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
         where
             E: de::Error,
@@ -320,7 +352,7 @@ where
                 Err(E::invalid_value(Unexpected::Signed(value), &self))
             }
         }
-        
+
         fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
         where
             E: de::Error,
@@ -331,15 +363,17 @@ where
                 Err(E::invalid_value(Unexpected::Unsigned(value), &self))
             }
         }
-        
+
         fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
         where
             E: de::Error,
         {
-            value.parse().map_err(|_| E::invalid_value(Unexpected::Str(value), &self))
+            value
+                .parse()
+                .map_err(|_| E::invalid_value(Unexpected::Str(value), &self))
         }
     }
-    
+
     deserializer.deserialize_any(StringOrIntVisitor)
 }
 
@@ -348,30 +382,30 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::de::{self, Unexpected, Visitor};
-    
+
     struct StringOrIntOptionVisitor;
-    
+
     impl<'de> Visitor<'de> for StringOrIntOptionVisitor {
         type Value = Option<i32>;
-        
+
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a string, integer, or null")
         }
-        
+
         fn visit_none<E>(self) -> Result<Self::Value, E>
         where
             E: de::Error,
         {
             Ok(None)
         }
-        
+
         fn visit_unit<E>(self) -> Result<Self::Value, E>
         where
             E: de::Error,
         {
             Ok(None)
         }
-        
+
         fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
         where
             E: de::Error,
@@ -382,7 +416,7 @@ where
                 Err(E::invalid_value(Unexpected::Signed(value), &self))
             }
         }
-        
+
         fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
         where
             E: de::Error,
@@ -393,7 +427,7 @@ where
                 Err(E::invalid_value(Unexpected::Unsigned(value), &self))
             }
         }
-        
+
         fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
         where
             E: de::Error,
@@ -401,11 +435,14 @@ where
             if value.is_empty() {
                 Ok(None)
             } else {
-                value.parse().map(Some).map_err(|_| E::invalid_value(Unexpected::Str(value), &self))
+                value
+                    .parse()
+                    .map(Some)
+                    .map_err(|_| E::invalid_value(Unexpected::Str(value), &self))
             }
         }
     }
-    
+
     deserializer.deserialize_any(StringOrIntOptionVisitor)
 }
 
@@ -417,17 +454,21 @@ impl SourceHandler for XtreamSourceHandler {
 
     async fn validate_source(&self, source: &StreamSource) -> AppResult<SourceValidationResult> {
         debug!("Validating Xtream source: {}", source.name);
-        
+
         let mut result = self.validate_xtream_url(&source.url)?;
 
         // Check required authentication
         if source.username.is_none() {
-            result.errors.push("Xtream source requires username".to_string());
+            result
+                .errors
+                .push("Xtream source requires username".to_string());
             result.is_valid = false;
         }
 
         if source.password.is_none() {
-            result.errors.push("Xtream source requires password".to_string());
+            result
+                .errors
+                .push("Xtream source requires password".to_string());
             result.is_valid = false;
         }
 
@@ -437,20 +478,26 @@ impl SourceHandler for XtreamSourceHandler {
                 Ok(server_info) => {
                     if let Some(user_info) = &server_info.user_info {
                         result = result.with_context("user_status", user_info.status.clone());
-                        result = result.with_context("max_connections", user_info.max_connections.clone().unwrap_or_default());
-                        
+                        result = result.with_context(
+                            "max_connections",
+                            user_info.max_connections.clone().unwrap_or_default(),
+                        );
+
                         if let Some(exp_date) = &user_info.exp_date {
                             result = result.with_context("expiry_date", exp_date.clone());
                         }
                     }
-                    
+
                     if let Some(server_details) = &server_info.server_info
-                        && let Some(timezone) = &server_details.timezone {
+                        && let Some(timezone) = &server_details.timezone
+                    {
                         result = result.with_context("server_timezone", timezone.clone());
                     }
                 }
                 Err(e) => {
-                    result.errors.push(format!("Authentication test failed: {e}"));
+                    result
+                        .errors
+                        .push(format!("Authentication test failed: {e}"));
                     result.is_valid = false;
                 }
             }
@@ -464,18 +511,19 @@ impl SourceHandler for XtreamSourceHandler {
         match self.test_authentication(source).await {
             Ok(server_info) => {
                 let mut capabilities = SourceCapabilities::xtream_full();
-                
+
                 if let Some(user_info) = &server_info.user_info {
                     if let Some(max_conn_str) = &user_info.max_connections
-                        && let Ok(max_conn) = max_conn_str.parse::<u32>() {
+                        && let Ok(max_conn) = max_conn_str.parse::<u32>()
+                    {
                         capabilities.max_concurrent_connections = Some(max_conn);
                     }
-                    
+
                     if let Some(formats) = &user_info.allowed_output_formats {
                         capabilities.supported_formats = formats.clone();
                     }
                 }
-                
+
                 Ok(capabilities)
             }
             Err(_) => {
@@ -495,7 +543,7 @@ impl SourceHandler for XtreamSourceHandler {
     async fn get_source_info(&self, source: &StreamSource) -> AppResult<HashMap<String, String>> {
         let mut info = HashMap::new();
         info.insert("source_type".to_string(), "Xtream".to_string());
-        
+
         match self.test_authentication(source).await {
             Ok(server_info) => {
                 if let Some(user_info) = &server_info.user_info {
@@ -510,7 +558,7 @@ impl SourceHandler for XtreamSourceHandler {
                         info.insert("active_connections".to_string(), active_conn.clone());
                     }
                 }
-                
+
                 if let Some(server_details) = &server_info.server_info {
                     if let Some(timezone) = &server_details.timezone {
                         info.insert("server_timezone".to_string(), timezone.clone());
@@ -524,7 +572,7 @@ impl SourceHandler for XtreamSourceHandler {
                 info.insert("error".to_string(), e.to_string());
             }
         }
-        
+
         Ok(info)
     }
 }
@@ -533,54 +581,63 @@ impl SourceHandler for XtreamSourceHandler {
 impl ChannelIngestor for XtreamSourceHandler {
     async fn ingest_channels(&self, source: &StreamSource) -> AppResult<Vec<Channel>> {
         // Directly ingest channels without progress callbacks
-        info!("Starting Xtream channel ingestion for source: {}", source.name);
-        
+        info!(
+            "Starting Xtream channel ingestion for source: {}",
+            source.name
+        );
+
         // Get live channels (authentication errors will be handled by this call)
         let xtream_channels = self.get_live_channels(source).await?;
-        
+
         // Convert to internal format with deduplication
         let mut channels = Vec::new();
         let mut seen_channels = std::collections::HashSet::new();
         let mut duplicate_count = 0;
-        
+
         for xtream_channel in &xtream_channels {
-            let stream_url = self.generate_xtream_stream_url(source, &xtream_channel.stream_id.to_string());
-            
+            let stream_url =
+                self.generate_xtream_stream_url(source, &xtream_channel.stream_id.to_string());
+
             // Create deduplication key based on stream URL and channel name
             let dedup_key = format!("{}|{}", stream_url, xtream_channel.name);
-            
+
             if seen_channels.contains(&dedup_key) {
                 duplicate_count += 1;
-                debug!("Skipping duplicate Xtream channel '{}' with stream_id {}", 
-                       xtream_channel.name, xtream_channel.stream_id);
+                debug!(
+                    "Skipping duplicate Xtream channel '{}' with stream_id {}",
+                    xtream_channel.name, xtream_channel.stream_id
+                );
                 continue;
             }
             seen_channels.insert(dedup_key);
-            
+
             let channel = self.convert_xtream_channel(xtream_channel, source);
             channels.push(channel);
         }
-        
+
         // Clean up deduplication set to free memory
         drop(seen_channels);
-        
+
         if duplicate_count > 0 {
-            info!("Removed {} duplicate channel entries from Xtream source '{}'", duplicate_count, source.name);
+            info!(
+                "Removed {} duplicate channel entries from Xtream source '{}'",
+                duplicate_count, source.name
+            );
         }
-        
-        info!("Successfully ingested {} channels from Xtream source: {}", channels.len(), source.name);
+
+        info!(
+            "Successfully ingested {} channels from Xtream source: {}",
+            channels.len(),
+            source.name
+        );
         Ok(channels)
     }
-
 
     async fn estimate_channel_count(&self, _source: &StreamSource) -> AppResult<Option<u32>> {
         // Channel counts should come from actual ingestion results, not HTTP estimation calls
         Ok(None)
     }
-
-
 }
-
 
 #[async_trait]
 impl StreamUrlGenerator for XtreamSourceHandler {
@@ -598,20 +655,16 @@ impl StreamUrlGenerator for XtreamSourceHandler {
         channel_ids: &[String],
     ) -> AppResult<HashMap<String, String>> {
         let mut urls = HashMap::new();
-        
+
         for channel_id in channel_ids {
             let url = self.generate_xtream_stream_url(source, channel_id);
             urls.insert(channel_id.clone(), url);
         }
-        
+
         Ok(urls)
     }
 
-    async fn validate_stream_url(
-        &self,
-        _source: &StreamSource,
-        url: &str,
-    ) -> AppResult<bool> {
+    async fn validate_stream_url(&self, _source: &StreamSource, url: &str) -> AppResult<bool> {
         match self.raw_client.head(url).send().await {
             Ok(response) => Ok(response.status().is_success()),
             Err(_) => Ok(false),
@@ -626,7 +679,7 @@ impl Authenticator for XtreamSourceHandler {
             Ok(server_info) => {
                 if let Some(user_info) = server_info.user_info {
                     let success = user_info.status == "Active";
-                    
+
                     Ok(AuthenticationResult {
                         success,
                         token: None, // Xtream uses username/password, not tokens
@@ -637,10 +690,10 @@ impl Authenticator for XtreamSourceHandler {
                                 .ok()
                                 .map(|dt| dt.with_timezone(&Utc))
                         }),
-                        error_message: if !success { 
-                            Some(format!("User status: {}", user_info.status)) 
-                        } else { 
-                            None 
+                        error_message: if !success {
+                            Some(format!("User status: {}", user_info.status))
+                        } else {
+                            None
                         },
                         metadata: {
                             let mut meta = HashMap::new();
@@ -665,19 +718,20 @@ impl Authenticator for XtreamSourceHandler {
                     })
                 }
             }
-            Err(e) => {
-                Ok(AuthenticationResult {
-                    success: false,
-                    token: None,
-                    expires_at: None,
-                    error_message: Some(e.to_string()),
-                    metadata: HashMap::new(),
-                })
-            }
+            Err(e) => Ok(AuthenticationResult {
+                success: false,
+                token: None,
+                expires_at: None,
+                error_message: Some(e.to_string()),
+                metadata: HashMap::new(),
+            }),
         }
     }
 
-    async fn refresh_authentication(&self, source: &StreamSource) -> AppResult<AuthenticationResult> {
+    async fn refresh_authentication(
+        &self,
+        source: &StreamSource,
+    ) -> AppResult<AuthenticationResult> {
         // For Xtream, refresh is the same as authenticate since it's stateless
         self.authenticate(source).await
     }
@@ -700,4 +754,3 @@ impl FullSourceHandler for XtreamSourceHandler {
         }
     }
 }
-

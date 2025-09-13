@@ -39,31 +39,39 @@ pub enum ValidationError {
     /// Field is required but missing or empty
     #[error("Field '{field}' is required")]
     Required { field: String },
-    
+
     /// Field value is too short
     #[error("Field '{field}' must be at least {min} characters long (got {actual})")]
-    TooShort { field: String, min: usize, actual: usize },
-    
+    TooShort {
+        field: String,
+        min: usize,
+        actual: usize,
+    },
+
     /// Field value is too long
     #[error("Field '{field}' must be at most {max} characters long (got {actual})")]
-    TooLong { field: String, max: usize, actual: usize },
-    
+    TooLong {
+        field: String,
+        max: usize,
+        actual: usize,
+    },
+
     /// Field value is not a valid URL
     #[error("Field '{field}' must be a valid URL")]
     InvalidUrl { field: String },
-    
+
     /// Field value is not a valid UUID
     #[error("Field '{field}' must be a valid UUID")]
     InvalidUuid { field: String },
-    
+
     /// Field value doesn't match required pattern
     #[error("Field '{field}' has invalid format")]
     InvalidFormat { field: String },
-    
+
     /// Field value is not in allowed list
     #[error("Field '{field}' must be one of: {allowed:?}")]
     InvalidChoice { field: String, allowed: Vec<String> },
-    
+
     /// Custom validation error
     #[error("Field '{field}': {message}")]
     Custom { field: String, message: String },
@@ -77,25 +85,25 @@ pub type ValidationResult<T> = Result<T, Vec<ValidationError>>;
 pub enum ValidationRule {
     /// Field is required (not None, not empty string)
     Required(String),
-    
+
     /// Field must be at least min characters long
     MinLength { field: String, min: usize },
-    
+
     /// Field must be at most max characters long
     MaxLength { field: String, max: usize },
-    
+
     /// Field must be a valid URL
     Url(String),
-    
+
     /// Field must be a valid UUID
     Uuid(String),
-    
+
     /// Field must match a regex pattern
     Regex { field: String, pattern: String },
-    
+
     /// Field must be one of the allowed values
     Choice { field: String, allowed: Vec<String> },
-    
+
     /// Custom validation function
     Custom {
         field: String,
@@ -108,7 +116,7 @@ impl ValidationRule {
     pub fn required<S: Into<String>>(field: S) -> Self {
         Self::Required(field.into())
     }
-    
+
     /// Create a minimum length rule
     pub fn min_length<S: Into<String>>(field: S, min: usize) -> Self {
         Self::MinLength {
@@ -116,7 +124,7 @@ impl ValidationRule {
             min,
         }
     }
-    
+
     /// Create a maximum length rule
     pub fn max_length<S: Into<String>>(field: S, max: usize) -> Self {
         Self::MaxLength {
@@ -124,17 +132,17 @@ impl ValidationRule {
             max,
         }
     }
-    
+
     /// Create a URL validation rule
     pub fn url<S: Into<String>>(field: S) -> Self {
         Self::Url(field.into())
     }
-    
+
     /// Create a UUID validation rule
     pub fn uuid<S: Into<String>>(field: S) -> Self {
         Self::Uuid(field.into())
     }
-    
+
     /// Create a regex pattern rule
     pub fn regex<S: Into<String>>(field: S, pattern: S) -> Self {
         Self::Regex {
@@ -142,7 +150,7 @@ impl ValidationRule {
             pattern: pattern.into(),
         }
     }
-    
+
     /// Create a choice validation rule
     pub fn choice<S: Into<String>>(field: S, allowed: Vec<S>) -> Self {
         Self::Choice {
@@ -150,12 +158,9 @@ impl ValidationRule {
             allowed: allowed.into_iter().map(|s| s.into()).collect(),
         }
     }
-    
+
     /// Create a custom validation rule
-    pub fn custom<S: Into<String>>(
-        field: S,
-        validator: fn(&str) -> Result<(), String>,
-    ) -> Self {
+    pub fn custom<S: Into<String>>(field: S, validator: fn(&str) -> Result<(), String>) -> Self {
         Self::Custom {
             field: field.into(),
             validator,
@@ -174,37 +179,37 @@ impl Validator {
     pub fn new() -> Self {
         Self { rules: Vec::new() }
     }
-    
+
     /// Add a validation rule
     pub fn rule(mut self, rule: ValidationRule) -> Self {
         self.rules.push(rule);
         self
     }
-    
+
     /// Add multiple validation rules
     pub fn rules(mut self, rules: Vec<ValidationRule>) -> Self {
         self.rules.extend(rules);
         self
     }
-    
+
     /// Validate a map of field values
     pub fn validate(&self, data: &HashMap<String, Option<String>>) -> ValidationResult<()> {
         let mut errors = Vec::new();
-        
+
         for rule in &self.rules {
             match self.apply_rule(rule, data) {
                 Ok(_) => continue,
                 Err(error) => errors.push(error),
             }
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
     }
-    
+
     /// Apply a single validation rule
     fn apply_rule(
         &self,
@@ -221,7 +226,7 @@ impl Validator {
                     }),
                 }
             }
-            
+
             ValidationRule::MinLength { field, min } => {
                 if let Some(Some(value)) = data.get(field) {
                     if value.len() < *min {
@@ -237,7 +242,7 @@ impl Validator {
                     Ok(()) // Skip validation if field is missing
                 }
             }
-            
+
             ValidationRule::MaxLength { field, max } => {
                 if let Some(Some(value)) = data.get(field) {
                     if value.len() > *max {
@@ -253,7 +258,7 @@ impl Validator {
                     Ok(()) // Skip validation if field is missing
                 }
             }
-            
+
             ValidationRule::Url(field) => {
                 if let Some(Some(value)) = data.get(field) {
                     if Url::parse(value).is_ok() {
@@ -267,7 +272,7 @@ impl Validator {
                     Ok(()) // Skip validation if field is missing
                 }
             }
-            
+
             ValidationRule::Uuid(field) => {
                 if let Some(Some(value)) = data.get(field) {
                     if Uuid::parse_str(value).is_ok() {
@@ -281,7 +286,7 @@ impl Validator {
                     Ok(()) // Skip validation if field is missing
                 }
             }
-            
+
             ValidationRule::Regex { field, pattern } => {
                 if let Some(Some(value)) = data.get(field) {
                     if let Ok(regex) = regex::Regex::new(pattern) {
@@ -302,7 +307,7 @@ impl Validator {
                     Ok(()) // Skip validation if field is missing
                 }
             }
-            
+
             ValidationRule::Choice { field, allowed } => {
                 if let Some(Some(value)) = data.get(field) {
                     if allowed.contains(value) {
@@ -317,7 +322,7 @@ impl Validator {
                     Ok(()) // Skip validation if field is missing
                 }
             }
-            
+
             ValidationRule::Custom { field, validator } => {
                 if let Some(Some(value)) = data.get(field) {
                     match validator(value) {
@@ -341,7 +346,6 @@ impl Default for Validator {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,15 +356,15 @@ mod tests {
         data.insert("name".to_string(), Some("test".to_string()));
         data.insert("empty".to_string(), Some("".to_string()));
         data.insert("missing".to_string(), None);
-        
+
         let validator = Validator::new()
             .rule(ValidationRule::required("name"))
             .rule(ValidationRule::required("empty"))
             .rule(ValidationRule::required("missing"));
-        
+
         let result = validator.validate(&data);
         assert!(result.is_err());
-        
+
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 2); // empty and missing should fail
     }
@@ -369,15 +373,18 @@ mod tests {
     fn test_length_validation() {
         let mut data = HashMap::new();
         data.insert("short".to_string(), Some("hi".to_string()));
-        data.insert("long".to_string(), Some("this is a very long string".to_string()));
-        
+        data.insert(
+            "long".to_string(),
+            Some("this is a very long string".to_string()),
+        );
+
         let validator = Validator::new()
             .rule(ValidationRule::min_length("short", 5))
             .rule(ValidationRule::max_length("long", 10));
-        
+
         let result = validator.validate(&data);
         assert!(result.is_err());
-        
+
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 2);
     }
@@ -385,16 +392,19 @@ mod tests {
     #[test]
     fn test_url_validation() {
         let mut data = HashMap::new();
-        data.insert("valid_url".to_string(), Some("https://example.com".to_string()));
+        data.insert(
+            "valid_url".to_string(),
+            Some("https://example.com".to_string()),
+        );
         data.insert("invalid_url".to_string(), Some("not-a-url".to_string()));
-        
+
         let validator = Validator::new()
             .rule(ValidationRule::url("valid_url"))
             .rule(ValidationRule::url("invalid_url"));
-        
+
         let result = validator.validate(&data);
         assert!(result.is_err());
-        
+
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 1); // Only invalid_url should fail
     }
@@ -402,16 +412,19 @@ mod tests {
     #[test]
     fn test_uuid_validation() {
         let mut data = HashMap::new();
-        data.insert("valid_uuid".to_string(), Some("12345678-1234-5678-9abc-123456789abc".to_string()));
+        data.insert(
+            "valid_uuid".to_string(),
+            Some("12345678-1234-5678-9abc-123456789abc".to_string()),
+        );
         data.insert("invalid_uuid".to_string(), Some("not-a-uuid".to_string()));
-        
+
         let validator = Validator::new()
             .rule(ValidationRule::uuid("valid_uuid"))
             .rule(ValidationRule::uuid("invalid_uuid"));
-        
+
         let result = validator.validate(&data);
         assert!(result.is_err());
-        
+
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 1); // Only invalid_uuid should fail
     }
@@ -421,16 +434,21 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("valid_choice".to_string(), Some("option1".to_string()));
         data.insert("invalid_choice".to_string(), Some("option3".to_string()));
-        
+
         let validator = Validator::new()
-            .rule(ValidationRule::choice("valid_choice", vec!["option1", "option2"]))
-            .rule(ValidationRule::choice("invalid_choice", vec!["option1", "option2"]));
-        
+            .rule(ValidationRule::choice(
+                "valid_choice",
+                vec!["option1", "option2"],
+            ))
+            .rule(ValidationRule::choice(
+                "invalid_choice",
+                vec!["option1", "option2"],
+            ));
+
         let result = validator.validate(&data);
         assert!(result.is_err());
-        
+
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 1); // Only invalid_choice should fail
     }
-
 }

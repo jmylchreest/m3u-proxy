@@ -3,6 +3,7 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [main, develop]
+    tags: ["v*"] # Trigger on version tags
   pull_request:
     branches: [main]
   release:
@@ -130,7 +131,7 @@ jobs:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     needs: [check, test]
-    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'release' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
@@ -239,65 +240,156 @@ jobs:
       - name: Run cargo-deny
         run: cargo deny check || true # Continue even if there are warnings
 
-  docker:
-    name: Build Docker Images
+  sbom:
+    name: Generate SBOM (Rust + Frontend)
+    runs-on: ubuntu-latest
+    needs: [check] # Only needs basic checks, can run parallel to tests
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Install cargo-sbom
+        run: cargo install cargo-sbom
+
+      - name: Install Node.js SBOM tools
+        run: npm install -g @cyclonedx/cyclonedx-npm
+
+      - name: Generate Rust SPDX SBOM
+        run: cargo sbom --output-format spdx_json_2_3 --output-file rust-sbom-spdx.json
+
+      - name: Generate Rust CycloneDX SBOM
+        run: cargo sbom --output-format cyclone_json_1_6 --output-file rust-sbom-cyclonedx.json
+
+      - name: Generate Frontend SPDX SBOM
+        run: |
+          cd frontend
+          npm sbom --sbom-format=spdx --sbom-type=application > ../frontend-sbom-spdx.json
+
+      - name: Generate Frontend CycloneDX SBOM
+        run: |
+          cd frontend
+          npx @cyclonedx/cyclonedx-npm --output-file ../frontend-sbom-cyclonedx.json
+
+      - name: Install jq for SBOM merging
+        run: sudo apt-get install -y jq
+
+      - name: Create Combined SPDX SBOM
+        run: |
+          # Create a combined SPDX SBOM with both Rust and Frontend components
+          jq -s '
+            {
+              "spdxVersion": "SPDX-2.3",
+              "dataLicense": "CC0-1.0",
+              "SPDXID": "SPDXRef-DOCUMENT",
+              "name": "m3u-proxy-complete",
+              "documentNamespace": ("https://github.com/jmylchreest/m3u-proxy/" + (now | strftime("%Y%m%d%H%M%S"))),
+              "creationInfo": {
+                "created": (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
+                "creators": ["Tool: GitHub Actions CI/CD"]
+              },
+              "packages": (.[0].packages + .[1].packages),
+              "relationships": (.[0].relationships + .[1].relationships)
+            }
+          ' rust-sbom-spdx.json frontend-sbom-spdx.json > sbom-spdx.json
+
+      - name: Create Combined CycloneDX SBOM
+        run: |
+          # Create a combined CycloneDX SBOM with both Rust and Frontend components
+          jq -s '
+            {
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.6",
+              "serialNumber": ("urn:uuid:" + (now | tostring | @base64)),
+              "version": 1,
+              "metadata": {
+                "timestamp": (now | strftime("%Y-%m-%dT%H:%M:%S.000Z")),
+                "tools": [
+                  {"vendor": "GitHub Actions", "name": "CI/CD Pipeline", "version": "1.0"}
+                ],
+                "component": {
+                  "type": "application",
+                  "name": "m3u-proxy",
+                  "version": "dev"
+                }
+              },
+              "components": (.[0].components + .[1].components)
+            }
+          ' rust-sbom-cyclonedx.json frontend-sbom-cyclonedx.json > sbom-cyclonedx.json
+
+      - name: Upload Combined SPDX SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-spdx
+          path: sbom-spdx.json
+          if-no-files-found: error
+
+      - name: Upload Combined CycloneDX SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom-cyclonedx.json
+          if-no-files-found: error
+
+      - name: Upload Individual SBOMs (for debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: individual-sboms
+          path: |
+            rust-sbom-*.json
+            frontend-sbom-*.json
+          if-no-files-found: error
+
+  containers:
+    name: Build and Push Container Images
     runs-on: ubuntu-latest
     needs: [check, test]
-    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
-    strategy:
-      matrix:
-        platform:
-          - linux/amd64
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Install Just
+        uses: taiki-e/install-action@just
 
       - name: Login to GitHub Container Registry
-        if: github.event_name == 'release'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha
+      - name: Build container with versioned tagging
+        run: just build-container-versioned
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: ${{ matrix.platform }}
-          push: ${{ github.event_name == 'release' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Push container to GitHub Container Registry
+        run: just push-container
 
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [build, docker]
-    if: github.event_name == 'release'
+    needs: [build, containers, sbom]
+    if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -311,16 +403,27 @@ jobs:
         run: |
           echo "## Release ${{ github.ref_name }}" > RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
-          echo "### Artifacts" >> RELEASE_NOTES.md
+          echo "### Binary Artifacts" >> RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
           for file in artifacts/*/m3u-proxy-*.tar.gz; do
             filename=$(basename "$file")
             echo "- $filename" >> RELEASE_NOTES.md
           done
+          echo "" >> RELEASE_NOTES.md
+          echo "### Software Bill of Materials (SBOM)" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "Complete dependency information for both Rust backend and Node.js frontend:" >> RELEASE_NOTES.md
+          echo "- \`sbom-spdx.json\` - SPDX 2.3 format (ISO standard)" >> RELEASE_NOTES.md
+          echo "- \`sbom-cyclonedx.json\` - CycloneDX 1.6 format (ECMA standard)" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "Individual component SBOMs are also available in the individual-sboms artifact for detailed analysis." >> RELEASE_NOTES.md
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*/m3u-proxy-*.tar.gz
+          files: |
+            artifacts/*/m3u-proxy-*.tar.gz
+            artifacts/sbom-spdx/sbom-spdx.json
+            artifacts/sbom-cyclonedx/sbom-cyclonedx.json
           body_path: RELEASE_NOTES.md
           fail_on_unmatched_files: true

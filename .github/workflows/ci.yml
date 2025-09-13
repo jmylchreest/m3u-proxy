@@ -21,7 +21,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Needed for git describe in get-version
+          fetch-depth: 0
+          fetch-tags: true # Needed for git describe in get-version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -80,7 +81,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Needed for git describe in get-version
+          fetch-depth: 0
+          fetch-tags: true # Needed for git describe in get-version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -156,7 +158,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Needed for git describe in get-version
+          fetch-depth: 0
+          fetch-tags: true # Needed for git describe in get-version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

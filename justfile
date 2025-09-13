@@ -22,38 +22,70 @@ get-version:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Check if we're on a git tag (exact match)
-    if TAG=$(git describe --exact-match --tags HEAD 2>/dev/null); then
-        # On a tag: v0.1.3 → 0.1.3
-        VERSION=${TAG#v}  # Remove 'v' prefix if present
-        echo "$VERSION"
-    else
-        # Not on a tag - use git describe to get version with commit info
-        if git describe --tags --always --long 2>/dev/null | grep -q '^v'; then
-            # After a tag: v0.1.3-12-ga1b2c3d → 0.1.4-dev.12.ga1b2c3d
-            DESCRIBE=$(git describe --tags --always --long 2>/dev/null)
+    # Obtain the current declared version from Cargo.toml
+    CURRENT_VERSION=$(just get-current-version || echo "0.0.0")
 
-            # Parse: v0.1.3-12-ga1b2c3d
-            if [[ $DESCRIBE =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-([0-9]+)-(g[a-f0-9]+)$ ]]; then
-                MAJOR=${BASH_REMATCH[1]}
-                MINOR=${BASH_REMATCH[2]}
-                PATCH=${BASH_REMATCH[3]}
-                COMMITS=${BASH_REMATCH[4]}
-                COMMIT=${BASH_REMATCH[5]}
-
-                # Increment patch for next development version
-                NEXT_PATCH=$((PATCH + 1))
-
-                echo "${MAJOR}.${MINOR}.${NEXT_PATCH}-dev.${COMMITS}.${COMMIT}"
-            else
-                echo "Error: Unable to parse git describe output: $DESCRIBE" >&2
-                exit 1
-            fi
+    parse_semver() {
+        # $1 = version string (may contain -dev suffix)
+        if [[ $1 =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+            echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]}"
         else
-            # No tags exist yet - use commit hash only
-            COMMIT=$(git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
-            echo "0.0.1-dev.0.g${COMMIT}"
+            echo "0 0 0"
         fi
+    }
+
+    cv=($(parse_semver "$CURRENT_VERSION"))
+    CV_MAJOR=${cv[0]}
+    CV_MINOR=${cv[1]}
+    CV_PATCH=${cv[2]}
+
+    # If exactly on a tag, normalize and return it (strip leading v)
+    if TAG=$(git describe --exact-match --tags HEAD 2>/dev/null); then
+        VERSION=${TAG#v}
+        echo "$VERSION"
+        exit 0
+    fi
+
+    # If we have at least one tag reachable
+    if git describe --tags --always --long 2>/dev/null | grep -q '^v'; then
+        DESCRIBE=$(git describe --tags --always --long 2>/dev/null)
+        # Expect form: vMAJOR.MINOR.PATCH-COMMITS-gHASH
+        if [[ $DESCRIBE =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-([0-9]+)-(g[a-f0-9]+)$ ]]; then
+            MAJOR=${BASH_REMATCH[1]}
+            MINOR=${BASH_REMATCH[2]}
+            PATCH=${BASH_REMATCH[3]}
+            COMMITS=${BASH_REMATCH[4]}
+            COMMIT=${BASH_REMATCH[5]}
+
+            NEXT_PATCH_FROM_TAG=$((PATCH + 1))
+
+            # Determine if CURRENT_VERSION is ahead of last tag
+            # Compare (MAJOR,MINOR,PATCH) vs CURRENT_VERSION
+            use_current_ahead=false
+            if (( CV_MAJOR > MAJOR )); then
+                use_current_ahead=true
+            elif (( CV_MAJOR == MAJOR && CV_MINOR > MINOR )); then
+                use_current_ahead=true
+            elif (( CV_MAJOR == MAJOR && CV_MINOR == MINOR && CV_PATCH > PATCH )); then
+                use_current_ahead=true
+            fi
+
+            if $use_current_ahead; then
+                # Base next dev on CURRENT_VERSION's patch + 1
+                BASE_PATCH=$((CV_PATCH + 1))
+            else
+                BASE_PATCH=$NEXT_PATCH_FROM_TAG
+            fi
+
+            echo "${MAJOR}.${MINOR}.${BASE_PATCH}-dev.${COMMITS}.${COMMIT}"
+        else
+            echo "Error: Unable to parse git describe output: $DESCRIBE" >&2
+            exit 1
+        fi
+    else
+        # No tags at all: initial dev version based on commit
+        COMMIT=$(git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
+        echo "0.0.1-dev.0.g${COMMIT}"
     fi
 
 # Set version in all relevant files (Cargo.toml, package.json, package-lock.json)
@@ -507,21 +539,49 @@ build-container-versioned:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Get the git-based version
-    VERSION=$(just get-version)
-    echo "Building container with git-based version: $VERSION"
+    RAW_VERSION=$(just get-version)
+    CURRENT_VERSION=$(just get-current-version || echo "0.0.0")
 
-    # Always update Cargo.toml to match (for SBOM consistency)
-    echo "Updating Cargo.toml to version: $VERSION"
-    just set-version "$VERSION"
+    normalize_core() { echo "${1%%-*}"; }
 
-    # Ensure npm dependencies are up to date
+    ver_gt() {
+        IFS='.' read -r a b c <<< "$(normalize_core "$1")"
+        IFS='.' read -r x y z <<< "$(normalize_core "$2")"
+        if (( a > x )) || (( a == x && b > y )) || (( a == x && b == y && c > z )); then
+            return 0
+        else
+            return 1
+        fi
+    }
+
+    # Decide on safe, non-downgrading version
+    if ver_gt "$RAW_VERSION" "$CURRENT_VERSION"; then
+        VERSION="$RAW_VERSION"
+    elif ver_gt "$CURRENT_VERSION" "$RAW_VERSION"; then
+        echo "Computed version ($RAW_VERSION) is lower than current ($CURRENT_VERSION); preserving current."
+        VERSION="$CURRENT_VERSION"
+    else
+        VERSION="$CURRENT_VERSION"
+    fi
+
+    echo "Building container with safe version: $VERSION"
+
+    # Update Cargo.toml only if we are moving forward or equal; force only if mismatch with chosen version
+    if ver_gt "$VERSION" "$CURRENT_VERSION"; then
+        echo "Updating Cargo.toml to version: $VERSION"
+        just set-version "$VERSION"
+    elif [ "$VERSION" != "$CURRENT_VERSION" ]; then
+        echo "Non-equal version mismatch detected; forcing set-version to maintain consistency"
+        just set-version "$VERSION" --force
+    else
+        echo "Cargo.toml already at desired version ($VERSION)"
+    fi
+
     echo "Ensuring npm dependencies are up to date..."
     PROJECT_ROOT=$(pwd)
     cd frontend && npm install
     cd "$PROJECT_ROOT"
 
-    # Run the container build with version as argument
     ./scripts/build-container.sh "$VERSION"
 
 # Push container with proper version tagging

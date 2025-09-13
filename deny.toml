@@ -16,7 +16,9 @@ yanked = "warn"
 notice = "warn"
 # A list of advisory IDs to ignore
 ignore = [
-    # "RUSTSEC-0000-0000", # Example ignore
+    # These are known unmaintained crates that we're aware of but can't replace yet
+    "RUSTSEC-2024-0384", # instant - unmaintained, used by async-std
+    "RUSTSEC-2024-0436", # paste - unmaintained, used by utoipa-axum
 ]
 
 [licenses]

@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - "v*"
   release:
     types: [published]
 
@@ -9,8 +12,9 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  build-and-upload:
-    name: Build and Upload ${{ matrix.target }}
+  # Parallel job 1: Build binaries for multiple platforms
+  build-binaries:
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -43,6 +47,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install just
         uses: extractions/setup-just@v2
@@ -82,12 +88,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Setup build database
-        run: |
-          mkdir -p data
-          touch data/build.db
-          cargo run -- --database-url sqlite:data/build.db migrate
 
       - name: Install cross (if needed)
         if: matrix.cross
@@ -141,7 +141,25 @@ jobs:
           fi
           cat ${{ matrix.archive_name }}.sha256
 
-      - name: Upload release asset
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: target/${{ matrix.target }}/release/m3u-proxy
+          format: spdx-json
+          output-file: sbom-${{ matrix.target }}.spdx.json
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: m3u-proxy-${{ matrix.target }}
+          path: |
+            ${{ matrix.archive_name }}
+            ${{ matrix.archive_name }}.sha256
+            sbom-${{ matrix.target }}.spdx.json
+          retention-days: 7
+
+      - name: Upload to release (if triggered by release)
+        if: github.event_name == 'release'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -151,7 +169,8 @@ jobs:
           asset_name: ${{ matrix.archive_name }}
           asset_content_type: application/gzip
 
-      - name: Upload checksum
+      - name: Upload checksum to release (if triggered by release)
+        if: github.event_name == 'release'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -161,8 +180,20 @@ jobs:
           asset_name: ${{ matrix.archive_name }}.sha256
           asset_content_type: text/plain
 
-  docker-release:
-    name: Build and Push Docker Images
+      - name: Upload SBOM to release (if triggered by release)
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: sbom-${{ matrix.target }}.spdx.json
+          asset_name: sbom-${{ matrix.target }}.spdx.json
+          asset_content_type: application/json
+
+  # Parallel job 2: Build and push container images using your just commands
+  build-container:
+    name: Build and Push Container
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -170,26 +201,18 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install just
         uses: extractions/setup-just@v2
 
-      - name: Get version and update source files
+      - name: Get version
         id: version
         run: |
           VERSION=$(just get-version)
-          just set-version "$VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building with version: $VERSION"
-
-          # Determine if this is a release or snapshot
-          if echo "$VERSION" | grep -q "snapshot"; then
-            echo "is_snapshot=true" >> $GITHUB_OUTPUT
-            echo "docker_tag_suffix=snapshot" >> $GITHUB_OUTPUT
-          else
-            echo "is_snapshot=false" >> $GITHUB_OUTPUT
-            echo "docker_tag_suffix=latest" >> $GITHUB_OUTPUT
-          fi
+          echo "Building container with version: $VERSION"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -201,36 +224,57 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.docker_tag_suffix }}
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-          labels: |
-            org.opencontainers.image.title=m3u-proxy
-            org.opencontainers.image.description=M3U Proxy Server
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            APP_VERSION=${{ steps.version.outputs.version }}
-            BUILDKIT_INLINE_CACHE=1
+      - name: Build container using just
+        run: just build-container-versioned
 
-  create-release-notes:
+      - name: Push container using just
+        run: just push-container
+
+      - name: Generate container SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+          format: spdx-json
+          output-file: container-sbom-${{ steps.version.outputs.version }}.spdx.json
+
+      - name: Upload container SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-sbom-${{ steps.version.outputs.version }}
+          path: container-sbom-${{ steps.version.outputs.version }}.spdx.json
+          retention-days: 30
+
+      - name: Upload container SBOM to release (if triggered by release)
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: container-sbom-${{ steps.version.outputs.version }}.spdx.json
+          asset_name: container-sbom-${{ steps.version.outputs.version }}.spdx.json
+          asset_content_type: application/json
+
+  # Job 3: Update release notes (runs after both parallel jobs)
+  update-release:
     name: Update Release Notes
     runs-on: ubuntu-latest
-    needs: [build-and-upload, docker-release]
+    if: github.event_name == 'release'
+    needs: [build-binaries, build-container]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(just get-version)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Generate changelog
         id: changelog
@@ -251,21 +295,32 @@ jobs:
 
           $COMMITS
 
-          ## Docker Images
+          ## Container Images
 
           - \`ghcr.io/${{ github.repository }}:latest\`
-          - \`ghcr.io/${{ github.repository }}:${GITHUB_REF#refs/tags/}\`
+          - \`ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}\`
+          - \`ghcr.io/${{ github.repository }}:release\`
 
           ## Installation
 
+          ### Binary Installation
           1. Download the appropriate binary for your platform from the assets below
           2. Extract the archive: \`tar -xzf m3u-proxy-*.tar.gz\`
           3. Run the binary: \`./m3u-proxy-release/m3u-proxy\`
 
-          Or use Docker:
+          ### Container Installation
           \`\`\`bash
-          docker run -p 3000:3000 -v ./data:/app/data ghcr.io/${{ github.repository }}:latest
-          \`\`\`"
+          # Using just commands (recommended for development)
+          just build-container-versioned
+          just push-container
+
+          # Or pull from registry
+          docker run -p 8080:8080 -v ./data:/app/data ghcr.io/${{ github.repository }}:latest
+          \`\`\`
+
+          ## Security
+
+          This release includes Software Bill of Materials (SBOM) files for both binaries and container images to ensure supply chain security and compliance."
 
           echo "$CHANGELOG" > release_notes.md
 

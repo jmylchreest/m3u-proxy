@@ -373,8 +373,7 @@ impl StreamSourceService {
             .stream_source_repo
             .get_channel_count_for_source(&id)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to get channel count: {}", e))?
-            as u64;
+            .map_err(|e| anyhow::anyhow!("Failed to get channel count: {}", e))?;
 
         // Use service pattern for URL linking
         let linked_epgs = self

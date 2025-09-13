@@ -333,7 +333,6 @@ pub enum SourceType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
     // Test imports will be added when integration tests are implemented
 
     // Helper function to test cron logic without needing full JobScheduler setup
@@ -380,19 +379,33 @@ mod tests {
 
     #[test]
     fn test_should_schedule_source_with_last_ingestion() {
-        let now = Utc::now();
+        use chrono::TimeZone;
 
-        // Last ingested 20 minutes ago, 15-minute cron should trigger
-        let last_ingested = now - Duration::minutes(20);
+        // Use fixed timestamps to avoid timing-related flakiness
+        // Set "now" to 2024-01-01 12:20:00 UTC (20 minutes past the hour)
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 12, 20, 0).unwrap();
+
+        // Last ingested at 12:00:00 (20 minutes ago)
+        // Next cron trigger would be at 12:15:00, which is before "now" (12:20:00)
+        // So it should trigger
+        let last_ingested = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
         let result = test_cron_scheduling("0 0/15 * * * * *", Some(last_ingested), now);
         assert!(result.is_ok());
-        assert!(result.unwrap());
+        assert!(
+            result.unwrap(),
+            "Should trigger: last ingested at 12:00, next trigger at 12:15, now is 12:20"
+        );
 
-        // Last ingested 5 minutes ago, 15-minute cron should not trigger
-        let last_ingested = now - Duration::minutes(5);
+        // Last ingested at 12:16:00 (4 minutes ago)
+        // Next cron trigger would be at 12:30:00, which is after "now" (12:20:00)
+        // So it should NOT trigger
+        let last_ingested = Utc.with_ymd_and_hms(2024, 1, 1, 12, 16, 0).unwrap();
         let result = test_cron_scheduling("0 0/15 * * * * *", Some(last_ingested), now);
         assert!(result.is_ok());
-        assert!(!result.unwrap());
+        assert!(
+            !result.unwrap(),
+            "Should not trigger: last ingested at 12:16, next trigger at 12:30, now is 12:20"
+        );
     }
 
     // TODO: Implement integration tests with proper mocking for:

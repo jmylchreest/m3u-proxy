@@ -65,9 +65,9 @@ RUN groupadd -g 65532 m3u-proxy && \
     chown -R 65532:65532 /app
 
 # Copy application files and set final configuration
-COPY --from=backend-builder /usr/src/m3u-proxy/target/release/m3u-proxy /app/m3u-proxy
 COPY --from=backend-builder /usr/src/m3u-proxy/crates/m3u-proxy/config.example.toml /app/config.example.toml
 COPY --from=backend-builder /tmp/entrypoint.sh /app/entrypoint.sh
+COPY --from=backend-builder /usr/src/m3u-proxy/target/release/m3u-proxy /app/m3u-proxy
 
 WORKDIR /app
 VOLUME ["/app/data", "/app/config"]

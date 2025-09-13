@@ -140,10 +140,6 @@ jobs:
             os: ubuntu-latest
             cross: false
             arch: amd64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            cross: true
-            arch: arm64
 
           # macOS targets
           - target: x86_64-apple-darwin
@@ -192,12 +188,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-target-
 
-      - name: Install cross compilation tools (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
       - name: Setup build database
         run: |
           mkdir -p data
@@ -205,16 +195,7 @@ jobs:
           # Run the app briefly to initialize database with migrations
           timeout 5 cargo run -- --database-url sqlite:data/build.db || true
 
-      - name: Build with cross (if needed)
-        if: matrix.cross
-        run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-          cross build --release --target ${{ matrix.target }}
-        env:
-          CROSS_CONTAINER_OPTS: "--platform linux/${{ matrix.arch }}"
-
       - name: Build with cargo
-        if: ${{ !matrix.cross }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package binary
@@ -267,7 +248,6 @@ jobs:
       matrix:
         platform:
           - linux/amd64
-          - linux/arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -279,13 +259,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        if: github.event_name == 'release'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Login to GitHub Container Registry
         if: github.event_name == 'release'
@@ -300,7 +273,6 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ secrets.DOCKER_USERNAME }}/m3u-proxy
             ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=branch

@@ -64,7 +64,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  
+
   const [canvasContext, setCanvasContext] = useState<CanvasRenderingContext2D | null>(null);
   const [canvasDimensions, setCanvasDimensions] = useState({ width: 1200, height: 600 });
   const [scrollPosition, setScrollPosition] = useState({ x: 0, y: 0 });
@@ -79,7 +79,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
   // Extract theme colors from CSS custom properties - memoized for stability
   const theme = useMemo(() => {
     const computedStyle = getComputedStyle(document.documentElement);
-    
+
     const getColor = (property: string) => {
       const value = computedStyle.getPropertyValue(property).trim();
       // Handle OKLCH colors - wrap in oklch() function
@@ -88,10 +88,10 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       }
       return `oklch(${value})`;
     };
-    
+
     const themeColors = {
       background: getColor('--background'),
-      foreground: getColor('--foreground'), 
+      foreground: getColor('--foreground'),
       muted: getColor('--muted'),
       mutedForeground: getColor('--muted-foreground'),
       border: getColor('--border'),
@@ -102,7 +102,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       secondary: getColor('--secondary'),
       secondaryForeground: getColor('--secondary-foreground'),
     };
-    
+
     return themeColors;
   }, [themeKey]); // Depend on themeKey to force updates
 
@@ -126,8 +126,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
         return channelPrograms.some(
           (program) =>
             program.title.toLowerCase().includes(searchLower) ||
-            (program.description &&
-              program.description.toLowerCase().includes(searchLower)),
+            (program.description && program.description.toLowerCase().includes(searchLower))
         );
       });
     }
@@ -160,33 +159,33 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       Debug.log('Main container not found');
       return;
     }
-    
+
     // Find the ScrollArea viewport element to get the actual available space
     const viewport = scrollArea.querySelector('[data-radix-scroll-area-viewport]');
     if (!viewport) {
       Debug.log('ScrollArea viewport not found');
       return;
     }
-    
+
     const rect = viewport.getBoundingClientRect();
-    let width = rect.width;  // Use full viewport width
+    let width = rect.width; // Use full viewport width
     let height = rect.height; // Use full viewport height
-    
+
     // Ensure minimum reasonable dimensions
     if (width < 100) width = 1200;
     if (height < 100) height = 600;
-    
+
     const devicePixelRatio = window.devicePixelRatio || 1;
-    
+
     Debug.log('Initializing canvas to available viewport size:', width, 'x', height);
-    
+
     // Set canvas size to available viewport dimensions
     canvas.width = width * devicePixelRatio;
     canvas.height = height * devicePixelRatio;
-    
+
     canvas.style.width = width + 'px';
     canvas.style.height = height + 'px';
-    
+
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.scale(devicePixelRatio, devicePixelRatio);
@@ -210,26 +209,26 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       // Find the ScrollArea viewport element to get the actual available space
       const viewport = scrollArea.querySelector('[data-radix-scroll-area-viewport]');
       if (!viewport) return;
-      
+
       const rect = viewport.getBoundingClientRect();
-      let width = rect.width;  // Use full viewport width
+      let width = rect.width; // Use full viewport width
       let height = rect.height; // Use full viewport height
-      
+
       // Ensure minimum reasonable dimensions
       if (width < 100) width = 1200;
       if (height < 100) height = 600;
-      
+
       const devicePixelRatio = window.devicePixelRatio || 1;
-      
+
       Debug.log('Resizing canvas to available viewport size:', width, 'x', height);
-      
+
       try {
         canvas.width = width * devicePixelRatio;
         canvas.height = height * devicePixelRatio;
-        
+
         canvas.style.width = width + 'px';
         canvas.style.height = height + 'px';
-        
+
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.scale(devicePixelRatio, devicePixelRatio);
@@ -246,7 +245,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     if (viewport) {
       resizeObserver.observe(viewport);
     }
-    
+
     return () => {
       resizeObserver.disconnect();
     };
@@ -256,61 +255,69 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
   useEffect(() => {
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
-        if (mutation.type === 'attributes' && 
-            (mutation.attributeName === 'class' || mutation.attributeName === 'data-theme')) {
+        if (
+          mutation.type === 'attributes' &&
+          (mutation.attributeName === 'class' || mutation.attributeName === 'data-theme')
+        ) {
           Debug.log('Theme changed, updating Canvas colors');
-          setThemeKey(prev => prev + 1);
+          setThemeKey((prev) => prev + 1);
         }
       });
     });
 
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['class', 'data-theme']
+      attributeFilter: ['class', 'data-theme'],
     });
 
     return () => observer.disconnect();
   }, []);
 
   // Helper function to format time
-  const formatTimeInTimezone = useCallback((timeString: string) => {
-    try {
-      const date = new Date(timeString);
-      if (isNaN(date.getTime())) return '--:--';
-      
-      return date.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-        timeZone: selectedTimezone,
-      });
-    } catch {
-      return '--:--';
-    }
-  }, [selectedTimezone]);
+  const formatTimeInTimezone = useCallback(
+    (timeString: string) => {
+      try {
+        const date = new Date(timeString);
+        if (isNaN(date.getTime())) return '--:--';
+
+        return date.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          timeZone: selectedTimezone,
+        });
+      } catch {
+        return '--:--';
+      }
+    },
+    [selectedTimezone]
+  );
 
   // Calculate program position and dimensions
-  const calculateProgramMetrics = useCallback((program: EpgProgram, guideStartTime: Date) => {
-    const programStart = new Date(program.start_time);
-    const programEnd = new Date(program.end_time);
-    const guideStart = guideStartTime;
-    const guideEnd = new Date(guideStart.getTime() + GUIDE_HOURS * 60 * 60 * 1000);
-    
-    if (programEnd <= guideStart || programStart >= guideEnd) {
-      return { left: -9999, width: 0, programStart, programEnd };
-    }
-    
-    const visibleStart = programStart < guideStart ? guideStart : programStart;
-    const visibleEnd = programEnd > guideEnd ? guideEnd : programEnd;
-    
-    const startOffset = visibleStart.getTime() - guideStart.getTime();
-    const leftPosition = (startOffset / (1000 * 60 * 60)) * PIXELS_PER_HOUR;
-    
-    const visibleDuration = visibleEnd.getTime() - visibleStart.getTime();
-    const width = Math.max(30, (visibleDuration / (1000 * 60 * 60)) * PIXELS_PER_HOUR);
-    
-    return { left: Math.max(0, leftPosition), width, programStart, programEnd };
-  }, [GUIDE_HOURS]);
+  const calculateProgramMetrics = useCallback(
+    (program: EpgProgram, guideStartTime: Date) => {
+      const programStart = new Date(program.start_time);
+      const programEnd = new Date(program.end_time);
+      const guideStart = guideStartTime;
+      const guideEnd = new Date(guideStart.getTime() + GUIDE_HOURS * 60 * 60 * 1000);
+
+      if (programEnd <= guideStart || programStart >= guideEnd) {
+        return { left: -9999, width: 0, programStart, programEnd };
+      }
+
+      const visibleStart = programStart < guideStart ? guideStart : programStart;
+      const visibleEnd = programEnd > guideEnd ? guideEnd : programEnd;
+
+      const startOffset = visibleStart.getTime() - guideStart.getTime();
+      const leftPosition = (startOffset / (1000 * 60 * 60)) * PIXELS_PER_HOUR;
+
+      const visibleDuration = visibleEnd.getTime() - visibleStart.getTime();
+      const width = Math.max(30, (visibleDuration / (1000 * 60 * 60)) * PIXELS_PER_HOUR);
+
+      return { left: Math.max(0, leftPosition), width, programStart, programEnd };
+    },
+    [GUIDE_HOURS]
+  );
 
   // Main render function
   const renderCanvas = useCallback(() => {
@@ -321,12 +328,12 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
 
     const ctx = canvasContext;
     const { width, height } = canvasDimensions;
-    
+
     Debug.log('Rendering canvas:', width, 'x', height, 'channels:', filteredChannels.length);
-    
+
     // Clear canvas
     ctx.clearRect(0, 0, width, height);
-    
+
     // Test render - draw a simple rectangle to verify canvas is working
     ctx.fillStyle = '#ff0000';
     ctx.fillRect(10, 10, 100, 50);
@@ -337,9 +344,12 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     const guideStartTime = new Date(guideData.start_time);
     const viewportStartY = scrollPosition.y;
     const viewportEndY = viewportStartY + height;
-    
+
     // Calculate visible channel range
-    const startChannelIndex = Math.max(0, Math.floor((viewportStartY - TIME_HEADER_HEIGHT) / CHANNEL_HEIGHT));
+    const startChannelIndex = Math.max(
+      0,
+      Math.floor((viewportStartY - TIME_HEADER_HEIGHT) / CHANNEL_HEIGHT)
+    );
     const endChannelIndex = Math.min(
       filteredChannels.length,
       Math.ceil((viewportEndY - TIME_HEADER_HEIGHT) / CHANNEL_HEIGHT) + 1
@@ -351,14 +361,14 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
 
     // First pass: Render main content area (channels and programs)
     // This gets clipped by sticky headers
-    
+
     // Render visible channels and programs first
     for (let i = startChannelIndex; i < endChannelIndex; i++) {
       if (!filteredChannels[i]) continue;
-      
+
       const [channelId, channel] = filteredChannels[i];
-      const channelY = TIME_HEADER_HEIGHT + (i * CHANNEL_HEIGHT) - viewportStartY;
-      
+      const channelY = TIME_HEADER_HEIGHT + i * CHANNEL_HEIGHT - viewportStartY;
+
       // Skip if channel row is not visible
       if (channelY + CHANNEL_HEIGHT < TIME_HEADER_HEIGHT || channelY > height) continue;
 
@@ -377,17 +387,17 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       // Render programs for this channel
       const channelPrograms = guideData.programs[channelId] || [];
       const programStartX = CHANNEL_SIDEBAR_WIDTH - scrollPosition.x;
-      
+
       channelPrograms.forEach((program) => {
         const metrics = calculateProgramMetrics(program, guideStartTime);
-        
+
         if (metrics.left < -9999 || metrics.width === 0) return;
-        
+
         const programX = programStartX + metrics.left;
         const programY = channelY + 8;
         const programWidth = metrics.width;
         const programHeight = CHANNEL_HEIGHT - 16;
-        
+
         // Skip if program is not visible horizontally
         if (programX + programWidth < CHANNEL_SIDEBAR_WIDTH || programX > width) return;
 
@@ -406,7 +416,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
           // Regular programs: Use secondary for normal, muted for hover (subtle)
           ctx.fillStyle = isHovered ? theme.muted : theme.secondary;
         }
-        
+
         ctx.fillRect(programX, programY, programWidth, programHeight);
 
         // Program borders
@@ -433,13 +443,14 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
           ctx.fillStyle = theme.foreground;
         }
         ctx.font = 'bold 11px ui-sans-serif, system-ui, -apple-system, sans-serif';
-        
+
         // Program title
         const maxTitleWidth = programWidth - 12;
         if (maxTitleWidth > 20) {
-          const titleText = program.title.length > maxTitleWidth / 7 
-            ? program.title.substring(0, Math.floor(maxTitleWidth / 7)) + '...'
-            : program.title;
+          const titleText =
+            program.title.length > maxTitleWidth / 7
+              ? program.title.substring(0, Math.floor(maxTitleWidth / 7)) + '...'
+              : program.title;
           ctx.fillText(titleText, programX + 6, programY + 14);
         }
 
@@ -472,7 +483,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     // Second pass: Render sticky time header (always on top)
     ctx.fillStyle = theme.muted;
     ctx.fillRect(0, 0, width, TIME_HEADER_HEIGHT);
-    
+
     // Time header border
     ctx.strokeStyle = theme.border;
     ctx.lineWidth = 1;
@@ -484,23 +495,23 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     // Render time grid headers (sticky)
     const headerStartX = CHANNEL_SIDEBAR_WIDTH - scrollPosition.x;
     for (let hour = 0; hour < GUIDE_HOURS; hour++) {
-      const x = headerStartX + (hour * PIXELS_PER_HOUR);
-      
+      const x = headerStartX + hour * PIXELS_PER_HOUR;
+
       // Skip if header is not visible
       if (x + PIXELS_PER_HOUR < CHANNEL_SIDEBAR_WIDTH || x > width) continue;
-      
+
       // Vertical hour lines (extend through content area)
       ctx.strokeStyle = theme.border;
       ctx.beginPath();
       ctx.moveTo(x, TIME_HEADER_HEIGHT);
       ctx.lineTo(x, height);
       ctx.stroke();
-      
+
       // Time labels (in sticky header)
       if (x > CHANNEL_SIDEBAR_WIDTH - 50 && x < width - 50) {
         const time = new Date(guideStartTime.getTime() + hour * 60 * 60 * 1000);
         const timeLabel = formatTimeInTimezone(time.toISOString());
-        
+
         ctx.fillStyle = theme.foreground;
         ctx.font = '12px ui-sans-serif, system-ui, -apple-system, sans-serif';
         ctx.fillText(timeLabel, x + 10, TIME_HEADER_HEIGHT / 2);
@@ -511,14 +522,14 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     // Channel sidebar background
     ctx.fillStyle = theme.secondary;
     ctx.fillRect(0, TIME_HEADER_HEIGHT, CHANNEL_SIDEBAR_WIDTH, height - TIME_HEADER_HEIGHT);
-    
+
     // Render visible channel info in sidebar
     for (let i = startChannelIndex; i < endChannelIndex; i++) {
       if (!filteredChannels[i]) continue;
-      
+
       const [channelId, channel] = filteredChannels[i];
-      const channelY = TIME_HEADER_HEIGHT + (i * CHANNEL_HEIGHT) - viewportStartY;
-      
+      const channelY = TIME_HEADER_HEIGHT + i * CHANNEL_HEIGHT - viewportStartY;
+
       // Skip if channel row is not visible
       if (channelY + CHANNEL_HEIGHT < TIME_HEADER_HEIGHT || channelY > height) continue;
 
@@ -530,7 +541,8 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       ctx.fillStyle = theme.foreground;
       ctx.font = 'bold 13px ui-sans-serif, system-ui, -apple-system, sans-serif';
       const channelName = channel.name || channelId;
-      const truncatedName = channelName.length > 20 ? channelName.substring(0, 17) + '...' : channelName;
+      const truncatedName =
+        channelName.length > 20 ? channelName.substring(0, 17) + '...' : channelName;
       ctx.fillText(truncatedName, 50, channelY + CHANNEL_HEIGHT / 2 - 8);
 
       ctx.font = '11px ui-sans-serif, system-ui, -apple-system, sans-serif';
@@ -542,7 +554,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       ctx.fillRect(10, channelY + 16, 28, 28);
       ctx.strokeStyle = theme.border;
       ctx.strokeRect(10, channelY + 16, 28, 28);
-      
+
       // Play icon (triangle)
       ctx.fillStyle = theme.primary;
       ctx.beginPath();
@@ -574,11 +586,14 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       const now = currentTime;
       const guideStart = new Date(guideData.start_time);
       const guideEnd = new Date(guideData.end_time);
-      
+
       if (now >= guideStart && now <= guideEnd) {
         const currentOffset = now.getTime() - guideStart.getTime();
-        const currentX = CHANNEL_SIDEBAR_WIDTH + (currentOffset / (1000 * 60 * 60)) * PIXELS_PER_HOUR - scrollPosition.x;
-        
+        const currentX =
+          CHANNEL_SIDEBAR_WIDTH +
+          (currentOffset / (1000 * 60 * 60)) * PIXELS_PER_HOUR -
+          scrollPosition.x;
+
         if (currentX >= CHANNEL_SIDEBAR_WIDTH && currentX <= width) {
           ctx.strokeStyle = '#ef4444';
           ctx.lineWidth = 3;
@@ -586,7 +601,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
           ctx.moveTo(currentX, TIME_HEADER_HEIGHT);
           ctx.lineTo(currentX, height);
           ctx.stroke();
-          
+
           // Time indicator dot
           ctx.fillStyle = '#ef4444';
           ctx.beginPath();
@@ -614,16 +629,16 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
   // Render when key dependencies change (debounced to prevent infinite loops)
   useEffect(() => {
     if (!canvasContext || !guideData || isRenderingRef.current) return;
-    
+
     Debug.log('Render effect triggered');
     isRenderingRef.current = true;
-    
+
     // Use requestAnimationFrame to debounce and optimize rendering
     const frameId = requestAnimationFrame(() => {
       renderCanvas();
       isRenderingRef.current = false;
     });
-    
+
     return () => {
       cancelAnimationFrame(frameId);
       isRenderingRef.current = false;
@@ -652,12 +667,12 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     setScrollPosition(newScrollPosition);
   }, []);
 
-  // Set up scroll listener  
+  // Set up scroll listener
   useEffect(() => {
     const scrollArea = scrollAreaRef.current;
     if (!scrollArea) return;
 
-    // ScrollArea ref points directly to the ScrollArea component, 
+    // ScrollArea ref points directly to the ScrollArea component,
     // we need to find the viewport within it
     const scrollViewport = scrollArea.querySelector('[data-radix-scroll-area-viewport]');
     if (!scrollViewport) {
@@ -674,100 +689,114 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
   }, [handleScroll]);
 
   // Hit testing for mouse events
-  const findProgramAtPoint = useCallback((x: number, y: number): EpgProgram | null => {
-    if (!guideData) return null;
+  const findProgramAtPoint = useCallback(
+    (x: number, y: number): EpgProgram | null => {
+      if (!guideData) return null;
 
-    for (const [channelId] of filteredChannels) {
-      const programs = guideData.programs[channelId] || [];
-      for (const program of programs) {
-        const bounds = (program as any)._bounds;
-        if (bounds && 
-            x >= bounds.x && 
+      for (const [channelId] of filteredChannels) {
+        const programs = guideData.programs[channelId] || [];
+        for (const program of programs) {
+          const bounds = (program as any)._bounds;
+          if (
+            bounds &&
+            x >= bounds.x &&
             x <= bounds.x + bounds.width &&
-            y >= bounds.y && 
-            y <= bounds.y + bounds.height) {
-          return program;
+            y >= bounds.y &&
+            y <= bounds.y + bounds.height
+          ) {
+            return program;
+          }
         }
       }
-    }
-    return null;
-  }, [guideData, filteredChannels]);
+      return null;
+    },
+    [guideData, filteredChannels]
+  );
 
-  const findChannelAtPoint = useCallback((x: number, y: number): [string, Channel] | null => {
-    if (x > CHANNEL_SIDEBAR_WIDTH) return null;
-    
-    const channelIndex = Math.floor((y + scrollPosition.y - TIME_HEADER_HEIGHT) / CHANNEL_HEIGHT);
-    if (channelIndex >= 0 && channelIndex < filteredChannels.length) {
-      return filteredChannels[channelIndex];
-    }
-    return null;
-  }, [filteredChannels, scrollPosition.y]);
+  const findChannelAtPoint = useCallback(
+    (x: number, y: number): [string, Channel] | null => {
+      if (x > CHANNEL_SIDEBAR_WIDTH) return null;
+
+      const channelIndex = Math.floor((y + scrollPosition.y - TIME_HEADER_HEIGHT) / CHANNEL_HEIGHT);
+      if (channelIndex >= 0 && channelIndex < filteredChannels.length) {
+        return filteredChannels[channelIndex];
+      }
+      return null;
+    },
+    [filteredChannels, scrollPosition.y]
+  );
 
   // Mouse event handlers
-  const handleMouseMove = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  const handleMouseMove = useCallback(
+    (event: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
 
-    // Check if hovering over play button
-    let isOverPlayButton = false;
-    if (x >= 10 && x <= 38) {
-      const adjustedY = y + scrollPosition.y;
-      const channelIndex = Math.floor((adjustedY - TIME_HEADER_HEIGHT) / CHANNEL_HEIGHT);
-      
-      if (channelIndex >= 0 && channelIndex < filteredChannels.length) {
-        const channelRowY = TIME_HEADER_HEIGHT + (channelIndex * CHANNEL_HEIGHT);
-        const relativeY = adjustedY - channelRowY;
-        
-        if (relativeY >= 16 && relativeY <= 44) {
-          isOverPlayButton = true;
-        }
-      }
-    }
+      // Check if hovering over play button
+      let isOverPlayButton = false;
+      if (x >= 10 && x <= 38) {
+        const adjustedY = y + scrollPosition.y;
+        const channelIndex = Math.floor((adjustedY - TIME_HEADER_HEIGHT) / CHANNEL_HEIGHT);
 
-    const program = findProgramAtPoint(x, y);
-    setHoveredProgram(program);
-    
-    canvas.style.cursor = (program || isOverPlayButton) ? 'pointer' : 'default';
-  }, [findProgramAtPoint, scrollPosition, filteredChannels]);
+        if (channelIndex >= 0 && channelIndex < filteredChannels.length) {
+          const channelRowY = TIME_HEADER_HEIGHT + channelIndex * CHANNEL_HEIGHT;
+          const relativeY = adjustedY - channelRowY;
 
-  const handleClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
-    // Check for play button click first (simplified logic)
-    if (x >= 10 && x <= 38) {
-      const adjustedY = y + scrollPosition.y;
-      const channelIndex = Math.floor((adjustedY - TIME_HEADER_HEIGHT) / CHANNEL_HEIGHT);
-      
-      if (channelIndex >= 0 && channelIndex < filteredChannels.length) {
-        const channelRowY = TIME_HEADER_HEIGHT + (channelIndex * CHANNEL_HEIGHT);
-        const relativeY = adjustedY - channelRowY;
-        
-        // Play button is at y: 16-44 within the channel row
-        if (relativeY >= 16 && relativeY <= 44) {
-          const [channelId, channelData] = filteredChannels[channelIndex];
-          if (onChannelPlay) {
-            onChannelPlay({ id: channelId, name: channelData.name, logo: channelData.logo });
+          if (relativeY >= 16 && relativeY <= 44) {
+            isOverPlayButton = true;
           }
-          return;
         }
       }
-    }
 
-    // Check for program click
-    const program = findProgramAtPoint(x, y);
-    if (program && onProgramClick) {
-      onProgramClick(program);
-    }
-  }, [findProgramAtPoint, onProgramClick, onChannelPlay, scrollPosition, filteredChannels]);
+      const program = findProgramAtPoint(x, y);
+      setHoveredProgram(program);
+
+      canvas.style.cursor = program || isOverPlayButton ? 'pointer' : 'default';
+    },
+    [findProgramAtPoint, scrollPosition, filteredChannels]
+  );
+
+  const handleClick = useCallback(
+    (event: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+
+      // Check for play button click first (simplified logic)
+      if (x >= 10 && x <= 38) {
+        const adjustedY = y + scrollPosition.y;
+        const channelIndex = Math.floor((adjustedY - TIME_HEADER_HEIGHT) / CHANNEL_HEIGHT);
+
+        if (channelIndex >= 0 && channelIndex < filteredChannels.length) {
+          const channelRowY = TIME_HEADER_HEIGHT + channelIndex * CHANNEL_HEIGHT;
+          const relativeY = adjustedY - channelRowY;
+
+          // Play button is at y: 16-44 within the channel row
+          if (relativeY >= 16 && relativeY <= 44) {
+            const [channelId, channelData] = filteredChannels[channelIndex];
+            if (onChannelPlay) {
+              onChannelPlay({ id: channelId, name: channelData.name, logo: channelData.logo });
+            }
+            return;
+          }
+        }
+      }
+
+      // Check for program click
+      const program = findProgramAtPoint(x, y);
+      if (program && onProgramClick) {
+        onProgramClick(program);
+      }
+    },
+    [findProgramAtPoint, onProgramClick, onChannelPlay, scrollPosition, filteredChannels]
+  );
 
   // Handle mouse wheel events and forward them to the ScrollArea
   const handleWheel = useCallback((event: WheelEvent) => {
@@ -785,7 +814,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
     viewport.scrollBy({
       left: event.deltaX,
       top: event.deltaY,
-      behavior: 'auto'
+      behavior: 'auto',
     });
   }, []);
 
@@ -807,7 +836,7 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
       <canvas
         ref={canvasRef}
         className="absolute top-0 left-0 z-10"
-        style={{ 
+        style={{
           pointerEvents: 'auto',
         }}
         onMouseMove={handleMouseMove}

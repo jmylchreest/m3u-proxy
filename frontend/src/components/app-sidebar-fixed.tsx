@@ -1,4 +1,4 @@
-"use client"
+'use client';
 
 import {
   Play,
@@ -15,10 +15,10 @@ import {
   Radio,
   ArrowUpDown,
   Tv,
-  Calendar
-} from "lucide-react"
-import { usePathname } from "next/navigation"
-import { cn } from "@/lib/utils"
+  Calendar,
+} from 'lucide-react';
+import { usePathname } from 'next/navigation';
+import { cn } from '@/lib/utils';
 import {
   Sidebar,
   SidebarHeader,
@@ -29,108 +29,108 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
-} from "@/components/ui/sidebar"
+} from '@/components/ui/sidebar';
 
 const navigation = [
   {
-    title: "Overview",
+    title: 'Overview',
     items: [
       {
-        title: "Dashboard",
-        url: "/",
+        title: 'Dashboard',
+        url: '/',
         icon: Activity,
       },
       {
-        title: "Channel Browser",
-        url: "/channels",
+        title: 'Channel Browser',
+        url: '/channels',
         icon: Tv,
       },
       {
-        title: "EPG Viewer",
-        url: "/epg",
+        title: 'EPG Viewer',
+        url: '/epg',
         icon: Calendar,
       },
     ],
   },
   {
-    title: "Proxy Config",
+    title: 'Proxy Config',
     items: [
       {
-        title: "Stream Sources",
-        url: "/sources/stream",
+        title: 'Stream Sources',
+        url: '/sources/stream',
         icon: Radio,
       },
       {
-        title: "EPG Sources",
-        url: "/sources/epg",
+        title: 'EPG Sources',
+        url: '/sources/epg',
         icon: Database,
       },
       {
-        title: "Proxies",
-        url: "/proxies",
+        title: 'Proxies',
+        url: '/proxies',
         icon: Play,
       },
     ],
   },
   {
-    title: "Global Config",
+    title: 'Global Config',
     items: [
       {
-        title: "Filters",
-        url: "/admin/filters",
+        title: 'Filters',
+        url: '/admin/filters',
         icon: Filter,
       },
       {
-        title: "Data Mapping",
-        url: "/admin/data-mapping",
+        title: 'Data Mapping',
+        url: '/admin/data-mapping',
         icon: ArrowUpDown,
       },
       {
-        title: "Logos",
-        url: "/admin/logos",
+        title: 'Logos',
+        url: '/admin/logos',
         icon: Image,
       },
       {
-        title: "Relay Profiles",
-        url: "/admin/relays",
+        title: 'Relay Profiles',
+        url: '/admin/relays',
         icon: Server,
       },
     ],
   },
   {
-    title: "Debug",
+    title: 'Debug',
     items: [
       {
-        title: "Debug",
-        url: "/debug",
+        title: 'Debug',
+        url: '/debug',
         icon: Bug,
       },
       {
-        title: "Settings",
-        url: "/settings",
+        title: 'Settings',
+        url: '/settings',
         icon: Settings,
       },
       {
-        title: "Events",
-        url: "/events",
+        title: 'Events',
+        url: '/events',
         icon: Zap,
       },
       {
-        title: "Logs",
-        url: "/logs",
+        title: 'Logs',
+        url: '/logs',
         icon: FileText,
       },
       {
-        title: "Color Palette",
-        url: "/color-palette",
+        title: 'Color Palette',
+        url: '/color-palette',
         icon: Palette,
       },
     ],
   },
-]
+];
 
 export function AppSidebar() {
-  const pathname = usePathname()
+  const pathname = usePathname();
 
   return (
     <Sidebar variant="inset" collapsible="icon">
@@ -154,13 +154,8 @@ export function AppSidebar() {
               <SidebarMenu>
                 {section.items.map((item) => (
                   <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton 
-                      asChild 
-                      isActive={pathname === item.url}
-                    >
-                      <a 
-                        href={item.url}
-                      >
+                    <SidebarMenuButton asChild isActive={pathname === item.url}>
+                      <a href={item.url}>
                         <item.icon />
                         <span>{item.title}</span>
                       </a>
@@ -173,5 +168,5 @@ export function AppSidebar() {
         ))}
       </SidebarContent>
     </Sidebar>
-  )
+  );
 }

@@ -1,8 +1,8 @@
-"use client"
+'use client';
 
-import { Check, Monitor, Sun, Moon, Palette } from "lucide-react"
-import { useTheme } from "@/components/enhanced-theme-provider"
-import { Button } from "@/components/ui/button"
+import { Check, Monitor, Sun, Moon, Palette } from 'lucide-react';
+import { useTheme } from '@/components/enhanced-theme-provider';
+import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,29 +10,33 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
   DropdownMenuLabel,
-} from "@/components/ui/dropdown-menu"
+} from '@/components/ui/dropdown-menu';
 
 export function EnhancedThemeSelector() {
-  const { theme, mode, actualMode, themes, setTheme, setMode } = useTheme()
+  const { theme, mode, actualMode, themes, setTheme, setMode } = useTheme();
 
   const getModeIcon = (themeMode: string) => {
     switch (themeMode) {
       case 'light':
-        return <Sun className="h-4 w-4" />
+        return <Sun className="h-4 w-4" />;
       case 'dark':
-        return <Moon className="h-4 w-4" />
+        return <Moon className="h-4 w-4" />;
       case 'system':
-        return <Monitor className="h-4 w-4" />
+        return <Monitor className="h-4 w-4" />;
       default:
-        return <Monitor className="h-4 w-4" />
+        return <Monitor className="h-4 w-4" />;
     }
-  }
+  };
 
-  const ColorPreview = ({ colors }: { colors?: { primary: string; accent: string; background: string; secondary: string } | null }) => {
+  const ColorPreview = ({
+    colors,
+  }: {
+    colors?: { primary: string; accent: string; background: string; secondary: string } | null;
+  }) => {
     if (!colors) {
       return (
         <div className="flex gap-1">
-          {[1, 2, 3, 4].map(i => (
+          {[1, 2, 3, 4].map((i) => (
             <div
               key={i}
               className="w-3 h-3 rounded-sm border border-border/50 bg-muted"
@@ -40,16 +44,16 @@ export function EnhancedThemeSelector() {
             />
           ))}
         </div>
-      )
+      );
     }
-    
+
     return (
       <div className="flex gap-1">
         {Object.entries({
           primary: colors.primary,
           accent: colors.accent,
           background: colors.background,
-          secondary: colors.secondary
+          secondary: colors.secondary,
         }).map(([name, color]) => (
           <div
             key={name}
@@ -59,8 +63,8 @@ export function EnhancedThemeSelector() {
           />
         ))}
       </div>
-    )
-  }
+    );
+  };
 
   return (
     <DropdownMenu>
@@ -72,7 +76,7 @@ export function EnhancedThemeSelector() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56 dropdown-backdrop">
         <DropdownMenuLabel>Mode</DropdownMenuLabel>
-        
+
         {(['system', 'light', 'dark'] as const).map((themeMode) => (
           <DropdownMenuItem
             key={themeMode}
@@ -86,10 +90,10 @@ export function EnhancedThemeSelector() {
             {mode === themeMode && <Check className="h-4 w-4" />}
           </DropdownMenuItem>
         ))}
-        
+
         <DropdownMenuSeparator />
         <DropdownMenuLabel>Theme</DropdownMenuLabel>
-        
+
         {themes.map((themeOption) => (
           <DropdownMenuItem
             key={themeOption.id}
@@ -105,5 +109,5 @@ export function EnhancedThemeSelector() {
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
-  )
+  );
 }

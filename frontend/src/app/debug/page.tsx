@@ -1,5 +1,5 @@
-import { Debug } from "@/components/debug"
+import { Debug } from '@/components/debug';
 
 export default function DebugPage() {
-  return <Debug />
+  return <Debug />;
 }

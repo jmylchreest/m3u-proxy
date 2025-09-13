@@ -1,5 +1,5 @@
-import { Events } from "@/components/events"
+import { Events } from '@/components/events';
 
 export default function EventsPage() {
-  return <Events />
+  return <Events />;
 }

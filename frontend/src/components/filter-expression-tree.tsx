@@ -1,84 +1,93 @@
-"use client"
+'use client';
 
-import { FilterExpressionTree } from "@/types/api"
-import { Badge } from "@/components/ui/badge"
-import { 
-  GitBranch, 
-  ArrowRight, 
+import { FilterExpressionTree } from '@/types/api';
+import { Badge } from '@/components/ui/badge';
+import {
+  GitBranch,
+  ArrowRight,
   ChevronRight,
   ChevronDown,
   Code2,
-  Filter as FilterIcon
-} from "lucide-react"
-import { useState } from "react"
+  Filter as FilterIcon,
+} from 'lucide-react';
+import { useState } from 'react';
 
 interface FilterExpressionTreeViewProps {
-  tree: FilterExpressionTree
-  compact?: boolean
-  className?: string
+  tree: FilterExpressionTree;
+  compact?: boolean;
+  className?: string;
 }
 
 function getOperatorColor(operator: string): string {
   switch (operator?.toLowerCase()) {
     case 'contains':
     case 'not_contains':
-      return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
-    case 'equals':  
+      return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
+    case 'equals':
     case 'not_equals':
-      return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+      return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
     case 'matches':
     case 'not_matches':
-      return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200'
+      return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200';
     case 'starts_with':
     case 'ends_with':
-      return 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200'
+      return 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200';
     case 'and':
-      return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
+      return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200';
     case 'or':
-      return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+      return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200';
     default:
-      return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
+      return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200';
   }
 }
 
 function formatOperatorName(operator: string): string {
   switch (operator?.toLowerCase()) {
-    case 'contains': return 'Contains'
-    case 'not_contains': return 'NotContains'
-    case 'equals': return 'Equals'
-    case 'not_equals': return 'NotEquals'
-    case 'matches': return 'Matches'
-    case 'not_matches': return 'NotMatches'
-    case 'starts_with': return 'StartsWith'
-    case 'ends_with': return 'EndsWith'
-    case 'and': return 'AND'
-    case 'or': return 'OR'
-    default: return operator || 'Unknown'
+    case 'contains':
+      return 'Contains';
+    case 'not_contains':
+      return 'NotContains';
+    case 'equals':
+      return 'Equals';
+    case 'not_equals':
+      return 'NotEquals';
+    case 'matches':
+      return 'Matches';
+    case 'not_matches':
+      return 'NotMatches';
+    case 'starts_with':
+      return 'StartsWith';
+    case 'ends_with':
+      return 'EndsWith';
+    case 'and':
+      return 'AND';
+    case 'or':
+      return 'OR';
+    default:
+      return operator || 'Unknown';
   }
 }
 
-function ConditionNode({ 
-  tree, 
-  level = 0, 
+function ConditionNode({
+  tree,
+  level = 0,
   isLast = false,
-  compact = false 
-}: { 
-  tree: FilterExpressionTree; 
-  level?: number; 
+  compact = false,
+}: {
+  tree: FilterExpressionTree;
+  level?: number;
   isLast?: boolean;
   compact?: boolean;
 }) {
   if (tree.type === 'condition') {
-    const operatorName = formatOperatorName(tree.operator || '')
-    const caseSensitive = tree.case_sensitive ? ' (case-sensitive)' : ' (case-insensitive)'
-    const negated = tree.negate ? 'NOT ' : ''
-    
+    const operatorName = formatOperatorName(tree.operator || '');
+    const caseSensitive = tree.case_sensitive ? ' (case-sensitive)' : ' (case-insensitive)';
+    const negated = tree.negate ? 'NOT ' : '';
+
     return (
       <div className={`flex items-center gap-2 ${level > 0 ? 'ml-4' : ''}`}>
         {level > 0 && (
-          <div className="flex items-center text-muted-foreground">
-            {isLast ? '└──' : '├──'}
-          </div>
+          <div className="flex items-center text-muted-foreground">{isLast ? '└──' : '├──'}</div>
         )}
         <div className="flex items-center gap-2 flex-wrap">
           <Badge variant="outline" className="text-xs font-mono">
@@ -95,42 +104,36 @@ function ConditionNode({
           <code className="text-xs bg-muted px-2 py-1 rounded font-mono max-w-[200px] truncate">
             "{tree.value}"
           </code>
-          {!compact && (
-            <span className="text-xs text-muted-foreground">
-              {caseSensitive}
-            </span>
-          )}
+          {!compact && <span className="text-xs text-muted-foreground">{caseSensitive}</span>}
         </div>
       </div>
-    )
+    );
   }
 
-  return null
+  return null;
 }
 
-function GroupNode({ 
-  tree, 
-  level = 0, 
+function GroupNode({
+  tree,
+  level = 0,
   isLast = false,
-  compact = false 
-}: { 
-  tree: FilterExpressionTree; 
-  level?: number; 
+  compact = false,
+}: {
+  tree: FilterExpressionTree;
+  level?: number;
   isLast?: boolean;
   compact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(level < 2) // Auto-expand first 2 levels
+  const [isExpanded, setIsExpanded] = useState(level < 2); // Auto-expand first 2 levels
 
   if (tree.type === 'group' && tree.children) {
-    const operatorName = formatOperatorName(tree.operator || 'AND')
-    
+    const operatorName = formatOperatorName(tree.operator || 'AND');
+
     return (
       <div className={level > 0 ? 'ml-4' : ''}>
         <div className="flex items-center gap-2 mb-1">
           {level > 0 && (
-            <div className="flex items-center text-muted-foreground">
-              {isLast ? '└──' : '├──'}
-            </div>
+            <div className="flex items-center text-muted-foreground">{isLast ? '└──' : '├──'}</div>
           )}
           <button
             onClick={() => setIsExpanded(!isExpanded)}
@@ -149,7 +152,7 @@ function GroupNode({
             </span>
           </button>
         </div>
-        
+
         {isExpanded && (
           <div className="space-y-1">
             {tree.children.map((child, index) => {
@@ -158,10 +161,10 @@ function GroupNode({
                 level.toString(),
                 index.toString(),
                 String(child.type || 'unknown'),
-                String(child.field || child.operator || `item-${index}`)
+                String(child.field || child.operator || `item-${index}`),
               ];
               const uniqueKey = keyParts.join('-');
-              
+
               return (
                 <ExpressionTreeNode
                   key={uniqueKey}
@@ -175,52 +178,38 @@ function GroupNode({
           </div>
         )}
       </div>
-    )
+    );
   }
 
-  return null
+  return null;
 }
 
-function ExpressionTreeNode({ 
-  tree, 
-  level = 0, 
+function ExpressionTreeNode({
+  tree,
+  level = 0,
   isLast = false,
-  compact = false 
-}: { 
-  tree: FilterExpressionTree; 
-  level?: number; 
+  compact = false,
+}: {
+  tree: FilterExpressionTree;
+  level?: number;
   isLast?: boolean;
   compact?: boolean;
 }) {
   if (tree.type === 'condition') {
-    return (
-      <ConditionNode 
-        tree={tree} 
-        level={level} 
-        isLast={isLast} 
-        compact={compact}
-      />
-    )
+    return <ConditionNode tree={tree} level={level} isLast={isLast} compact={compact} />;
   }
 
   if (tree.type === 'group') {
-    return (
-      <GroupNode 
-        tree={tree} 
-        level={level} 
-        isLast={isLast} 
-        compact={compact}
-      />
-    )
+    return <GroupNode tree={tree} level={level} isLast={isLast} compact={compact} />;
   }
 
-  return null
+  return null;
 }
 
-export function FilterExpressionTreeView({ 
-  tree, 
-  compact = false, 
-  className = "" 
+export function FilterExpressionTreeView({
+  tree,
+  compact = false,
+  className = '',
 }: FilterExpressionTreeViewProps) {
   return (
     <div className={`font-mono text-sm ${className}`}>
@@ -230,7 +219,7 @@ export function FilterExpressionTreeView({
       </div>
       <ExpressionTreeNode tree={tree} compact={compact} />
     </div>
-  )
+  );
 }
 
 // Compact version for table display
@@ -248,15 +237,17 @@ export function FilterExpressionCompact({ tree }: { tree: FilterExpressionTree }
           "{tree.value}"
         </code>
       </div>
-    )
+    );
   }
 
   if (tree.type === 'group' && tree.children) {
-    const firstCondition = tree.children.find(child => child.type === 'condition')
-    const totalConditions = tree.children.filter(child => child.type === 'condition').length + 
-                           tree.children.filter(child => child.type === 'group').reduce((acc, group) => 
-                             acc + (group.children?.length || 0), 0)
-    
+    const firstCondition = tree.children.find((child) => child.type === 'condition');
+    const totalConditions =
+      tree.children.filter((child) => child.type === 'condition').length +
+      tree.children
+        .filter((child) => child.type === 'group')
+        .reduce((acc, group) => acc + (group.children?.length || 0), 0);
+
     return (
       <div className="flex items-center gap-1 flex-wrap">
         <Badge className={`text-xs ${getOperatorColor(tree.operator || 'and')}`}>
@@ -273,12 +264,10 @@ export function FilterExpressionCompact({ tree }: { tree: FilterExpressionTree }
           </>
         )}
         {totalConditions > 1 && (
-          <span className="text-xs text-muted-foreground">
-            +{totalConditions - 1} more
-          </span>
+          <span className="text-xs text-muted-foreground">+{totalConditions - 1} more</span>
         )}
       </div>
-    )
+    );
   }
 
   return (
@@ -286,5 +275,5 @@ export function FilterExpressionCompact({ tree }: { tree: FilterExpressionTree }
       <FilterIcon className="h-3 w-3 text-muted-foreground" />
       <span className="text-xs text-muted-foreground">Empty filter</span>
     </div>
-  )
+  );
 }

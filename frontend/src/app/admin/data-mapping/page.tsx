@@ -1,5 +1,5 @@
-import { DataMapping } from "@/components/data-mapping"
+import { DataMapping } from '@/components/data-mapping';
 
 export default function DataMappingPage() {
-  return <DataMapping />
+  return <DataMapping />;
 }

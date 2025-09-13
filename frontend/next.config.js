@@ -3,7 +3,7 @@ const nextConfig = {
   output: process.env.NODE_ENV === 'production' ? 'export' : undefined,
   trailingSlash: true,
   images: {
-    unoptimized: true
+    unoptimized: true,
   },
   // Only add rewrites in development mode (not needed for static export)
   ...(process.env.NODE_ENV !== 'production' && {
@@ -21,9 +21,9 @@ const nextConfig = {
           source: '/live',
           destination: 'http://localhost:8080/live',
         },
-      ]
+      ];
     },
   }),
-}
+};
 
-module.exports = nextConfig
+module.exports = nextConfig;

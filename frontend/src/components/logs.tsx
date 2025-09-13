@@ -1,16 +1,29 @@
-"use client"
+'use client';
 
-import { useState, useEffect, useMemo } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
-import { cn } from "@/lib/utils"
-import { DateTimePicker } from "@/components/ui/date-time-picker"
-import { 
+import { useState, useEffect, useMemo } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { cn } from '@/lib/utils';
+import { DateTimePicker } from '@/components/ui/date-time-picker';
+import {
   FileText,
   Play,
   Pause,
@@ -28,247 +41,247 @@ import {
   Zap,
   CheckCircle,
   Check,
-  ChevronsUpDown
-} from "lucide-react"
-import { LogEntry, LogStats } from "@/types/api"
-import { logsClient } from "@/lib/logs-client"
-import { getBackendUrl } from '@/lib/config'
-import { useBackendConnectivity } from '@/providers/backend-connectivity-provider'
+  ChevronsUpDown,
+} from 'lucide-react';
+import { LogEntry, LogStats } from '@/types/api';
+import { logsClient } from '@/lib/logs-client';
+import { getBackendUrl } from '@/lib/config';
+import { useBackendConnectivity } from '@/providers/backend-connectivity-provider';
 
 export function Logs() {
-  const { isConnected: backendConnected } = useBackendConnectivity()
-  
+  const { isConnected: backendConnected } = useBackendConnectivity();
+
   // Logs state
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [pendingLogs, setPendingLogs] = useState<LogEntry[]>([])
-  const [logsConnected, setLogsConnected] = useState(false)
-  const [logsPaused, setLogsPaused] = useState(false)
-  const [logStats, setLogStats] = useState<LogStats | null>(null)
-  const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set())
-  const [showRawData, setShowRawData] = useState<Set<string>>(new Set())
-  const [dateAfter, setDateAfter] = useState<Date | undefined>(undefined)
-  const [dateBefore, setDateBefore] = useState<Date | undefined>(undefined)
-  
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [pendingLogs, setPendingLogs] = useState<LogEntry[]>([]);
+  const [logsConnected, setLogsConnected] = useState(false);
+  const [logsPaused, setLogsPaused] = useState(false);
+  const [logStats, setLogStats] = useState<LogStats | null>(null);
+  const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
+  const [showRawData, setShowRawData] = useState<Set<string>>(new Set());
+  const [dateAfter, setDateAfter] = useState<Date | undefined>(undefined);
+  const [dateBefore, setDateBefore] = useState<Date | undefined>(undefined);
+
   // Filter state
-  const [textFilter, setTextFilter] = useState("")
-  const [levelFilter, setLevelFilter] = useState("all")
-  const [moduleFilter, setModuleFilter] = useState("all")
-  const [moduleOpen, setModuleOpen] = useState(false)
+  const [textFilter, setTextFilter] = useState('');
+  const [levelFilter, setLevelFilter] = useState('all');
+  const [moduleFilter, setModuleFilter] = useState('all');
+  const [moduleOpen, setModuleOpen] = useState(false);
 
   // Get unique modules from logs for dropdown
   const uniqueModules = useMemo(() => {
-    const modules = new Set<string>()
-    logs.forEach(log => {
-      if (log.target) modules.add(log.target)
-      if (log.module && log.module !== log.target) modules.add(log.module)
-    })
-    return Array.from(modules).sort()
-  }, [logs])
+    const modules = new Set<string>();
+    logs.forEach((log) => {
+      if (log.target) modules.add(log.target);
+      if (log.module && log.module !== log.target) modules.add(log.module);
+    });
+    return Array.from(modules).sort();
+  }, [logs]);
 
   // Filter logs
   const filteredLogs = useMemo(() => {
-    return logs.filter(log => {
-      const matchesText = textFilter === "" || 
+    return logs.filter((log) => {
+      const matchesText =
+        textFilter === '' ||
         log.message.toLowerCase().includes(textFilter.toLowerCase()) ||
         (log.module && log.module.toLowerCase().includes(textFilter.toLowerCase())) ||
         (log.target && log.target.toLowerCase().includes(textFilter.toLowerCase())) ||
-        (log.context && JSON.stringify(log.context).toLowerCase().includes(textFilter.toLowerCase())) ||
-        (log.fields && JSON.stringify(log.fields).toLowerCase().includes(textFilter.toLowerCase())) ||
-        (log.span && JSON.stringify(log.span).toLowerCase().includes(textFilter.toLowerCase()))
-      
-      const matchesLevel = levelFilter === "all" || log.level === levelFilter
-      
-      const matchesModule = moduleFilter === "all" || 
-        moduleFilter === log.target ||
-        moduleFilter === log.module
-      
+        (log.context &&
+          JSON.stringify(log.context).toLowerCase().includes(textFilter.toLowerCase())) ||
+        (log.fields &&
+          JSON.stringify(log.fields).toLowerCase().includes(textFilter.toLowerCase())) ||
+        (log.span && JSON.stringify(log.span).toLowerCase().includes(textFilter.toLowerCase()));
+
+      const matchesLevel = levelFilter === 'all' || log.level === levelFilter;
+
+      const matchesModule =
+        moduleFilter === 'all' || moduleFilter === log.target || moduleFilter === log.module;
+
       // Date range filtering
-      const logDate = new Date(log.timestamp)
-      const matchesDateAfter = !dateAfter || logDate >= dateAfter
-      const matchesDateBefore = !dateBefore || logDate <= dateBefore
-      
-      return matchesText && matchesLevel && matchesModule && matchesDateAfter && matchesDateBefore
-    })
-  }, [logs, textFilter, levelFilter, moduleFilter, dateAfter, dateBefore])
+      const logDate = new Date(log.timestamp);
+      const matchesDateAfter = !dateAfter || logDate >= dateAfter;
+      const matchesDateBefore = !dateBefore || logDate <= dateBefore;
+
+      return matchesText && matchesLevel && matchesModule && matchesDateAfter && matchesDateBefore;
+    });
+  }, [logs, textFilter, levelFilter, moduleFilter, dateAfter, dateBefore]);
 
   // Handle new logs from SSE
   const handleNewLog = (log: LogEntry) => {
     if (logsPaused) {
-      setPendingLogs(prev => [log, ...prev].slice(0, 100)) // Keep only last 100 pending
+      setPendingLogs((prev) => [log, ...prev].slice(0, 100)); // Keep only last 100 pending
     } else {
-      setLogs(prev => [log, ...prev].slice(0, 1000)) // Keep only last 1000 logs
+      setLogs((prev) => [log, ...prev].slice(0, 1000)); // Keep only last 1000 logs
     }
-  }
+  };
 
   // Fetch log statistics
   const fetchLogStats = async () => {
     try {
-      const backendUrl = getBackendUrl()
-      const response = await fetch(`${backendUrl}/api/v1/logs/stats`)
+      const backendUrl = getBackendUrl();
+      const response = await fetch(`${backendUrl}/api/v1/logs/stats`);
       if (response.ok) {
-        const stats: LogStats = await response.json()
-        setLogStats(stats)
+        const stats: LogStats = await response.json();
+        setLogStats(stats);
       }
     } catch (error) {
-      console.warn('Failed to fetch log stats:', error)
+      console.warn('Failed to fetch log stats:', error);
     }
-  }
+  };
 
   // Toggle logs stream
   const toggleLogsStream = () => {
     if (logsConnected) {
-      logsClient.disconnect()
-      setLogsConnected(false)
+      logsClient.disconnect();
+      setLogsConnected(false);
     } else {
-      logsClient.connect()
-      logsClient.subscribe(handleNewLog)
-      setLogsConnected(true)
+      logsClient.connect();
+      logsClient.subscribe(handleNewLog);
+      setLogsConnected(true);
     }
-  }
+  };
 
   // Toggle pause/resume logs
   const toggleLogsPause = () => {
     if (logsPaused) {
       // Resume - add pending logs to main list
-      setLogs(prev => [...pendingLogs, ...prev].slice(0, 1000))
-      setPendingLogs([])
+      setLogs((prev) => [...pendingLogs, ...prev].slice(0, 1000));
+      setPendingLogs([]);
     }
-    setLogsPaused(!logsPaused)
-  }
+    setLogsPaused(!logsPaused);
+  };
 
   // Clear logs
   const clearLogs = () => {
-    setLogs([])
-    setPendingLogs([])
-  }
+    setLogs([]);
+    setPendingLogs([]);
+  };
 
   // Get level badge variant and icon
-  function getLevelBadgeVariant(level: string): "default" | "secondary" | "destructive" | "outline" {
+  function getLevelBadgeVariant(
+    level: string
+  ): 'default' | 'secondary' | 'destructive' | 'outline' {
     switch (level) {
       case 'error':
-        return 'destructive'
+        return 'destructive';
       case 'warn':
-        return 'secondary'
+        return 'secondary';
       case 'info':
-        return 'default'
+        return 'default';
       case 'debug':
-        return 'outline'
+        return 'outline';
       case 'trace':
-        return 'outline'
+        return 'outline';
       default:
-        return 'outline'
+        return 'outline';
     }
   }
 
   function getLevelIcon(level: string) {
     switch (level) {
       case 'error':
-        return <XCircle className="h-3 w-3" />
+        return <XCircle className="h-3 w-3" />;
       case 'warn':
-        return <AlertTriangle className="h-3 w-3" />
+        return <AlertTriangle className="h-3 w-3" />;
       case 'info':
-        return <Info className="h-3 w-3" />
+        return <Info className="h-3 w-3" />;
       case 'debug':
       case 'trace':
-        return <Bug className="h-3 w-3" />
+        return <Bug className="h-3 w-3" />;
       default:
-        return <FileText className="h-3 w-3" />
+        return <FileText className="h-3 w-3" />;
     }
   }
 
   const toggleLogExpansion = (logId: string) => {
-    setExpandedLogs(prev => {
-      const newSet = new Set(prev)
+    setExpandedLogs((prev) => {
+      const newSet = new Set(prev);
       if (newSet.has(logId)) {
-        newSet.delete(logId)
+        newSet.delete(logId);
       } else {
-        newSet.add(logId)
+        newSet.add(logId);
       }
-      return newSet
-    })
-  }
+      return newSet;
+    });
+  };
 
   const toggleRawData = (logId: string) => {
-    setShowRawData(prev => {
-      const newSet = new Set(prev)
+    setShowRawData((prev) => {
+      const newSet = new Set(prev);
       if (newSet.has(logId)) {
-        newSet.delete(logId)
+        newSet.delete(logId);
       } else {
-        newSet.add(logId)
+        newSet.add(logId);
       }
-      return newSet
-    })
-  }
+      return newSet;
+    });
+  };
 
   const renderLogFields = (fields: Record<string, any> | null | undefined) => {
-    if (!fields || typeof fields !== 'object') return null
-    
-    const filteredFields = Object.entries(fields).filter(([key]) => key !== 'message')
-    
-    if (filteredFields.length === 0) return null
+    if (!fields || typeof fields !== 'object') return null;
+
+    const filteredFields = Object.entries(fields).filter(([key]) => key !== 'message');
+
+    if (filteredFields.length === 0) return null;
 
     return (
       <div className="mt-2 space-y-1">
         {filteredFields.map(([key, value]) => (
           <div key={key} className="flex items-start gap-2 text-xs">
-            <span className="font-medium text-muted-foreground min-w-0 flex-shrink-0">
-              {key}:
-            </span>
+            <span className="font-medium text-muted-foreground min-w-0 flex-shrink-0">{key}:</span>
             <span className="font-mono bg-muted px-1 py-0.5 rounded text-xs break-all">
               {typeof value === 'string' ? value : JSON.stringify(value)}
             </span>
           </div>
         ))}
       </div>
-    )
-  }
+    );
+  };
 
   const renderLogSpan = (span: any) => {
-    if (!span || typeof span !== 'object') return null
+    if (!span || typeof span !== 'object') return null;
 
     return (
       <div className="mt-2 space-y-1">
         <div className="text-xs text-muted-foreground font-medium">Span Information:</div>
         {Object.entries(span).map(([key, value]) => (
           <div key={key} className="flex items-start gap-2 text-xs">
-            <span className="font-medium text-muted-foreground min-w-0 flex-shrink-0">
-              {key}:
-            </span>
+            <span className="font-medium text-muted-foreground min-w-0 flex-shrink-0">{key}:</span>
             <span className="font-mono bg-muted px-1 py-0.5 rounded text-xs break-all">
               {typeof value === 'string' ? value : JSON.stringify(value)}
             </span>
           </div>
         ))}
       </div>
-    )
-  }
+    );
+  };
 
   useEffect(() => {
     // Only connect to logs stream if backend is available
     if (!backendConnected) {
-      logsClient.disconnect()
-      setLogsConnected(false)
-      return
+      logsClient.disconnect();
+      setLogsConnected(false);
+      return;
     }
-    
+
     // Auto-connect to logs stream
-    logsClient.connect()
-    logsClient.subscribe(handleNewLog)
-    setLogsConnected(true)
-    
+    logsClient.connect();
+    logsClient.subscribe(handleNewLog);
+    setLogsConnected(true);
+
     // Fetch initial stats
-    fetchLogStats()
-    
+    fetchLogStats();
+
     // Refresh stats every 30 seconds
-    const statsInterval = setInterval(fetchLogStats, 30000)
-    
+    const statsInterval = setInterval(fetchLogStats, 30000);
+
     // Cleanup on unmount or when backend disconnects
     return () => {
-      logsClient.disconnect()
-      setLogsConnected(false)
-      clearInterval(statsInterval)
-    }
-  }, [backendConnected])
+      logsClient.disconnect();
+      setLogsConnected(false);
+      clearInterval(statsInterval);
+    };
+  }, [backendConnected]);
 
   return (
     <div className="space-y-6">
@@ -280,15 +293,13 @@ export function Logs() {
             <FileText className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {logStats?.total_logs || logs.length}
-            </div>
+            <div className="text-2xl font-bold">{logStats?.total_logs || logs.length}</div>
             <p className="text-xs text-muted-foreground">
               {pendingLogs.length > 0 && `${pendingLogs.length} pending`}
             </p>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Errors</CardTitle>
@@ -296,11 +307,11 @@ export function Logs() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-destructive">
-              {logStats?.logs_by_level?.error || logs.filter(l => l.level === 'error').length}
+              {logStats?.logs_by_level?.error || logs.filter((l) => l.level === 'error').length}
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Warnings</CardTitle>
@@ -308,23 +319,21 @@ export function Logs() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-amber-500">
-              {logStats?.logs_by_level?.warn || logs.filter(l => l.level === 'warn').length}
+              {logStats?.logs_by_level?.warn || logs.filter((l) => l.level === 'warn').length}
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Connection</CardTitle>
-            <div className={`h-2 w-2 rounded-full ${logsConnected ? 'bg-green-500' : 'bg-gray-400'}`} />
+            <div
+              className={`h-2 w-2 rounded-full ${logsConnected ? 'bg-green-500' : 'bg-gray-400'}`}
+            />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {logsConnected ? 'Live' : 'Offline'}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {logsPaused && 'Paused'}
-            </p>
+            <div className="text-2xl font-bold">{logsConnected ? 'Live' : 'Offline'}</div>
+            <p className="text-xs text-muted-foreground">{logsPaused && 'Paused'}</p>
           </CardContent>
         </Card>
       </div>
@@ -348,9 +357,9 @@ export function Logs() {
         <div>
           {/* Log Controls */}
           <div className="flex flex-wrap items-center gap-3 mb-4">
-            <Button 
-              onClick={toggleLogsStream} 
-              variant={logsConnected ? "destructive" : "default"}
+            <Button
+              onClick={toggleLogsStream}
+              variant={logsConnected ? 'destructive' : 'default'}
               size="sm"
             >
               {logsConnected ? (
@@ -365,13 +374,9 @@ export function Logs() {
                 </>
               )}
             </Button>
-            
+
             {logsConnected && (
-              <Button 
-                onClick={toggleLogsPause} 
-                variant="outline"
-                size="sm"
-              >
+              <Button onClick={toggleLogsPause} variant="outline" size="sm">
                 {logsPaused ? (
                   <>
                     <Play className="h-4 w-4 mr-2" />
@@ -385,17 +390,19 @@ export function Logs() {
                 )}
               </Button>
             )}
-            
+
             <Button onClick={clearLogs} variant="outline" size="sm">
               Clear
             </Button>
-            
+
             <Button onClick={fetchLogStats} variant="outline" size="sm">
               Refresh Stats
             </Button>
-            
+
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <div className={`h-2 w-2 rounded-full ${logsConnected ? 'bg-green-500' : 'bg-gray-400'}`} />
+              <div
+                className={`h-2 w-2 rounded-full ${logsConnected ? 'bg-green-500' : 'bg-gray-400'}`}
+              />
               {logsConnected ? 'Connected' : 'Disconnected'}
             </div>
           </div>
@@ -414,7 +421,7 @@ export function Logs() {
                   className="pl-9 h-9"
                 />
               </div>
-              
+
               {/* Right-aligned filters with fixed widths */}
               <div className="flex flex-col sm:flex-row gap-2 lg:ml-auto">
                 <Select value={levelFilter} onValueChange={setLevelFilter}>
@@ -430,7 +437,7 @@ export function Logs() {
                     <SelectItem value="error">Error</SelectItem>
                   </SelectContent>
                 </Select>
-                
+
                 <Popover open={moduleOpen} onOpenChange={setModuleOpen}>
                   <PopoverTrigger asChild>
                     <Button
@@ -440,8 +447,11 @@ export function Logs() {
                       className="h-9 w-full sm:w-40 justify-between font-normal"
                     >
                       <span className="truncate">
-                        {moduleFilter === "all" ? "All modules" : 
-                         moduleFilter.length > 20 ? `${moduleFilter.substring(0, 20)}...` : moduleFilter}
+                        {moduleFilter === 'all'
+                          ? 'All modules'
+                          : moduleFilter.length > 20
+                            ? `${moduleFilter.substring(0, 20)}...`
+                            : moduleFilter}
                       </span>
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
@@ -455,14 +465,14 @@ export function Logs() {
                           <CommandItem
                             value="all"
                             onSelect={() => {
-                              setModuleFilter("all")
-                              setModuleOpen(false)
+                              setModuleFilter('all');
+                              setModuleOpen(false);
                             }}
                           >
                             <Check
                               className={cn(
-                                "mr-2 h-4 w-4",
-                                moduleFilter === "all" ? "opacity-100" : "opacity-0"
+                                'mr-2 h-4 w-4',
+                                moduleFilter === 'all' ? 'opacity-100' : 'opacity-0'
                               )}
                             />
                             All Modules
@@ -472,14 +482,14 @@ export function Logs() {
                               key={module}
                               value={module}
                               onSelect={(currentValue) => {
-                                setModuleFilter(currentValue)
-                                setModuleOpen(false)
+                                setModuleFilter(currentValue);
+                                setModuleOpen(false);
                               }}
                             >
                               <Check
                                 className={cn(
-                                  "mr-2 h-4 w-4",
-                                  moduleFilter === module ? "opacity-100" : "opacity-0"
+                                  'mr-2 h-4 w-4',
+                                  moduleFilter === module ? 'opacity-100' : 'opacity-0'
                                 )}
                               />
                               {module}
@@ -490,7 +500,7 @@ export function Logs() {
                     </Command>
                   </PopoverContent>
                 </Popover>
-                
+
                 <div className="flex items-center gap-2">
                   <DateTimePicker
                     value={dateAfter}
@@ -509,8 +519,8 @@ export function Logs() {
                       variant="outline"
                       size="sm"
                       onClick={() => {
-                        setDateAfter(undefined)
-                        setDateBefore(undefined)
+                        setDateAfter(undefined);
+                        setDateBefore(undefined);
                       }}
                       className="h-9 w-9 p-0"
                       title="Clear date range"
@@ -521,7 +531,7 @@ export function Logs() {
                 </div>
               </div>
             </div>
-            
+
             {/* Filter Stats */}
             <div className="text-sm text-muted-foreground flex items-center gap-2">
               <Filter className="h-4 w-4" />
@@ -537,13 +547,16 @@ export function Logs() {
               </div>
             ) : (
               filteredLogs.map((log) => {
-                const isExpanded = expandedLogs.has(log.id)
-                const showRaw = showRawData.has(log.id)
-                const hasFields = log.fields && Object.keys(log.fields).length > 0
-                const hasSpan = log.span && typeof log.span === 'object'
-                
+                const isExpanded = expandedLogs.has(log.id);
+                const showRaw = showRawData.has(log.id);
+                const hasFields = log.fields && Object.keys(log.fields).length > 0;
+                const hasSpan = log.span && typeof log.span === 'object';
+
                 return (
-                  <div key={`${log.id}-${log.timestamp}`} className="border rounded-lg hover:bg-muted/50">
+                  <div
+                    key={`${log.id}-${log.timestamp}`}
+                    className="border rounded-lg hover:bg-muted/50"
+                  >
                     <div className="flex items-start gap-3 p-3">
                       <div className="flex-shrink-0 mt-0.5">
                         <Badge variant={getLevelBadgeVariant(log.level)} className="text-xs gap-1">
@@ -551,7 +564,7 @@ export function Logs() {
                           {log.level}
                         </Badge>
                       </div>
-                      
+
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
                           <p className="text-sm font-medium leading-tight">{log.message}</p>
@@ -559,7 +572,7 @@ export function Logs() {
                             <span className="text-xs text-muted-foreground">
                               {new Date(log.timestamp).toLocaleTimeString()}
                             </span>
-                            
+
                             {/* Expand/Collapse Button */}
                             {(hasFields || hasSpan || log.context) && (
                               <Button
@@ -575,7 +588,7 @@ export function Logs() {
                                 )}
                               </Button>
                             )}
-                            
+
                             {/* Raw Data Toggle */}
                             <Button
                               variant="ghost"
@@ -588,7 +601,7 @@ export function Logs() {
                             </Button>
                           </div>
                         </div>
-                        
+
                         <div className="flex items-center gap-2 mt-1">
                           <Badge variant="outline" className="text-xs">
                             {log.target || 'unknown'}
@@ -600,7 +613,8 @@ export function Logs() {
                           )}
                           {log.file && (
                             <span className="text-xs text-muted-foreground">
-                              {log.file}{log.line && `:${log.line}`}
+                              {log.file}
+                              {log.line && `:${log.line}`}
                             </span>
                           )}
                           {hasFields && (
@@ -619,13 +633,13 @@ export function Logs() {
                             </Badge>
                           )}
                         </div>
-                        
+
                         {/* Expanded Fields */}
                         {isExpanded && hasFields && renderLogFields(log.fields)}
-                        
+
                         {/* Expanded Span */}
                         {isExpanded && hasSpan && renderLogSpan(log.span)}
-                        
+
                         {/* Context (legacy) */}
                         {isExpanded && log.context && Object.keys(log.context).length > 0 && (
                           <div className="mt-2 p-2 bg-muted rounded text-xs">
@@ -635,7 +649,7 @@ export function Logs() {
                             </pre>
                           </div>
                         )}
-                        
+
                         {/* Raw Data */}
                         {showRaw && (
                           <div className="mt-2 p-2 bg-muted rounded text-xs">
@@ -648,12 +662,12 @@ export function Logs() {
                       </div>
                     </div>
                   </div>
-                )
+                );
               })
             )}
           </div>
         </div>
       </div>
     </div>
-  )
+  );
 }

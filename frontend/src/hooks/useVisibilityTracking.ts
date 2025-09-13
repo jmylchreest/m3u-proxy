@@ -1,8 +1,8 @@
-"use client"
+'use client';
 
-import { useEffect, useRef } from 'react'
-import { useProgressContext } from '@/providers/ProgressProvider'
-import { Debug } from '@/utils/debug'
+import { useEffect, useRef } from 'react';
+import { useProgressContext } from '@/providers/ProgressProvider';
+import { Debug } from '@/utils/debug';
 
 /**
  * Hook to automatically mark events as seen when they appear in the UI
@@ -10,31 +10,31 @@ import { Debug } from '@/utils/debug'
  * @param enabled - Whether to track visibility (default: true)
  */
 export function useVisibilityTracking(eventIds: string[], enabled: boolean = true) {
-  const context = useProgressContext()
-  const previousEventIds = useRef<Set<string>>(new Set())
+  const context = useProgressContext();
+  const previousEventIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!enabled || eventIds.length === 0) return
+    if (!enabled || eventIds.length === 0) return;
 
-    const currentEventIds = new Set(eventIds)
-    const newEventIds: string[] = []
+    const currentEventIds = new Set(eventIds);
+    const newEventIds: string[] = [];
 
     // Find events that are newly visible
     for (const eventId of currentEventIds) {
       if (!previousEventIds.current.has(eventId)) {
-        newEventIds.push(eventId)
+        newEventIds.push(eventId);
       }
     }
 
     // Mark new events as seen/acknowledged
     if (newEventIds.length > 0) {
-      Debug.log('[useVisibilityTracking] Marking events as seen:', newEventIds)
-      context.markAsSeen(newEventIds)
+      Debug.log('[useVisibilityTracking] Marking events as seen:', newEventIds);
+      context.markAsSeen(newEventIds);
     }
 
     // Update the previous set
-    previousEventIds.current = currentEventIds
-  }, [eventIds, enabled, context])
+    previousEventIds.current = currentEventIds;
+  }, [eventIds, enabled, context]);
 }
 
 /**
@@ -43,12 +43,12 @@ export function useVisibilityTracking(eventIds: string[], enabled: boolean = tru
  * @param eventIds - Array of event IDs to mark as seen
  */
 export function useMarkAsSeen(eventIds: string[]) {
-  const context = useProgressContext()
-  
+  const context = useProgressContext();
+
   useEffect(() => {
     if (eventIds.length > 0) {
-      Debug.log('[useMarkAsSeen] Marking events as seen:', eventIds)
-      context.markAsSeen(eventIds)
+      Debug.log('[useMarkAsSeen] Marking events as seen:', eventIds);
+      context.markAsSeen(eventIds);
     }
-  }, [eventIds, context])
+  }, [eventIds, context]);
 }

@@ -4,12 +4,16 @@
 export function getBackendUrl(): string {
   // For development, use environment variable with fallback to localhost:8080
   if (process.env.NODE_ENV === 'development') {
-    return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
+    return (
+      process.env.NEXT_PUBLIC_API_BASE_URL ||
+      process.env.NEXT_PUBLIC_BACKEND_URL ||
+      'http://localhost:8080'
+    );
   }
-  
+
   // For production (embedded in backend), use relative URLs
   // This automatically works with any host/port the backend is running on
-  return ''
+  return '';
 }
 
 // API Configuration
@@ -24,13 +28,13 @@ export const API_CONFIG = {
     logos: '/api/v1/logos',
     relays: '/api/v1/relay',
     dashboard: '/api/v1/metrics/dashboard',
-    health: '/health'
-  }
-} as const
+    health: '/health',
+  },
+} as const;
 
 // Request timeout in milliseconds
-export const REQUEST_TIMEOUT = 30000
+export const REQUEST_TIMEOUT = 30000;
 
 // Default pagination settings
-export const DEFAULT_PAGE_SIZE = 20
-export const MAX_PAGE_SIZE = 100
+export const DEFAULT_PAGE_SIZE = 20;
+export const MAX_PAGE_SIZE = 100;

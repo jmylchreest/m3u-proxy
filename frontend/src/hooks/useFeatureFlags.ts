@@ -58,11 +58,11 @@ export function useFeatureFlags() {
       // Update cache (always update cache data, but caching behavior is controlled by feature flag)
       featureFlagsCache = flags;
       featureConfigsCache = configs;
-      
+
       // Only mark cache as valid if caching is enabled AND configured
       const isCacheEnabled = flags['feature-cache'] === true;
       const cacheDuration = configs['feature-cache']?.['cache-duration'];
-      
+
       if (isCacheEnabled && cacheDuration) {
         isCacheValid = true;
         cacheTimestamp = Date.now();
@@ -87,11 +87,11 @@ export function useFeatureFlags() {
     // Check if caching is enabled via feature flag from server
     const isCacheEnabled = featureFlagsCache['feature-cache'] === true;
     const cacheDuration = featureConfigsCache['feature-cache']?.['cache-duration'];
-    
+
     // Only use cache if caching is enabled AND cache duration is configured AND cache is valid
     if (isCacheEnabled && cacheDuration && isCacheValid) {
       const now = Date.now();
-      if ((now - cacheTimestamp) < cacheDuration) {
+      if (now - cacheTimestamp < cacheDuration) {
         setFeatureFlags(featureFlagsCache);
         setFeatureConfigs(featureConfigsCache);
         setIsLoading(false);
@@ -129,7 +129,10 @@ export function isFeatureEnabled(featureKey: string, featureFlags?: FeatureFlags
  * @param featureConfigs - Optional feature configs object, if not provided will use cached values
  * @returns FeatureConfig - configuration object for the feature, empty object if not found
  */
-export function getFeatureConfig(featureKey: string, featureConfigs?: FeatureConfigs): FeatureConfig {
+export function getFeatureConfig(
+  featureKey: string,
+  featureConfigs?: FeatureConfigs
+): FeatureConfig {
   const configs = featureConfigs || featureConfigsCache;
   return configs[featureKey] || {}; // Return empty object if not found
 }
@@ -141,7 +144,11 @@ export function getFeatureConfig(featureKey: string, featureConfigs?: FeatureCon
  * @param featureConfigs - Optional feature configs object, if not provided will use cached values
  * @returns any - the config value, undefined if not found
  */
-export function getFeatureConfigValue(featureKey: string, configKey: string, featureConfigs?: FeatureConfigs): any {
+export function getFeatureConfigValue(
+  featureKey: string,
+  configKey: string,
+  featureConfigs?: FeatureConfigs
+): any {
   const config = getFeatureConfig(featureKey, featureConfigs);
   return config[configKey];
 }
@@ -154,7 +161,12 @@ export function getFeatureConfigValue(featureKey: string, configKey: string, fea
  * @param featureConfigs - Optional feature configs object
  * @returns string - the config value as string, or default value
  */
-export function getFeatureConfigString(featureKey: string, configKey: string, defaultValue: string = '', featureConfigs?: FeatureConfigs): string {
+export function getFeatureConfigString(
+  featureKey: string,
+  configKey: string,
+  defaultValue: string = '',
+  featureConfigs?: FeatureConfigs
+): string {
   const value = getFeatureConfigValue(featureKey, configKey, featureConfigs);
   return typeof value === 'string' ? value : defaultValue;
 }
@@ -167,7 +179,12 @@ export function getFeatureConfigString(featureKey: string, configKey: string, de
  * @param featureConfigs - Optional feature configs object
  * @returns number - the config value as number, or default value
  */
-export function getFeatureConfigNumber(featureKey: string, configKey: string, defaultValue: number = 0, featureConfigs?: FeatureConfigs): number {
+export function getFeatureConfigNumber(
+  featureKey: string,
+  configKey: string,
+  defaultValue: number = 0,
+  featureConfigs?: FeatureConfigs
+): number {
   const value = getFeatureConfigValue(featureKey, configKey, featureConfigs);
   return typeof value === 'number' ? value : defaultValue;
 }
@@ -180,7 +197,12 @@ export function getFeatureConfigNumber(featureKey: string, configKey: string, de
  * @param featureConfigs - Optional feature configs object
  * @returns boolean - the config value as boolean, or default value
  */
-export function getFeatureConfigBoolean(featureKey: string, configKey: string, defaultValue: boolean = false, featureConfigs?: FeatureConfigs): boolean {
+export function getFeatureConfigBoolean(
+  featureKey: string,
+  configKey: string,
+  defaultValue: boolean = false,
+  featureConfigs?: FeatureConfigs
+): boolean {
   const value = getFeatureConfigValue(featureKey, configKey, featureConfigs);
   return typeof value === 'boolean' ? value : defaultValue;
 }
@@ -192,11 +214,11 @@ export function getFeatureConfigBoolean(featureKey: string, configKey: string, d
  */
 export function useFeatureFlag(featureKey: string) {
   const { featureFlags, isLoading, error } = useFeatureFlags();
-  
+
   return {
     isEnabled: isFeatureEnabled(featureKey, featureFlags),
     isLoading,
-    error
+    error,
   };
 }
 
@@ -208,20 +230,19 @@ export function useFeatureFlag(featureKey: string) {
 export function useFeatureConfig(featureKey: string) {
   const { featureConfigs, isLoading, error } = useFeatureFlags();
   const config = getFeatureConfig(featureKey, featureConfigs);
-  
+
   return {
     config,
     isLoading,
     error,
     // Convenience methods for common config value types
-    getString: (configKey: string, defaultValue: string = '') => 
+    getString: (configKey: string, defaultValue: string = '') =>
       getFeatureConfigString(featureKey, configKey, defaultValue, featureConfigs),
-    getNumber: (configKey: string, defaultValue: number = 0) => 
+    getNumber: (configKey: string, defaultValue: number = 0) =>
       getFeatureConfigNumber(featureKey, configKey, defaultValue, featureConfigs),
-    getBoolean: (configKey: string, defaultValue: boolean = false) => 
+    getBoolean: (configKey: string, defaultValue: boolean = false) =>
       getFeatureConfigBoolean(featureKey, configKey, defaultValue, featureConfigs),
-    getValue: (configKey: string) => 
-      getFeatureConfigValue(featureKey, configKey, featureConfigs),
+    getValue: (configKey: string) => getFeatureConfigValue(featureKey, configKey, featureConfigs),
   };
 }
 
@@ -234,21 +255,20 @@ export function useFeature(featureKey: string) {
   const { featureFlags, featureConfigs, isLoading, error } = useFeatureFlags();
   const isEnabled = isFeatureEnabled(featureKey, featureFlags);
   const config = getFeatureConfig(featureKey, featureConfigs);
-  
+
   return {
     isEnabled,
     config,
     isLoading,
     error,
     // Convenience methods for common config value types
-    getString: (configKey: string, defaultValue: string = '') => 
+    getString: (configKey: string, defaultValue: string = '') =>
       getFeatureConfigString(featureKey, configKey, defaultValue, featureConfigs),
-    getNumber: (configKey: string, defaultValue: number = 0) => 
+    getNumber: (configKey: string, defaultValue: number = 0) =>
       getFeatureConfigNumber(featureKey, configKey, defaultValue, featureConfigs),
-    getBoolean: (configKey: string, defaultValue: boolean = false) => 
+    getBoolean: (configKey: string, defaultValue: boolean = false) =>
       getFeatureConfigBoolean(featureKey, configKey, defaultValue, featureConfigs),
-    getValue: (configKey: string) => 
-      getFeatureConfigValue(featureKey, configKey, featureConfigs),
+    getValue: (configKey: string) => getFeatureConfigValue(featureKey, configKey, featureConfigs),
   };
 }
 

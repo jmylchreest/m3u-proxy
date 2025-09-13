@@ -1,23 +1,11 @@
-"use client";
+'use client';
 
-import React, {
-  useState,
-  useEffect,
-  useCallback,
-  useRef,
-  useMemo,
-} from "react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import {
   Search,
   Calendar,
@@ -28,21 +16,16 @@ import {
   Table as TableIcon,
   Globe,
   Play,
-} from "lucide-react";
-import { DateTimePicker } from "@/components/ui/date-time-picker";
+} from 'lucide-react';
+import { DateTimePicker } from '@/components/ui/date-time-picker';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from '@/components/ui/select';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Table,
   TableBody,
@@ -50,18 +33,25 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
-import { Check, ChevronsUpDown } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { VideoPlayerModal } from "@/components/video-player-modal";
-import { getBackendUrl } from "@/lib/config";
-import { Debug } from "@/utils/debug";
-import { CanvasEPG } from "@/components/epg/CanvasEPG";
+} from '@/components/ui/table';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Command,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+} from '@/components/ui/command';
+import { Check, ChevronsUpDown } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { VideoPlayerModal } from '@/components/video-player-modal';
+import { getBackendUrl } from '@/lib/config';
+import { Debug } from '@/utils/debug';
+import { CanvasEPG } from '@/components/epg/CanvasEPG';
 
 interface Channel {
   id: string;
@@ -101,7 +91,7 @@ interface EpgSource {
 interface SourceOption {
   id: string;
   name: string;
-  type: "epg_source" | "stream_source";
+  type: 'epg_source' | 'stream_source';
   display_name: string;
 }
 
@@ -128,28 +118,24 @@ export default function EpgPage() {
   const [guideData, setGuideData] = useState<EpgGuideResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [selectedSource, setSelectedSource] = useState<string>("");
-  const [selectedCategory, setSelectedCategory] = useState<string>("");
-  const [viewMode, setViewMode] = useState<"grid" | "list" | "table" | "guide">("guide");
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [selectedSource, setSelectedSource] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table' | 'guide'>('guide');
   const [currentPage, setCurrentPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
-  const [timeRange, setTimeRange] = useState<
-    "today" | "tomorrow" | "week" | "custom"
-  >("today");
+  const [timeRange, setTimeRange] = useState<'today' | 'tomorrow' | 'week' | 'custom'>('today');
   const [customDate, setCustomDate] = useState<Date | undefined>(undefined);
   const [hidePastPrograms, setHidePastPrograms] = useState(true);
-  const [channelFilter, setChannelFilter] = useState("");
+  const [channelFilter, setChannelFilter] = useState('');
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [guideTimeRange, setGuideTimeRange] = useState<"6h" | "12h" | "18h" | "24h" | "30h" | "36h" | "42h" | "48h">(
-    "24h",
-  );
-  const [guideStartTime, setGuideStartTime] = useState<Date | undefined>(
-    undefined,
-  );
+  const [guideTimeRange, setGuideTimeRange] = useState<
+    '6h' | '12h' | '18h' | '24h' | '30h' | '36h' | '42h' | '48h'
+  >('24h');
+  const [guideStartTime, setGuideStartTime] = useState<Date | undefined>(undefined);
   const [selectedTimezone, setSelectedTimezone] = useState<string>(
     // Detect user's timezone on component mount
     typeof window !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC'
@@ -204,63 +190,72 @@ export default function EpgPage() {
   ];
 
   // Helper function to format time in selected timezone
-  const formatTimeInTimezone = useCallback((timeString: string) => {
-    try {
-      const date = new Date(timeString);
-      if (isNaN(date.getTime())) {
+  const formatTimeInTimezone = useCallback(
+    (timeString: string) => {
+      try {
+        const date = new Date(timeString);
+        if (isNaN(date.getTime())) {
+          return '--:--';
+        }
+
+        return date.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          timeZone: selectedTimezone,
+        });
+      } catch (error) {
+        Debug.warn('Error formatting time in timezone:', error);
         return '--:--';
       }
-      
-      return date.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-        timeZone: selectedTimezone,
-      });
-    } catch (error) {
-      Debug.warn('Error formatting time in timezone:', error);
-      return '--:--';
-    }
-  }, [selectedTimezone]);
+    },
+    [selectedTimezone]
+  );
 
   // Helper function to format date in selected timezone
-  const formatDateInTimezone = useCallback((timeString: string) => {
-    try {
-      const date = new Date(timeString);
-      if (isNaN(date.getTime())) {
+  const formatDateInTimezone = useCallback(
+    (timeString: string) => {
+      try {
+        const date = new Date(timeString);
+        if (isNaN(date.getTime())) {
+          return 'Invalid Date';
+        }
+
+        return date.toLocaleDateString([], {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric',
+          timeZone: selectedTimezone,
+        });
+      } catch (error) {
+        Debug.warn('Error formatting date in timezone:', error);
         return 'Invalid Date';
       }
-      
-      return date.toLocaleDateString([], {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        timeZone: selectedTimezone,
-      });
-    } catch (error) {
-      Debug.warn('Error formatting date in timezone:', error);
-      return 'Invalid Date';
-    }
-  }, [selectedTimezone]);
+    },
+    [selectedTimezone]
+  );
 
-  // Helper function to format guide time in selected timezone  
-  const formatGuideTimeInTimezone = useCallback((timeString: string) => {
-    try {
-      const date = new Date(timeString);
-      if (isNaN(date.getTime())) {
+  // Helper function to format guide time in selected timezone
+  const formatGuideTimeInTimezone = useCallback(
+    (timeString: string) => {
+      try {
+        const date = new Date(timeString);
+        if (isNaN(date.getTime())) {
+          return '--';
+        }
+
+        return date.toLocaleTimeString([], {
+          hour: 'numeric',
+          hour12: true,
+          timeZone: selectedTimezone,
+        });
+      } catch (error) {
+        Debug.warn('Error formatting guide time in timezone:', error);
         return '--';
       }
-      
-      return date.toLocaleTimeString([], {
-        hour: 'numeric',
-        hour12: true,
-        timeZone: selectedTimezone,
-      });
-    } catch (error) {
-      Debug.warn('Error formatting guide time in timezone:', error);
-      return '--';
-    }
-  }, [selectedTimezone]);
+    },
+    [selectedTimezone]
+  );
 
   const getTimeRangeParams = useCallback(() => {
     const now = new Date();
@@ -268,59 +263,43 @@ export default function EpgPage() {
     let endTime: Date;
 
     switch (timeRange) {
-      case "today":
+      case 'today':
         // If hiding past programs, start from current time, otherwise start from beginning of day
         startTime = hidePastPrograms
           ? now
           : new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        endTime = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate() + 1,
-        );
+        endTime = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         break;
-      case "tomorrow":
-        startTime = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate() + 1,
-        );
+      case 'tomorrow':
+        startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         endTime = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
         break;
-      case "week":
+      case 'week':
         // If hiding past programs, start from current time, otherwise start from beginning of today
         startTime = hidePastPrograms
           ? now
           : new Date(now.getFullYear(), now.getMonth(), now.getDate());
         endTime = new Date(startTime.getTime() + 7 * 24 * 60 * 60 * 1000);
         break;
-      case "custom":
+      case 'custom':
         if (customDate) {
           // For custom date, check if it's today and apply hidePastPrograms logic
           const isToday = customDate.toDateString() === now.toDateString();
           startTime =
             isToday && hidePastPrograms
               ? now
-              : new Date(
-                  customDate.getFullYear(),
-                  customDate.getMonth(),
-                  customDate.getDate(),
-                );
+              : new Date(customDate.getFullYear(), customDate.getMonth(), customDate.getDate());
           endTime = new Date(
             customDate.getFullYear(),
             customDate.getMonth(),
-            customDate.getDate() + 1,
+            customDate.getDate() + 1
           );
         } else {
           // Fallback to today if no custom date is set
           startTime = hidePastPrograms
             ? now
             : new Date(now.getFullYear(), now.getMonth(), now.getDate());
-          endTime = new Date(
-            now.getFullYear(),
-            now.getMonth(),
-            now.getDate() + 1,
-          );
+          endTime = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         }
         break;
     }
@@ -351,24 +330,24 @@ export default function EpgPage() {
 
   const fetchPrograms = useCallback(
     async (
-      searchTerm: string = "",
-      sourceId: string = "",
-      category: string = "",
+      searchTerm: string = '',
+      sourceId: string = '',
+      category: string = '',
       pageNum: number = 1,
-      append: boolean = false,
+      append: boolean = false
     ) => {
       try {
         setLoading(true);
 
         const params = new URLSearchParams({
           page: pageNum.toString(),
-          limit: "50",
+          limit: '50',
           ...getTimeRangeParams(),
         });
 
-        if (searchTerm) params.append("search", searchTerm);
-        if (sourceId) params.append("source_id", sourceId);
-        if (category) params.append("category", category);
+        if (searchTerm) params.append('search', searchTerm);
+        if (sourceId) params.append('source_id', sourceId);
+        if (category) params.append('category', category);
 
         const response = await fetch(`/api/v1/epg/programs?${params}`);
 
@@ -376,20 +355,17 @@ export default function EpgPage() {
           throw new Error(`Failed to fetch programs: ${response.statusText}`);
         }
 
-        const data: { success: boolean; data: EpgProgramsResponse } =
-          await response.json();
+        const data: { success: boolean; data: EpgProgramsResponse } = await response.json();
 
         if (!data.success) {
-          throw new Error("API returned unsuccessful response");
+          throw new Error('API returned unsuccessful response');
         }
 
         if (append) {
           setPrograms((prev) => {
             // Deduplicate by ID
             const existing = new Set(prev.map((program) => program.id));
-            const newPrograms = data.data.programs.filter(
-              (program) => !existing.has(program.id),
-            );
+            const newPrograms = data.data.programs.filter((program) => !existing.has(program.id));
             return [...prev, ...newPrograms];
           });
         } else {
@@ -403,14 +379,14 @@ export default function EpgPage() {
         // Extract unique categories for filtering - only update on fresh fetch
         if (!append) {
           const uniqueCategories = Array.from(
-            new Set(data.data.programs.map((p) => p.category).filter(Boolean)),
+            new Set(data.data.programs.map((p) => p.category).filter(Boolean))
           ) as string[];
           setCategories(uniqueCategories);
         }
 
         setError(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "An error occurred");
+        setError(err instanceof Error ? err.message : 'An error occurred');
         if (!append) {
           setPrograms([]);
         }
@@ -418,7 +394,7 @@ export default function EpgPage() {
         setLoading(false);
       }
     },
-    [getTimeRangeParams],
+    [getTimeRangeParams]
   );
 
   const fetchSources = async () => {
@@ -427,39 +403,34 @@ export default function EpgPage() {
 
       // Fetch EPG Sources
       try {
-        const epgSourcesResponse = await fetch("/api/v1/sources/epg");
+        const epgSourcesResponse = await fetch('/api/v1/sources/epg');
         if (epgSourcesResponse.ok) {
           const epgSourcesData: { success: boolean; data: { items: any[] } } =
             await epgSourcesResponse.json();
           if (epgSourcesData.success && epgSourcesData.data.items) {
             // Only store active EPG sources (backend should already filter, but ensure consistency)
-            const activeEpgSources = epgSourcesData.data.items.filter(
-              (source) => source.is_active,
-            );
+            const activeEpgSources = epgSourcesData.data.items.filter((source) => source.is_active);
             setSources(activeEpgSources);
 
             activeEpgSources.forEach((source) => {
               options.push({
                 id: source.id,
                 name: source.name,
-                type: "epg_source",
+                type: 'epg_source',
                 display_name: `${source.name} (${source.source_type.toUpperCase()})`,
               });
             });
           }
         }
       } catch (err) {
-        Debug.warn("Failed to fetch EPG sources:", err);
+        Debug.warn('Failed to fetch EPG sources:', err);
       }
 
-
       // Deduplicate sources based on ID to ensure uniqueness
-      const uniqueOptions = Array.from(
-        new Map(options.map((opt) => [opt.id, opt])).values(),
-      );
+      const uniqueOptions = Array.from(new Map(options.map((opt) => [opt.id, opt])).values());
       setSourceOptions(uniqueOptions);
     } catch (err) {
-      console.error("Failed to fetch sources:", err);
+      console.error('Failed to fetch sources:', err);
     }
   };
 
@@ -468,12 +439,22 @@ export default function EpgPage() {
       setLoading(true);
 
       // Use guide-specific time range - start at beginning of current hour if no custom time is set
-      const baseTime = guideStartTime || (() => {
-        const now = new Date();
-        // Round down to the start of the current hour
-        return new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0, 0);
-      })();
-      const hours = parseInt(guideTimeRange.replace("h", ""));
+      const baseTime =
+        guideStartTime ||
+        (() => {
+          const now = new Date();
+          // Round down to the start of the current hour
+          return new Date(
+            now.getFullYear(),
+            now.getMonth(),
+            now.getDate(),
+            now.getHours(),
+            0,
+            0,
+            0
+          );
+        })();
+      const hours = parseInt(guideTimeRange.replace('h', ''));
       const startTime = baseTime;
       const endTime = new Date(baseTime.getTime() + hours * 60 * 60 * 1000);
 
@@ -482,7 +463,7 @@ export default function EpgPage() {
         end_time: endTime.toISOString(),
       });
 
-      if (selectedSource) params.append("source_id", selectedSource);
+      if (selectedSource) params.append('source_id', selectedSource);
 
       const response = await fetch(`/api/v1/epg/guide?${params}`);
 
@@ -490,17 +471,16 @@ export default function EpgPage() {
         throw new Error(`Failed to fetch guide data: ${response.statusText}`);
       }
 
-      const data: { success: boolean; data: EpgGuideResponse } =
-        await response.json();
+      const data: { success: boolean; data: EpgGuideResponse } = await response.json();
 
       if (!data.success) {
-        throw new Error("API returned unsuccessful response");
+        throw new Error('API returned unsuccessful response');
       }
 
       setGuideData(data.data);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      setError(err instanceof Error ? err.message : 'An error occurred');
       setGuideData(null);
     } finally {
       setLoading(false);
@@ -508,14 +488,8 @@ export default function EpgPage() {
   };
 
   const handleLoadMore = useCallback(() => {
-    if (hasMore && !loading && viewMode !== "guide") {
-      fetchPrograms(
-        debouncedSearch,
-        selectedSource,
-        selectedCategory,
-        currentPage + 1,
-        true,
-      );
+    if (hasMore && !loading && viewMode !== 'guide') {
+      fetchPrograms(debouncedSearch, selectedSource, selectedCategory, currentPage + 1, true);
     }
   }, [
     hasMore,
@@ -534,24 +508,12 @@ export default function EpgPage() {
 
   // Handle search changes without losing focus
   const performProgramSearch = useCallback(() => {
-    if (viewMode !== "guide") {
+    if (viewMode !== 'guide') {
       setPrograms([]);
       setCurrentPage(1);
-      fetchPrograms(
-        debouncedSearch,
-        selectedSource,
-        selectedCategory,
-        1,
-        false,
-      );
+      fetchPrograms(debouncedSearch, selectedSource, selectedCategory, 1, false);
     }
-  }, [
-    viewMode,
-    debouncedSearch,
-    selectedSource,
-    selectedCategory,
-    fetchPrograms,
-  ]);
+  }, [viewMode, debouncedSearch, selectedSource, selectedCategory, fetchPrograms]);
 
   useEffect(() => {
     performProgramSearch();
@@ -559,18 +521,12 @@ export default function EpgPage() {
 
   // Handle non-search filter changes
   useEffect(() => {
-    if (viewMode === "guide") {
+    if (viewMode === 'guide') {
       fetchGuideData();
     } else {
       setPrograms([]);
       setCurrentPage(1);
-      fetchPrograms(
-        debouncedSearch,
-        selectedSource,
-        selectedCategory,
-        1,
-        false,
-      );
+      fetchPrograms(debouncedSearch, selectedSource, selectedCategory, 1, false);
     }
   }, [
     selectedSource,
@@ -586,27 +542,22 @@ export default function EpgPage() {
   // Intersection observer for infinite scroll - only for non-guide views
   useEffect(() => {
     const loadMoreElement = loadMoreRef.current;
-    if (!loadMoreElement || viewMode === "guide") return;
+    if (!loadMoreElement || viewMode === 'guide') return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         const [entry] = entries;
         // Trigger load more when the element comes into view and we have more data
         // Only trigger on intersection, not when search changes to prevent focus loss
-        if (
-          entry.isIntersecting &&
-          hasMore &&
-          !loading &&
-          !debouncedSearch
-        ) {
+        if (entry.isIntersecting && hasMore && !loading && !debouncedSearch) {
           handleLoadMore();
         }
       },
       {
         // Trigger when the element is 200px away from being visible
-        rootMargin: "200px",
+        rootMargin: '200px',
         threshold: 0.1,
-      },
+      }
     );
 
     observer.observe(loadMoreElement);
@@ -621,16 +572,12 @@ export default function EpgPage() {
   };
 
   const handleSourceFilter = (value: string) => {
-    setSelectedSource(value === "all" ? "" : value);
+    setSelectedSource(value === 'all' ? '' : value);
   };
 
   const handleCategoryFilter = (value: string) => {
-    setSelectedCategory(value === "all" ? "" : value);
+    setSelectedCategory(value === 'all' ? '' : value);
   };
-
-  
-  
-  
 
   // Handle channel play (only for channel rows, not individual programs)
   const handlePlayChannel = (channel: { id: string; name: string; logo?: string }) => {
@@ -658,8 +605,6 @@ export default function EpgPage() {
     return now >= slotTime && now < slotEnd;
   };
 
-
-
   // All channels rendered - no virtualization, just filtering and sorting
   const getAllChannels = useMemo(() => {
     if (!guideData) return [];
@@ -683,8 +628,7 @@ export default function EpgPage() {
         return channelPrograms.some(
           (program) =>
             program.title.toLowerCase().includes(searchLower) ||
-            (program.description &&
-              program.description.toLowerCase().includes(searchLower)),
+            (program.description && program.description.toLowerCase().includes(searchLower))
         );
       });
     }
@@ -692,8 +636,6 @@ export default function EpgPage() {
     // Sort alphabetically by channel name
     return channels.sort(([, a], [, b]) => a.name.localeCompare(b.name));
   }, [guideData, channelFilter]);
-
-
 
   // Filter programs based on hide past programs toggle and live only toggle
   const filteredPrograms = useMemo(() => {
@@ -708,7 +650,6 @@ export default function EpgPage() {
         return endTime > now;
       });
     }
-
 
     return filtered;
   }, [programs, hidePastPrograms]);
@@ -727,12 +668,10 @@ export default function EpgPage() {
             <div className="flex-1 min-w-0">
               <div className="flex items-center space-x-2 mb-1">
                 <Badge
-                  variant={
-                    isLive ? "default" : isUpcoming ? "secondary" : "outline"
-                  }
+                  variant={isLive ? 'default' : isUpcoming ? 'secondary' : 'outline'}
                   className="text-xs"
                 >
-                  {isLive ? "LIVE" : isUpcoming ? "UPCOMING" : "PAST"}
+                  {isLive ? 'LIVE' : isUpcoming ? 'UPCOMING' : 'PAST'}
                 </Badge>
                 {program.category && (
                   <Badge variant="outline" className="text-xs">
@@ -740,9 +679,7 @@ export default function EpgPage() {
                   </Badge>
                 )}
               </div>
-              <CardTitle className="text-sm font-medium line-clamp-2">
-                {program.title}
-              </CardTitle>
+              <CardTitle className="text-sm font-medium line-clamp-2">{program.title}</CardTitle>
               <CardDescription className="text-xs">
                 {program.channel_name} • {formatDateInTimezone(program.start_time)}
               </CardDescription>
@@ -753,7 +690,7 @@ export default function EpgPage() {
                 alt={program.channel_name}
                 className="w-8 h-8 object-contain ml-2 flex-shrink-0"
                 onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
+                  (e.target as HTMLImageElement).style.display = 'none';
                 }}
               />
             )}
@@ -773,14 +710,10 @@ export default function EpgPage() {
           </div>
 
           {program.description && (
-            <p className="text-xs text-muted-foreground line-clamp-2 mb-3">
-              {program.description}
-            </p>
+            <p className="text-xs text-muted-foreground line-clamp-2 mb-3">{program.description}</p>
           )}
 
-          <div className="text-xs text-muted-foreground">
-            Channel: {program.channel_name}
-          </div>
+          <div className="text-xs text-muted-foreground">Channel: {program.channel_name}</div>
         </CardContent>
       </Card>
     );
@@ -794,7 +727,7 @@ export default function EpgPage() {
     const isUpcoming = startTime > now;
 
     return (
-      <TableRow className={`hover:bg-muted/50 ${isLive ? "bg-primary/5" : ""}`}>
+      <TableRow className={`hover:bg-muted/50 ${isLive ? 'bg-primary/5' : ''}`}>
         <TableCell className="w-16">
           {program.channel_logo ? (
             <img
@@ -802,7 +735,7 @@ export default function EpgPage() {
               alt={program.channel_name}
               className="w-8 h-8 object-contain"
               onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
+                (e.target as HTMLImageElement).style.display = 'none';
               }}
             />
           ) : (
@@ -823,15 +756,13 @@ export default function EpgPage() {
             {formatTimeInTimezone(program.start_time)} - {formatTimeInTimezone(program.end_time)}
           </div>
         </TableCell>
-        <TableCell className="text-sm">
-          {formatDateInTimezone(program.start_time)}
-        </TableCell>
+        <TableCell className="text-sm">{formatDateInTimezone(program.start_time)}</TableCell>
         <TableCell>
           <Badge
-            variant={isLive ? "default" : isUpcoming ? "secondary" : "outline"}
+            variant={isLive ? 'default' : isUpcoming ? 'secondary' : 'outline'}
             className="text-xs"
           >
-            {isLive ? "LIVE" : isUpcoming ? "UPCOMING" : "PAST"}
+            {isLive ? 'LIVE' : isUpcoming ? 'UPCOMING' : 'PAST'}
           </Badge>
         </TableCell>
         <TableCell>
@@ -873,7 +804,7 @@ export default function EpgPage() {
                 alt={program.channel_name}
                 className="w-10 h-10 object-contain"
                 onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
+                  (e.target as HTMLImageElement).style.display = 'none';
                 }}
               />
             )}
@@ -884,18 +815,16 @@ export default function EpgPage() {
                 <span>•</span>
                 <div className="flex items-center">
                   <Clock className="w-3 h-3 mr-1" />
-                  {formatTimeInTimezone(program.start_time)} -{" "}
+                  {formatTimeInTimezone(program.start_time)} -{' '}
                   {formatTimeInTimezone(program.end_time)}
                 </div>
                 <span>•</span>
                 <span>{formatDateInTimezone(program.start_time)}</span>
                 <Badge
-                  variant={
-                    isLive ? "default" : isUpcoming ? "secondary" : "outline"
-                  }
+                  variant={isLive ? 'default' : isUpcoming ? 'secondary' : 'outline'}
                   className="text-xs"
                 >
-                  {isLive ? "LIVE" : isUpcoming ? "UPCOMING" : "PAST"}
+                  {isLive ? 'LIVE' : isUpcoming ? 'UPCOMING' : 'PAST'}
                 </Badge>
                 {program.category && (
                   <>
@@ -917,11 +846,6 @@ export default function EpgPage() {
       </Card>
     );
   };
-
-
-
-
-
 
   if (loading && programs.length === 0 && !guideData) {
     return (
@@ -998,18 +922,25 @@ export default function EpgPage() {
                             let remainingWidth = 240 * 6; // Total width available (6 x 40px cells)
                             const programs = [];
                             let totalUsed = 0;
-                            
+
                             while (totalUsed < remainingWidth - 80) {
-                              const availableWidths = programWidths.filter(w => w <= remainingWidth - totalUsed);
+                              const availableWidths = programWidths.filter(
+                                (w) => w <= remainingWidth - totalUsed
+                              );
                               if (availableWidths.length === 0) break;
-                              
-                              const width = availableWidths[Math.floor(Math.random() * availableWidths.length)];
+
+                              const width =
+                                availableWidths[Math.floor(Math.random() * availableWidths.length)];
                               programs.push(width);
                               totalUsed += width;
                             }
-                            
+
                             return programs.map((width, j) => (
-                              <div key={j} className="border-r h-16 p-1 flex-shrink-0" style={{ width: `${width}px` }}>
+                              <div
+                                key={j}
+                                className="border-r h-16 p-1 flex-shrink-0"
+                                style={{ width: `${width}px` }}
+                              >
                                 {Math.random() > 0.2 ? (
                                   <div className="h-full bg-secondary p-1 rounded">
                                     <Skeleton className="h-3 w-3/4 mb-1" />
@@ -1054,7 +985,6 @@ export default function EpgPage() {
         </div>
 
         <div className="space-y-6">
-
           {/* Unified Filters and Controls */}
           <Card>
             <CardContent className="p-4">
@@ -1063,26 +993,38 @@ export default function EpgPage() {
                 <div className="relative flex-1 min-w-0">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                   <Input
-                    placeholder={viewMode === "guide" ? "Search channels, programs..." : "Search programs, channels, descriptions..."}
-                    value={viewMode === "guide" ? channelFilter : search}
-                    onChange={(e) => viewMode === "guide" ? setChannelFilter(e.target.value) : handleSearch(e.target.value)}
+                    placeholder={
+                      viewMode === 'guide'
+                        ? 'Search channels, programs...'
+                        : 'Search programs, channels, descriptions...'
+                    }
+                    value={viewMode === 'guide' ? channelFilter : search}
+                    onChange={(e) =>
+                      viewMode === 'guide'
+                        ? setChannelFilter(e.target.value)
+                        : handleSearch(e.target.value)
+                    }
                     className="pl-10"
                   />
                 </div>
 
                 {/* Date/Time Picker */}
                 <DateTimePicker
-                  value={viewMode === "guide" ? guideStartTime : customDate}
-                  onChange={viewMode === "guide" ? setGuideStartTime : setCustomDate}
+                  value={viewMode === 'guide' ? guideStartTime : customDate}
+                  onChange={viewMode === 'guide' ? setGuideStartTime : setCustomDate}
                   placeholder="Now"
                   className="w-48"
                 />
 
                 {/* Time Range for Guide or Date Range for Programs */}
-                {viewMode === "guide" ? (
+                {viewMode === 'guide' ? (
                   <Select
                     value={guideTimeRange}
-                    onValueChange={(v) => setGuideTimeRange(v as "6h" | "12h" | "18h" | "24h" | "30h" | "36h" | "42h" | "48h")}
+                    onValueChange={(v) =>
+                      setGuideTimeRange(
+                        v as '6h' | '12h' | '18h' | '24h' | '30h' | '36h' | '42h' | '48h'
+                      )
+                    }
                   >
                     <SelectTrigger className="w-32">
                       <SelectValue />
@@ -1101,7 +1043,9 @@ export default function EpgPage() {
                 ) : (
                   <Select
                     value={timeRange}
-                    onValueChange={(v) => setTimeRange(v as "today" | "tomorrow" | "week" | "custom")}
+                    onValueChange={(v) =>
+                      setTimeRange(v as 'today' | 'tomorrow' | 'week' | 'custom')
+                    }
                   >
                     <SelectTrigger className="w-40">
                       <Calendar className="w-4 h-4 mr-2" />
@@ -1117,10 +1061,7 @@ export default function EpgPage() {
                 )}
 
                 {/* Source Filter */}
-                <Select
-                  value={selectedSource || "all"}
-                  onValueChange={handleSourceFilter}
-                >
+                <Select value={selectedSource || 'all'} onValueChange={handleSourceFilter}>
                   <SelectTrigger className="w-48">
                     <Filter className="w-4 h-4 mr-2" />
                     <SelectValue placeholder="All Sources" />
@@ -1147,7 +1088,7 @@ export default function EpgPage() {
                       <Globe className="w-4 h-4 mr-2" />
                       {selectedTimezone
                         ? timezones.find((tz) => tz.value === selectedTimezone)?.label
-                        : "Select timezone..."}
+                        : 'Select timezone...'}
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
                   </PopoverTrigger>
@@ -1168,13 +1109,15 @@ export default function EpgPage() {
                             >
                               <Check
                                 className={cn(
-                                  "mr-2 h-4 w-4",
-                                  selectedTimezone === timezone.value ? "opacity-100" : "opacity-0"
+                                  'mr-2 h-4 w-4',
+                                  selectedTimezone === timezone.value ? 'opacity-100' : 'opacity-0'
                                 )}
                               />
                               <div className="flex-1">
                                 <div className="font-medium">{timezone.label}</div>
-                                <div className="text-sm text-muted-foreground">{timezone.offset}</div>
+                                <div className="text-sm text-muted-foreground">
+                                  {timezone.offset}
+                                </div>
                               </div>
                             </CommandItem>
                           ))}
@@ -1185,11 +1128,8 @@ export default function EpgPage() {
                 </Popover>
 
                 {/* Category Filter (only for non-guide views) */}
-                {viewMode !== "guide" && (
-                  <Select
-                    value={selectedCategory || "all"}
-                    onValueChange={handleCategoryFilter}
-                  >
+                {viewMode !== 'guide' && (
+                  <Select value={selectedCategory || 'all'} onValueChange={handleCategoryFilter}>
                     <SelectTrigger className="w-48">
                       <Filter className="w-4 h-4 mr-2" />
                       <SelectValue placeholder="All Categories" />
@@ -1205,38 +1145,36 @@ export default function EpgPage() {
                   </Select>
                 )}
 
-
-
                 {/* Layout Buttons */}
                 <div className="flex bg-muted rounded-lg p-1">
                   <Button
-                    variant={viewMode === "guide" ? "default" : "ghost"}
+                    variant={viewMode === 'guide' ? 'default' : 'ghost'}
                     size="sm"
-                    onClick={() => setViewMode("guide")}
+                    onClick={() => setViewMode('guide')}
                     title="TV Guide"
                   >
                     <Grid className="w-4 h-4" />
                   </Button>
                   <Button
-                    variant={viewMode === "table" ? "default" : "ghost"}
+                    variant={viewMode === 'table' ? 'default' : 'ghost'}
                     size="sm"
-                    onClick={() => setViewMode("table")}
+                    onClick={() => setViewMode('table')}
                     title="Table view"
                   >
                     <TableIcon className="w-4 h-4" />
                   </Button>
                   <Button
-                    variant={viewMode === "list" ? "default" : "ghost"}
+                    variant={viewMode === 'list' ? 'default' : 'ghost'}
                     size="sm"
-                    onClick={() => setViewMode("list")}
+                    onClick={() => setViewMode('list')}
                     title="List view"
                   >
                     <List className="w-4 h-4" />
                   </Button>
                   <Button
-                    variant={viewMode === "grid" ? "default" : "ghost"}
+                    variant={viewMode === 'grid' ? 'default' : 'ghost'}
                     size="sm"
-                    onClick={() => setViewMode("grid")}
+                    onClick={() => setViewMode('grid')}
                     title="Card view"
                   >
                     <Grid className="w-4 h-4" />
@@ -1247,7 +1185,7 @@ export default function EpgPage() {
           </Card>
 
           {/* Programs Views (grid, list, table) */}
-          {viewMode !== "guide" && (
+          {viewMode !== 'guide' && (
             <div className="space-y-6">
               {/* Hide Past Programs Toggle for non-guide views */}
               <div className="flex items-center space-x-2">
@@ -1264,325 +1202,326 @@ export default function EpgPage() {
                 </label>
               </div>
 
-            {/* Error Display */}
-            {error && (
-              <Card className="border-destructive">
-                <CardContent className="p-4">
-                  <p className="text-destructive">{error}</p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      fetchPrograms(
-                        debouncedSearch,
-                        selectedSource,
-                        selectedCategory,
-                        1,
-                        false,
-                      )
-                    }
-                    className="mt-2"
-                  >
-                    Retry
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
+              {/* Error Display */}
+              {error && (
+                <Card className="border-destructive">
+                  <CardContent className="p-4">
+                    <p className="text-destructive">{error}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        fetchPrograms(debouncedSearch, selectedSource, selectedCategory, 1, false)
+                      }
+                      className="mt-2"
+                    >
+                      Retry
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
 
-            {/* Results Summary */}
-            {programs.length > 0 && (
-              <div className="text-sm text-muted-foreground">
-                Showing {filteredPrograms.length} of {programs.length} programs
-                {hidePastPrograms &&
-                  filteredPrograms.length !== programs.length && (
+              {/* Results Summary */}
+              {programs.length > 0 && (
+                <div className="text-sm text-muted-foreground">
+                  Showing {filteredPrograms.length} of {programs.length} programs
+                  {hidePastPrograms && filteredPrograms.length !== programs.length && (
                     <span className="ml-2 text-primary">
-                      • {programs.length - filteredPrograms.length} past
-                      programs hidden
+                      • {programs.length - filteredPrograms.length} past programs hidden
                     </span>
                   )}
-                {hasMore && !loading && (
-                  <span className="ml-2 text-primary">
-                    • {Math.ceil((total - programs.length) / 50)} more pages
-                    available
-                  </span>
-                )}
-              </div>
-            )}
+                  {hasMore && !loading && (
+                    <span className="ml-2 text-primary">
+                      • {Math.ceil((total - programs.length) / 50)} more pages available
+                    </span>
+                  )}
+                </div>
+              )}
 
-            {/* Programs Display */}
-            {loading ? (
-              // Loading skeletons for different view modes
-              <>
-                {viewMode === "table" ? (
-                  <Card className="mb-6">
-                    <CardContent className="p-0">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-16">Logo</TableHead>
-                            <TableHead>Program Title</TableHead>
-                            <TableHead>Channel</TableHead>
-                            <TableHead>Time</TableHead>
-                            <TableHead>Date</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Category</TableHead>
-                            <TableHead>Description</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {Array.from({ length: 6 }).map((_, i) => (
-                            <TableRow key={i}>
-                              <TableCell><Skeleton className="w-8 h-8 rounded" /></TableCell>
-                              <TableCell><Skeleton className="h-4 w-32" /></TableCell>
-                              <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                              <TableCell><Skeleton className="h-4 w-20" /></TableCell>
-                              <TableCell><Skeleton className="h-4 w-16" /></TableCell>
-                              <TableCell><Skeleton className="h-6 w-12 rounded-full" /></TableCell>
-                              <TableCell><Skeleton className="h-6 w-16 rounded-full" /></TableCell>
-                              <TableCell><Skeleton className="h-4 w-40" /></TableCell>
-                              <TableCell><Skeleton className="h-8 w-8 rounded" /></TableCell>
+              {/* Programs Display */}
+              {loading ? (
+                // Loading skeletons for different view modes
+                <>
+                  {viewMode === 'table' ? (
+                    <Card className="mb-6">
+                      <CardContent className="p-0">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-16">Logo</TableHead>
+                              <TableHead>Program Title</TableHead>
+                              <TableHead>Channel</TableHead>
+                              <TableHead>Time</TableHead>
+                              <TableHead>Date</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Category</TableHead>
+                              <TableHead>Description</TableHead>
                             </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </CardContent>
-                  </Card>
-                ) : viewMode === "grid" ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
-                    {Array.from({ length: 12 }).map((_, i) => (
-                      <Card key={i}>
-                        <CardHeader className="pb-3">
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center space-x-2 mb-1">
-                                <Skeleton className="h-5 w-12 rounded-full" />
-                                <Skeleton className="h-5 w-16 rounded-full" />
-                              </div>
-                              <Skeleton className="h-4 w-full mb-1" />
-                              <Skeleton className="h-3 w-24" />
-                            </div>
-                            <Skeleton className="w-8 h-8 ml-2 rounded" />
-                          </div>
-                        </CardHeader>
-                        <CardContent className="pt-0">
-                          <div className="flex items-center justify-between mb-3">
-                            <Skeleton className="h-3 w-20" />
-                            <Skeleton className="h-5 w-8 rounded-full" />
-                          </div>
-                          <Skeleton className="h-3 w-full mb-1" />
-                          <Skeleton className="h-3 w-3/4 mb-3" />
-                          <div className="flex justify-between items-center">
-                            <Skeleton className="h-3 w-16" />
-                            <Skeleton className="h-8 w-8 rounded" />
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-3 mb-6">
-                    {Array.from({ length: 8 }).map((_, i) => (
-                      <Card key={i}>
-                        <CardContent className="p-4">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-4">
-                              <Skeleton className="w-10 h-10 rounded" />
-                              <div>
-                                <Skeleton className="h-4 w-48 mb-2" />
-                                <div className="flex items-center space-x-2">
-                                  <Skeleton className="h-3 w-20" />
-                                  <Skeleton className="h-3 w-16" />
+                          </TableHeader>
+                          <TableBody>
+                            {Array.from({ length: 6 }).map((_, i) => (
+                              <TableRow key={i}>
+                                <TableCell>
+                                  <Skeleton className="w-8 h-8 rounded" />
+                                </TableCell>
+                                <TableCell>
+                                  <Skeleton className="h-4 w-32" />
+                                </TableCell>
+                                <TableCell>
+                                  <Skeleton className="h-4 w-24" />
+                                </TableCell>
+                                <TableCell>
+                                  <Skeleton className="h-4 w-20" />
+                                </TableCell>
+                                <TableCell>
+                                  <Skeleton className="h-4 w-16" />
+                                </TableCell>
+                                <TableCell>
+                                  <Skeleton className="h-6 w-12 rounded-full" />
+                                </TableCell>
+                                <TableCell>
+                                  <Skeleton className="h-6 w-16 rounded-full" />
+                                </TableCell>
+                                <TableCell>
+                                  <Skeleton className="h-4 w-40" />
+                                </TableCell>
+                                <TableCell>
+                                  <Skeleton className="h-8 w-8 rounded" />
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </CardContent>
+                    </Card>
+                  ) : viewMode === 'grid' ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
+                      {Array.from({ length: 12 }).map((_, i) => (
+                        <Card key={i}>
+                          <CardHeader className="pb-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center space-x-2 mb-1">
                                   <Skeleton className="h-5 w-12 rounded-full" />
                                   <Skeleton className="h-5 w-16 rounded-full" />
                                 </div>
+                                <Skeleton className="h-4 w-full mb-1" />
+                                <Skeleton className="h-3 w-24" />
                               </div>
+                              <Skeleton className="w-8 h-8 ml-2 rounded" />
                             </div>
-                            <Skeleton className="h-8 w-16 rounded" />
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : filteredPrograms.length > 0 ? (
-              <>
-                {viewMode === "table" ? (
-                  <Card className="mb-6">
-                    <CardContent className="p-0">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-16">Logo</TableHead>
-                            <TableHead>Program Title</TableHead>
-                            <TableHead>Channel</TableHead>
-                            <TableHead>Time</TableHead>
-                            <TableHead>Date</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Category</TableHead>
-                            <TableHead>Description</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {filteredPrograms.map((program) => (
-                            <ProgramTableRow
-                              key={program.id}
-                              program={program}
-                            />
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </CardContent>
-                  </Card>
-                ) : viewMode === "grid" ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
-                    {filteredPrograms.map((program) => (
-                      <ProgramCard key={program.id} program={program} />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-3 mb-6">
-                    {filteredPrograms.map((program) => (
-                      <ProgramListItem key={program.id} program={program} />
-                    ))}
-                  </div>
-                )}
-
-                {/* Progressive Loading */}
-                {hasMore && (
-                  <div ref={loadMoreRef} className="flex justify-center mt-6">
-                    <Card className="w-full max-w-md">
-                      <CardContent className="p-4 text-center">
-                        {loading ? (
-                          <div className="flex items-center justify-center space-x-2">
-                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"></div>
-                            <p className="text-sm text-muted-foreground">
-                              Loading more programs...
-                            </p>
-                          </div>
-                        ) : (
-                          <>
-                            <p className="text-sm text-muted-foreground mb-2">
-                              {Math.ceil((total - programs.length) / 50)} pages
-                              remaining
-                            </p>
-                            <Button
-                              variant="outline"
-                              onClick={handleLoadMore}
-                              size="sm"
-                              className="gap-2"
-                            >
-                              Load More Programs
-                            </Button>
-                          </>
-                        )}
+                          </CardHeader>
+                          <CardContent className="pt-0">
+                            <div className="flex items-center justify-between mb-3">
+                              <Skeleton className="h-3 w-20" />
+                              <Skeleton className="h-5 w-8 rounded-full" />
+                            </div>
+                            <Skeleton className="h-3 w-full mb-1" />
+                            <Skeleton className="h-3 w-3/4 mb-3" />
+                            <div className="flex justify-between items-center">
+                              <Skeleton className="h-3 w-16" />
+                              <Skeleton className="h-8 w-8 rounded" />
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="space-y-3 mb-6">
+                      {Array.from({ length: 8 }).map((_, i) => (
+                        <Card key={i}>
+                          <CardContent className="p-4">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center space-x-4">
+                                <Skeleton className="w-10 h-10 rounded" />
+                                <div>
+                                  <Skeleton className="h-4 w-48 mb-2" />
+                                  <div className="flex items-center space-x-2">
+                                    <Skeleton className="h-3 w-20" />
+                                    <Skeleton className="h-3 w-16" />
+                                    <Skeleton className="h-5 w-12 rounded-full" />
+                                    <Skeleton className="h-5 w-16 rounded-full" />
+                                  </div>
+                                </div>
+                              </div>
+                              <Skeleton className="h-8 w-16 rounded" />
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : filteredPrograms.length > 0 ? (
+                <>
+                  {viewMode === 'table' ? (
+                    <Card className="mb-6">
+                      <CardContent className="p-0">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-16">Logo</TableHead>
+                              <TableHead>Program Title</TableHead>
+                              <TableHead>Channel</TableHead>
+                              <TableHead>Time</TableHead>
+                              <TableHead>Date</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Category</TableHead>
+                              <TableHead>Description</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {filteredPrograms.map((program) => (
+                              <ProgramTableRow key={program.id} program={program} />
+                            ))}
+                          </TableBody>
+                        </Table>
                       </CardContent>
                     </Card>
-                  </div>
-                )}
-              </>
-            ) : programs.length > 0 && filteredPrograms.length === 0 ? (
-              <Card>
-                <CardContent className="p-8 text-center">
-                  <p className="text-muted-foreground">
-                    All programs are hidden by current filters
-                  </p>
-                  <Button
-                    variant="outline"
-                    onClick={() => setHidePastPrograms(false)}
-                    className="mt-4"
-                  >
-                    Show Past Programs
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : (
-              !loading && (
+                  ) : viewMode === 'grid' ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
+                      {filteredPrograms.map((program) => (
+                        <ProgramCard key={program.id} program={program} />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="space-y-3 mb-6">
+                      {filteredPrograms.map((program) => (
+                        <ProgramListItem key={program.id} program={program} />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Progressive Loading */}
+                  {hasMore && (
+                    <div ref={loadMoreRef} className="flex justify-center mt-6">
+                      <Card className="w-full max-w-md">
+                        <CardContent className="p-4 text-center">
+                          {loading ? (
+                            <div className="flex items-center justify-center space-x-2">
+                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"></div>
+                              <p className="text-sm text-muted-foreground">
+                                Loading more programs...
+                              </p>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-sm text-muted-foreground mb-2">
+                                {Math.ceil((total - programs.length) / 50)} pages remaining
+                              </p>
+                              <Button
+                                variant="outline"
+                                onClick={handleLoadMore}
+                                size="sm"
+                                className="gap-2"
+                              >
+                                Load More Programs
+                              </Button>
+                            </>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </div>
+                  )}
+                </>
+              ) : programs.length > 0 && filteredPrograms.length === 0 ? (
                 <Card>
                   <CardContent className="p-8 text-center">
-                    <p className="text-muted-foreground">No programs found</p>
-                    {(search || selectedCategory) && (
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setSearch("");
-                          setSelectedCategory("");
-                        }}
-                        className="mt-4"
-                      >
-                        Clear Filters
-                      </Button>
-                    )}
+                    <p className="text-muted-foreground">
+                      All programs are hidden by current filters
+                    </p>
+                    <Button
+                      variant="outline"
+                      onClick={() => setHidePastPrograms(false)}
+                      className="mt-4"
+                    >
+                      Show Past Programs
+                    </Button>
                   </CardContent>
                 </Card>
-              )
-            )}
+              ) : (
+                !loading && (
+                  <Card>
+                    <CardContent className="p-8 text-center">
+                      <p className="text-muted-foreground">No programs found</p>
+                      {(search || selectedCategory) && (
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setSearch('');
+                            setSelectedCategory('');
+                          }}
+                          className="mt-4"
+                        >
+                          Clear Filters
+                        </Button>
+                      )}
+                    </CardContent>
+                  </Card>
+                )
+              )}
             </div>
           )}
 
           {/* TV Guide View */}
-          {viewMode === "guide" && (
+          {viewMode === 'guide' && (
             <div className="space-y-6">
+              {/* TV Guide Grid - Canvas Rendering Only */}
+              {guideData ? (
+                <Card className="overflow-hidden flex flex-col h-[600px]">
+                  <div className="relative flex-1 min-h-0">
+                    <CanvasEPG
+                      guideData={guideData}
+                      guideTimeRange={guideTimeRange}
+                      channelFilter={channelFilter}
+                      currentTime={currentTime}
+                      selectedTimezone={selectedTimezone}
+                      onProgramClick={(program) => {
+                        // Handle program clicks - could open modal, navigate, etc.
+                        Debug.log('Program clicked:', program);
+                      }}
+                      onChannelPlay={(channel) => {
+                        handlePlayChannel(channel);
+                      }}
+                      className="border-0"
+                    />
 
-            {/* TV Guide Grid - Canvas Rendering Only */}
-            {guideData ? (
-              <Card className="overflow-hidden flex flex-col h-[600px]">
-                <div className="relative flex-1 min-h-0">
-                  <CanvasEPG
-                    guideData={guideData}
-                    guideTimeRange={guideTimeRange}
-                    channelFilter={channelFilter}
-                    currentTime={currentTime}
-                    selectedTimezone={selectedTimezone}
-                    onProgramClick={(program) => {
-                      // Handle program clicks - could open modal, navigate, etc.
-                      Debug.log('Program clicked:', program);
-                    }}
-                    onChannelPlay={(channel) => {
-                      handlePlayChannel(channel);
-                    }}
-                    className="border-0"
-                  />
-                  
-                  {/* Guide Footer */}
-                  <div className="border-t bg-muted/50 p-3">
-                    <div className="flex justify-between items-center text-sm text-muted-foreground">
-                      <span>
-                        {getAllChannels.length} channels • {guideTimeRange} time range
-                      </span>
-                      <span>Updated: {new Date().toLocaleTimeString()}</span>
+                    {/* Guide Footer */}
+                    <div className="border-t bg-muted/50 p-3">
+                      <div className="flex justify-between items-center text-sm text-muted-foreground">
+                        <span>
+                          {getAllChannels.length} channels • {guideTimeRange} time range
+                        </span>
+                        <span>Updated: {new Date().toLocaleTimeString()}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </Card>
-            ) : loading ? (
-              <Card className="overflow-hidden">
-                <div className="h-[600px] w-full flex items-center justify-center">
-                  <div className="flex flex-col items-center space-y-4">
-                    <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent"></div>
-                    <p className="text-muted-foreground">Loading EPG guide...</p>
+                </Card>
+              ) : loading ? (
+                <Card className="overflow-hidden">
+                  <div className="h-[600px] w-full flex items-center justify-center">
+                    <div className="flex flex-col items-center space-y-4">
+                      <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent"></div>
+                      <p className="text-muted-foreground">Loading EPG guide...</p>
+                    </div>
                   </div>
-                </div>
-              </Card>
-            ) : (
-              <Card>
-                <CardContent className="p-8 text-center">
-                  <Grid className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                  <p className="text-muted-foreground mb-4">
-                    No guide data available
-                  </p>
-                  <Button onClick={fetchGuideData} variant="outline">
-                    Retry Loading Guide
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
+                </Card>
+              ) : (
+                <Card>
+                  <CardContent className="p-8 text-center">
+                    <Grid className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p className="text-muted-foreground mb-4">No guide data available</p>
+                    <Button onClick={fetchGuideData} variant="outline">
+                      Retry Loading Guide
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           )}
         </div>
-
       </div>
-      
+
       {/* Video Player Modal */}
       {selectedChannel && (
         <VideoPlayerModal

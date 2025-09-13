@@ -1,29 +1,24 @@
-"use client"
+'use client';
 
-import { Button } from "@/components/ui/button"
-import { 
-  Tooltip, 
-  TooltipContent, 
-  TooltipProvider, 
-  TooltipTrigger 
-} from "@/components/ui/tooltip"
-import { Progress } from "@/components/ui/progress"
-import { RefreshCw, AlertCircle, CheckCircle, Clock } from "lucide-react"
-import { cn } from "@/lib/utils"
-import { useProgressState, formatProgress } from "@/hooks/useProgressState"
-import { useConflictHandler } from "@/hooks/useConflictHandler"
-import { ConflictNotification } from "@/components/ConflictNotification"
-import { useEffect, useRef } from "react"
+import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Progress } from '@/components/ui/progress';
+import { RefreshCw, AlertCircle, CheckCircle, Clock } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { useProgressState, formatProgress } from '@/hooks/useProgressState';
+import { useConflictHandler } from '@/hooks/useConflictHandler';
+import { ConflictNotification } from '@/components/ConflictNotification';
+import { useEffect, useRef } from 'react';
 
 interface RefreshButtonProps {
-  resourceId: string
-  onRefresh: () => Promise<void> | void
-  onComplete?: () => void
-  disabled?: boolean
-  size?: "sm" | "default" | "lg"
-  variant?: "default" | "outline" | "ghost"
-  className?: string
-  tooltipText?: string
+  resourceId: string;
+  onRefresh: () => Promise<void> | void;
+  onComplete?: () => void;
+  disabled?: boolean;
+  size?: 'sm' | 'default' | 'lg';
+  variant?: 'default' | 'outline' | 'ghost';
+  className?: string;
+  tooltipText?: string;
 }
 
 export function RefreshButton({
@@ -31,84 +26,84 @@ export function RefreshButton({
   onRefresh,
   onComplete,
   disabled = false,
-  size = "sm",
-  variant = "outline",
+  size = 'sm',
+  variant = 'outline',
   className,
-  tooltipText = "Refresh"
+  tooltipText = 'Refresh',
 }: RefreshButtonProps) {
-  const progressState = useProgressState(resourceId)
-  const { handleApiError, dismissConflict, getConflictState } = useConflictHandler()
-  const lastEventRef = useRef<typeof progressState.event>(null)
-  
-  const conflictState = getConflictState(resourceId)
+  const progressState = useProgressState(resourceId);
+  const { handleApiError, dismissConflict, getConflictState } = useConflictHandler();
+  const lastEventRef = useRef<typeof progressState.event>(null);
 
-  const isRefreshing = progressState.isActive
-  const hasError = progressState.hasError
+  const conflictState = getConflictState(resourceId);
+
+  const isRefreshing = progressState.isActive;
+  const hasError = progressState.hasError;
 
   // Call onComplete when operation finishes
   useEffect(() => {
-    const currentEvent = progressState.event
-    
+    const currentEvent = progressState.event;
+
     // Check for new completed events (different event ID than last one we saw)
     if (currentEvent && currentEvent.state === 'completed' && onComplete) {
-      const lastEvent = lastEventRef.current
-      const isNewEvent = !lastEvent || lastEvent.id !== currentEvent.id
-      
+      const lastEvent = lastEventRef.current;
+      const isNewEvent = !lastEvent || lastEvent.id !== currentEvent.id;
+
       if (isNewEvent) {
-        onComplete()
+        onComplete();
       }
     }
-    
-    lastEventRef.current = currentEvent
-  }, [progressState.event, onComplete, resourceId])
-  const isCompleted = progressState.isCompleted
+
+    lastEventRef.current = currentEvent;
+  }, [progressState.event, onComplete, resourceId]);
+  const isCompleted = progressState.isCompleted;
 
   // Determine button state and styling
   const buttonState = {
     icon: hasError ? AlertCircle : isCompleted ? CheckCircle : isRefreshing ? RefreshCw : RefreshCw,
     className: cn(
-      isRefreshing && "animate-spin",
-      hasError && "text-destructive hover:text-destructive",
-      isCompleted && "text-green-600 hover:text-green-700",
+      isRefreshing && 'animate-spin',
+      hasError && 'text-destructive hover:text-destructive',
+      isCompleted && 'text-green-600 hover:text-green-700',
       className
     ),
-    disabled: disabled || isRefreshing
-  }
+    disabled: disabled || isRefreshing,
+  };
 
   // Build tooltip content
   const tooltipContent = () => {
     if (!progressState.event) {
-      return tooltipText
+      return tooltipText;
     }
 
-    const { event, currentStep, duration, progress, stages, operationName, error } = progressState
+    const { event, currentStep, duration, progress, stages, operationName, error } = progressState;
 
     return (
       <div className="space-y-2 max-w-sm">
-        <div className="font-medium">
-          {operationName || "Processing"}
-        </div>
-        
+        <div className="font-medium">{operationName || 'Processing'}</div>
+
         <div className="space-y-1 text-sm">
           <div className="flex justify-between">
             <span>Status:</span>
-            <span className={cn(
-              "font-medium",
-              event.state === 'completed' && "text-green-600",
-              event.state === 'error' && "text-destructive",
-              event.state === 'processing' && "text-blue-600"
-            )}>
+            <span
+              className={cn(
+                'font-medium',
+                event.state === 'completed' && 'text-green-600',
+                event.state === 'error' && 'text-destructive',
+                event.state === 'processing' && 'text-blue-600'
+              )}
+            >
               {event.state.charAt(0).toUpperCase() + event.state.slice(1)}
             </span>
           </div>
-          
+
           {currentStep && (
             <div className="flex justify-between">
               <span>Step:</span>
               <span className="font-medium">{currentStep}</span>
             </div>
           )}
-          
+
           {progress && (
             <div className="space-y-2">
               <div className="flex justify-between">
@@ -118,7 +113,7 @@ export function RefreshButton({
               <Progress value={progress.overall_percentage} className="h-2" />
             </div>
           )}
-          
+
           {stages && (
             <div className="space-y-2">
               <div className="flex justify-between">
@@ -143,7 +138,7 @@ export function RefreshButton({
               )}
             </div>
           )}
-          
+
           <div className="flex justify-between">
             <span>Duration:</span>
             <span className="font-medium flex items-center gap-1">
@@ -151,7 +146,7 @@ export function RefreshButton({
               {duration}
             </span>
           </div>
-          
+
           {error && (
             <div className="pt-1 border-t">
               <div className="text-destructive text-xs">
@@ -162,22 +157,22 @@ export function RefreshButton({
           )}
         </div>
       </div>
-    )
-  }
+    );
+  };
 
-  const IconComponent = buttonState.icon
+  const IconComponent = buttonState.icon;
 
   const handleRefreshClick = async () => {
     try {
-      await onRefresh()
+      await onRefresh();
     } catch (error) {
       // Check if it's a 409 conflict and handle it
-      if (!handleApiError(error, resourceId, "Refresh")) {
+      if (!handleApiError(error, resourceId, 'Refresh')) {
         // If not a conflict, re-throw for other error handling
-        throw error
+        throw error;
       }
     }
-  }
+  };
 
   return (
     <TooltipProvider>
@@ -204,5 +199,5 @@ export function RefreshButton({
         </Tooltip>
       </ConflictNotification>
     </TooltipProvider>
-  )
+  );
 }

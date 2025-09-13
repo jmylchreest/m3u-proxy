@@ -16,7 +16,7 @@ use super::metadata::CachedLogoMetadata;
 pub struct LogoCacheService {
     /// Primary cache index: url_hash -> entry
     cache_index: Arc<RwLock<HashMap<u64, LogoCacheEntry>>>,
-    /// Channel name hash -> Vec<url_hash> for channel-based lookups  
+    /// Channel name hash -> Vec<url_hash> for channel-based lookups
     channel_name_index: Arc<RwLock<HashMap<u64, Vec<u64>>>>,
     /// Channel group hash -> Vec<url_hash> for group-based lookups
     channel_group_index: Arc<RwLock<HashMap<u64, Vec<u64>>>>,
@@ -224,7 +224,7 @@ impl LogoCacheService {
 
         let relative_path = file_path
             .file_name()
-            .unwrap_or_else(|| file_path.as_os_str())
+            .unwrap_or(file_path.as_os_str())
             .to_string_lossy()
             .to_string();
 

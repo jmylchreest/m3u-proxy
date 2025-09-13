@@ -1,14 +1,36 @@
-"use client";
+'use client';
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Search, Play, Filter, Grid, List, Eye, Zap, Check, Table as TableIcon } from 'lucide-react';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Search,
+  Play,
+  Filter,
+  Grid,
+  List,
+  Eye,
+  Zap,
+  Check,
+  Table as TableIcon,
+} from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
@@ -20,7 +42,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { VideoPlayerModal } from '@/components/video-player-modal';
-import { getBackendUrl } from '@/lib/config'
+import { getBackendUrl } from '@/lib/config';
 import { Debug } from '@/utils/debug';
 
 interface Channel {
@@ -67,7 +89,7 @@ const formatRelativeTime = (dateString: string): string => {
   if (diffMinutes < 60) return `${diffMinutes}m ago`;
   if (diffHours < 24) return `${diffHours}h ago`;
   if (diffDays < 7) return `${diffDays}d ago`;
-  
+
   return date.toLocaleDateString();
 };
 
@@ -108,81 +130,98 @@ export default function ChannelsPage() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  const fetchChannels = useCallback(async (searchTerm: string = '', group: string = '', pageNum: number = 1, append: boolean = false, isSearchChange: boolean = false) => {
-    try {
-      setLoading(true);
-      
-      const params = new URLSearchParams({
-        page: pageNum.toString(),
-        limit: '200',
-      });
-      
-      if (searchTerm) params.append('search', searchTerm);
-      if (group) params.append('group', group);
+  const fetchChannels = useCallback(
+    async (
+      searchTerm: string = '',
+      group: string = '',
+      pageNum: number = 1,
+      append: boolean = false,
+      isSearchChange: boolean = false
+    ) => {
+      try {
+        setLoading(true);
 
-      let apiUrl = '/api/v1/channels';
-
-      const response = await fetch(`${apiUrl}?${params}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch channels: ${response.statusText}`);
-      }
-      
-      const data: { success: boolean; data: ChannelsResponse } = await response.json();
-      
-      if (!data.success) {
-        throw new Error('API returned unsuccessful response');
-      }
-
-      let channelsData = data.data.channels;
-      
-      if (append) {
-        setChannels(prev => {
-          // Deduplicate by ID
-          const existing = new Set(prev.map(channel => channel.id));
-          const newChannels = channelsData.filter(channel => !existing.has(channel.id));
-          return [...prev, ...newChannels];
+        const params = new URLSearchParams({
+          page: pageNum.toString(),
+          limit: '200',
         });
-      } else if (isSearchChange && pageNum === 1) {
-        // For search changes, replace the list but don't trigger a full page refresh
-        setChannels(channelsData);
-      } else {
-        setChannels(channelsData);
-      }
 
-      setCurrentPage(pageNum);
-      setTotal(data.data.total);
-      setHasMore(data.data.has_more);
-      
-      // Extract unique groups and sources for filtering - only update on fresh fetch
-      if (!append) {
-        const uniqueGroups = Array.from(
-          new Set(data.data.channels.map(c => c.group).filter(Boolean))
-        ) as string[];
-        setGroups(uniqueGroups);
-        
-        const uniqueSources = Array.from(
-          new Set(data.data.channels.map(c => c.source_name).filter(Boolean))
-        ) as string[];
-        setSources(uniqueSources);
+        if (searchTerm) params.append('search', searchTerm);
+        if (group) params.append('group', group);
+
+        let apiUrl = '/api/v1/channels';
+
+        const response = await fetch(`${apiUrl}?${params}`);
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch channels: ${response.statusText}`);
+        }
+
+        const data: { success: boolean; data: ChannelsResponse } = await response.json();
+
+        if (!data.success) {
+          throw new Error('API returned unsuccessful response');
+        }
+
+        let channelsData = data.data.channels;
+
+        if (append) {
+          setChannels((prev) => {
+            // Deduplicate by ID
+            const existing = new Set(prev.map((channel) => channel.id));
+            const newChannels = channelsData.filter((channel) => !existing.has(channel.id));
+            return [...prev, ...newChannels];
+          });
+        } else if (isSearchChange && pageNum === 1) {
+          // For search changes, replace the list but don't trigger a full page refresh
+          setChannels(channelsData);
+        } else {
+          setChannels(channelsData);
+        }
+
+        setCurrentPage(pageNum);
+        setTotal(data.data.total);
+        setHasMore(data.data.has_more);
+
+        // Extract unique groups and sources for filtering - only update on fresh fetch
+        if (!append) {
+          const uniqueGroups = Array.from(
+            new Set(data.data.channels.map((c) => c.group).filter(Boolean))
+          ) as string[];
+          setGroups(uniqueGroups);
+
+          const uniqueSources = Array.from(
+            new Set(data.data.channels.map((c) => c.source_name).filter(Boolean))
+          ) as string[];
+          setSources(uniqueSources);
+        }
+
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'An error occurred');
+        if (!append) {
+          setChannels([]);
+        }
+      } finally {
+        setLoading(false);
       }
-      
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-      if (!append) {
-        setChannels([]);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
 
   const handleLoadMore = useCallback(() => {
     if (hasMore && !loading) {
       fetchChannels(debouncedSearch, selectedGroup, currentPage + 1, true, false);
     }
-  }, [hasMore, loading, debouncedSearch, selectedGroup, selectedSources, currentPage, fetchChannels]);
+  }, [
+    hasMore,
+    loading,
+    debouncedSearch,
+    selectedGroup,
+    selectedSources,
+    currentPage,
+    fetchChannels,
+  ]);
 
   // Single effect that handles both search and filter changes intelligently
   useEffect(() => {
@@ -236,9 +275,9 @@ export default function ChannelsPage() {
   };
 
   const handleSourceToggle = (sourceName: string) => {
-    setSelectedSources(prev => {
+    setSelectedSources((prev) => {
       if (prev.includes(sourceName)) {
-        return prev.filter(s => s !== sourceName);
+        return prev.filter((s) => s !== sourceName);
       } else {
         return [...prev, sourceName];
       }
@@ -253,15 +292,14 @@ export default function ChannelsPage() {
     }
   };
 
-
   const handlePlayChannel = async (channel: Channel) => {
     try {
       // Use the new unified channel streaming endpoint (directly streams content, no CORS issues)
       const streamUrl = `${getBackendUrl()}/channel/${channel.id}/stream`;
-      
+
       setSelectedChannel({
         ...channel,
-        stream_url: streamUrl
+        stream_url: streamUrl,
       });
       setIsPlayerOpen(true);
     } catch (err) {
@@ -271,36 +309,38 @@ export default function ChannelsPage() {
 
   const handleProbeChannel = async (channel: Channel) => {
     try {
-      setProbingChannels(prev => new Set(prev).add(channel.id));
-      
+      setProbingChannels((prev) => new Set(prev).add(channel.id));
+
       const response = await fetch(`/api/v1/channels/${channel.id}/probe`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
       });
-      
+
       if (!response.ok) {
         throw new Error(`Failed to probe channel: ${response.statusText}`);
       }
-      
+
       const result = await response.json();
-      
+
       if (result.success === 'true' || result.success === true) {
         // Update the specific channel in the local state with the new codec information
-        setChannels(prev => prev.map(ch => {
-          if (ch.id === channel.id) {
-            return {
-              ...ch,
-              video_codec: result.data?.video_codec || ch.video_codec,
-              audio_codec: result.data?.audio_codec || ch.audio_codec,
-              resolution: result.data?.resolution || ch.resolution,
-              last_probed_at: new Date().toISOString(),
-              probe_method: 'ffprobe_manual'
-            };
-          }
-          return ch;
-        }));
+        setChannels((prev) =>
+          prev.map((ch) => {
+            if (ch.id === channel.id) {
+              return {
+                ...ch,
+                video_codec: result.data?.video_codec || ch.video_codec,
+                audio_codec: result.data?.audio_codec || ch.audio_codec,
+                resolution: result.data?.resolution || ch.resolution,
+                last_probed_at: new Date().toISOString(),
+                probe_method: 'ffprobe_manual',
+              };
+            }
+            return ch;
+          })
+        );
         setError(null);
       } else {
         setError(result.data?.error || result.error || 'Failed to probe channel');
@@ -308,7 +348,7 @@ export default function ChannelsPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to probe channel');
     } finally {
-      setProbingChannels(prev => {
+      setProbingChannels((prev) => {
         const newSet = new Set(prev);
         newSet.delete(channel.id);
         return newSet;
@@ -321,9 +361,11 @@ export default function ChannelsPage() {
     const [popoverImageError, setPopoverImageError] = useState(false);
 
     if (!channel.logo_url || imageError) {
-      return <div className="w-8 h-8 bg-muted rounded flex items-center justify-center text-muted-foreground text-xs">
-        No Logo
-      </div>;
+      return (
+        <div className="w-8 h-8 bg-muted rounded flex items-center justify-center text-muted-foreground text-xs">
+          No Logo
+        </div>
+      );
     }
 
     return (
@@ -381,9 +423,7 @@ export default function ChannelsPage() {
           <span className="text-muted-foreground">-</span>
         )}
       </TableCell>
-      <TableCell className="text-sm">
-        {channel.source_name || channel.source_type}
-      </TableCell>
+      <TableCell className="text-sm">{channel.source_name || channel.source_type}</TableCell>
       <TableCell className="text-sm">
         {channel.video_codec || <span className="text-muted-foreground">-</span>}
       </TableCell>
@@ -416,11 +456,7 @@ export default function ChannelsPage() {
         <div className="flex gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button
-                size="sm"
-                onClick={() => handlePlayChannel(channel)}
-                className="h-8 px-2"
-              >
+              <Button size="sm" onClick={() => handlePlayChannel(channel)} className="h-8 px-2">
                 <Play className="w-3 h-3" />
               </Button>
             </TooltipTrigger>
@@ -458,9 +494,7 @@ export default function ChannelsPage() {
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0">
-            <CardTitle className="text-sm font-medium truncate">
-              {channel.name}
-            </CardTitle>
+            <CardTitle className="text-sm font-medium truncate">{channel.name}</CardTitle>
             {channel.group && (
               <CardDescription className="mt-1">
                 <Badge variant="secondary" className="text-xs">
@@ -503,10 +537,7 @@ export default function ChannelsPage() {
           <div className="flex gap-1 ml-2">
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button
-                  size="sm"
-                  onClick={() => handlePlayChannel(channel)}
-                >
+                <Button size="sm" onClick={() => handlePlayChannel(channel)}>
                   <Play className="w-4 h-4" />
                 </Button>
               </TooltipTrigger>
@@ -584,10 +615,7 @@ export default function ChannelsPage() {
           <div className="flex gap-2">
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button
-                  size="sm"
-                  onClick={() => handlePlayChannel(channel)}
-                >
+                <Button size="sm" onClick={() => handlePlayChannel(channel)}>
                   <Play className="w-4 h-4 mr-2" />
                   Play
                 </Button>
@@ -637,231 +665,230 @@ export default function ChannelsPage() {
   return (
     <TooltipProvider>
       <div className="container mx-auto p-6">
-      <div className="mb-6">
-        <p className="text-muted-foreground">
-          Browse and play channels with detailed information and metadata
-        </p>
-      </div>
+        <div className="mb-6">
+          <p className="text-muted-foreground">
+            Browse and play channels with detailed information and metadata
+          </p>
+        </div>
 
-      {/* Search and Filters */}
-      <Card className="mb-6">
-        <CardContent className="p-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-            <Input
-              placeholder="Search channels..."
-              value={search}
-              onChange={(e) => handleSearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                }
-              }}
-              className="pl-10"
-            />
-          </div>
-          
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="w-full sm:w-48 justify-between">
-                <div className="flex items-center">
-                  <Filter className="w-4 h-4 mr-2" />
-                  <span>
-                    {selectedSources.length === 0 
-                      ? 'All Sources' 
-                      : selectedSources.length === sources.length 
-                        ? 'All Sources' 
-                        : `${selectedSources.length} Source${selectedSources.length > 1 ? 's' : ''}`
+        {/* Search and Filters */}
+        <Card className="mb-6">
+          <CardContent className="p-6">
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                <Input
+                  placeholder="Search channels..."
+                  value={search}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
                     }
-                  </span>
-                </div>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onClick={handleAllSourcesToggle}>
-                <Checkbox 
-                  checked={selectedSources.length === sources.length && sources.length > 0}
-                  className="mr-2"
+                  }}
+                  className="pl-10"
                 />
-                All Sources
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              {sources.map((source) => (
-                <DropdownMenuItem key={source} onClick={() => handleSourceToggle(source)}>
-                  <Checkbox 
-                    checked={selectedSources.includes(source)}
-                    className="mr-2"
-                  />
-                  {source}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+              </div>
 
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="w-full sm:w-48 justify-between">
+                    <div className="flex items-center">
+                      <Filter className="w-4 h-4 mr-2" />
+                      <span>
+                        {selectedSources.length === 0
+                          ? 'All Sources'
+                          : selectedSources.length === sources.length
+                            ? 'All Sources'
+                            : `${selectedSources.length} Source${selectedSources.length > 1 ? 's' : ''}`}
+                      </span>
+                    </div>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onClick={handleAllSourcesToggle}>
+                    <Checkbox
+                      checked={selectedSources.length === sources.length && sources.length > 0}
+                      className="mr-2"
+                    />
+                    All Sources
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  {sources.map((source) => (
+                    <DropdownMenuItem key={source} onClick={() => handleSourceToggle(source)}>
+                      <Checkbox checked={selectedSources.includes(source)} className="mr-2" />
+                      {source}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
 
-          <div className="flex bg-muted rounded-lg p-1">
-            <Button
-              variant={viewMode === 'table' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setViewMode('table')}
-              title="Table view"
-            >
-              <TableIcon className="w-4 h-4" />
-            </Button>
-            <Button
-              variant={viewMode === 'grid' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setViewMode('grid')}
-              title="Grid view"
-            >
-              <Grid className="w-4 h-4" />
-            </Button>
-            <Button
-              variant={viewMode === 'list' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setViewMode('list')}
-              title="Compact list view"
-            >
-              <List className="w-4 h-4" />
-            </Button>
-          </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Error Display */}
-      {error && (
-        <Card className="mb-6 border-destructive">
-          <CardContent className="p-4">
-            <p className="text-destructive">{error}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => fetchChannels(debouncedSearch, selectedGroup, 1, false, false)}
-              className="mt-2"
-            >
-              Retry
-            </Button>
+              <div className="flex bg-muted rounded-lg p-1">
+                <Button
+                  variant={viewMode === 'table' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('table')}
+                  title="Table view"
+                >
+                  <TableIcon className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('grid')}
+                  title="Grid view"
+                >
+                  <Grid className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={viewMode === 'list' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('list')}
+                  title="Compact list view"
+                >
+                  <List className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
-      )}
 
-      {/* Results Summary */}
-      {channels.length > 0 && (
-        <div className="mb-4 text-sm text-muted-foreground">
-          Showing {channels.length} of {total} channels
-          {hasMore && !loading && (
-            <span className="ml-2 text-primary">• {Math.ceil((total - channels.length) / 200)} more pages available</span>
-          )}
-        </div>
-      )}
-
-      {/* Channels Display */}
-      {channels.length > 0 ? (
-        <>
-          {viewMode === 'table' ? (
-            <Card className="mb-6">
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-16">Logo</TableHead>
-                      <TableHead>Channel Name</TableHead>
-                      <TableHead>Channel #</TableHead>
-                      <TableHead>Group</TableHead>
-                      <TableHead>Source</TableHead>
-                      <TableHead>Video Codec</TableHead>
-                      <TableHead>Audio Codec</TableHead>
-                      <TableHead>Resolution</TableHead>
-                      <TableHead>Last Probed</TableHead>
-                      <TableHead className="w-32">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {channels.map((channel) => (
-                      <ChannelTableRow key={channel.id} channel={channel} />
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          ) : viewMode === 'grid' ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
-              {channels.map((channel) => (
-                <ChannelCard key={channel.id} channel={channel} />
-              ))}
-            </div>
-          ) : (
-            <div className="space-y-3 mb-6">
-              {channels.map((channel) => (
-                <ChannelListItem key={channel.id} channel={channel} />
-              ))}
-            </div>
-          )}
-
-          {/* Progressive Loading */}
-          {hasMore && (
-            <div ref={loadMoreRef} className="flex justify-center mt-6">
-              <Card className="w-full max-w-md">
-                <CardContent className="p-4 text-center">
-                  {loading ? (
-                    <div className="flex items-center justify-center space-x-2">
-                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"></div>
-                      <p className="text-sm text-muted-foreground">Loading more channels...</p>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="text-sm text-muted-foreground mb-2">
-                        {Math.ceil((total - channels.length) / 200)} pages remaining
-                      </p>
-                      <Button 
-                        variant="outline" 
-                        onClick={handleLoadMore}
-                        size="sm"
-                        className="gap-2"
-                      >
-                        Load More Channels
-                      </Button>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          )}
-        </>
-      ) : !loading && (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <p className="text-muted-foreground">No channels found</p>
-            {(search || selectedGroup || selectedSources.length > 0) && (
+        {/* Error Display */}
+        {error && (
+          <Card className="mb-6 border-destructive">
+            <CardContent className="p-4">
+              <p className="text-destructive">{error}</p>
               <Button
                 variant="outline"
-                onClick={() => {
-                  setSearch('');
-                  setSelectedGroup('');
-                  setSelectedSources([]);
-                }}
-                className="mt-4"
+                size="sm"
+                onClick={() => fetchChannels(debouncedSearch, selectedGroup, 1, false, false)}
+                className="mt-2"
               >
-                Clear Filters
+                Retry
               </Button>
-            )}
-          </CardContent>
-        </Card>
-      )}
+            </CardContent>
+          </Card>
+        )}
 
-      {/* Video Player Modal */}
-      {selectedChannel && (
-        <VideoPlayerModal
-          isOpen={isPlayerOpen}
-          onClose={() => {
-            setIsPlayerOpen(false);
-            setSelectedChannel(null);
-          }}
-          channel={selectedChannel}
-        />
-      )}
+        {/* Results Summary */}
+        {channels.length > 0 && (
+          <div className="mb-4 text-sm text-muted-foreground">
+            Showing {channels.length} of {total} channels
+            {hasMore && !loading && (
+              <span className="ml-2 text-primary">
+                • {Math.ceil((total - channels.length) / 200)} more pages available
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Channels Display */}
+        {channels.length > 0 ? (
+          <>
+            {viewMode === 'table' ? (
+              <Card className="mb-6">
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-16">Logo</TableHead>
+                        <TableHead>Channel Name</TableHead>
+                        <TableHead>Channel #</TableHead>
+                        <TableHead>Group</TableHead>
+                        <TableHead>Source</TableHead>
+                        <TableHead>Video Codec</TableHead>
+                        <TableHead>Audio Codec</TableHead>
+                        <TableHead>Resolution</TableHead>
+                        <TableHead>Last Probed</TableHead>
+                        <TableHead className="w-32">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {channels.map((channel) => (
+                        <ChannelTableRow key={channel.id} channel={channel} />
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            ) : viewMode === 'grid' ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
+                {channels.map((channel) => (
+                  <ChannelCard key={channel.id} channel={channel} />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3 mb-6">
+                {channels.map((channel) => (
+                  <ChannelListItem key={channel.id} channel={channel} />
+                ))}
+              </div>
+            )}
+
+            {/* Progressive Loading */}
+            {hasMore && (
+              <div ref={loadMoreRef} className="flex justify-center mt-6">
+                <Card className="w-full max-w-md">
+                  <CardContent className="p-4 text-center">
+                    {loading ? (
+                      <div className="flex items-center justify-center space-x-2">
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"></div>
+                        <p className="text-sm text-muted-foreground">Loading more channels...</p>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-sm text-muted-foreground mb-2">
+                          {Math.ceil((total - channels.length) / 200)} pages remaining
+                        </p>
+                        <Button
+                          variant="outline"
+                          onClick={handleLoadMore}
+                          size="sm"
+                          className="gap-2"
+                        >
+                          Load More Channels
+                        </Button>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+          </>
+        ) : (
+          !loading && (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <p className="text-muted-foreground">No channels found</p>
+                {(search || selectedGroup || selectedSources.length > 0) && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setSearch('');
+                      setSelectedGroup('');
+                      setSelectedSources([]);
+                    }}
+                    className="mt-4"
+                  >
+                    Clear Filters
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          )
+        )}
+
+        {/* Video Player Modal */}
+        {selectedChannel && (
+          <VideoPlayerModal
+            isOpen={isPlayerOpen}
+            onClose={() => {
+              setIsPlayerOpen(false);
+              setSelectedChannel(null);
+            }}
+            channel={selectedChannel}
+          />
+        )}
       </div>
     </TooltipProvider>
   );

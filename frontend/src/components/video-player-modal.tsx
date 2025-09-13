@@ -1,10 +1,34 @@
-"use client";
+'use client';
 
-import React, { useEffect, useRef, useState, useCallback, ErrorInfo, Component, useMemo } from 'react';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  ErrorInfo,
+  Component,
+  useMemo,
+} from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { X, Maximize2, Minimize2, Volume2, VolumeX, Settings, Copy, ExternalLink, Check } from 'lucide-react';
+import {
+  X,
+  Maximize2,
+  Minimize2,
+  Volume2,
+  VolumeX,
+  Settings,
+  Copy,
+  ExternalLink,
+  Check,
+} from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Debug } from '@/utils/debug';
 import mpegts from 'mpegts.js';
@@ -78,7 +102,7 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
   const playerRef = useRef<any>(null);
   const errorCountRef = useRef<number>(0);
   const lastErrorTimeRef = useRef<number>(0);
-  
+
   // Create debug logger for this component - use useMemo to avoid recreating on every render
   const debug = useMemo(() => Debug.createLogger('VideoPlayer'), []);
   const [isLoading, setIsLoading] = useState(true);
@@ -109,12 +133,12 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
   // Show controls immediately (for mouse enter/move)
   const showControlsWithTimer = useCallback(() => {
     setShowControls(true);
-    
+
     // Clear existing timer
     if (controlsTimerRef.current) {
       clearTimeout(controlsTimerRef.current);
     }
-    
+
     // Set new timer to hide controls after 2.5 seconds of inactivity
     controlsTimerRef.current = setTimeout(() => {
       setShowControls(false);
@@ -127,7 +151,7 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
     if (controlsTimerRef.current) {
       clearTimeout(controlsTimerRef.current);
     }
-    
+
     // Hide controls immediately when mouse leaves
     setShowControls(false);
   }, []);
@@ -135,11 +159,11 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
   // Handle mouse movement with throttling
   const handleMouseMove = useCallback(() => {
     const now = Date.now();
-    
+
     // Throttle mouse move events to avoid excessive updates
     if (now - lastMouseMoveRef.current < 100) return;
     lastMouseMoveRef.current = now;
-    
+
     showControlsWithTimer();
   }, [showControlsWithTimer]);
 
@@ -148,7 +172,7 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
     showControlsWithTimer();
   }, [showControlsWithTimer]);
 
-  // Handle mouse leave - hide controls immediately 
+  // Handle mouse leave - hide controls immediately
   const handleMouseLeave = useCallback(() => {
     hideControlsImmediately();
   }, [hideControlsImmediately]);
@@ -156,9 +180,9 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
   // Auto-show controls on modal open
   useEffect(() => {
     if (!isOpen) return;
-    
+
     showControlsWithTimer();
-    
+
     // Cleanup timer on unmount
     return () => {
       if (controlsTimerRef.current) {
@@ -173,14 +197,14 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
 
     const detectHEVCSupport = async () => {
       const video = document.createElement('video');
-      
+
       // Test HEVC codec support
       const hevcCodecs = [
         'video/mp4; codecs="hvc1.1.1.L93.B0"',
         'video/mp4; codecs="hev1.1.1.L93.B0"',
-        'video/mp4; codecs="hvc1.1.6.L93.B0"'
+        'video/mp4; codecs="hvc1.1.6.L93.B0"',
       ];
-      
+
       let hardwareSupport = 'none';
       for (const codec of hevcCodecs) {
         const support = video.canPlayType(codec);
@@ -195,19 +219,19 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
       // Detect browser flags (Chrome/Edge only)
       let platformHEVC = false;
       let webPlatformFeatures = false;
-      
+
       if (navigator.userAgent.includes('Chrome') || navigator.userAgent.includes('Edge')) {
         try {
           // Try to detect if experimental features are enabled
           // This is indirect detection since we can't directly access flags
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
-          
+
           // Test for experimental web platform features availability
           if ('OffscreenCanvas' in window && 'MediaStreamTrackProcessor' in window) {
             webPlatformFeatures = true;
           }
-          
+
           // Platform HEVC is harder to detect directly, but we can infer from codec support
           if (hardwareSupport !== 'none') {
             platformHEVC = true;
@@ -220,7 +244,7 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
       setHevcSupport({
         platformHEVC,
         webPlatformFeatures,
-        hardwareSupport
+        hardwareSupport,
       });
     };
 
@@ -266,7 +290,7 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
               videoRef.current.src = '';
               videoRef.current.load(); // Force video element reset
             }
-            
+
             // Properly destroy the player
             playerRef.current.unload();
             playerRef.current.detachMediaElement();
@@ -285,11 +309,11 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
           videoRef.current.playsInline = true;
           // Disable picture-in-picture to avoid duplicate controls
           (videoRef.current as any).disablePictureInPicture = true;
-          
+
           // Enhanced buffering attributes
           videoRef.current.setAttribute('buffered', 'true');
           videoRef.current.setAttribute('crossorigin', 'anonymous');
-          
+
           // Set buffer size hints if supported
           if ('setBufferSize' in videoRef.current) {
             (videoRef.current as any).setBufferSize(1024 * 1024 * 5); // 5MB buffer
@@ -317,39 +341,39 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
           enableStashBuffer: true,
           stashInitialSize: 128, // Increased for better buffering
           stashBufferThreshold: 60, // Increased buffer size for smoother playback
-          
+
           // Live streaming optimizations
           liveBufferLatencyChasing: true,
           liveBufferLatencyMaxLatency: 5, // Increased to allow more buffering
           liveBufferLatencyMinRemain: 1.5, // Increased minimum buffer
-          
+
           // Buffer management
           autoCleanupSourceBuffer: true,
           autoCleanupMaxBackwardDuration: 30,
           autoCleanupMinBackwardDuration: 10,
-          
+
           // Additional buffering settings
           enableSeekableRanges: false,
           lazyLoad: true,
           lazyLoadMaxDuration: 180, // 3 minutes of content
           lazyLoadRecoverDuration: 30,
-          
+
           // Network and buffering tweaks
           reuseRedirectedURL: true,
-          
+
           // Advanced buffering configuration
           initialLiveManifestSize: 3, // Start with more segments
           liveBufferLatencyChaseUpToTolerance: true,
-          
+
           // Performance optimizations
           enableStatisticsInfo: true, // Enable buffer statistics
           fixAudioTimestampGap: true,
-          
-          // Segment loading optimizations  
+
+          // Segment loading optimizations
           headers: {
             'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
-          }
+            Pragma: 'no-cache',
+          },
         };
 
         const player = window.mpegts.createPlayer(mediaDataSource, config);
@@ -365,42 +389,55 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
 
         player.on(window.mpegts.Events.MEDIA_INFO, (mediaInfo: any) => {
           debug.log('CODEC - Full media info:', JSON.stringify(mediaInfo, null, 2));
-          
+
           // Extract codec information - try all possible property paths
           const codecs: { video?: string; audio?: string } = {};
-          
+
           // Comprehensive search for video codec information
-          let videoCodec = mediaInfo?.videoTracks?.[0]?.codec || 
-                          mediaInfo?.videoTracks?.[0]?.codecName ||
-                          mediaInfo?.video?.codec ||
-                          mediaInfo?.video?.codecName ||
-                          mediaInfo?.tracks?.[0]?.codec ||
-                          mediaInfo?.tracks?.[0]?.codecName ||
-                          mediaInfo?.videoConfig?.codec;
-          
+          let videoCodec =
+            mediaInfo?.videoTracks?.[0]?.codec ||
+            mediaInfo?.videoTracks?.[0]?.codecName ||
+            mediaInfo?.video?.codec ||
+            mediaInfo?.video?.codecName ||
+            mediaInfo?.tracks?.[0]?.codec ||
+            mediaInfo?.tracks?.[0]?.codecName ||
+            mediaInfo?.videoConfig?.codec;
+
           // Try to extract video codec from mimeType if direct codec info isn't available
           if (!videoCodec && mediaInfo?.mimeType) {
             const mimeType = mediaInfo.mimeType.toLowerCase();
             if (mimeType.includes('avc1') || mimeType.includes('h264')) {
               videoCodec = 'avc1';
-            } else if (mimeType.includes('hvc1') || mimeType.includes('hev1') || mimeType.includes('h265')) {
+            } else if (
+              mimeType.includes('hvc1') ||
+              mimeType.includes('hev1') ||
+              mimeType.includes('h265')
+            ) {
               videoCodec = 'hvc1';
             }
           }
-          
+
           debug.log('CODEC - Raw video codec found:', videoCodec);
-          
+
           if (videoCodec) {
             // Clean up codec name for display, ignore container formats like mp2t
             let cleanVideoCodec = videoCodec.toString().toLowerCase();
             if (cleanVideoCodec === 'mp2t') {
               // mp2t is a container format, not a codec - skip it
               debug.log('CODEC - Skipping container format mp2t');
-            } else if (cleanVideoCodec.includes('h264') || cleanVideoCodec.includes('avc1') || cleanVideoCodec.includes('avc')) {
+            } else if (
+              cleanVideoCodec.includes('h264') ||
+              cleanVideoCodec.includes('avc1') ||
+              cleanVideoCodec.includes('avc')
+            ) {
               cleanVideoCodec = 'H.264';
               codecs.video = cleanVideoCodec;
-            } else if (cleanVideoCodec.includes('h265') || cleanVideoCodec.includes('hevc') || 
-                      cleanVideoCodec.includes('hvc1') || cleanVideoCodec.includes('hev1')) {
+            } else if (
+              cleanVideoCodec.includes('h265') ||
+              cleanVideoCodec.includes('hevc') ||
+              cleanVideoCodec.includes('hvc1') ||
+              cleanVideoCodec.includes('hev1')
+            ) {
               cleanVideoCodec = 'H.265';
               setIsHevcStream(true);
               codecs.video = cleanVideoCodec;
@@ -415,28 +452,32 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
               codecs.video = cleanVideoCodec;
             } else if (!['mp2t', 'mpegts', 'ts'].includes(cleanVideoCodec)) {
               // Only show if it's not a known container format
-              cleanVideoCodec = videoCodec.toString().replace(/[^a-zA-Z0-9.]/g, '').toUpperCase();
+              cleanVideoCodec = videoCodec
+                .toString()
+                .replace(/[^a-zA-Z0-9.]/g, '')
+                .toUpperCase();
               codecs.video = cleanVideoCodec;
             }
-            
+
             debug.log('CODEC - Cleaned video codec:', codecs.video);
           }
-          
+
           // Enhanced search for audio codec - look in all possible locations
-          let audioCodec = mediaInfo?.audioTracks?.[0]?.codec ||
-                          mediaInfo?.audioTracks?.[0]?.codecName ||
-                          mediaInfo?.audio?.codec ||
-                          mediaInfo?.audio?.codecName ||
-                          mediaInfo?.tracks?.find((track: any) => track.type === 'audio')?.codec ||
-                          mediaInfo?.tracks?.find((track: any) => track.type === 'audio')?.codecName ||
-                          mediaInfo?.audioConfig?.codec;
-          
+          let audioCodec =
+            mediaInfo?.audioTracks?.[0]?.codec ||
+            mediaInfo?.audioTracks?.[0]?.codecName ||
+            mediaInfo?.audio?.codec ||
+            mediaInfo?.audio?.codecName ||
+            mediaInfo?.tracks?.find((track: any) => track.type === 'audio')?.codec ||
+            mediaInfo?.tracks?.find((track: any) => track.type === 'audio')?.codecName ||
+            mediaInfo?.audioConfig?.codec;
+
           // If we still don't have audio codec, check if there are multiple tracks
           if (!audioCodec && mediaInfo?.tracks && mediaInfo.tracks.length > 1) {
             // Try second track if first is video
             audioCodec = mediaInfo.tracks[1]?.codec || mediaInfo.tracks[1]?.codecName;
           }
-          
+
           // Additional fallback: check if we can detect from stream format/container
           if (!audioCodec && mediaInfo?.mimeType) {
             const mimeType = mediaInfo.mimeType.toLowerCase();
@@ -446,15 +487,15 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
               audioCodec = 'mp3';
             }
           }
-          
+
           // If we still can't detect it, just use unknown indicator
           if (!audioCodec) {
             debug.log('CODEC - No audio codec detected');
             audioCodec = '?';
           }
-          
+
           debug.log('CODEC - Raw audio codec found:', audioCodec);
-          
+
           if (audioCodec) {
             // Clean up audio codec name for display
             let cleanAudioCodec = audioCodec.toString().toLowerCase();
@@ -476,55 +517,72 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
               cleanAudioCodec = 'MP2';
             } else if (!['mp2t', 'mpegts', 'ts'].includes(cleanAudioCodec)) {
               // Only show if it's not a known container format
-              cleanAudioCodec = audioCodec.toString().replace(/[^a-zA-Z0-9.]/g, '').toUpperCase();
+              cleanAudioCodec = audioCodec
+                .toString()
+                .replace(/[^a-zA-Z0-9.]/g, '')
+                .toUpperCase();
             } else {
               // Skip container formats
               cleanAudioCodec = null;
             }
-            
+
             if (cleanAudioCodec) {
               debug.log('CODEC - Cleaned audio codec:', cleanAudioCodec);
               codecs.audio = cleanAudioCodec;
             }
           }
-          
+
           debug.log('CODEC - Setting final codecs:', codecs);
           setStreamCodecs(codecs);
         });
 
         player.on(window.mpegts.Events.ERROR, (type: string, details: string, data: any) => {
           debug.error('mpegts.js error:', type, details, data);
-          
+
           // Error rate limiting to prevent browser crashes from error loops
           const now = Date.now();
-          if (now - lastErrorTimeRef.current < 5000) { // Less than 5 seconds since last error
+          if (now - lastErrorTimeRef.current < 5000) {
+            // Less than 5 seconds since last error
             errorCountRef.current++;
           } else {
             errorCountRef.current = 1; // Reset count if errors are spaced out
           }
           lastErrorTimeRef.current = now;
-          
+
           // If too many errors in a short time, give up to prevent crashes
           if (errorCountRef.current > 3) {
-            debug.error('Too many errors detected, preventing further attempts to avoid browser crash');
-            setError('Multiple playback errors detected. This stream may be incompatible with your browser. Please try a different channel or refresh the page.');
+            debug.error(
+              'Too many errors detected, preventing further attempts to avoid browser crash'
+            );
+            setError(
+              'Multiple playback errors detected. This stream may be incompatible with your browser. Please try a different channel or refresh the page.'
+            );
             setIsLoading(false);
             return;
           }
-          
+
           let errorMsg = 'Failed to load video stream';
 
           // Enhanced error handling with recovery mechanisms
           if (type === 'NetworkError') {
-            errorMsg = 'Network error while loading video. Please check your connection and try again.';
+            errorMsg =
+              'Network error while loading video. Please check your connection and try again.';
           } else if (type === 'MediaError') {
-            if (details && (details.includes('unsupported') || details.includes('hvc1') || details.includes('hev1') || details.includes('HEVC'))) {
+            if (
+              details &&
+              (details.includes('unsupported') ||
+                details.includes('hvc1') ||
+                details.includes('hev1') ||
+                details.includes('HEVC'))
+            ) {
               setIsHevcStream(true); // Flag this as an HEVC stream
               errorMsg = 'codec_unsupported'; // Special flag for codec issues
             } else if (details && details.includes('decode')) {
-              errorMsg = 'H.264 decode error: Your browser may not support this stream format. Try refreshing or use a different browser.';
+              errorMsg =
+                'H.264 decode error: Your browser may not support this stream format. Try refreshing or use a different browser.';
             } else if (details && details.includes('buffer')) {
-              errorMsg = 'Buffer error: Stream may be too fast for your device. This is a known issue with some H.264 streams.';
+              errorMsg =
+                'Buffer error: Stream may be too fast for your device. This is a known issue with some H.264 streams.';
             } else {
               errorMsg = 'Media error: The stream format may not be supported or corrupted.';
             }
@@ -571,7 +629,10 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
             // Also try auto-play when the video element is ready to play
             if (videoRef.current) {
               videoRef.current.play().catch((e) => {
-                debug.warn('Auto-play failed on canplay event (browser may require user interaction):', e);
+                debug.warn(
+                  'Auto-play failed on canplay event (browser may require user interaction):',
+                  e
+                );
               });
             }
           });
@@ -596,7 +657,7 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
         // Load the stream
         player.load();
         playerRef.current = player;
-        
+
         // Set up enhanced buffer monitoring with adaptive management
         bufferUpdateIntervalRef.current = setInterval(() => {
           if (playerRef.current && videoRef.current) {
@@ -608,10 +669,10 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
                   bufferLength: statistics.bufferLength,
                   backBufferLength: statistics.backBufferLength,
                 });
-                
+
                 // Adaptive buffer management based on buffer health
                 const bufferHealth = statistics.bufferLength || 0;
-                
+
                 // If buffer is running low, try to help by reducing playback rate slightly
                 if (bufferHealth < 2 && !videoRef.current.paused) {
                   debug.log('Low buffer detected, applying adaptive measures');
@@ -631,23 +692,23 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
                   const currentTime = videoRef.current.currentTime;
                   let totalBuffered = 0;
                   let bufferAhead = 0;
-                  
+
                   // Calculate total buffered content and content ahead of current time
                   for (let i = 0; i < buffered.length; i++) {
                     const start = buffered.start(i);
                     const end = buffered.end(i);
-                    totalBuffered += (end - start);
-                    
+                    totalBuffered += end - start;
+
                     if (end > currentTime) {
                       bufferAhead += Math.max(0, end - Math.max(start, currentTime));
                     }
                   }
-                  
+
                   setBufferInfo({
                     bufferLength: bufferAhead,
                     backBufferLength: totalBuffered - bufferAhead,
                   });
-                  
+
                   // Apply adaptive buffering for HTML5 fallback too
                   if (bufferAhead < 2 && !videoRef.current.paused) {
                     if (videoRef.current.playbackRate > 0.98) {
@@ -664,7 +725,6 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
             }
           }
         }, 500); // Update more frequently (every 500ms) for better responsiveness
-
       } catch (err) {
         debug.error('Player initialization error:', err);
         setError(err instanceof Error ? err.message : 'Failed to initialize video player');
@@ -681,12 +741,12 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
         clearTimeout(controlsTimerRef.current);
         controlsTimerRef.current = null;
       }
-      
+
       if (bufferUpdateIntervalRef.current) {
         clearInterval(bufferUpdateIntervalRef.current);
         bufferUpdateIntervalRef.current = null;
       }
-      
+
       // Clean up player
       if (playerRef.current) {
         try {
@@ -696,7 +756,7 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
             videoRef.current.src = '';
             videoRef.current.load();
           }
-          
+
           // Properly cleanup mpegts.js player
           playerRef.current.unload();
           playerRef.current.detachMediaElement();
@@ -706,7 +766,7 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
         }
         playerRef.current = null;
       }
-      
+
       // Clean up video element
       if (videoRef.current) {
         videoRef.current.src = '';
@@ -714,7 +774,6 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
       }
     };
   }, [isOpen, mpegtsLoaded, channel?.stream_url]);
-
 
   const handleClose = () => {
     if (videoRef.current) {
@@ -775,10 +834,10 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
         if (streamUrl.startsWith('/')) {
           absoluteUrl = `${window.location.origin}${streamUrl}`;
         }
-        
+
         // Copy URL to clipboard
         await navigator.clipboard.writeText(absoluteUrl);
-        
+
         // Create a proper .m3u8 playlist file that the system can handle
         const playlistContent = `#EXTM3U
 #EXT-X-VERSION:3
@@ -787,10 +846,10 @@ export function VideoPlayerModal({ isOpen, onClose, channel, program }: VideoPla
 #EXT-X-PLAYLIST-TYPE:LIVE
 #EXTINF:10.0,
 ${absoluteUrl}`;
-        
+
         const blob = new Blob([playlistContent], { type: 'application/vnd.apple.mpegurl' });
         const url = URL.createObjectURL(blob);
-        
+
         // Create a link to download the playlist file
         const a = document.createElement('a');
         a.href = url;
@@ -798,10 +857,10 @@ ${absoluteUrl}`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        
+
         // Clean up
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-        
+
         // Show notification
         setCopySuccess(true);
         setTimeout(() => setCopySuccess(false), 3000);
@@ -814,11 +873,11 @@ ${absoluteUrl}`;
   };
 
   const displayTitle = program?.title || channel?.name || 'Video Player';
-  const displaySubtitle = program 
+  const displaySubtitle = program
     ? `${program.channel_name} • ${new Date(program.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-    : channel?.group 
-    ? channel.group
-    : undefined;
+    : channel?.group
+      ? channel.group
+      : undefined;
 
   // Debug log the render with codecs
   if (streamCodecs.video || streamCodecs.audio) {
@@ -827,8 +886,8 @@ ${absoluteUrl}`;
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent 
-        className="max-w-5xl w-[90vw] p-0 bg-black [&>button]:hidden" 
+      <DialogContent
+        className="max-w-5xl w-[90vw] p-0 bg-black [&>button]:hidden"
         aria-describedby="video-player-description"
         onMouseMove={handleMouseMove}
         onMouseEnter={handleMouseEnter}
@@ -836,12 +895,12 @@ ${absoluteUrl}`;
       >
         <div className="relative">
           {/* Header */}
-          <DialogHeader className={`absolute top-0 left-0 right-0 z-10 bg-gradient-to-b from-black/80 to-transparent p-4 transition-opacity ${showControls ? 'duration-200 opacity-100' : 'duration-500 opacity-0'}`}>
+          <DialogHeader
+            className={`absolute top-0 left-0 right-0 z-10 bg-gradient-to-b from-black/80 to-transparent p-4 transition-opacity ${showControls ? 'duration-200 opacity-100' : 'duration-500 opacity-0'}`}
+          >
             <div className="flex items-start justify-between text-white">
               <div className="flex-1 min-w-0">
-                <DialogTitle className="text-lg font-medium truncate">
-                  {displayTitle}
-                </DialogTitle>
+                <DialogTitle className="text-lg font-medium truncate">{displayTitle}</DialogTitle>
                 {displaySubtitle && (
                   <DialogDescription className="text-gray-300 text-sm mt-1">
                     {displaySubtitle}
@@ -858,12 +917,14 @@ ${absoluteUrl}`;
                   )}
                   {/* Source name badge */}
                   {(channel?.source_name || channel?.source_type) && (
-                    <Badge 
-                      variant="outline" 
+                    <Badge
+                      variant="outline"
                       className={`text-xs bg-black/50 backdrop-blur-sm ${
-                        channel.source_type === 'proxy' ? 'border-blue-500 text-blue-300' :
-                        channel.source_type === 'source' ? 'border-green-500 text-green-300' :
-                        'border-gray-500 text-gray-300'
+                        channel.source_type === 'proxy'
+                          ? 'border-blue-500 text-blue-300'
+                          : channel.source_type === 'source'
+                            ? 'border-green-500 text-green-300'
+                            : 'border-gray-500 text-gray-300'
                       }`}
                     >
                       {channel.source_name || channel.source_type}
@@ -871,24 +932,32 @@ ${absoluteUrl}`;
                   )}
                   {/* Video codec badge */}
                   {streamCodecs.video && (
-                    <Badge variant="outline" className="text-xs bg-black/50 backdrop-blur-sm border-purple-500 text-purple-300">
+                    <Badge
+                      variant="outline"
+                      className="text-xs bg-black/50 backdrop-blur-sm border-purple-500 text-purple-300"
+                    >
                       {streamCodecs.video}
                     </Badge>
                   )}
                   {/* Audio codec badge */}
                   {streamCodecs.audio && (
-                    <Badge variant="outline" className="text-xs bg-black/50 backdrop-blur-sm border-orange-500 text-orange-300">
+                    <Badge
+                      variant="outline"
+                      className="text-xs bg-black/50 backdrop-blur-sm border-orange-500 text-orange-300"
+                    >
                       {streamCodecs.audio}
                     </Badge>
                   )}
                   {/* Enhanced Buffer information */}
                   {bufferInfo.bufferLength !== undefined && (
-                    <Badge 
-                      variant="outline" 
+                    <Badge
+                      variant="outline"
                       className={`text-xs bg-black/50 backdrop-blur-sm ${
-                        bufferInfo.bufferLength < 2 ? 'border-red-500 text-red-300' :
-                        bufferInfo.bufferLength < 5 ? 'border-yellow-500 text-yellow-300' :
-                        'border-green-500 text-green-300'
+                        bufferInfo.bufferLength < 2
+                          ? 'border-red-500 text-red-300'
+                          : bufferInfo.bufferLength < 5
+                            ? 'border-yellow-500 text-yellow-300'
+                            : 'border-green-500 text-green-300'
                       }`}
                     >
                       Buffer: {bufferInfo.bufferLength.toFixed(1)}s
@@ -901,7 +970,7 @@ ${absoluteUrl}`;
                   )}
                 </div>
               </div>
-              
+
               <div className="flex items-center space-x-2 ml-4">
                 <Button
                   variant="ghost"
@@ -922,7 +991,7 @@ ${absoluteUrl}`;
                 >
                   <ExternalLink className="w-4 h-4" />
                 </Button>
-                
+
                 <Button
                   variant="ghost"
                   size="sm"
@@ -936,90 +1005,141 @@ ${absoluteUrl}`;
           </DialogHeader>
 
           {/* Video Player */}
-          <div 
-            className="relative bg-black aspect-video flex items-center justify-center group"
-          >
+          <div className="relative bg-black aspect-video flex items-center justify-center group">
             {error ? (
               <div className="m-4 text-center text-white max-w-2xl mx-auto">
                 <div className="bg-red-900/50 border border-red-600 rounded-lg p-6">
                   <h3 className="text-lg font-semibold mb-3">Video Playback Error</h3>
-                  
+
                   {error === 'codec_unsupported' && isHevcStream ? (
                     <div className="text-left space-y-3 mb-4">
-                      <p className="text-red-200">This video uses the H.265/HEVC codec which requires additional support.</p>
-                      
+                      <p className="text-red-200">
+                        This video uses the H.265/HEVC codec which requires additional support.
+                      </p>
+
                       {hevcSupport && (
                         <div className="bg-blue-900/30 border border-blue-600 rounded p-3 text-xs">
-                          <p className="text-blue-200 font-medium mb-2">🔍 Browser Detection Results:</p>
+                          <p className="text-blue-200 font-medium mb-2">
+                            🔍 Browser Detection Results:
+                          </p>
                           <div className="space-y-1 text-blue-100">
                             <div className="flex justify-between">
                               <span>Hardware H.265 Support:</span>
-                              <span className={hevcSupport.hardwareSupport === 'probably' ? 'text-green-300' : 
-                                              hevcSupport.hardwareSupport === 'maybe' ? 'text-yellow-300' : 'text-red-300'}>
+                              <span
+                                className={
+                                  hevcSupport.hardwareSupport === 'probably'
+                                    ? 'text-green-300'
+                                    : hevcSupport.hardwareSupport === 'maybe'
+                                      ? 'text-yellow-300'
+                                      : 'text-red-300'
+                                }
+                              >
                                 {hevcSupport.hardwareSupport}
                               </span>
                             </div>
                             <div className="flex justify-between">
                               <span>Web Platform Features:</span>
-                              <span className={hevcSupport.webPlatformFeatures ? 'text-green-300' : 'text-red-300'}>
+                              <span
+                                className={
+                                  hevcSupport.webPlatformFeatures
+                                    ? 'text-green-300'
+                                    : 'text-red-300'
+                                }
+                              >
                                 {hevcSupport.webPlatformFeatures ? 'enabled' : 'disabled'}
                               </span>
                             </div>
                             <div className="flex justify-between">
                               <span>Platform HEVC Decoder:</span>
-                              <span className={hevcSupport.platformHEVC ? 'text-green-300' : 'text-red-300'}>
+                              <span
+                                className={
+                                  hevcSupport.platformHEVC ? 'text-green-300' : 'text-red-300'
+                                }
+                              >
                                 {hevcSupport.platformHEVC ? 'available' : 'not detected'}
                               </span>
                             </div>
                           </div>
                         </div>
                       )}
-                      
-                      {hevcSupport && (hevcSupport.hardwareSupport === 'none' || !hevcSupport.webPlatformFeatures || !hevcSupport.platformHEVC) && (
-                        <div className="bg-yellow-900/30 border border-yellow-600 rounded p-3">
-                          <p className="text-yellow-200 text-sm font-medium mb-2">💡 Enable H.265 support:</p>
-                          <div className="text-yellow-100 text-xs space-y-2">
-                            {(navigator.userAgent.includes('Chrome') || navigator.userAgent.includes('Edge')) ? (
-                              <div>
-                                <p className="font-medium">{navigator.userAgent.includes('Chrome') ? 'Chrome/Chromium' : 'Edge'}:</p>
-                                <ol className="list-decimal list-inside ml-2 space-y-1">
-                                  <li>Go to <a 
-                                    href={navigator.userAgent.includes('Chrome') ? 'chrome://flags' : 'edge://flags'} 
-                                    className="bg-black/30 px-1 rounded text-blue-300 hover:text-blue-200 underline cursor-pointer"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      window.open(navigator.userAgent.includes('Chrome') ? 'chrome://flags' : 'edge://flags', '_blank');
-                                    }}
-                                  >
-                                    {navigator.userAgent.includes('Chrome') ? 'chrome://flags' : 'edge://flags'}
-                                  </a></li>
-                                  {!hevcSupport?.webPlatformFeatures && (
-                                    <li className="text-orange-200">Enable "Experimental Web Platform features" ⚠️</li>
-                                  )}
-                                  {!hevcSupport?.platformHEVC && (
-                                    <li className="text-orange-200">Enable "Platform HEVCDecoder" (if available) ⚠️</li>
-                                  )}
-                                  <li>Restart browser and try again</li>
-                                </ol>
-                              </div>
-                            ) : (
-                              <p>For other browsers, H.265 support may be limited.</p>
-                            )}
-                            {hevcSupport?.hardwareSupport === 'none' && (
-                              <p className="text-red-300 text-xs mt-2">
-                                ⚠️ Your system may not have hardware H.265 decoding support
-                              </p>
-                            )}
+
+                      {hevcSupport &&
+                        (hevcSupport.hardwareSupport === 'none' ||
+                          !hevcSupport.webPlatformFeatures ||
+                          !hevcSupport.platformHEVC) && (
+                          <div className="bg-yellow-900/30 border border-yellow-600 rounded p-3">
+                            <p className="text-yellow-200 text-sm font-medium mb-2">
+                              💡 Enable H.265 support:
+                            </p>
+                            <div className="text-yellow-100 text-xs space-y-2">
+                              {navigator.userAgent.includes('Chrome') ||
+                              navigator.userAgent.includes('Edge') ? (
+                                <div>
+                                  <p className="font-medium">
+                                    {navigator.userAgent.includes('Chrome')
+                                      ? 'Chrome/Chromium'
+                                      : 'Edge'}
+                                    :
+                                  </p>
+                                  <ol className="list-decimal list-inside ml-2 space-y-1">
+                                    <li>
+                                      Go to{' '}
+                                      <a
+                                        href={
+                                          navigator.userAgent.includes('Chrome')
+                                            ? 'chrome://flags'
+                                            : 'edge://flags'
+                                        }
+                                        className="bg-black/30 px-1 rounded text-blue-300 hover:text-blue-200 underline cursor-pointer"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          window.open(
+                                            navigator.userAgent.includes('Chrome')
+                                              ? 'chrome://flags'
+                                              : 'edge://flags',
+                                            '_blank'
+                                          );
+                                        }}
+                                      >
+                                        {navigator.userAgent.includes('Chrome')
+                                          ? 'chrome://flags'
+                                          : 'edge://flags'}
+                                      </a>
+                                    </li>
+                                    {!hevcSupport?.webPlatformFeatures && (
+                                      <li className="text-orange-200">
+                                        Enable "Experimental Web Platform features" ⚠️
+                                      </li>
+                                    )}
+                                    {!hevcSupport?.platformHEVC && (
+                                      <li className="text-orange-200">
+                                        Enable "Platform HEVCDecoder" (if available) ⚠️
+                                      </li>
+                                    )}
+                                    <li>Restart browser and try again</li>
+                                  </ol>
+                                </div>
+                              ) : (
+                                <p>For other browsers, H.265 support may be limited.</p>
+                              )}
+                              {hevcSupport?.hardwareSupport === 'none' && (
+                                <p className="text-red-300 text-xs mt-2">
+                                  ⚠️ Your system may not have hardware H.265 decoding support
+                                </p>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      )}
-                      
+                        )}
+
                       {hevcSupport && hevcSupport.hardwareSupport === 'probably' && (
                         <div className="bg-green-900/30 border border-green-600 rounded p-3">
-                          <p className="text-green-200 text-sm">✅ H.265 support appears to be enabled. The error might be stream-specific.</p>
+                          <p className="text-green-200 text-sm">
+                            ✅ H.265 support appears to be enabled. The error might be
+                            stream-specific.
+                          </p>
                         </div>
                       )}
-                      
+
                       <p className="text-gray-300 text-sm">
                         Or copy the stream URL below to use with VLC, MPV, or other media players.
                       </p>
@@ -1027,7 +1147,7 @@ ${absoluteUrl}`;
                   ) : (
                     <p className="text-red-200 mb-4">{error}</p>
                   )}
-                  
+
                   <div className="flex justify-center space-x-3">
                     <Button
                       variant="outline"
@@ -1035,7 +1155,11 @@ ${absoluteUrl}`;
                       onClick={copyStreamUrl}
                       className={`text-white border-blue-400 hover:bg-blue-800 ${copySuccess ? 'bg-green-600/20 border-green-400' : ''}`}
                     >
-                      {copySuccess ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
+                      {copySuccess ? (
+                        <Check className="w-4 h-4 mr-2" />
+                      ) : (
+                        <Copy className="w-4 h-4 mr-2" />
+                      )}
                       {copySuccess ? 'Copied!' : 'Copy URL'}
                     </Button>
                     <Button
@@ -1081,31 +1205,47 @@ ${absoluteUrl}`;
                     disablePictureInPicture
                   />
                 </VideoPlayerErrorBoundary>
-                
+
                 {/* HEVC Support Detection Info - only show if stream is actually HEVC */}
                 {hevcSupport && error !== 'codec_unsupported' && isHevcStream && (
                   <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                     <div className="bg-black/80 rounded-lg p-3 text-white text-xs max-w-sm">
                       <div className="flex items-center space-x-2 mb-2">
-                        <div className={`w-2 h-2 rounded-full ${
-                          hevcSupport.hardwareSupport === 'probably' ? 'bg-green-400' :
-                          hevcSupport.hardwareSupport === 'maybe' ? 'bg-yellow-400' : 'bg-red-400'
-                        }`} />
+                        <div
+                          className={`w-2 h-2 rounded-full ${
+                            hevcSupport.hardwareSupport === 'probably'
+                              ? 'bg-green-400'
+                              : hevcSupport.hardwareSupport === 'maybe'
+                                ? 'bg-yellow-400'
+                                : 'bg-red-400'
+                          }`}
+                        />
                         <span className="font-medium">H.265/HEVC Support</span>
                       </div>
                       <div className="text-gray-300">
-                        {hevcSupport.hardwareSupport === 'probably' ? 'Hardware acceleration available' :
-                         hevcSupport.hardwareSupport === 'maybe' ? 'Limited hardware support' :
-                         'Software decoding only'}
+                        {hevcSupport.hardwareSupport === 'probably'
+                          ? 'Hardware acceleration available'
+                          : hevcSupport.hardwareSupport === 'maybe'
+                            ? 'Limited hardware support'
+                            : 'Software decoding only'}
                       </div>
                       {hevcSupport.hardwareSupport === 'none' && (
                         <div className="text-yellow-300 text-xs mt-1">
-                          <a 
-                            href={navigator.userAgent.includes('Chrome') ? 'chrome://flags' : 'edge://flags'}
+                          <a
+                            href={
+                              navigator.userAgent.includes('Chrome')
+                                ? 'chrome://flags'
+                                : 'edge://flags'
+                            }
                             className="text-blue-300 hover:text-blue-200 underline cursor-pointer"
                             onClick={(e) => {
                               e.preventDefault();
-                              window.open(navigator.userAgent.includes('Chrome') ? 'chrome://flags' : 'edge://flags', '_blank');
+                              window.open(
+                                navigator.userAgent.includes('Chrome')
+                                  ? 'chrome://flags'
+                                  : 'edge://flags',
+                                '_blank'
+                              );
                             }}
                           >
                             Enable in chrome://flags for better performance
@@ -1115,7 +1255,7 @@ ${absoluteUrl}`;
                     </div>
                   </div>
                 )}
-                
+
                 {isLoading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/50">
                     <div className="text-center text-white">
@@ -1132,9 +1272,7 @@ ${absoluteUrl}`;
           {program?.description && !isFullscreen && (
             <div className="p-4 bg-gray-900 text-white border-t border-gray-700">
               <h4 className="font-medium mb-2 text-gray-200">Description</h4>
-              <p className="text-sm text-gray-300 leading-relaxed">
-                {program.description}
-              </p>
+              <p className="text-sm text-gray-300 leading-relaxed">{program.description}</p>
             </div>
           )}
         </div>

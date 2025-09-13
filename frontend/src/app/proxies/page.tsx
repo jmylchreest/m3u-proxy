@@ -1,5 +1,5 @@
-import { Proxies } from "@/components/proxies"
+import { Proxies } from '@/components/proxies';
 
 export default function ProxiesPage() {
-  return <Proxies />
+  return <Proxies />;
 }

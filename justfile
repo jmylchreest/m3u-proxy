@@ -32,7 +32,7 @@ get-version:
         if git describe --tags --always --long 2>/dev/null | grep -q '^v'; then
             # After a tag: v0.1.3-12-ga1b2c3d → 0.1.4-dev.12.ga1b2c3d
             DESCRIBE=$(git describe --tags --always --long 2>/dev/null)
-            
+
             # Parse: v0.1.3-12-ga1b2c3d
             if [[ $DESCRIBE =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-([0-9]+)-(g[a-f0-9]+)$ ]]; then
                 MAJOR=${BASH_REMATCH[1]}
@@ -40,10 +40,10 @@ get-version:
                 PATCH=${BASH_REMATCH[3]}
                 COMMITS=${BASH_REMATCH[4]}
                 COMMIT=${BASH_REMATCH[5]}
-                
+
                 # Increment patch for next development version
                 NEXT_PATCH=$((PATCH + 1))
-                
+
                 echo "${MAJOR}.${MINOR}.${NEXT_PATCH}-dev.${COMMITS}.${COMMIT}"
             else
                 echo "Error: Unable to parse git describe output: $DESCRIBE" >&2
@@ -160,7 +160,7 @@ set-version version *force="":
 # Tag a new release with automatic version bumping
 # Usage: just tag-release [major|minor]
 # Without args: patch bump (0.2.3 -> 0.2.4)
-# With major: major bump (0.2.3 -> 1.0.0)  
+# With major: major bump (0.2.3 -> 1.0.0)
 # With minor: minor bump (0.2.3 -> 0.3.0)
 tag-release bump="patch":
     @./scripts/tag-release.sh {{bump}}
@@ -168,8 +168,13 @@ tag-release bump="patch":
 # Run all tests (Rust and Next.js)
 test:
     @echo "Running Rust tests..."
-    cargo test
+    cargo test --all-features --verbose
     @echo "Running Next.js tests..."
+    cd frontend && npm test || echo "No test script found, skipping..."
+
+# Run tests in CI mode (with format checking)
+test-ci: fmt-check test
+    @echo "CI tests completed successfully!"
     cd frontend && npm test
 
 # Development server for frontend (Next.js dev mode)
@@ -204,13 +209,13 @@ build-backend-optimized:
 binary-path:
     #!/usr/bin/env bash
     set -euo pipefail
-    
+
     # Check if release binary exists
     if [ -f "target/release/m3u-proxy" ]; then
         echo "$(pwd)/target/release/m3u-proxy"
     # Check if debug binary exists
     elif [ -f "target/debug/m3u-proxy" ]; then
-        echo "$(pwd)/target/debug/m3u-proxy" 
+        echo "$(pwd)/target/debug/m3u-proxy"
     else
         echo "Binary not found. Run 'just build-backend' or 'just build-backend-optimized' first." >&2
         exit 1
@@ -220,7 +225,7 @@ binary-path:
 binary-info:
     #!/usr/bin/env bash
     set -euo pipefail
-    
+
     BINARY_PATH=$(just binary-path)
     if [ $? -eq 0 ]; then
         echo "Binary location: $BINARY_PATH"
@@ -273,9 +278,9 @@ install-all: install
 upgrade-deps-backend *args="":
     #!/usr/bin/env bash
     set -euo pipefail
-    
+
     echo "Upgrading Rust dependencies..."
-    
+
     # Check if aggressive upgrade requested
     if [[ "{{args}}" == *"--aggressive"* ]]; then
         echo "Performing aggressive upgrade..."
@@ -293,14 +298,14 @@ upgrade-deps-backend *args="":
         # Standard update within Cargo.toml constraints
         cargo update
     fi
-    
+
     echo "Checking for outdated Rust crates..."
     if command -v cargo-outdated >/dev/null 2>&1; then
         cargo outdated
     else
         echo "cargo-outdated not installed - run 'cargo install cargo-outdated' to check for updates"
     fi
-    
+
     echo "Checking for unused Rust dependencies..."
     if command -v cargo-udeps >/dev/null 2>&1; then
         cargo +nightly udeps --all-targets
@@ -308,7 +313,7 @@ upgrade-deps-backend *args="":
         echo "cargo-udeps not installed - run 'cargo install cargo-udeps' to check for unused dependencies"
         echo "Note: cargo-udeps requires nightly toolchain: 'rustup toolchain install nightly'"
     fi
-    
+
     echo "Rust dependencies upgraded!"
     echo ""
     if [[ "{{args}}" != *"--aggressive"* ]]; then
@@ -328,9 +333,9 @@ upgrade-deps-backend *args="":
 upgrade-deps-frontend *args="":
     #!/usr/bin/env bash
     set -euo pipefail
-    
+
     echo "Upgrading npm dependencies..."
-    
+
     # Check if aggressive upgrade requested
     if [[ "{{args}}" == *"--aggressive"* ]]; then
         echo "Performing aggressive upgrade..."
@@ -351,13 +356,13 @@ upgrade-deps-frontend *args="":
         # Standard update within package.json constraints
         cd frontend && npm update
     fi
-    
+
     echo "Checking for outdated npm packages..."
     cd frontend && { npm outdated || echo "All npm packages are up to date"; }
-    
+
     echo "Checking for unused npm dependencies..."
     (cd frontend && { npx depcheck --ignores="@tailwindcss/postcss,autoprefixer,postcss,tw-animate-css" || echo "No unused dependencies found"; })
-    
+
     echo "npm dependencies upgraded!"
     echo ""
     if [[ "{{args}}" != *"--aggressive"* ]]; then
@@ -406,14 +411,21 @@ push-container registry="":
 # Format all code (Rust and frontend)
 fmt:
     @echo "Formatting Rust code..."
-    cargo fmt
+    cargo fmt --all
     @echo "Formatting frontend code..."
     cd frontend && npm run format || echo "No format script found, skipping..."
+
+# Check if code is properly formatted without changing files
+fmt-check:
+    @echo "Checking Rust code formatting..."
+    cargo fmt --all -- --check
+    @echo "Checking frontend code formatting..."
+    cd frontend && npm run format:check || echo "No format:check script found, skipping..."
 
 # Lint all code
 lint:
     @echo "Linting Rust code..."
-    cargo clippy -- -D warnings
+    cargo clippy --all-targets --all-features -- -D warnings
     @echo "Linting frontend code..."
     cd frontend && npm run lint || echo "No lint script found, skipping..."
 
@@ -441,9 +453,13 @@ bench: bench-rust bench-frontend
     @echo "Rust results: target/criterion/"
     @echo "Frontend results: check frontend/benchmark-results or console output"
 
-# Full quality check (format, lint, audit, test)
-check: fmt lint audit test
+# Full quality check (format check, lint, audit, test)
+check: fmt-check lint audit test
     @echo "All quality checks passed!"
+
+# Full quality check with auto-fix (format, lint, audit, test)
+check-fix: fmt lint audit test
+    @echo "All quality checks passed (with fixes applied)!"
 
 # Performance testing (benchmarks + tests)
 perf: test bench
@@ -453,9 +469,13 @@ perf: test bench
 test-all: test
     @echo "All tests (backend, frontend) completed!"
 
-# Quality check
-check-all: fmt lint audit test
+# Quality check (same as check but more explicit name)
+check-all: fmt-check lint audit test
     @echo "All quality checks passed!"
+
+# Pre-commit checks - run this before committing code
+pre-commit: fmt-check lint
+    @echo "Pre-commit checks passed!"
 
 # Development workflow: build and test
 dev-check: build-dev
@@ -470,11 +490,11 @@ build-versioned:
     set -euo pipefail
     VERSION=$(just get-version)
     echo "Building with git-based version: $VERSION"
-    
+
     # Always update Cargo.toml to match build version (for SBOM consistency)
     echo "Updating Cargo.toml to version: $VERSION"
     just set-version "$VERSION"
-    
+
     # Check if this is a release version (no -dev suffix)
     if [[ "$VERSION" =~ -dev ]]; then
         echo "Development build detected - using standard release build"
@@ -483,7 +503,7 @@ build-versioned:
         echo "Release build detected - using optimized build with stripped symbols"
         just build-frontend copy-frontend build-backend-optimized
     fi
-    
+
     echo "✅ Versioned build complete with version: $VERSION"
     echo "   Cargo.toml, containers, and SBOM will all reference: $VERSION"
 

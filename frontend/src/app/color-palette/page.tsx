@@ -1,5 +1,5 @@
-import { ColourPalette } from "@/components/color-palette"
+import { ColourPalette } from '@/components/color-palette';
 
 export default function ColourPalettePage() {
-  return <ColourPalette />
+  return <ColourPalette />;
 }

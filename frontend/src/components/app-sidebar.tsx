@@ -1,4 +1,4 @@
-"use client"
+'use client';
 
 import {
   Play,
@@ -16,9 +16,9 @@ import {
   ArrowUpDown,
   Tv,
   Calendar,
-  Paintbrush
-} from "lucide-react"
-import { usePathname } from "next/navigation"
+  Paintbrush,
+} from 'lucide-react';
+import { usePathname } from 'next/navigation';
 import {
   Sidebar,
   SidebarHeader,
@@ -29,127 +29,128 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
-} from "@/components/ui/sidebar"
+} from '@/components/ui/sidebar';
 
 const navigation = [
   {
-    title: "Overview",
+    title: 'Overview',
     items: [
       {
-        title: "Dashboard",
-        url: "/",
+        title: 'Dashboard',
+        url: '/',
         icon: Activity,
       },
       {
-        title: "Channel Browser",
-        url: "/channels",
+        title: 'Channel Browser',
+        url: '/channels',
         icon: Tv,
       },
       {
-        title: "EPG Viewer",
-        url: "/epg",
+        title: 'EPG Viewer',
+        url: '/epg',
         icon: Calendar,
       },
     ],
   },
   {
-    title: "Proxy Config",
+    title: 'Proxy Config',
     items: [
       {
-        title: "Stream Sources",
-        url: "/sources/stream",
+        title: 'Stream Sources',
+        url: '/sources/stream',
         icon: Database,
       },
       {
-        title: "EPG Sources",
-        url: "/sources/epg",
+        title: 'EPG Sources',
+        url: '/sources/epg',
         icon: Server,
       },
       {
-        title: "Proxies",
-        url: "/proxies",
+        title: 'Proxies',
+        url: '/proxies',
         icon: Play,
       },
     ],
   },
   {
-    title: "Global Config",
+    title: 'Global Config',
     items: [
       {
-        title: "Filters",
-        url: "/admin/filters",
+        title: 'Filters',
+        url: '/admin/filters',
         icon: Filter,
       },
       {
-        title: "Data Mapping",
-        url: "/admin/data-mapping",
+        title: 'Data Mapping',
+        url: '/admin/data-mapping',
         icon: ArrowUpDown,
       },
       {
-        title: "Logos",
-        url: "/admin/logos",
+        title: 'Logos',
+        url: '/admin/logos',
         icon: Image,
       },
       {
-        title: "Relay Profiles",
-        url: "/admin/relays",
+        title: 'Relay Profiles',
+        url: '/admin/relays',
         icon: Zap,
       },
     ],
   },
   {
-    title: "Debug",
+    title: 'Debug',
     items: [
       {
-        title: "Debug",
-        url: "/debug",
+        title: 'Debug',
+        url: '/debug',
         icon: Bug,
       },
       {
-        title: "Settings",
-        url: "/settings",
+        title: 'Settings',
+        url: '/settings',
         icon: Settings,
       },
       {
-        title: "Events",
-        url: "/events",
+        title: 'Events',
+        url: '/events',
         icon: Activity,
       },
       {
-        title: "Logs",
-        url: "/logs",
+        title: 'Logs',
+        url: '/logs',
         icon: FileText,
       },
       {
-        title: "Colour Palette",
-        url: "/color-palette",
+        title: 'Colour Palette',
+        url: '/color-palette',
         icon: Paintbrush,
       },
     ],
   },
-]
+];
 
 function getOperationTypeForPath(pathname: string): string | undefined {
   // Remove trailing slash for consistent matching
-  const normalizedPathname = pathname.endsWith('/') && pathname !== '/' ? pathname.slice(0, -1) : pathname
-  
+  const normalizedPathname =
+    pathname.endsWith('/') && pathname !== '/' ? pathname.slice(0, -1) : pathname;
+
   switch (normalizedPathname) {
-    case "/sources/stream":
-      return "stream_ingestion"
-    case "/sources/epg":
-      return "epg_ingestion"
-    case "/proxies":
-      return "proxy_regeneration"
-    case "/events":
-      return undefined // Show all operation types
+    case '/sources/stream':
+      return 'stream_ingestion';
+    case '/sources/epg':
+      return 'epg_ingestion';
+    case '/proxies':
+      return 'proxy_regeneration';
+    case '/events':
+      return undefined; // Show all operation types
     default:
-      return undefined
+      return undefined;
   }
 }
 
 export function AppSidebar() {
-  const pathname = usePathname()
-  const operationType = getOperationTypeForPath(pathname)
+  const pathname = usePathname();
+  const operationType = getOperationTypeForPath(pathname);
 
   return (
     <Sidebar variant="inset" collapsible="icon">
@@ -170,7 +171,7 @@ export function AppSidebar() {
               <SidebarMenu>
                 {group.items.map((item) => (
                   <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton 
+                    <SidebarMenuButton
                       asChild
                       isActive={pathname === item.url}
                       tooltip={item.title}
@@ -187,7 +188,6 @@ export function AppSidebar() {
           </SidebarGroup>
         ))}
       </SidebarContent>
-
     </Sidebar>
-  )
+  );
 }

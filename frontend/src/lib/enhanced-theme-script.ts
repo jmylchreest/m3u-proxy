@@ -76,4 +76,4 @@ export const enhancedThemeScript = `
   // Initialize theme
   initializeTheme();
 })();
-`
+`;

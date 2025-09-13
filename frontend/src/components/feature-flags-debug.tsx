@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,9 +21,7 @@ export function FeatureFlagsDebug() {
             <Flag className="w-5 h-5" />
             Feature Flags
           </CardTitle>
-          <CardDescription>
-            Current feature flag configuration
-          </CardDescription>
+          <CardDescription>Current feature flag configuration</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center justify-center py-8">
@@ -43,15 +41,11 @@ export function FeatureFlagsDebug() {
             <Flag className="w-5 h-5" />
             Feature Flags
           </CardTitle>
-          <CardDescription>
-            Current feature flag configuration
-          </CardDescription>
+          <CardDescription>Current feature flag configuration</CardDescription>
         </CardHeader>
         <CardContent>
           <Alert variant="destructive">
-            <AlertDescription>
-              Failed to load feature flags: {error}
-            </AlertDescription>
+            <AlertDescription>Failed to load feature flags: {error}</AlertDescription>
           </Alert>
         </CardContent>
       </Card>
@@ -70,9 +64,7 @@ export function FeatureFlagsDebug() {
           <Flag className="h-5 w-5" />
           Feature Flags
         </CardTitle>
-        <CardDescription>
-          Runtime feature toggles and configuration
-        </CardDescription>
+        <CardDescription>Runtime feature toggles and configuration</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {flagEntries.length === 0 && configEntries.length === 0 ? (
@@ -89,7 +81,7 @@ export function FeatureFlagsDebug() {
                 <div key={key} className="bg-muted/50 rounded p-2">
                   <div className="flex justify-between items-center mb-1">
                     <div className="font-medium text-sm font-mono truncate pr-2">{key}</div>
-                    <Badge variant={enabled ? "default" : "secondary"} className="text-xs">
+                    <Badge variant={enabled ? 'default' : 'secondary'} className="text-xs">
                       {enabled ? (
                         <>
                           <Check className="w-3 h-3 mr-1" />
@@ -103,7 +95,7 @@ export function FeatureFlagsDebug() {
                       )}
                     </Badge>
                   </div>
-                  
+
                   {/* Configuration details if present */}
                   {config && Object.keys(config).length > 0 && (
                     <div className="mt-2 pt-1 border-t border-border/50">
@@ -112,10 +104,9 @@ export function FeatureFlagsDebug() {
                           <div key={configKey} className="flex justify-between items-center">
                             <span className="text-muted-foreground font-mono">{configKey}:</span>
                             <span className="font-medium font-mono">
-                              {typeof configValue === 'string' 
-                                ? `"${configValue}"` 
-                                : JSON.stringify(configValue)
-                              }
+                              {typeof configValue === 'string'
+                                ? `"${configValue}"`
+                                : JSON.stringify(configValue)}
                             </span>
                           </div>
                         ))}

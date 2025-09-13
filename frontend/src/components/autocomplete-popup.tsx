@@ -1,32 +1,28 @@
-"use client"
+'use client';
 
-import { cn } from "@/lib/utils"
-import { Code } from "@/components/ui/code"
-import { Badge } from "@/components/ui/badge"
-import { Loader2 } from "lucide-react"
-import type { AutocompleteSuggestion, AutocompleteState } from "@/hooks/useHelperAutocomplete"
+import { cn } from '@/lib/utils';
+import { Code } from '@/components/ui/code';
+import { Badge } from '@/components/ui/badge';
+import { Loader2 } from 'lucide-react';
+import type { AutocompleteSuggestion, AutocompleteState } from '@/hooks/useHelperAutocomplete';
 
 export interface AutocompletePopupProps {
-  state: AutocompleteState
-  onSuggestionClick: (suggestion: AutocompleteSuggestion) => void
-  className?: string
+  state: AutocompleteState;
+  onSuggestionClick: (suggestion: AutocompleteSuggestion) => void;
+  className?: string;
 }
 
-export function AutocompletePopup({
-  state,
-  onSuggestionClick,
-  className
-}: AutocompletePopupProps) {
-  if (!state.isOpen) return null
+export function AutocompletePopup({ state, onSuggestionClick, className }: AutocompletePopupProps) {
+  if (!state.isOpen) return null;
 
-  const { suggestions, selectedIndex, position, loading } = state
+  const { suggestions, selectedIndex, position, loading } = state;
 
   return (
     <div
       data-autocomplete-popup="true"
       className={cn(
-        "fixed z-50 min-w-[200px] max-w-[400px] bg-popover border border-border rounded-md shadow-lg",
-        "animate-in fade-in-0 zoom-in-95 duration-100",
+        'fixed z-50 min-w-[200px] max-w-[400px] bg-popover border border-border rounded-md shadow-lg',
+        'animate-in fade-in-0 zoom-in-95 duration-100',
         className
       )}
       style={{
@@ -40,18 +36,16 @@ export function AutocompletePopup({
           Loading suggestions...
         </div>
       ) : suggestions.length === 0 ? (
-        <div className="p-3 text-sm text-muted-foreground">
-          No suggestions found
-        </div>
+        <div className="p-3 text-sm text-muted-foreground">No suggestions found</div>
       ) : (
         <div className="py-1 max-h-[300px] overflow-y-auto">
           {suggestions.map((suggestion, index) => (
             <div
               key={`${suggestion.type}-${suggestion.value}-${index}`}
               className={cn(
-                "px-3 py-2 cursor-pointer text-sm transition-colors",
-                "hover:bg-accent hover:text-accent-foreground",
-                index === selectedIndex && "bg-accent text-accent-foreground"
+                'px-3 py-2 cursor-pointer text-sm transition-colors',
+                'hover:bg-accent hover:text-accent-foreground',
+                index === selectedIndex && 'bg-accent text-accent-foreground'
               )}
               onClick={() => onSuggestionClick(suggestion)}
               onMouseEnter={() => {
@@ -69,22 +63,24 @@ export function AutocompletePopup({
                   </Badge>
                 )}
               </div>
-              
+
               {suggestion.preview && (
                 <div className="mt-2">
-                  {suggestion.preview.startsWith('http') && (suggestion.preview.includes('/logos/') || suggestion.preview.includes('/images/')) ? (
+                  {suggestion.preview.startsWith('http') &&
+                  (suggestion.preview.includes('/logos/') ||
+                    suggestion.preview.includes('/images/')) ? (
                     <img
                       src={suggestion.preview}
                       alt={suggestion.label}
                       className="w-full object-contain border border-border rounded bg-muted"
                       onError={(e) => {
                         // Fallback to text preview if image fails
-                        (e.target as HTMLImageElement).style.display = 'none'
-                        const textPreview = document.createElement('div')
-                        textPreview.className = 'text-xs text-blue-600 font-mono'
-                        textPreview.textContent = `Preview: ${suggestion.preview}`
-                        const target = e.target as HTMLImageElement
-                        target.parentNode?.appendChild(textPreview)
+                        (e.target as HTMLImageElement).style.display = 'none';
+                        const textPreview = document.createElement('div');
+                        textPreview.className = 'text-xs text-blue-600 font-mono';
+                        textPreview.textContent = `Preview: ${suggestion.preview}`;
+                        const target = e.target as HTMLImageElement;
+                        target.parentNode?.appendChild(textPreview);
                       }}
                     />
                   ) : (
@@ -98,7 +94,7 @@ export function AutocompletePopup({
           ))}
         </div>
       )}
-      
+
       {/* Footer with keyboard hints */}
       <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground bg-muted/50">
         <div className="flex items-center gap-4">
@@ -108,5 +104,5 @@ export function AutocompletePopup({
         </div>
       </div>
     </div>
-  )
+  );
 }

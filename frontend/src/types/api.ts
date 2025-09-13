@@ -40,7 +40,7 @@ export interface StreamSource {
 }
 
 export interface StreamSourceResponse extends StreamSource {
-  source_kind?: 'stream';  // Added for unified /sources endpoint
+  source_kind?: 'stream'; // Added for unified /sources endpoint
   channel_count: number;
   next_scheduled_update?: string;
 }
@@ -65,7 +65,7 @@ export interface EpgSource {
 }
 
 export interface EpgSourceResponse extends EpgSource {
-  source_kind?: 'epg';  // Added for unified /sources endpoint
+  source_kind?: 'epg'; // Added for unified /sources endpoint
   channel_count: number;
   program_count: number;
   next_scheduled_update?: string;
@@ -138,7 +138,7 @@ export interface FilterWithMeta {
   filter: Filter;
 }
 
-// Relay Types  
+// Relay Types
 export type VideoCodec = 'H264' | 'H265' | 'AV1' | 'MPEG2' | 'MPEG4' | 'Copy';
 export type AudioCodec = 'AAC' | 'MP3' | 'AC3' | 'EAC3' | 'MPEG2Audio' | 'DTS' | 'Copy';
 export type RelayOutputFormat = 'TransportStream' | 'HLS' | 'Dash' | 'Copy';
@@ -279,7 +279,6 @@ export interface RelayConnectedClient {
   bytes_served: string;
   last_activity: string;
 }
-
 
 // Logo Types
 export interface LogoAsset {
@@ -489,7 +488,6 @@ export interface KubernetesProbeResponse {
   timestamp: string;
 }
 
-
 // Request Types
 export interface CreateStreamSourceRequest {
   name: string;
@@ -583,7 +581,17 @@ export interface ProgressStage {
   id: string;
   name: string;
   percentage: number;
-  state: 'idle' | 'preparing' | 'connecting' | 'downloading' | 'processing' | 'saving' | 'cleanup' | 'completed' | 'error' | 'cancelled';
+  state:
+    | 'idle'
+    | 'preparing'
+    | 'connecting'
+    | 'downloading'
+    | 'processing'
+    | 'saving'
+    | 'cleanup'
+    | 'completed'
+    | 'error'
+    | 'cancelled';
   stage_step: string | null;
 }
 
@@ -594,7 +602,17 @@ export interface ProgressEvent {
   operation_type: 'epg_ingestion' | 'stream_ingestion' | 'proxy_regeneration';
   owner_type: 'epg_source' | 'stream_source' | 'proxy';
   owner_id: string;
-  state: 'idle' | 'preparing' | 'connecting' | 'downloading' | 'processing' | 'saving' | 'cleanup' | 'completed' | 'error' | 'cancelled';
+  state:
+    | 'idle'
+    | 'preparing'
+    | 'connecting'
+    | 'downloading'
+    | 'processing'
+    | 'saving'
+    | 'cleanup'
+    | 'completed'
+    | 'error'
+    | 'cancelled';
   current_stage: string;
   overall_percentage: number;
   stages: ProgressStage[];
@@ -604,7 +622,7 @@ export interface ProgressEvent {
   error: string | null;
 }
 
-export type EventHandler = (event: ServiceEvent | ProgressEvent) => void
+export type EventHandler = (event: ServiceEvent | ProgressEvent) => void;
 
 // Log Types for SSE
 export interface LogEntry {
@@ -637,7 +655,7 @@ export interface LogStats {
   newest_log_timestamp?: string;
 }
 
-export type LogHandler = (log: LogEntry) => void
+export type LogHandler = (log: LogEntry) => void;
 
 // Settings Types
 export interface RuntimeSettings {

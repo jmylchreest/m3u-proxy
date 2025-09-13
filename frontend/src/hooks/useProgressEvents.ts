@@ -1,7 +1,7 @@
-"use client"
+'use client';
 
-import { useState, useEffect } from 'react'
-import { useProgressContext, ProgressEvent } from '@/providers/ProgressProvider'
+import { useState, useEffect } from 'react';
+import { useProgressContext, ProgressEvent } from '@/providers/ProgressProvider';
 
 /**
  * Subscribe to progress events for a specific resource ID
@@ -9,25 +9,25 @@ import { useProgressContext, ProgressEvent } from '@/providers/ProgressProvider'
  * @returns The latest progress event for this resource, or null if none
  */
 export function useProgressEvents(resourceId: string): ProgressEvent | null {
-  const context = useProgressContext()
-  const [event, setEvent] = useState<ProgressEvent | null>(null)
+  const context = useProgressContext();
+  const [event, setEvent] = useState<ProgressEvent | null>(null);
 
   useEffect(() => {
-    if (!resourceId) return
+    if (!resourceId) return;
 
     // Get initial state
-    const initialState = context.getResourceState(resourceId)
-    setEvent(initialState)
+    const initialState = context.getResourceState(resourceId);
+    setEvent(initialState);
 
     // Subscribe to updates
     const unsubscribe = context.subscribe(resourceId, (newEvent) => {
-      setEvent(newEvent)
-    })
+      setEvent(newEvent);
+    });
 
-    return unsubscribe
-  }, [resourceId])
+    return unsubscribe;
+  }, [resourceId]);
 
-  return event
+  return event;
 }
 
 /**
@@ -36,23 +36,25 @@ export function useProgressEvents(resourceId: string): ProgressEvent | null {
  * @returns Array of latest events for this operation type
  */
 export function useProgressEventsByType(operationType: string): ProgressEvent[] {
-  const context = useProgressContext()
-  const [events, setEvents] = useState<ProgressEvent[]>([])
+  const context = useProgressContext();
+  const [events, setEvents] = useState<ProgressEvent[]>([]);
 
   useEffect(() => {
-    if (!operationType) return
+    if (!operationType) return;
 
-    const eventMap = new Map<string, ProgressEvent>()
+    const eventMap = new Map<string, ProgressEvent>();
 
     const unsubscribe = context.subscribeToType(operationType, (event) => {
-      eventMap.set(event.id, event)
-      setEvents(Array.from(eventMap.values()).sort((a, b) => 
-        new Date(b.last_update).getTime() - new Date(a.last_update).getTime()
-      ))
-    })
+      eventMap.set(event.id, event);
+      setEvents(
+        Array.from(eventMap.values()).sort(
+          (a, b) => new Date(b.last_update).getTime() - new Date(a.last_update).getTime()
+        )
+      );
+    });
 
-    return unsubscribe
-  }, [operationType])
+    return unsubscribe;
+  }, [operationType]);
 
-  return events
+  return events;
 }

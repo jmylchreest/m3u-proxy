@@ -436,8 +436,7 @@ build-container:
 # Pushes all three tags: version, :latest, and (:release | :snapshot)
 push-container registry="":
     @echo "Pushing container to registry using external script with runtime detection..."
-    #!/usr/bin/env bash
-    set -euo pipefail
+    # Run the push script directly; it has its own bash shebang and sets -euo pipefail internally
     ./scripts/push-container.sh "{{registry}}"
 
 # Format all code (Rust and frontend)

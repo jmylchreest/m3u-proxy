@@ -276,7 +276,7 @@ jobs:
         run: cargo sbom --output-format spdx_json_2_3 > rust-sbom-spdx.json
 
       - name: Generate Rust CycloneDX SBOM
-        run: cargo sbom --output-format cyclone_json_1_6 > rust-sbom-cyclonedx.json
+        run: cargo sbom --output-format cyclone_dx_json_1_6 > rust-sbom-cyclonedx.json
 
       - name: Generate Frontend SPDX SBOM
         run: |

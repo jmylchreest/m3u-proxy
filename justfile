@@ -410,24 +410,15 @@ push-container registry="":
 
 # Format all code (Rust and frontend)
 fmt:
-    @echo "Formatting Rust code..."
-    cargo fmt --all
-    @echo "Formatting frontend code..."
-    cd frontend && npm run format || echo "No format script found, skipping..."
+    @./scripts/format.sh
 
 # Check if code is properly formatted without changing files
 fmt-check:
-    @echo "Checking Rust code formatting..."
-    cargo fmt --all -- --check
-    @echo "Checking frontend code formatting..."
-    cd frontend && npm run format:check || echo "No format:check script found, skipping..."
+    @./scripts/check-format.sh
 
 # Lint all code
 lint:
-    @echo "Linting Rust code..."
-    cargo clippy --all-targets --all-features -- -D warnings
-    @echo "Linting frontend code..."
-    cd frontend && npm run lint || echo "No lint script found, skipping..."
+    @./scripts/lint.sh
 
 # Run security audit
 audit:
@@ -474,8 +465,12 @@ check-all: fmt-check lint audit test
     @echo "All quality checks passed!"
 
 # Pre-commit checks - run this before committing code
-pre-commit: fmt-check lint
-    @echo "Pre-commit checks passed!"
+pre-commit:
+    @./scripts/pre-commit.sh
+
+# Install git hooks for automatic pre-commit checks
+install-hooks:
+    @./scripts/install-hooks.sh
 
 # Development workflow: build and test
 dev-check: build-dev

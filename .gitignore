@@ -2,7 +2,7 @@
 /target/
 **/target/
 **/*.rs.bk
-Cargo.lock
+
 
 # Configuration
 config.toml

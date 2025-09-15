@@ -71,9 +71,10 @@ get-version:
             fi
 
             if $use_current_ahead; then
-                # Base next dev on CURRENT_VERSION's patch + 1
-                BASE_PATCH=$((CV_PATCH + 1))
+                # CURRENT_VERSION is already ahead of the last tag; reuse its patch (do not increment again)
+                BASE_PATCH=$CV_PATCH
             else
+                # Normal case: use tag patch + 1 as the dev baseline
                 BASE_PATCH=$NEXT_PATCH_FROM_TAG
             fi
 
@@ -517,9 +518,22 @@ build-versioned:
     VERSION=$(just get-version)
     echo "Building with git-based version: $VERSION"
 
-    # Always update Cargo.toml to match build version (for SBOM consistency)
-    echo "Updating Cargo.toml to version: $VERSION"
-    just set-version "$VERSION"
+    # Sync manifests only when needed; preserve and persist -dev suffix for development builds
+    if [[ "$VERSION" =~ -dev ]]; then
+        if [ "$(just get-current-version)" != "$VERSION" ]; then
+            echo "Development build; syncing manifests (Cargo.toml, package.json) to $VERSION"
+            just set-version "$VERSION"
+        else
+            echo "Development build; manifests already at $VERSION"
+        fi
+    else
+        if [ "$(just get-current-version)" != "$VERSION" ]; then
+            echo "Release build; syncing manifests (Cargo.toml, package.json) to $VERSION"
+            just set-version "$VERSION"
+        else
+            echo "Release build; manifests already at $VERSION"
+        fi
+    fi
 
     # Check if this is a release version (no -dev suffix)
     if [[ "$VERSION" =~ -dev ]]; then
@@ -565,15 +579,29 @@ build-container-versioned:
 
     echo "Building container with safe version: $VERSION"
 
-    # Update Cargo.toml only if we are moving forward or equal; force only if mismatch with chosen version
-    if ver_gt "$VERSION" "$CURRENT_VERSION"; then
-        echo "Updating Cargo.toml to version: $VERSION"
-        just set-version "$VERSION"
-    elif [ "$VERSION" != "$CURRENT_VERSION" ]; then
-        echo "Non-equal version mismatch detected; forcing set-version to maintain consistency"
-        just set-version "$VERSION" --force
+    # Sync Cargo.toml version only when:
+    #  - It is behind the computed core (next dev baseline), or
+    #  - This is a tagged (non -dev) release and differs
+    core() { echo "${1%%-*}"; }
+    VERSION_CORE=$(core "$VERSION")
+    CURRENT_CORE=$(core "$CURRENT_VERSION")
+
+    # For non-tagged (development) builds we want the full -dev.* string persisted in manifests.
+    # For tagged releases we ensure exact match to the tag version.
+    if [[ "$VERSION" =~ -dev ]]; then
+        if [ "$CURRENT_VERSION" != "$VERSION" ]; then
+            echo "Development build; syncing manifests (Cargo.toml, package.json) to development version: $VERSION"
+            just set-version "$VERSION"
+        else
+            echo "Development build; manifests already at $VERSION"
+        fi
     else
-        echo "Cargo.toml already at desired version ($VERSION)"
+        if [ "$CURRENT_VERSION" != "$VERSION" ]; then
+            echo "Release build; syncing manifests (Cargo.toml, package.json) to $VERSION"
+            just set-version "$VERSION"
+        else
+            echo "Release build; manifests already at $VERSION"
+        fi
     fi
 
     echo "Ensuring npm dependencies are up to date..."

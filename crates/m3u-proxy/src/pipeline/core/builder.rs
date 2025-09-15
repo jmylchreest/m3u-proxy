@@ -8,10 +8,14 @@ use std::sync::Arc;
 
 use crate::{
     config::Config,
+    ingestor::IngestionStateManager,
     logo_assets::service::LogoAssetService,
     models::StreamProxy,
     pipeline::{core::orchestrator::PipelineOrchestrator, stages::logo_caching::LogoCachingConfig},
 };
+
+// Type alias to clarify fully qualified dependency bundle usage
+type OrchestratorDeps = crate::pipeline::core::orchestrator::OrchestratorDependencies;
 use sandboxed_file_manager::SandboxedManager;
 
 /// Configuration for pipeline execution
@@ -45,6 +49,7 @@ pub struct PipelineBuilder {
     file_manager: SandboxedManager,
     logo_service: Arc<LogoAssetService>,
     pipeline_config: PipelineConfig,
+    ingestion_state_manager: Arc<IngestionStateManager>,
 }
 
 impl PipelineBuilder {
@@ -54,6 +59,7 @@ impl PipelineBuilder {
         app_config: Config,
         file_manager: SandboxedManager,
         logo_service: Arc<LogoAssetService>,
+        ingestion_state_manager: Arc<IngestionStateManager>,
     ) -> Self {
         Self {
             database,
@@ -61,6 +67,7 @@ impl PipelineBuilder {
             file_manager,
             logo_service,
             pipeline_config: PipelineConfig::default(),
+            ingestion_state_manager,
         }
     }
 
@@ -117,14 +124,19 @@ impl PipelineBuilder {
             base_url: self.app_config.web.base_url.clone(),
         };
 
-        // Build orchestrator with all dependencies
-        Ok(PipelineOrchestrator::new_with_dependencies(
-            proxy_config,
-            self.file_manager.clone(),
-            self.file_manager, // TODO: Use proper proxy output file manager
-            self.logo_service,
-            logo_config,
-            self.database,
+        // Build orchestrator with all dependencies (updated to use dependency bundle)
+        Ok(PipelineOrchestrator::new_from_dependencies(
+            OrchestratorDeps {
+                proxy_config,
+                file_manager: self.file_manager.clone(),
+                // Re-use the same manager for proxy output in this builder context
+                proxy_output_file_manager: self.file_manager.clone(),
+                logo_service: self.logo_service.clone(),
+                logo_config,
+                database: self.database.clone(),
+                app_config: self.app_config.clone(),
+                ingestion_state_manager: self.ingestion_state_manager.clone(),
+            },
         ))
     }
 

@@ -4,6 +4,7 @@ use tracing::info;
 
 use crate::data_mapping::DataMappingService;
 use crate::database::Database;
+use crate::ingestor::IngestionStateManager;
 use crate::logo_assets::service::LogoAssetService;
 use crate::models::*;
 
@@ -28,16 +29,19 @@ pub struct GenerateProxyParams<'a> {
 pub struct ProxyService {
     pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
     proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
+    ingestion_state_manager: std::sync::Arc<IngestionStateManager>,
 }
 
 impl ProxyService {
     pub fn new(
         pipeline_file_manager: sandboxed_file_manager::SandboxedManager,
         proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
+        ingestion_state_manager: std::sync::Arc<IngestionStateManager>,
     ) -> Self {
         Self {
             pipeline_file_manager,
             proxy_output_file_manager,
+            ingestion_state_manager,
         }
     }
 
@@ -72,6 +76,7 @@ impl ProxyService {
             params.app_config.clone(),
             self.pipeline_file_manager.clone(),
             self.proxy_output_file_manager.clone(),
+            self.ingestion_state_manager.clone(),
         );
 
         // Create orchestrator using factory pattern

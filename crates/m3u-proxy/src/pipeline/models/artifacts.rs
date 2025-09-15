@@ -261,6 +261,54 @@ impl ArtifactRegistry {
             by_type,
         }
     }
+
+    /// Clear all artifacts to free memory (called after pipeline completion)
+    pub fn clear(&mut self) {
+        self.artifacts.clear();
+        self.by_type.clear();
+        self.by_stage.clear();
+    }
+
+    /// Remove old artifacts to prevent memory accumulation
+    pub fn cleanup_old_artifacts(&mut self, max_age_minutes: i64) {
+        let cutoff_time = Utc::now() - chrono::Duration::minutes(max_age_minutes);
+
+        // Find artifacts older than cutoff
+        let old_artifact_ids: Vec<String> = self
+            .artifacts
+            .iter()
+            .filter(|(_, artifact)| artifact.created_at < cutoff_time)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        // Remove from main registry
+        for artifact_id in &old_artifact_ids {
+            if let Some(artifact) = self.artifacts.remove(artifact_id) {
+                // Remove from type index
+                if let Some(type_list) = self.by_type.get_mut(&artifact.artifact_type) {
+                    type_list.retain(|id| id != artifact_id);
+                    if type_list.is_empty() {
+                        self.by_type.remove(&artifact.artifact_type);
+                    }
+                }
+
+                // Remove from stage index
+                if let Some(stage_list) = self.by_stage.get_mut(&artifact.created_by_stage) {
+                    stage_list.retain(|id| id != artifact_id);
+                    if stage_list.is_empty() {
+                        self.by_stage.remove(&artifact.created_by_stage);
+                    }
+                }
+            }
+        }
+
+        if !old_artifact_ids.is_empty() {
+            tracing::debug!(
+                "Cleaned up {} old artifacts from registry",
+                old_artifact_ids.len()
+            );
+        }
+    }
 }
 
 impl Default for ArtifactRegistry {

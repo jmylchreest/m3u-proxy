@@ -2257,7 +2257,7 @@ dependencies = [
 
 [[package]]
 name = "m3u-proxy"
-version = "0.2.12"
+version = "0.2.19-dev.1.gdf3604a"
 dependencies = [
  "anyhow",
  "async-stream",

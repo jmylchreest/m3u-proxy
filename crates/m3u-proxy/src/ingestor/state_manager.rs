@@ -272,6 +272,38 @@ impl IngestionStateManager {
         states.clone()
     }
 
+    /// Clean up old completed ingestion states to prevent memory accumulation
+    pub async fn cleanup_old_states(&self, max_age_minutes: i64) {
+        let cutoff_time = Utc::now() - Duration::minutes(max_age_minutes);
+        let mut states = self.states.write().await;
+        let mut processing = self.processing_info.write().await;
+        let mut tokens = self.cancellation_tokens.write().await;
+
+        // Remove states that are completed and older than cutoff
+        let old_states: Vec<Uuid> = states
+            .iter()
+            .filter(|(_, progress)| {
+                matches!(progress.state, crate::models::IngestionState::Completed)
+                    && progress.started_at < cutoff_time
+            })
+            .map(|(id, _)| *id)
+            .collect();
+
+        for state_id in old_states {
+            states.remove(&state_id);
+            processing.remove(&state_id);
+            tokens.remove(&state_id);
+        }
+
+        if !states.is_empty() {
+            tracing::debug!(
+                "Cleaned up {} old ingestion states, {} remaining",
+                states.len(),
+                states.len()
+            );
+        }
+    }
+
     pub async fn cancel_ingestion(&self, source_id: Uuid) -> bool {
         let cancel_tx = {
             let tokens = self.cancellation_tokens.read().await;

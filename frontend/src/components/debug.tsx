@@ -283,30 +283,16 @@ function LogoCacheCard() {
                     {cacheData.logo_cache.storage_usage.megabytes} MB
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Efficiency:</span>
-                  <span className="font-medium text-green-600">
-                    {cacheData.logo_cache.efficiency.memory_vs_string_storage}
-                  </span>
-                </div>
               </div>
             </div>
 
-            {/* Technology Features */}
+            {/* Status */}
             <div className="space-y-2">
-              <h4 className="text-sm font-medium text-muted-foreground">Technology</h4>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-xs">
+              <h4 className="text-sm font-medium text-muted-foreground">Status</h4>
+              <div className="space-y-1 text-xs">
+                <div className="flex items-center gap-2">
                   <Hash className="h-3 w-3 text-green-500" />
-                  <span>Hash-based indexing (no string storage)</span>
-                </div>
-                <div className="flex items-center gap-2 text-xs">
-                  <Gauge className="h-3 w-3 text-blue-500" />
-                  <span>{cacheData.logo_cache.efficiency.smart_dimension_encoding}</span>
-                </div>
-                <div className="flex items-center gap-2 text-xs">
-                  <MemoryStick className="h-3 w-3 text-purple-500" />
-                  <span>LRU caching for search results only</span>
+                  <span>Hash-based indexing active</span>
                 </div>
               </div>
             </div>

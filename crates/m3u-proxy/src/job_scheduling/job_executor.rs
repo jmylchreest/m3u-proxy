@@ -3,6 +3,7 @@
 use crate::config::Config;
 use crate::database::Database;
 use crate::database::repositories::StreamProxySeaOrmRepository;
+use crate::ingestor::IngestionStateManager;
 use crate::services::logo_cache_maintenance::LogoCacheMaintenanceService;
 use crate::services::progress_service::{OperationType, ProgressService};
 use crate::services::{EpgSourceService, ProxyRegenerationService, StreamSourceBusinessService};
@@ -17,6 +18,7 @@ pub struct JobExecutor {
     epg_service: Arc<EpgSourceService>,
     proxy_regeneration_service: Arc<ProxyRegenerationService>,
     logo_cache_maintenance_service: Arc<LogoCacheMaintenanceService>,
+    state_manager: Arc<IngestionStateManager>,
     proxy_repo: StreamProxySeaOrmRepository,
     database: Database,
     app_config: Config,
@@ -33,6 +35,7 @@ impl JobExecutor {
         epg_service: Arc<EpgSourceService>,
         proxy_regeneration_service: Arc<ProxyRegenerationService>,
         logo_cache_maintenance_service: Arc<LogoCacheMaintenanceService>,
+        state_manager: Arc<IngestionStateManager>,
         database: Database,
         app_config: Config,
         temp_file_manager: sandboxed_file_manager::SandboxedManager,
@@ -44,6 +47,7 @@ impl JobExecutor {
             epg_service,
             proxy_regeneration_service,
             logo_cache_maintenance_service,
+            state_manager,
             proxy_repo: StreamProxySeaOrmRepository::new(database.connection().clone()),
             database: database.clone(),
             app_config,
@@ -208,6 +212,7 @@ impl JobExecutor {
                 .execute_maintenance()
                 .await
                 .map(|_| ()),
+            "memory_cleanup" => self.cleanup_memory().await,
             _ => {
                 warn!("Unknown maintenance operation: {}", operation);
                 Err(anyhow::anyhow!(
@@ -313,6 +318,7 @@ impl JobExecutor {
             self.app_config.storage.clone(),
             self.temp_file_manager.clone(),
             &self.http_client_factory,
+            self.state_manager.clone(),
         )
         .await
         .map_err(|e| {
@@ -443,6 +449,21 @@ impl JobExecutor {
                 Err(anyhow::anyhow!("Pipeline execution failed: {}", e))
             }
         }
+    }
+
+    /// Clean up old ingestion states and pipeline artifacts to free memory
+    async fn cleanup_memory(&self) -> Result<()> {
+        info!("Starting memory cleanup maintenance");
+
+        // Clean up old ingestion states (older than 60 minutes)
+        self.state_manager.cleanup_old_states(60).await;
+
+        // Additional cleanup could include:
+        // - Clear cached data structures
+        // - Force garbage collection hints
+
+        info!("Memory cleanup maintenance completed");
+        Ok(())
     }
 }
 

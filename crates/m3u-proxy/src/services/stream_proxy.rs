@@ -37,6 +37,7 @@ pub struct StreamProxyService {
     app_config: crate::config::Config,
     temp_file_manager: SandboxedManager,
     proxy_output_file_manager: SandboxedManager,
+    ingestion_state_manager: std::sync::Arc<crate::ingestor::IngestionStateManager>,
     _system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
 }
 
@@ -56,6 +57,7 @@ pub struct StreamProxyServiceBuilder {
     pub temp_file_manager: SandboxedManager,
     pub proxy_output_file_manager: SandboxedManager,
     pub system: std::sync::Arc<tokio::sync::RwLock<sysinfo::System>>,
+    pub ingestion_state_manager: Option<std::sync::Arc<crate::ingestor::IngestionStateManager>>,
 }
 
 impl StreamProxyServiceBuilder {
@@ -83,6 +85,9 @@ impl StreamProxyService {
             app_config: builder.app_config,
             temp_file_manager: builder.temp_file_manager,
             proxy_output_file_manager: builder.proxy_output_file_manager,
+            ingestion_state_manager: builder.ingestion_state_manager.unwrap_or_else(|| {
+                std::sync::Arc::new(crate::ingestor::IngestionStateManager::new())
+            }),
             _system: builder.system,
         }
     }
@@ -265,6 +270,7 @@ impl StreamProxyService {
         let proxy_service = crate::proxy::ProxyService::new(
             self.temp_file_manager.clone(),
             self.proxy_output_file_manager.clone(),
+            self.ingestion_state_manager.clone(),
         );
         let params = crate::proxy::GenerateProxyParams {
             config: resolved_config.clone(),

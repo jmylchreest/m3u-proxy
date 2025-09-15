@@ -29,6 +29,18 @@ pub struct RegenerationRequest {
     pub progress_manager: Option<Arc<ProgressManager>>,
 }
 
+/// Arguments required for executing a single proxy regeneration (bundled to satisfy clippy)
+struct SingleProxyRegenArgs {
+    database: Database,
+    temp_file_manager: sandboxed_file_manager::SandboxedManager,
+    proxy_id: Uuid,
+    progress_manager: Option<Arc<ProgressManager>>,
+    active_regenerations: Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
+    app_config: Config,
+    http_client_factory: Arc<crate::utils::HttpClientFactory>,
+    ingestion_state_manager: Arc<IngestionStateManager>,
+}
+
 /// Configuration for the regeneration service
 #[derive(Debug, Clone)]
 pub struct RegenerationConfig {
@@ -279,15 +291,16 @@ impl ProxyRegenerationService {
         }
 
         // Execute the regeneration
-        match Self::execute_single_proxy_regeneration(
-            database.clone(),
-            temp_file_manager.clone(),
+        match Self::execute_single_proxy_regeneration(SingleProxyRegenArgs {
+            database: database.clone(),
+            temp_file_manager: temp_file_manager.clone(),
             proxy_id,
-            request.progress_manager.clone(),
-            active_regenerations.clone(),
-            app_config.clone(),
-            http_client_factory.clone(),
-        )
+            progress_manager: request.progress_manager.clone(),
+            active_regenerations: active_regenerations.clone(),
+            app_config: app_config.clone(),
+            http_client_factory: http_client_factory.clone(),
+            ingestion_state_manager: ingestion_state_manager.clone(),
+        })
         .await
         {
             Ok(()) => {
@@ -642,16 +655,22 @@ impl ProxyRegenerationService {
         Ok(())
     }
 
+    // (SingleProxyRegenArgs moved to module scope above impl to satisfy clippy and visibility)
+
     /// Execute a single proxy regeneration (used by the queue processor)
     async fn execute_single_proxy_regeneration(
-        database: Database,
-        temp_file_manager: sandboxed_file_manager::SandboxedManager,
-        proxy_id: Uuid,
-        progress_manager: Option<Arc<ProgressManager>>,
-        active_regenerations: Arc<Mutex<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
-        app_config: Config,
-        http_client_factory: Arc<crate::utils::HttpClientFactory>,
+        args: SingleProxyRegenArgs,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let SingleProxyRegenArgs {
+            database,
+            temp_file_manager,
+            proxy_id,
+            progress_manager,
+            active_regenerations,
+            app_config,
+            http_client_factory,
+            ingestion_state_manager,
+        } = args;
         // Create and track the regeneration task
         let handle = tokio::spawn(async move {
             debug!("Starting regeneration execution for proxy {}", proxy_id);
@@ -665,6 +684,7 @@ impl ProxyRegenerationService {
                 progress_manager,
                 app_config,
                 &http_client_factory,
+                ingestion_state_manager.clone(),
             )
             .await
             {
@@ -702,6 +722,7 @@ impl ProxyRegenerationService {
         progress_manager: Option<Arc<ProgressManager>>,
         app_config: Config,
         http_client_factory: &crate::utils::HttpClientFactory,
+        ingestion_state_manager: Arc<crate::ingestor::IngestionStateManager>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use crate::pipeline::PipelineOrchestratorFactory;
 
@@ -717,6 +738,7 @@ impl ProxyRegenerationService {
             storage_config,
             temp_file_manager,
             http_client_factory,
+            ingestion_state_manager.clone(),
         )
         .await?;
 

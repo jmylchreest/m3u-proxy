@@ -30,15 +30,22 @@ pub struct Config {
     pub job_scheduling: Option<JobSchedulingConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeaturesConfig {
     /// Simple boolean flags for enabling/disabling features
     /// Example: debug-frontend = true, experimental-ui = false
+    ///
+    /// Added default feature flag:
+    ///   ingestion_guard = true (controls whether the ingestion guard pipeline stage is active)
     #[serde(default)]
     pub flags: std::collections::HashMap<String, bool>,
 
     /// Per-feature configuration settings
     /// Example: config.debug-frontend.level = "verbose", config.video-player.buffer-size = 1024
+    ///
+    /// Added default config map entry for "ingestion_guard":
+    ///   delay_secs   (u64, default 15)
+    ///   max_attempts (u32, default 20)
     #[serde(default)]
     pub config:
         std::collections::HashMap<String, std::collections::HashMap<String, serde_json::Value>>,
@@ -90,6 +97,26 @@ impl FeaturesConfig {
     }
 }
 
+impl Default for FeaturesConfig {
+    fn default() -> Self {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let mut flags = HashMap::new();
+        // Enable ingestion guard by default
+        flags.insert("ingestion_guard".to_string(), true);
+
+        let mut ingestion_guard_cfg = HashMap::new();
+        ingestion_guard_cfg.insert("delay_secs".to_string(), json!(15u64));
+        ingestion_guard_cfg.insert("max_attempts".to_string(), json!(20u32));
+
+        let mut config = HashMap::new();
+        config.insert("ingestion_guard".to_string(), ingestion_guard_cfg);
+
+        Self { flags, config }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     pub url: String,
@@ -100,7 +127,7 @@ pub struct DatabaseConfig {
     #[serde(default)]
     pub sqlite: SqliteConfig,
 
-    /// PostgreSQL-specific configuration  
+    /// PostgreSQL-specific configuration
     #[serde(default)]
     pub postgresql: PostgreSqlConfig,
 
@@ -182,10 +209,6 @@ pub struct StorageConfig {
 
     #[serde(default = "default_cached_logo_path")]
     pub cached_logo_path: PathBuf,
-    #[serde(default = "default_cached_logo_retention")]
-    pub cached_logo_retention: String,
-    #[serde(default = "default_cached_logo_cleanup_interval")]
-    pub cached_logo_cleanup_interval: String,
 
     #[serde(default = "default_temp_path")]
     pub temp_path: Option<String>,
@@ -210,8 +233,6 @@ impl Default for StorageConfig {
             m3u_cleanup_interval: default_m3u_cleanup_interval(),
             uploaded_logo_path: default_uploaded_logo_path(),
             cached_logo_path: default_cached_logo_path(),
-            cached_logo_retention: default_cached_logo_retention(),
-            cached_logo_cleanup_interval: default_cached_logo_cleanup_interval(),
             temp_path: default_temp_path(),
             temp_retention: default_temp_retention(),
             temp_cleanup_interval: default_temp_cleanup_interval(),
@@ -327,14 +348,6 @@ fn default_m3u_retention() -> String {
 
 fn default_m3u_cleanup_interval() -> String {
     "4h".to_string()
-}
-
-fn default_cached_logo_retention() -> String {
-    "90d".to_string()
-}
-
-fn default_cached_logo_cleanup_interval() -> String {
-    "12h".to_string()
 }
 
 fn default_temp_retention() -> String {
@@ -518,7 +531,7 @@ impl DatabaseBatchConfig {
     /// Number of fields per EPG program record
     const EPG_PROGRAM_FIELDS: usize = 12;
 
-    /// Number of fields per stream channel record  
+    /// Number of fields per stream channel record
     /// (id, source_id, tvg_id, tvg_name, tvg_chno, channel_name, tvg_logo, tvg_shift, group_title, stream_url, created_at, updated_at)
     const STREAM_CHANNEL_FIELDS: usize = 12;
 
@@ -745,7 +758,7 @@ pub struct JobSchedulingConfig {
     #[serde(default = "default_stream_ingestion_limit")]
     pub stream_ingestion_limit: usize,
 
-    /// Maximum concurrent EPG ingestion jobs (default: 1)  
+    /// Maximum concurrent EPG ingestion jobs (default: 1)
     #[serde(default = "default_epg_ingestion_limit")]
     pub epg_ingestion_limit: usize,
 
@@ -848,8 +861,6 @@ impl Default for Config {
                 m3u_cleanup_interval: "4h".to_string(),
                 uploaded_logo_path: PathBuf::from("./data/logos/uploaded"),
                 cached_logo_path: PathBuf::from("./data/logos/cached"),
-                cached_logo_retention: "90d".to_string(),
-                cached_logo_cleanup_interval: "12h".to_string(),
                 temp_path: Some("./data/temp".to_string()),
                 temp_retention: "5m".to_string(),
                 temp_cleanup_interval: "1m".to_string(),
@@ -884,6 +895,7 @@ impl Config {
     pub fn load_from_file(config_file: &str) -> Result<Self> {
         // Check if config file exists
         if !std::path::Path::new(config_file).exists() {
+            // Config file missing: using built-in defaults merged with any M3U_PROXY_* environment variables
             tracing::warn!(
                 "Config file '{}' not found, using default configuration values",
                 config_file

@@ -149,6 +149,7 @@ impl WebServer {
         let proxy_service = crate::proxy::ProxyService::new(
             builder.pipeline_file_manager.clone(),
             builder.proxy_output_file_manager.clone(),
+            builder.progress_service.get_ingestion_state_manager(),
         );
 
         let log_broadcaster = Some(builder.log_broadcaster.clone());

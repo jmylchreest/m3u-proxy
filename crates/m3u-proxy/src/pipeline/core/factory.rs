@@ -6,9 +6,13 @@
 
 use crate::{
     config::{Config, StorageConfig},
+    ingestor::IngestionStateManager,
     logo_assets::{service::LogoAssetService, storage::LogoAssetStorage},
     models::StreamProxy,
-    pipeline::{core::orchestrator::PipelineOrchestrator, stages::logo_caching::LogoCachingConfig},
+    pipeline::{
+        core::orchestrator::{OrchestratorDependencies, PipelineOrchestrator},
+        stages::logo_caching::LogoCachingConfig,
+    },
 };
 use sandboxed_file_manager::{CleanupPolicy, SandboxedManager, TimeMatch};
 use std::collections::HashMap;
@@ -27,6 +31,7 @@ pub struct PipelineOrchestratorFactory {
     app_config: Config,
     pipeline_file_manager: SandboxedManager,
     proxy_output_file_manager: SandboxedManager,
+    ingestion_state_manager: Arc<IngestionStateManager>,
     /// CONCURRENCY FIX: Track active orchestrators to prevent multiple instances per proxy
     active_orchestrators: Arc<Mutex<HashMap<Uuid, String>>>, // proxy_id -> pipeline_execution_id
 }
@@ -39,6 +44,7 @@ impl PipelineOrchestratorFactory {
         app_config: Config,
         pipeline_file_manager: SandboxedManager,
         proxy_output_file_manager: SandboxedManager,
+        ingestion_state_manager: Arc<IngestionStateManager>,
     ) -> Self {
         Self {
             database,
@@ -46,6 +52,7 @@ impl PipelineOrchestratorFactory {
             app_config,
             pipeline_file_manager,
             proxy_output_file_manager,
+            ingestion_state_manager,
             active_orchestrators: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -57,6 +64,7 @@ impl PipelineOrchestratorFactory {
         storage_config: StorageConfig,
         pipeline_file_manager: SandboxedManager,
         http_client_factory: &crate::utils::HttpClientFactory,
+        ingestion_state_manager: Arc<IngestionStateManager>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Create logo storage from configuration
         let logo_storage = LogoAssetStorage::new(
@@ -94,6 +102,7 @@ impl PipelineOrchestratorFactory {
             app_config,
             pipeline_file_manager,
             proxy_output_file_manager,
+            ingestion_state_manager,
         ))
     }
 
@@ -126,15 +135,17 @@ impl PipelineOrchestratorFactory {
             base_url: self.app_config.web.base_url.clone(),
         };
 
-        // Create orchestrator with all dependencies injected
-        let orchestrator = PipelineOrchestrator::new_with_dependencies(
+        // Create orchestrator with all dependencies injected (using dependency bundle)
+        let orchestrator = PipelineOrchestrator::new_from_dependencies(OrchestratorDependencies {
             proxy_config,
-            self.pipeline_file_manager.clone(),
-            self.proxy_output_file_manager.clone(),
-            self.logo_service.clone(),
+            file_manager: self.pipeline_file_manager.clone(),
+            proxy_output_file_manager: self.proxy_output_file_manager.clone(),
+            logo_service: self.logo_service.clone(),
             logo_config,
-            self.database.clone(),
-        );
+            database: self.database.clone(),
+            app_config: self.app_config.clone(),
+            ingestion_state_manager: self.ingestion_state_manager.clone(),
+        });
 
         // Register this orchestrator as active (get pipeline execution ID from orchestrator)
         let pipeline_id = orchestrator.get_execution_id().to_string();
@@ -233,6 +244,7 @@ impl PipelineOrchestratorFactory {
         db_connection: sea_orm::DatabaseConnection,
         app_config: Config,
         pipeline_file_manager: SandboxedManager,
+        ingestion_state_manager: Arc<IngestionStateManager>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let storage_config = StorageConfig {
             m3u_path: PathBuf::from("./m3u"),
@@ -240,8 +252,6 @@ impl PipelineOrchestratorFactory {
             m3u_cleanup_interval: "4h".to_string(),
             uploaded_logo_path: PathBuf::from("./uploads/logos"),
             cached_logo_path: PathBuf::from("./uploads/logos/cached"),
-            cached_logo_retention: "90d".to_string(),
-            cached_logo_cleanup_interval: "12h".to_string(),
             temp_path: Some("./temp".to_string()),
             temp_retention: "5m".to_string(),
             temp_cleanup_interval: "1m".to_string(),
@@ -270,6 +280,7 @@ impl PipelineOrchestratorFactory {
             storage_config,
             pipeline_file_manager,
             &http_client_factory,
+            ingestion_state_manager.clone(),
         )
         .await
     }
@@ -279,6 +290,7 @@ impl PipelineOrchestratorFactory {
 mod tests {
     use super::*;
     use crate::config::WebConfig;
+    use crate::ingestor::IngestionStateManager;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -302,10 +314,17 @@ mod tests {
         // Create in-memory database using SeaORM
         let db_connection = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
 
+        // Create ingestion state manager for test
+        let ingestion_state_manager = Arc::new(IngestionStateManager::new());
+
         // Test factory creation
-        let factory =
-            PipelineOrchestratorFactory::with_defaults(db_connection, app_config, file_manager)
-                .await;
+        let factory = PipelineOrchestratorFactory::with_defaults(
+            db_connection,
+            app_config,
+            file_manager,
+            ingestion_state_manager,
+        )
+        .await;
 
         assert!(factory.is_ok());
     }

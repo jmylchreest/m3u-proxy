@@ -42,10 +42,8 @@ m3u_cleanup_interval = "4h"
 uploaded_logo_path = "./data/logos/uploaded"
 # Environment variable: M3U_PROXY_STORAGE__CACHED_LOGO_PATH
 cached_logo_path = "./data/logos/cached"
-# Environment variable: M3U_PROXY_STORAGE__CACHED_LOGO_RETENTION
-cached_logo_retention = "90d"
-# Environment variable: M3U_PROXY_STORAGE__CACHED_LOGO_CLEANUP_INTERVAL
-cached_logo_cleanup_interval = "12h"
+# (Deprecated: cached_logo_retention & cached_logo_cleanup_interval removed;
+#  logo cache now retains indefinitely and is managed manually.)
 # Environment variable: M3U_PROXY_STORAGE__TEMP_PATH
 temp_path = "./data/temp"
 # Environment variable: M3U_PROXY_STORAGE__TEMP_RETENTION

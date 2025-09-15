@@ -35,8 +35,8 @@ pub async fn get_sandbox_health(
         },
         ManagedDirectoryInfo {
             name: "logos_cached".to_string(),
-            retention_duration: config.storage.cached_logo_retention.clone(),
-            cleanup_interval: config.storage.cached_logo_cleanup_interval.clone(),
+            retention_duration: "n/a".to_string(),
+            cleanup_interval: "n/a".to_string(),
         },
         ManagedDirectoryInfo {
             name: "proxy_output".to_string(),

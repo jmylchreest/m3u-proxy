@@ -2,7 +2,20 @@
 //!
 //! This is the refactored orchestrator that uses the new trait-based architecture
 //! with clean ProgressManager integration and simplified stage management.
+///
+/// Dependency bundle to reduce argument count for orchestrator construction
+pub struct OrchestratorDependencies {
+    pub proxy_config: crate::models::StreamProxy,
+    pub file_manager: sandboxed_file_manager::SandboxedManager,
+    pub proxy_output_file_manager: sandboxed_file_manager::SandboxedManager,
+    pub logo_service: std::sync::Arc<crate::logo_assets::service::LogoAssetService>,
+    pub logo_config: crate::pipeline::stages::logo_caching::LogoCachingConfig,
+    pub database: crate::database::Database,
+    pub app_config: crate::config::Config,
+    pub ingestion_state_manager: std::sync::Arc<crate::ingestor::IngestionStateManager>,
+}
 
+use crate::ingestor::IngestionStateManager;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::models::{PipelineExecution, PipelineStatus};
 use crate::pipeline::traits::{PipelineStage, ProgressAware, ProgressReporter};
@@ -20,6 +33,8 @@ pub struct PipelineOrchestrator {
     execution: PipelineExecution,
     file_manager: SandboxedManager,
     _proxy_output_file_manager: SandboxedManager,
+    app_config: crate::config::Config,
+    ingestion_state_manager: Arc<IngestionStateManager>,
     progress_manager: Option<Arc<ProgressManager>>,
     stages: Vec<Box<dyn PipelineStage>>,
 }
@@ -30,18 +45,50 @@ impl PipelineOrchestrator {
         execution: PipelineExecution,
         file_manager: SandboxedManager,
         proxy_output_file_manager: SandboxedManager,
+        app_config: crate::config::Config,
+        ingestion_state_manager: Arc<IngestionStateManager>,
         progress_manager: Option<Arc<ProgressManager>>,
     ) -> Self {
         Self {
             execution,
             file_manager,
             _proxy_output_file_manager: proxy_output_file_manager,
+            app_config,
+            ingestion_state_manager,
             progress_manager,
             stages: Vec::new(),
         }
     }
 
-    /// Create orchestrator with all dependencies injected (legacy compatibility)
+    /// New preferred constructor using a dependency bundle (Clippy-friendly)
+    pub fn new_from_dependencies(deps: OrchestratorDependencies) -> Self {
+        let execution = PipelineExecution::new(deps.proxy_config.id);
+        let mut orchestrator = Self {
+            execution,
+            file_manager: deps.file_manager,
+            _proxy_output_file_manager: deps.proxy_output_file_manager,
+            app_config: deps.app_config,
+            ingestion_state_manager: deps.ingestion_state_manager,
+            progress_manager: None,
+            stages: Vec::new(),
+        };
+
+        orchestrator.create_and_add_all_stages(
+            deps.proxy_config,
+            deps.logo_service,
+            deps.logo_config,
+            deps.database,
+        );
+
+        orchestrator
+    }
+
+    /// Legacy constructor kept for backwards compatibility.
+    /// Prefer using `new_from_dependencies`. Will be removed after call sites are migrated.
+    #[allow(clippy::too_many_arguments)]
+    #[deprecated(
+        note = "Use PipelineOrchestrator::new_from_dependencies with OrchestratorDependencies instead"
+    )]
     pub fn new_with_dependencies(
         proxy_config: crate::models::StreamProxy,
         file_manager: SandboxedManager,
@@ -49,12 +96,16 @@ impl PipelineOrchestrator {
         logo_service: Arc<crate::logo_assets::service::LogoAssetService>,
         logo_config: crate::pipeline::stages::logo_caching::LogoCachingConfig,
         database: crate::database::Database,
+        app_config: crate::config::Config,
+        ingestion_state_manager: Arc<IngestionStateManager>,
     ) -> Self {
         let execution = PipelineExecution::new(proxy_config.id);
         let mut orchestrator = Self {
             execution,
             file_manager,
             _proxy_output_file_manager: proxy_output_file_manager,
+            app_config,
+            ingestion_state_manager,
             progress_manager: None, // Will be set later if needed
             stages: Vec::new(),
         };
@@ -79,6 +130,74 @@ impl PipelineOrchestrator {
         database: crate::database::Database,
     ) {
         info!("Creating pipeline stages for proxy: {}", proxy_config.id);
+        // 0. Ingestion Guard Stage (wait for active ingestion tasks to finish or timeout)
+        // Dynamic configuration sources (precedence order):
+        //   1. Environment variables:
+        //        M3U_PROXY_FEATURE_INGESTION_GUARD_ENABLED (true/false, default: true)
+        //        M3U_PROXY_INGESTION_GUARD_DELAY_SECS      (u64, default: 15)
+        //        M3U_PROXY_INGESTION_GUARD_MAX_ATTEMPTS    (u32, default: 20)
+        //   2. (Future) FeaturesConfig (already loaded in higher layers; not yet plumbed here)
+        //      - When wired, prefer feature config over env except for explicit env override.
+        // For now we rely solely on env + library defaults.
+        // 0. Ingestion Guard Stage (wait for active ingestion tasks to finish or timeout)
+        // Feature-driven + env override precedence:
+        //   1. Env var M3U_PROXY_FEATURE_INGESTION_GUARD_ENABLED (false/0 disables)
+        //   2. features.flags["ingestion_guard"] (defaults true if missing)
+        // Delay / attempts precedence:
+        //   a. Env vars M3U_PROXY_INGESTION_GUARD_DELAY_SECS / MAX_ATTEMPTS
+        //   b. Feature config ingestion_guard.delay_secs / max_attempts
+        //   c. Library defaults (15 / 20)
+        let (mut enabled, mut cfg_delay, mut cfg_attempts) = {
+            // Base defaults
+            let mut enabled_default = true;
+            let mut delay =
+                crate::pipeline::stages::ingestion_guard::DEFAULT_INGESTION_GUARD_DELAY_SECS;
+            let mut attempts =
+                crate::pipeline::stages::ingestion_guard::DEFAULT_INGESTION_GUARD_MAX_ATTEMPTS;
+
+            if let Some(features) = &self.app_config.features {
+                enabled_default = features
+                    .flags
+                    .get("ingestion_guard")
+                    .copied()
+                    .unwrap_or(true);
+                if let Some(v) = features.get_config_number("ingestion_guard", "delay_secs") {
+                    delay = v as u64;
+                }
+                if let Some(v) = features.get_config_number("ingestion_guard", "max_attempts") {
+                    attempts = v as u32;
+                }
+            }
+
+            (enabled_default, delay, attempts)
+        };
+
+        if let Ok(raw) = std::env::var("M3U_PROXY_FEATURE_INGESTION_GUARD_ENABLED") {
+            enabled = raw != "false" && raw != "0";
+        }
+        if let Ok(raw) = std::env::var("M3U_PROXY_INGESTION_GUARD_DELAY_SECS")
+            && let Ok(v) = raw.parse::<u64>()
+        {
+            cfg_delay = v;
+        }
+        if let Ok(raw) = std::env::var("M3U_PROXY_INGESTION_GUARD_MAX_ATTEMPTS")
+            && let Ok(v) = raw.parse::<u32>()
+        {
+            cfg_attempts = v;
+        }
+
+        if enabled {
+            self.add_stage(Box::new(
+                crate::pipeline::stages::ingestion_guard::IngestionGuardStage::new_with_config(
+                    self.ingestion_state_manager.clone(),
+                    self.progress_manager.clone(),
+                    cfg_delay,
+                    cfg_attempts,
+                ),
+            ));
+        } else {
+            tracing::info!("Ingestion guard stage disabled (feature flag / env override)");
+        }
 
         // Create each pipeline stage in the correct order
 
@@ -387,7 +506,12 @@ impl PipelineOrchestrator {
             total_duration
         );
 
-        Ok(self.execution.clone())
+        let result = self.execution.clone();
+
+        // Clear artifacts to free memory after successful completion
+        self.execution.artifacts.clear();
+
+        Ok(result)
     }
 
     /// Get the appropriate PipelineStatus for a given stage ID
@@ -511,10 +635,14 @@ mod tests {
         let output_manager = file_manager.clone();
 
         // Create orchestrator
+        let ingestion_state_manager =
+            std::sync::Arc::new(crate::ingestor::IngestionStateManager::new());
         let mut orchestrator = PipelineOrchestrator::new(
             execution,
             file_manager,
             output_manager,
+            crate::config::Config::default(),
+            ingestion_state_manager,
             None, // No progress manager for basic test
         );
 

@@ -803,17 +803,7 @@ pub async fn logo_cache_debug(
                 "bytes": cache_stats.storage_usage_bytes,
                 "megabytes": format!("{:.2}", storage_usage_mb)
             },
-            "efficiency": {
-                "hash_based_indexing": true,
-                "smart_dimension_encoding": "12-bit with variable precision",
-                "memory_vs_string_storage": format!("~{}x more efficient",
-                    if cache_stats.total_entries > 0 {
-                        std::cmp::max(1, (cache_stats.total_entries * 200) / cache_stats.memory_usage_bytes)
-                    } else {
-                        1
-                    }
-                )
-            },
+
             "last_updated": chrono::Utc::now().to_rfc3339(),
             "cache_directory": state.config.storage.cached_logo_path,
             "max_size_mb": 1024, // Hardcoded default: 1GB cache size limit

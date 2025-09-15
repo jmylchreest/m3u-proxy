@@ -441,6 +441,7 @@ pub async fn list_proxies(
             app_config: state.config.clone(),
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            ingestion_state_manager: Some(state.progress_service.get_ingestion_state_manager()),
             system: state.system.clone(),
         });
 
@@ -516,6 +517,7 @@ pub async fn get_proxy(
             app_config: state.config.clone(),
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            ingestion_state_manager: Some(state.progress_service.get_ingestion_state_manager()),
             system: state.system.clone(),
         });
 
@@ -575,6 +577,7 @@ pub async fn create_proxy(
             app_config: state.config.clone(),
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            ingestion_state_manager: Some(state.progress_service.get_ingestion_state_manager()),
             system: state.system.clone(),
         });
 
@@ -691,6 +694,7 @@ pub async fn update_proxy(
             app_config: state.config.clone(),
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            ingestion_state_manager: Some(state.progress_service.get_ingestion_state_manager()),
             system: state.system.clone(),
         });
 
@@ -753,6 +757,7 @@ pub async fn delete_proxy(
             app_config: state.config.clone(),
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            ingestion_state_manager: Some(state.progress_service.get_ingestion_state_manager()),
             system: state.system.clone(),
         });
 
@@ -822,6 +827,7 @@ pub async fn preview_proxy_config(
             app_config: state.config.clone(),
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            ingestion_state_manager: Some(state.progress_service.get_ingestion_state_manager()),
             system: state.system.clone(),
         });
 
@@ -900,6 +906,7 @@ pub async fn preview_existing_proxy(
             app_config: state.config.clone(),
             temp_file_manager: state.temp_file_manager.clone(),
             proxy_output_file_manager: state.proxy_output_file_manager.clone(),
+            ingestion_state_manager: Some(state.progress_service.get_ingestion_state_manager()),
             system: state.system.clone(),
         });
 
@@ -1232,7 +1239,7 @@ pub async fn serve_proxy_xmltv(
 
 This is the main streaming endpoint that:
 - Proxies live streams from original sources
-- Captures viewing metrics and statistics  
+- Captures viewing metrics and statistics
 - Supports relay/transcoding when configured
 - Handles client connection management
 - Provides health monitoring for upstream sources

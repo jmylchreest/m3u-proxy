@@ -167,9 +167,12 @@ async fn main() -> Result<()> {
     // Test log capture is working
     info!("Log capture initialized for SSE streaming");
 
-    // Load configuration from specified file
-    let mut config = Config::load_from_file(&cli.config)?;
-    info!("Configuration loaded from: {}", cli.config);
+    // Load configuration from specified file (falls back to defaults + env overrides if missing)
+    let config_path = &cli.config;
+    let mut config = Config::load_from_file(config_path)?;
+    if std::path::Path::new(config_path).exists() {
+        info!("Configuration file loaded: {}", config_path);
+    }
 
     // Initialize feature flags from config in runtime store
     runtime_settings_arc
@@ -332,17 +335,10 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    // Create cached logo file manager using storage config
+    // Create cached logo file manager (no automatic retention/cleanup for logos now)
+    // Logo cache lifecycle is managed explicitly by the application / maintenance jobs
     let logos_cached_file_manager = SandboxedManager::builder()
         .base_directory(&config.storage.cached_logo_path)
-        .cleanup_policy(
-            CleanupPolicy::new()
-                .remove_after(parse_duration(&config.storage.cached_logo_retention)?)
-                .time_match(TimeMatch::LastAccess),
-        )
-        .cleanup_interval(parse_duration(
-            &config.storage.cached_logo_cleanup_interval,
-        )?)
         .build()
         .await?;
 
@@ -377,9 +373,7 @@ async fn main() -> Result<()> {
         config.storage.m3u_retention, config.storage.m3u_cleanup_interval, config.storage.m3u_path
     );
     info!(
-        "  logos_cached: {} retention, cleanup every {}, path: {:?}",
-        config.storage.cached_logo_retention,
-        config.storage.cached_logo_cleanup_interval,
+        "  logos_cached: no automatic retention (managed manually), path: {:?}",
         config.storage.cached_logo_path
     );
     info!(
@@ -472,6 +466,7 @@ async fn main() -> Result<()> {
         epg_source_service.clone(),
         Arc::new(proxy_regeneration_service.clone()),
         logo_cache_maintenance_service.clone(),
+        state_manager.clone(),
         database.clone(),
         config.clone(),
         temp_file_manager.clone(),

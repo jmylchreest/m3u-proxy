@@ -367,41 +367,65 @@ upgrade-deps-frontend *args="":
     #!/usr/bin/env bash
     set -euo pipefail
 
-    echo "Upgrading npm dependencies..."
+    # Determine absolute base directory (prefer JUSTFILE_DIRECTORY)
+    if [ -n "${JUSTFILE_DIRECTORY:-}" ]; then
+        BASE_DIR="${JUSTFILE_DIRECTORY%/}"
+    elif git rev-parse --show-toplevel >/dev/null 2>&1; then
+        BASE_DIR="$(git rev-parse --show-toplevel)"
+    else
+        BASE_DIR="$(pwd)"
+    fi
+
+    FRONTEND_DIR="$BASE_DIR/frontend"
+
+    if [ ! -d "$FRONTEND_DIR" ] || [ ! -f "$FRONTEND_DIR/package.json" ]; then
+        echo "Error: Frontend directory not found at: $FRONTEND_DIR"
+        exit 1
+    fi
+
+    echo "Upgrading npm dependencies in $FRONTEND_DIR ..."
+
+    run_in_frontend() {
+        (cd "$FRONTEND_DIR" && "$@")
+    }
+
+    # Support --yes even without --aggressive (non-interactive npx behavior)
+    NPX_CMD="npx"
+    if [[ "{{args}}" == *"--yes"* ]]; then
+        NPX_CMD="npx -y"
+    fi
 
     # Check if aggressive upgrade requested
     if [[ "{{args}}" == *"--aggressive"* ]]; then
         echo "Performing aggressive upgrade..."
         if command -v npx >/dev/null 2>&1; then
-            # Use npm-check-updates to upgrade package.json versions
             if [[ "{{args}}" == *"--yes"* ]]; then
-                # Non-interactive mode - auto-accept package installs
-                cd frontend && echo "y" | npx npm-check-updates -u && npm install
+                run_in_frontend bash -c "$NPX_CMD npm-check-updates -u && npm install"
             else
-                # Interactive mode
-                cd frontend && npx npm-check-updates -u && npm install
+                run_in_frontend bash -c "$NPX_CMD npm-check-updates -u"
+                run_in_frontend npm install
             fi
         else
             echo "npx not available. Falling back to standard npm update..."
-            cd frontend && npm update
+            run_in_frontend npm update
         fi
     else
         # Standard update within package.json constraints
-        cd frontend && npm update
+        run_in_frontend npm update
     fi
 
     echo "Checking for outdated npm packages..."
-    cd frontend && { npm outdated || echo "All npm packages are up to date"; }
+    run_in_frontend bash -c 'npm outdated || echo "All npm packages are up to date"'
 
     echo "Checking for unused npm dependencies..."
-    (cd frontend && { npx depcheck --ignores="@tailwindcss/postcss,autoprefixer,postcss,tw-animate-css" || echo "No unused dependencies found"; })
+    run_in_frontend bash -c "$NPX_CMD depcheck --ignores=\"@tailwindcss/postcss,autoprefixer,postcss,tw-animate-css\" || echo \"No unused dependencies found\""
 
     echo "npm dependencies upgraded!"
     echo ""
     if [[ "{{args}}" != *"--aggressive"* ]]; then
         echo "To upgrade to latest major versions:"
         echo "   just upgrade-deps-frontend --aggressive"
-        echo "For non-interactive mode: just upgrade-deps-frontend --aggressive --yes"
+        echo "For non-interactive mode (auto-confirm tools): add --yes (works with or without --aggressive)"
     fi
 
 # Upgrade all dependencies (backend + frontend)

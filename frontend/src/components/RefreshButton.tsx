@@ -27,7 +27,7 @@ export function RefreshButton({
   onComplete,
   disabled = false,
   size = 'sm',
-  variant = 'outline',
+  variant = 'ghost',
   className,
   tooltipText = 'Refresh',
 }: RefreshButtonProps) {
@@ -58,17 +58,19 @@ export function RefreshButton({
   }, [progressState.event, onComplete, resourceId]);
   const isCompleted = progressState.isCompleted;
 
-  // Determine button state and styling
+  // Determine button state and styling (icon spins, button stays static & transparent)
   const buttonState = {
-    icon: hasError ? AlertCircle : isCompleted ? CheckCircle : isRefreshing ? RefreshCw : RefreshCw,
+    icon: hasError ? AlertCircle : isCompleted ? CheckCircle : RefreshCw,
     className: cn(
-      isRefreshing && 'animate-spin',
       hasError && 'text-destructive hover:text-destructive',
       isCompleted && 'text-green-600 hover:text-green-700',
+      // Ensure no background / rotation effect on container
+      'p-0 h-8 w-8 rounded-full bg-transparent hover:bg-transparent',
       className
     ),
     disabled: disabled || isRefreshing,
   };
+  const iconClass = cn('h-4 w-4', isRefreshing && 'animate-spin');
 
   // Build tooltip content
   const tooltipContent = () => {
@@ -190,7 +192,7 @@ export function RefreshButton({
               disabled={buttonState.disabled}
               className={buttonState.className}
             >
-              <IconComponent className="h-4 w-4" />
+              <IconComponent className={iconClass} />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-sm">

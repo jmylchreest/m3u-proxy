@@ -417,7 +417,7 @@ export default function EpgPage() {
                 id: source.id,
                 name: source.name,
                 type: 'epg_source',
-                display_name: `${source.name} (${source.source_type.toUpperCase()})`,
+                display_name: `${source.name} (${(source.source_type || 'epg').toUpperCase()})`,
               });
             });
           }
@@ -426,7 +426,33 @@ export default function EpgPage() {
         Debug.warn('Failed to fetch EPG sources:', err);
       }
 
-      // Deduplicate sources based on ID to ensure uniqueness
+      // Fetch Stream Sources (so user can filter programs/guide by originating stream source as well)
+      try {
+        const streamSourcesResponse = await fetch('/api/v1/sources/stream');
+        if (streamSourcesResponse.ok) {
+          const streamSourcesData: { success: boolean; data: { items?: any[] } } =
+            await streamSourcesResponse.json();
+          if (streamSourcesData.success) {
+            const streamItems = (streamSourcesData.data?.items ?? []).filter(
+              (s) => s && (s.is_active === undefined || s.is_active === true)
+            );
+            streamItems.forEach((source) => {
+              if (source?.id && source?.name) {
+                options.push({
+                  id: source.id,
+                  name: source.name,
+                  type: 'stream_source',
+                  display_name: `${source.name} (${(source.source_type || 'stream').toUpperCase()})`,
+                });
+              }
+            });
+          }
+        }
+      } catch (err) {
+        Debug.warn('Failed to fetch stream sources:', err);
+      }
+
+      // Deduplicate sources based on ID to ensure uniqueness (EPG + Stream)
       const uniqueOptions = Array.from(new Map(options.map((opt) => [opt.id, opt])).values());
       setSourceOptions(uniqueOptions);
     } catch (err) {

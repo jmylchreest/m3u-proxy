@@ -15,12 +15,14 @@ interface NotificationBellProps {
   operationType?: string; // Filter by operation type (undefined = all)
   showPopup?: boolean; // Whether to show popup on click (false = just mark as read)
   className?: string;
+  resizeHandlePosition?: 'top' | 'bottom'; // Position of resize handle; affects drag direction (default 'bottom')
 }
 
 export function NotificationBell({
   operationType,
   showPopup = true,
   className,
+  resizeHandlePosition = 'bottom',
 }: NotificationBellProps) {
   const context = useProgressContext();
   const [events, setEvents] = useState<NotificationEvent[]>([]);
@@ -185,13 +187,17 @@ export function NotificationBell({
       .join(' ');
   };
 
-  // Resize handlers - inverted for top handle
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    const deltaY = e.clientY - startYRef.current;
-    // Invert the delta since we're dragging from the top
-    const newHeight = Math.max(200, Math.min(600, startHeightRef.current - deltaY));
-    setHeight(newHeight);
-  }, []);
+  // Resize handlers - direction depends on handle position
+  const handleMouseMove = useCallback(
+    (e: MouseEvent) => {
+      const deltaY = e.clientY - startYRef.current;
+      // If handle at top, dragging down reduces height; at bottom, dragging down increases height
+      const direction = resizeHandlePosition === 'top' ? -1 : 1;
+      const newHeight = Math.max(200, Math.min(600, startHeightRef.current + direction * deltaY));
+      setHeight(newHeight);
+    },
+    [resizeHandlePosition]
+  );
 
   const handleMouseUp = useCallback(() => {
     setIsResizing(false);
@@ -259,6 +265,15 @@ export function NotificationBell({
             </Button>
           </div>
 
+          {resizeHandlePosition === 'top' && (
+            <div
+              ref={resizeRef}
+              className="flex items-center justify-center h-4 bg-muted/50 hover:bg-muted border-b cursor-ns-resize group"
+              onMouseDown={handleMouseDown}
+            >
+              <GripHorizontal className="h-3 w-3 text-muted-foreground group-hover:text-foreground transition-colors" />
+            </div>
+          )}
           <div className="overflow-y-auto notification-scrollbar" style={{ height: `${height}px` }}>
             {filteredEvents.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground">
@@ -385,14 +400,15 @@ export function NotificationBell({
             )}
           </div>
 
-          {/* Resize handle at bottom */}
-          <div
-            ref={resizeRef}
-            className="flex items-center justify-center h-4 bg-muted/50 hover:bg-muted border-t cursor-ns-resize group"
-            onMouseDown={handleMouseDown}
-          >
-            <GripHorizontal className="h-3 w-3 text-muted-foreground group-hover:text-foreground transition-colors" />
-          </div>
+          {resizeHandlePosition === 'bottom' && (
+            <div
+              ref={resizeRef}
+              className="flex items-center justify-center h-4 bg-muted/50 hover:bg-muted border-t cursor-ns-resize group"
+              onMouseDown={handleMouseDown}
+            >
+              <GripHorizontal className="h-3 w-3 text-muted-foreground group-hover:text-foreground transition-colors" />
+            </div>
+          )}
         </PopoverContent>
       )}
     </Popover>

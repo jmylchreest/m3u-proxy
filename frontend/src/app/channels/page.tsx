@@ -75,6 +75,11 @@ interface ChannelsResponse {
   has_more: boolean;
 }
 
+interface StreamSourceOption {
+  id: string;
+  name: string;
+}
+
 // Helper functions for date formatting
 const formatRelativeTime = (dateString: string): string => {
   const date = new Date(dateString);
@@ -111,7 +116,7 @@ export default function ChannelsPage() {
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [groups, setGroups] = useState<string[]>([]);
-  const [sources, setSources] = useState<string[]>([]);
+  const [sources, setSources] = useState<StreamSourceOption[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [isPlayerOpen, setIsPlayerOpen] = useState(false);
   const [probingChannels, setProbingChannels] = useState<Set<string>>(new Set());
@@ -119,6 +124,23 @@ export default function ChannelsPage() {
   const isSearchChangeRef = useRef(false);
 
   // No longer need proxy resolution - only using direct stream sources
+  // Fetch stream sources (id + name) for reliable ID-based filtering
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await fetch('/api/v1/sources/stream');
+        if (!resp.ok) return;
+        const json = await resp.json();
+        const items = json?.data?.items ?? json?.data ?? [];
+        const mapped: StreamSourceOption[] = items
+          .filter((s: any) => s && s.id && s.name)
+          .map((s: any) => ({ id: s.id, name: s.name }));
+        setSources(mapped);
+      } catch (e) {
+        Debug.warn('Failed to fetch stream sources', e);
+      }
+    })();
+  }, []);
 
   // Debounce search input to prevent excessive API calls and focus loss
   useEffect(() => {
@@ -148,6 +170,10 @@ export default function ChannelsPage() {
 
         if (searchTerm) params.append('search', searchTerm);
         if (group) params.append('group', group);
+        // Multi-source filtering: always send selected source IDs (we store IDs now)
+        if (selectedSources.length > 0) {
+          params.append('source_id', selectedSources.join(','));
+        }
 
         let apiUrl = '/api/v1/channels';
 
@@ -164,6 +190,8 @@ export default function ChannelsPage() {
         }
 
         let channelsData = data.data.channels;
+
+        // No client-side name fallback needed; backend filtering handles source IDs.
 
         if (append) {
           setChannels((prev) => {
@@ -189,11 +217,7 @@ export default function ChannelsPage() {
             new Set(data.data.channels.map((c) => c.group).filter(Boolean))
           ) as string[];
           setGroups(uniqueGroups);
-
-          const uniqueSources = Array.from(
-            new Set(data.data.channels.map((c) => c.source_name).filter(Boolean))
-          ) as string[];
-          setSources(uniqueSources);
+          // Stream source options are loaded separately from /api/v1/sources/stream; no derivation needed here.
         }
 
         setError(null);
@@ -274,12 +298,12 @@ export default function ChannelsPage() {
     setSelectedGroup(value === 'all' ? '' : value);
   };
 
-  const handleSourceToggle = (sourceName: string) => {
+  const handleSourceToggle = (sourceId: string) => {
     setSelectedSources((prev) => {
-      if (prev.includes(sourceName)) {
-        return prev.filter((s) => s !== sourceName);
+      if (prev.includes(sourceId)) {
+        return prev.filter((s) => s !== sourceId);
       } else {
-        return [...prev, sourceName];
+        return [...prev, sourceId];
       }
     });
   };
@@ -288,7 +312,7 @@ export default function ChannelsPage() {
     if (selectedSources.length === sources.length) {
       setSelectedSources([]);
     } else {
-      setSelectedSources([...sources]);
+      setSelectedSources(sources.map((s) => s.id));
     }
   };
 
@@ -715,9 +739,9 @@ export default function ChannelsPage() {
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   {sources.map((source) => (
-                    <DropdownMenuItem key={source} onClick={() => handleSourceToggle(source)}>
-                      <Checkbox checked={selectedSources.includes(source)} className="mr-2" />
-                      {source}
+                    <DropdownMenuItem key={source.id} onClick={() => handleSourceToggle(source.id)}>
+                      <Checkbox checked={selectedSources.includes(source.id)} className="mr-2" />
+                      {source.name}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>

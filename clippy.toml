@@ -1,0 +1,108 @@
+# Clippy configuration for the m3u-proxy workspace
+#
+# IMPORTANT:
+# Clippy's TOML configuration does NOT support setting lint levels (allow/warn/deny)
+# via generic arrays like `warn = [...]` or `deny = [...]`. Those earlier keys were
+# invalid and caused the previous build failure.
+#
+# To enforce lint levels, use one (or both) of:
+#   1. Command line flags (recommended in CI):
+#        cargo clippy --workspace --all-targets -- \
+#          -D warnings \
+#          -W clippy::pedantic \
+#          -W clippy::nursery \
+#          -W clippy::cargo \
+#          -D clippy::unwrap_used \
+#          -D clippy::expect_used \
+#          -D clippy::panic \
+#          -D clippy::todo \
+#          -D clippy::unimplemented \
+#          -D clippy::dbg_macro \
+#          -D clippy::print_stdout \
+#          -D clippy::print_stderr
+#
+#   2. Or module / crate attributes:
+#        #![warn(clippy::pedantic, clippy::nursery, clippy::cargo)]
+#        #![deny(clippy::unwrap_used, clippy::expect_used)]
+#
+# This file configures only the tunable knobs that Clippy exposes via clippy.toml.
+# (See: https://doc.rust-lang.org/clippy/configuration.html)
+
+############################
+# Toolchain / MSRV
+############################
+msrv = "1.75"
+
+############################
+# Complexity / Size Thresholds
+############################
+# Raise thresholds slightly to accommodate current rule engine & parsing logic.
+cognitive-complexity-threshold = 35
+type-complexity-threshold = 425
+enum-variant-size-threshold = 240
+too-many-arguments-threshold = 12
+too-many-lines-threshold = 420
+
+############################
+# Naming / Style Relaxations
+############################
+single-char-binding-names-threshold = 6
+# Allow certain very short identifier names (common iteration vars).
+allowed-idents-below-min-chars = [
+  "id",
+  "db",
+  "op",
+  "tx",
+  "rx",
+  "ch",
+  "ep",
+]
+
+############################
+# Documentation / Formatting
+############################
+# Permit upper-case acronyms without aggressive rewriting.
+upper-case-acronyms-aggressive = false
+# Do not warn on commented-out code fragments during active refactors.
+lint-commented-code = false
+# Allow minor ordering deviations (we may enable ordering later).
+# (module-item-order-groupings removed; unsupported by Clippy configuration parser)
+
+############################
+# Wildcard Imports
+############################
+# We currently keep wildcard imports rare; if needed we can auto-warn on all:
+# warn-on-all-wildcard-imports = true
+
+############################
+# Arithmetic Side Effects
+############################
+# If we later want to restrict implicit arithmetic in sensitive sections,
+# we could enable arithmetic-side-effects; leaving default for now.
+
+############################
+# Third-Party / Generated
+############################
+# Example: you can list directories with generated code to relax some lints.
+# third-party = ["some/generated/dir"]
+
+############################
+# Future Tightening (Commented)
+############################
+# Uncomment as codebase stabilizes:
+# avoid-breaking-exported-api = true
+# warn-on-all-wildcard-imports = true
+# pass-by-value-size-limit = 200
+# disallowed-methods = ["std::mem::forget"]
+# disallowed-macros  = ["dbg"]
+
+############################
+# Local Justification Pattern
+############################
+# For intentional deviations add near the code:
+#   #[allow(clippy::cognitive_complexity)]
+#   // JUSTIFICATION: Parsing logic with planned decomposition in issue #XYZ
+#
+# Prefer local #[allow] over broad config changes unless it is cross-cutting.
+
+# End of clippy.toml

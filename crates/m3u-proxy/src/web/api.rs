@@ -1126,7 +1126,6 @@ pub async fn validate_expression(
 // Removed ValidationContext enum (unified validation no longer requires context discriminator)
 
 /// Unified engine-based validation logic: builds union field/alias set for requested domains and returns structured results (includes canonical_expression).
-
 async fn validate_expression_engine(
     _state: &AppState,
     expression: &str,
@@ -5709,7 +5708,7 @@ pub async fn get_popular_channels(
     Ok(Json(Vec::new()))
 }
 
-/// Get available fields based on validation context using FilterRepository
+// Get available fields based on validation context using FilterRepository
 // (Removed legacy get_fields_for_validation_context – unified validation now uses validate_expression_engine)
 
 // (Removed legacy is_stream_field helper – no longer needed)

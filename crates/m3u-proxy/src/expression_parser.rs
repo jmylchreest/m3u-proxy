@@ -323,6 +323,7 @@ impl ExpressionParser {
 
         ExpressionValidateResult {
             is_valid,
+            canonical_expression: None,
             errors,
             expression_tree,
         }

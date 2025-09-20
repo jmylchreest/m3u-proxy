@@ -392,7 +392,7 @@ export function DataMappingExpressionEditor({
             onValidationChange={handleValidationChange}
             onFieldsChange={handleFieldsChange}
             onValidationComplete={handleValidationComplete}
-            validationEndpoint={`/expressions/validate/data-mapping`}
+            validationEndpoint={`/expressions/validate?domain=${sourceType === 'epg' ? 'epg_mapping' : 'stream_mapping'}`}
             fieldsEndpoint={`/data-mapping/fields/${sourceType}`}
             sourceType={sourceType}
             placeholder={

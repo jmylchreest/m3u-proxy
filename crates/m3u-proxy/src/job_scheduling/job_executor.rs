@@ -395,6 +395,29 @@ impl JobExecutor {
                             pm.complete().await;
                         }
 
+                        // Enqueue a logo cache scan after a successful proxy regeneration.
+                        // This uses the shared job queue via the maintenance service; duplicates are ignored.
+                        match self.logo_cache_maintenance_service.enqueue_scan_job().await {
+                            Ok(true) => {
+                                debug!(
+                                    "Enqueued logo cache scan job after successful proxy regeneration {} ({})",
+                                    proxy_name, proxy_id
+                                );
+                            }
+                            Ok(false) => {
+                                debug!(
+                                    "Logo cache scan job already pending after proxy regeneration {} ({})",
+                                    proxy_name, proxy_id
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to enqueue logo cache scan after proxy regeneration {} ({}): {}",
+                                    proxy_name, proxy_id, e
+                                );
+                            }
+                        }
+
                         Ok(())
                     }
                     crate::pipeline::models::PipelineStatus::Failed => {

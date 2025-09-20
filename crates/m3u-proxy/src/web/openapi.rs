@@ -211,16 +211,14 @@ Check the endpoints below to see the complete API surface.
         crate::web::api::update_data_mapping_rule,
         crate::web::api::delete_data_mapping_rule,
         crate::web::api::reorder_data_mapping_rules,
-        crate::web::api::validate_data_mapping_expression,
         crate::web::api::get_data_mapping_stream_fields,
         crate::web::api::get_data_mapping_epg_fields,
         crate::web::api::get_data_mapping_helpers,
         crate::web::api::search_logo_assets_for_helper,
         crate::web::api::get_date_completion_options,
 
-        // Expression validation endpoints
-        crate::web::api::validate_stream_expression,
-        crate::web::api::validate_epg_expression,
+        // Expression validation endpoint (unified)
+        crate::web::api::validate_expression,
         crate::web::api::test_data_mapping_rule,
         crate::web::api::apply_data_mapping_rules,
         crate::web::api::apply_data_mapping_rules_post,

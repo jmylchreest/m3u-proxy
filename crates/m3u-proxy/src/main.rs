@@ -634,17 +634,18 @@ async fn main() -> Result<()> {
         )
     };
 
-    // Logo cache services
+    // Job scheduling system base queue (create early so services can attach)
+    let job_queue = Arc::new(JobQueue::new());
+
+    // Logo cache services (attach shared queue) - NOTE: shared job_queue created above is reused here
     let logo_cache_service = Arc::new(LogoCacheService::new(logos_cached_file_manager.clone())?);
     let logo_cache_maintenance_service = Arc::new(
         LogoCacheMaintenanceService::new(logo_cache_service.clone())
-            .with_job_queue(Arc::new(JobQueue::new())),
+            .with_job_queue(job_queue.clone()),
     );
     logo_cache_maintenance_service.initialize().await?;
-    info!("Logo cache maintenance initialized");
 
     // Job scheduling system
-    let job_queue = Arc::new(JobQueue::new());
     let job_scheduler = Arc::new(JobScheduler::new(job_queue.clone(), database.clone()));
     let job_executor = Arc::new(JobExecutor::new(
         stream_source_service.clone(),

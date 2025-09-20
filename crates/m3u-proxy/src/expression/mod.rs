@@ -13,7 +13,7 @@ use crate::models::ExtendedExpression;
 /// * Select the correct processing stage (Filtering vs DataMapping)
 /// * Derive the canonical field set (and their aliases) from a single registry
 /// * Keep future additions (e.g. Generation phase) centralized
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExpressionDomain {
     // Filtering (selection) contexts
     StreamFilter,
@@ -98,46 +98,248 @@ pub fn preprocess_expression(raw: &str) -> anyhow::Result<String> {
 /// 3. Collects canonical field names
 /// 4. Attaches the alias map
 pub fn build_parser_for(domain: ExpressionDomain) -> ExpressionParser {
-    let registry = FieldRegistry::global();
-    let full_alias_map = registry.alias_map();
+    // Temporary compatibility wrapper: delegate to ParserFactory (new unified path).
+    ParserFactory::global()
+        .parser_for_domain(domain)
+        .as_ref()
+        .clone()
+}
 
-    let (source_kind, stage_kind) = domain_to_source_and_stage(domain);
+/// Public snapshot struct for expression metrics (exposed for debugging endpoints / UI cards).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExpressionMetricsSnapshot {
+    pub total_parses: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_size: usize,
+    pub average_parse_time_ns: u64,
+    // New: total validation calls recorded
+    pub total_validations: u64,
+    // New: duration (ns) of the most recent validation aggregation
+    pub validation_last_duration_ns: u64,
+    // New: per-domain validation call counts (keys match unified domain query values)
+    pub per_domain_validations: std::collections::HashMap<&'static str, u64>,
+}
 
-    // Collect canonical field names for this (source, stage) pair
-    let mut fields: Vec<String> = registry
-        .descriptors_for(source_kind, stage_kind)
-        .into_iter()
-        .map(|d| d.name.to_string())
-        .collect();
+/// Public accessor returning a cheap snapshot of current metrics (parsing + validation).
+pub fn expression_metrics_snapshot() -> ExpressionMetricsSnapshot {
+    let m = metrics();
+    use std::sync::atomic::Ordering;
 
-    fields.sort();
-    fields.dedup();
+    let per_domain = {
+        if let Ok(map) = m.per_domain_validations.lock() {
+            map.clone()
+        } else {
+            std::collections::HashMap::new()
+        }
+    };
 
-    // Domain‑scoped alias filtering:
-    // Only include aliases whose canonical target is present in this domain's field set.
-    // This prevents cross‑domain pollution (e.g. stream group_title resolving to an EPG-only canonical).
-    let field_set: std::collections::HashSet<&str> = fields.iter().map(|s| s.as_str()).collect();
+    ExpressionMetricsSnapshot {
+        total_parses: m.total_parses.load(Ordering::Relaxed),
+        cache_hits: m.cache_hits.load(Ordering::Relaxed),
+        cache_misses: m.cache_misses.load(Ordering::Relaxed),
+        cache_size: ParserFactory::global().cache_size(),
+        average_parse_time_ns: m.average_parse_time_ns(),
+        total_validations: m.total_validations.load(Ordering::Relaxed),
+        validation_last_duration_ns: m.validation_last_duration_ns.load(Ordering::Relaxed),
+        per_domain_validations: per_domain,
+    }
+}
 
-    let filtered_aliases: std::collections::HashMap<String, String> = full_alias_map
-        .into_iter()
-        .filter(|(_alias, canonical)| field_set.contains(canonical.as_str()))
-        .collect();
+/// External helper for the web layer to record validation events (union-domain validations).
+/// Call this from the unified validation endpoint with the domains involved and elapsed duration.
+pub fn record_validation_metrics(domains: &[ExpressionDomain], duration: std::time::Duration) {
+    metrics().record_validation(domains, duration);
+}
 
-    // Debug trace: dump field list for EpgRule domain (helps diagnose missing fields in tests)
-    if matches!(domain, ExpressionDomain::EpgRule) && tracing::level_enabled!(tracing::Level::TRACE)
-    {
-        let mut sorted = fields.clone();
-        sorted.sort();
-        trace!(
-            "[EXPR_DOMAIN_FIELDS] domain=EpgRule count={} fields=[{}]",
-            sorted.len(),
-            sorted.join(",")
+/// Expression parsing / validation metrics (aggregated).
+#[derive(Default)]
+struct ExpressionMetrics {
+    // Parsing-related
+    total_parses: std::sync::atomic::AtomicU64,
+    cache_hits: std::sync::atomic::AtomicU64,
+    cache_misses: std::sync::atomic::AtomicU64,
+    total_parse_time_ns: std::sync::atomic::AtomicU64,
+
+    // Validation-related (added)
+    total_validations: std::sync::atomic::AtomicU64,
+    validation_last_duration_ns: std::sync::atomic::AtomicU64,
+    per_domain_validations: std::sync::Mutex<std::collections::HashMap<&'static str, u64>>,
+}
+
+impl ExpressionMetrics {
+    fn record_parse(&self, duration: std::time::Duration, cache_hit: bool) {
+        self.total_parses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if cache_hit {
+            self.cache_hits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.cache_misses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.total_parse_time_ns.fetch_add(
+            duration.as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
         );
     }
 
-    ExpressionParser::new()
-        .with_fields(fields)
-        .with_aliases(filtered_aliases)
+    fn record_validation(
+        &self,
+        domains: &[crate::expression::ExpressionDomain],
+        duration: std::time::Duration,
+    ) {
+        self.total_validations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.validation_last_duration_ns.store(
+            duration.as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        if let Ok(mut map) = self.per_domain_validations.lock() {
+            for d in domains {
+                let key: &'static str = match d {
+                    crate::expression::ExpressionDomain::StreamFilter => "stream_filter",
+                    crate::expression::ExpressionDomain::EpgFilter => "epg_filter",
+                    crate::expression::ExpressionDomain::StreamDataMapping => "stream_mapping",
+                    crate::expression::ExpressionDomain::EpgDataMapping => "epg_mapping",
+                    crate::expression::ExpressionDomain::StreamRule => "stream_rule",
+                    crate::expression::ExpressionDomain::EpgRule => "epg_rule",
+                };
+                *map.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+
+    fn average_parse_time_ns(&self) -> u64 {
+        let parses = self.total_parses.load(std::sync::atomic::Ordering::Relaxed);
+        if parses == 0 {
+            0
+        } else {
+            self.total_parse_time_ns
+                .load(std::sync::atomic::Ordering::Relaxed)
+                / parses
+        }
+    }
+}
+
+fn metrics() -> &'static ExpressionMetrics {
+    use std::sync::OnceLock;
+    static M: OnceLock<ExpressionMetrics> = OnceLock::new();
+    M.get_or_init(ExpressionMetrics::default)
+}
+
+/// Internal cache key (mirrors ExpressionDomain).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct DomainKey(ExpressionDomain);
+
+impl From<ExpressionDomain> for DomainKey {
+    fn from(d: ExpressionDomain) -> Self {
+        Self(d)
+    }
+}
+
+/// ParserFactory caches parsers per domain with filtered aliases.
+pub struct ParserFactory {
+    cache:
+        std::sync::RwLock<std::collections::HashMap<DomainKey, std::sync::Arc<ExpressionParser>>>,
+}
+
+impl ParserFactory {
+    fn new() -> Self {
+        Self {
+            cache: std::sync::RwLock::new(std::collections::HashMap::new()),
+        }
+    }
+
+    pub fn global() -> &'static Self {
+        use std::sync::OnceLock;
+        static INSTANCE: OnceLock<ParserFactory> = OnceLock::new();
+        INSTANCE.get_or_init(Self::new)
+    }
+
+    pub fn parser_for_domain(&self, domain: ExpressionDomain) -> std::sync::Arc<ExpressionParser> {
+        let key = DomainKey::from(domain);
+        // Fast path: read cache
+        if let Some(p) = self.cache.read().unwrap().get(&key) {
+            return p.clone();
+        }
+
+        // Build parser
+        let start = std::time::Instant::now();
+        let registry = FieldRegistry::global();
+        let full_alias_map = registry.alias_map();
+        let (source_kind, stage_kind) = domain_to_source_and_stage(domain);
+
+        let mut fields: Vec<String> = registry
+            .descriptors_for(source_kind, stage_kind)
+            .into_iter()
+            .map(|d| d.name.to_string())
+            .collect();
+        fields.sort();
+        fields.dedup();
+
+        let field_set: std::collections::HashSet<&str> =
+            fields.iter().map(|s| s.as_str()).collect();
+        let filtered_aliases: std::collections::HashMap<String, String> = full_alias_map
+            .into_iter()
+            .filter(|(_alias, canonical)| field_set.contains(canonical.as_str()))
+            .collect();
+
+        let parser = ExpressionParser::new()
+            .with_fields(fields)
+            .with_aliases(filtered_aliases);
+        let arc = std::sync::Arc::new(parser);
+
+        {
+            let mut w = self.cache.write().unwrap();
+            w.insert(key, arc.clone());
+        }
+
+        metrics().record_parse(start.elapsed(), false);
+        arc
+    }
+
+    pub fn cache_size(&self) -> usize {
+        self.cache.read().unwrap().len()
+    }
+}
+
+/// High-level engine coupling preprocessing + parsing.
+pub struct ExpressionEngine {
+    parser: std::sync::Arc<ExpressionParser>,
+}
+
+impl ExpressionEngine {
+    pub fn for_domain(domain: ExpressionDomain) -> Self {
+        let parser = ParserFactory::global().parser_for_domain(domain);
+        Self { parser }
+    }
+
+    pub fn parser(&self) -> &ExpressionParser {
+        &self.parser
+    }
+
+    pub fn parse_extended(&self, raw_expression: &str) -> anyhow::Result<Option<ParsedExpression>> {
+        if raw_expression.trim().is_empty() {
+            return Ok(None);
+        }
+        let preprocessed = preprocess_expression(raw_expression)?;
+        if preprocessed.trim().is_empty() {
+            return Ok(None);
+        }
+        let start = std::time::Instant::now();
+        let extended = self.parser.parse_extended(&preprocessed)?;
+        metrics().record_parse(start.elapsed(), true);
+        Ok(Some(ParsedExpression {
+            original_text: raw_expression.to_string(),
+            extended,
+            parsed_at: start,
+        }))
+    }
+
+    pub fn canonicalize_lossy(&self, raw: &str) -> String {
+        self.parser.canonicalize_expression_lossy(raw)
+    }
 }
 
 /// Helper: map domain to (SourceKind, StageKind)

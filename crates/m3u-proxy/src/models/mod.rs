@@ -529,6 +529,9 @@ pub struct ExpressionValidateResult {
     #[schema(example = true)]
     pub is_valid: bool,
 
+    #[schema(example = "programme_title contains \"Match\"")]
+    pub canonical_expression: Option<String>,
+
     #[schema(example = json!([
         {
             "category": "field",

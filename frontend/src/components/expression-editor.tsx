@@ -332,10 +332,18 @@ export const ExpressionEditor = forwardRef<HTMLTextAreaElement, ExpressionEditor
           if (response.ok) {
             const data = await response.json();
 
+            // Derive a user-friendly error message if the API uses the new shape without a top-level 'error'
+            const derivedError =
+              data.error ||
+              (!data.is_valid &&
+                Array.isArray(data.errors) &&
+                data.errors.length > 0 &&
+                (data.errors[0].message || data.errors[0].details));
+
             // New API response format
             const validationResult: ExpressionValidationResponse = {
               is_valid: data.is_valid,
-              error: data.error,
+              error: derivedError,
               errors: data.errors || [],
               condition_tree: data.condition_tree,
             };
@@ -358,9 +366,17 @@ export const ExpressionEditor = forwardRef<HTMLTextAreaElement, ExpressionEditor
             try {
               const errorData = await response.json();
 
+              const derivedError =
+                errorData.error ||
+                (!errorData.is_valid &&
+                  Array.isArray(errorData.errors) &&
+                  errorData.errors.length > 0 &&
+                  (errorData.errors[0].message || errorData.errors[0].details)) ||
+                'Validation failed';
+
               const validationResult: ExpressionValidationResponse = {
                 is_valid: false,
-                error: errorData.error || 'Validation failed',
+                error: derivedError,
                 errors: errorData.errors || [],
                 condition_tree: null,
               };

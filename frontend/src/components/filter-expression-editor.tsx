@@ -339,7 +339,7 @@ export function FilterExpressionEditor({
           onValidationChange={handleValidationChange}
           onFieldsChange={handleFieldsChange}
           onValidationComplete={handleValidationComplete}
-          validationEndpoint={`/expressions/validate/${sourceType}`}
+          validationEndpoint={`/expressions/validate?domain=${sourceType === 'epg' ? 'epg_filter' : 'stream_filter'}`}
           fieldsEndpoint={`/filters/fields/${sourceType}`}
           sourceType={sourceType}
           placeholder={placeholder}

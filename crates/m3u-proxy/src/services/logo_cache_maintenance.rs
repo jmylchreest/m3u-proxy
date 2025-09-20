@@ -68,29 +68,9 @@ impl LogoCacheMaintenanceService {
         // Initialize the logo cache (instant)
         self.logo_cache.initialize().await?;
 
-        // Enqueue a background job to populate the cache
-        if let Some(job_queue) = &self.job_queue {
-            let scan_job = ScheduledJob::new(
-                JobType::Maintenance("logo_cache_scan".to_string()),
-                JobPriority::Maintenance,
-            );
+        // Use helper to enqueue initial scan (shared queue now)
+        let _ = self.enqueue_scan_job().await?;
 
-            match job_queue.enqueue(scan_job).await {
-                Ok(true) => {
-                    info!("Enqueued logo cache scan job for background processing");
-                }
-                Ok(false) => {
-                    info!("Logo cache scan job already queued, skipping duplicate");
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to enqueue logo cache scan job: {}", e);
-                }
-            }
-        } else {
-            info!("Job queue not available - logo cache will remain empty until manual scan");
-        }
-
-        info!("Logo cache maintenance service initialized");
         Ok(())
     }
 
@@ -114,6 +94,34 @@ impl LogoCacheMaintenanceService {
 
         info!("Logo cache scan job completed");
         Ok(())
+    }
+
+    /// Enqueue (or attempt to) a logo cache scan job on the configured queue.
+    /// Returns Ok(true) if a new job was enqueued, Ok(false) if already present or no queue.
+    pub async fn enqueue_scan_job(&self) -> Result<bool> {
+        if let Some(job_queue) = &self.job_queue {
+            let scan_job = ScheduledJob::new(
+                JobType::Maintenance("logo_cache_scan".to_string()),
+                JobPriority::Maintenance,
+            );
+            match job_queue.enqueue(scan_job).await {
+                Ok(true) => {
+                    tracing::debug!("Enqueued logo cache scan job for background processing");
+                    Ok(true)
+                }
+                Ok(false) => {
+                    tracing::debug!("Logo cache scan job already queued, skipping duplicate");
+                    Ok(false)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to enqueue logo cache scan job: {e}");
+                    Err(e.into())
+                }
+            }
+        } else {
+            tracing::debug!("enqueue_scan_job called but no job queue configured");
+            Ok(false)
+        }
     }
 
     /// Get logo cache statistics

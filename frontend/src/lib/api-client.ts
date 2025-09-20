@@ -453,17 +453,33 @@ class ApiClient {
   async validateDataMappingExpression(
     expression: string,
     sourceType: string
-  ): Promise<{ valid: boolean; error?: string }> {
-    return this.request<{ valid: boolean; error?: string }>(
-      '/api/v1/expressions/validate/data-mapping',
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          expression,
-          source_type: sourceType,
-        }),
-      }
-    );
+  ): Promise<{
+    valid: boolean;
+    error?: string;
+    errors?: any[];
+    canonical_expression?: string;
+  }> {
+    const domain = sourceType === 'epg' ? 'epg_mapping' : 'stream_mapping';
+
+    // Call unified validation endpoint
+    const data = await this.request<any>(`/api/v1/expressions/validate?domain=${domain}`, {
+      method: 'POST',
+      body: JSON.stringify({ expression }),
+    });
+
+    // Translate unified response (ExpressionValidateResult) into legacy shape expected by callers
+    // Unified response fields: is_valid, canonical_expression, errors (array), etc.
+    const firstErrorMessage =
+      !data.is_valid && Array.isArray(data.errors) && data.errors.length > 0
+        ? data.errors[0].message || data.errors[0].details || 'Invalid expression'
+        : undefined;
+
+    return {
+      valid: !!data.is_valid,
+      error: firstErrorMessage,
+      errors: data.errors,
+      canonical_expression: data.canonical_expression,
+    };
   }
 
   async getDataMappingFields(sourceType: string): Promise<string[]> {

@@ -356,20 +356,8 @@ impl WebServer {
             .route("/logos/clear-cache", delete(api::clear_logo_cache))
             // Cached logo endpoint (uses sandboxed file manager, no database)
             .route("/logos/cached/{cache_id}", get(api::get_cached_logo_asset))
-            // Expression validation (generalized endpoints)
+            // Expression validation (unified endpoint; legacy per-domain endpoints removed)
             .route("/expressions/validate", post(api::validate_expression))
-            .route(
-                "/expressions/validate/stream",
-                post(api::validate_stream_expression),
-            )
-            .route(
-                "/expressions/validate/epg",
-                post(api::validate_epg_expression),
-            )
-            .route(
-                "/expressions/validate/data-mapping",
-                post(api::validate_data_mapping_expression),
-            )
             // Filters
             .route("/filters", get(api::list_filters).post(api::create_filter))
             .route(
@@ -414,6 +402,10 @@ impl WebServer {
             .route(
                 "/debug/epg/category-stats",
                 get(api::get_epg_category_stats),
+            )
+            .route(
+                "/debug/expression-metrics",
+                get(api::get_expression_metrics_debug),
             )
             .route(
                 "/data-mapping/reorder",

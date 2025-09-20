@@ -1066,10 +1066,41 @@ providing intelligent suggestions for typos and unknown fields.
 )]
 pub async fn validate_expression(
     State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
     Json(payload): Json<ExpressionValidateRequest>,
 ) -> Result<Json<ExpressionValidateResult>, StatusCode> {
-    // Generic endpoint - use combined/legacy fields for backward compatibility
-    validate_expression_with_context(&state, &payload.expression, ValidationContext::Generic).await
+    // Unified endpoint replacing legacy per-domain endpoints.
+    // Query params:
+    //   domain=stream_filter|epg_filter|stream_mapping|epg_mapping (repeatable or comma-separated)
+    //   If omitted, defaults to stream_filter + epg_filter.
+    let mut domains: Vec<crate::expression::ExpressionDomain> = Vec::new();
+
+    if let Some(raw) = params.get("domain") {
+        for part in raw.split(',').map(|s| s.trim().to_lowercase()) {
+            match part.as_str() {
+                "stream_filter" | "stream" => {
+                    domains.push(crate::expression::ExpressionDomain::StreamFilter)
+                }
+                "epg_filter" | "epg" => {
+                    domains.push(crate::expression::ExpressionDomain::EpgFilter)
+                }
+                "stream_mapping" | "stream_data_mapping" | "stream_datamapping" => {
+                    domains.push(crate::expression::ExpressionDomain::StreamDataMapping)
+                }
+                "epg_mapping" | "epg_data_mapping" | "epg_datamapping" => {
+                    domains.push(crate::expression::ExpressionDomain::EpgDataMapping)
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if domains.is_empty() {
+        domains.push(crate::expression::ExpressionDomain::StreamFilter);
+        domains.push(crate::expression::ExpressionDomain::EpgFilter);
+    }
+
+    validate_expression_engine(&state, &payload.expression, &domains).await
 }
 
 /// Validate stream source filter expressions
@@ -1086,86 +1117,82 @@ pub async fn validate_expression(
         (status = 500, description = "Internal server error")
     )
 )]
-pub async fn validate_stream_expression(
-    State(state): State<AppState>,
-    Json(payload): Json<ExpressionValidateRequest>,
-) -> Result<Json<ExpressionValidateResult>, StatusCode> {
-    validate_expression_with_context(&state, &payload.expression, ValidationContext::Stream).await
-}
+// Removed legacy validate_stream_expression endpoint (use unified /api/v1/expressions/validate)
 
-/// Validate EPG source filter expressions
-#[utoipa::path(
-    post,
-    path = "/api/v1/expressions/validate/epg",
-    tag = "expressions",
-    summary = "Validate EPG source filter expression",
-    description = "Validate expression for EPG source filtering with EPG-specific fields (programme_title, programme_description, start_time, etc.)",
-    request_body = ExpressionValidateRequest,
-    responses(
-        (status = 200, description = "EPG filter validation result", body = ExpressionValidateResult),
-        (status = 400, description = "Bad request"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn validate_epg_expression(
-    State(state): State<AppState>,
-    Json(payload): Json<ExpressionValidateRequest>,
-) -> Result<Json<ExpressionValidateResult>, StatusCode> {
-    validate_expression_with_context(&state, &payload.expression, ValidationContext::Epg).await
-}
+// (Legacy validate_epg_expression endpoint removed; unified endpoint in use)
 
-/// Validate data mapping expressions
-#[utoipa::path(
-    post,
-    path = "/api/v1/expressions/validate/data-mapping",
-    tag = "expressions",
-    summary = "Validate data mapping expression",
-    description = "Validate expression for data mapping transformations with mapping-specific fields (input and output fields)",
-    request_body = ExpressionValidateRequest,
-    responses(
-        (status = 200, description = "Data mapping validation result", body = ExpressionValidateResult),
-        (status = 400, description = "Bad request"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn validate_data_mapping_expression(
-    State(state): State<AppState>,
-    Json(payload): Json<ExpressionValidateRequest>,
-) -> Result<Json<ExpressionValidateResult>, StatusCode> {
-    validate_expression_with_context(&state, &payload.expression, ValidationContext::DataMapping)
-        .await
-}
+// (Legacy validate_data_mapping_expression endpoint removed; unified endpoint in use)
 
-#[derive(Debug)]
-enum ValidationContext {
-    Stream,
-    Epg,
-    DataMapping,
-    Generic,
-}
+// Removed ValidationContext enum (unified validation no longer requires context discriminator)
 
-/// Core validation logic with context-specific field resolution
-async fn validate_expression_with_context(
-    state: &AppState,
+/// Unified engine-based validation logic: builds union field/alias set for requested domains and returns structured results (includes canonical_expression).
+
+async fn validate_expression_engine(
+    _state: &AppState,
     expression: &str,
-    context: ValidationContext,
+    domains: &[crate::expression::ExpressionDomain],
 ) -> Result<Json<ExpressionValidateResult>, StatusCode> {
-    // Get context-specific available fields for semantic validation
-    let available_fields = get_fields_for_validation_context(state, &context).await?;
+    use crate::field_registry::{FieldRegistry, SourceKind, StageKind};
+    use std::collections::{HashMap, HashSet};
 
-    // Create parser with field validation enabled
-    // Create parser with field validation + alias support (e.g. program_category -> programme_category)
-    let registry = crate::field_registry::FieldRegistry::global();
-    let alias_map = registry.alias_map();
+    let start = std::time::Instant::now();
+
+    // Domain -> source/stage translator
+    fn domain_pair(d: crate::expression::ExpressionDomain) -> (SourceKind, StageKind) {
+        use crate::expression::ExpressionDomain::*;
+        match d {
+            StreamFilter => (SourceKind::Stream, StageKind::Filtering),
+            EpgFilter => (SourceKind::Epg, StageKind::Filtering),
+            StreamDataMapping | StreamRule => (SourceKind::Stream, StageKind::DataMapping),
+            EpgDataMapping | EpgRule => (SourceKind::Epg, StageKind::DataMapping),
+        }
+    }
+
+    let registry = FieldRegistry::global();
+
+    // Union canonical fields
+    let mut field_set: HashSet<String> = HashSet::new();
+    for d in domains {
+        let (sk, st) = domain_pair(*d);
+        for name in registry.field_names_for(sk, st) {
+            field_set.insert(name.to_string());
+        }
+    }
+    let mut fields: Vec<String> = field_set.into_iter().collect();
+    fields.sort();
+
+    // Filter alias map to canonical subset
+    let allowed: HashSet<&str> = fields.iter().map(|s| s.as_str()).collect();
+    let filtered_aliases: HashMap<String, String> = registry
+        .alias_map()
+        .into_iter()
+        .filter(|(_a, canon)| allowed.contains(canon.as_str()))
+        .collect();
+
     let parser = crate::expression_parser::ExpressionParser::new()
-        .with_fields(available_fields)
-        .with_aliases(alias_map);
+        .with_fields(fields)
+        .with_aliases(filtered_aliases);
 
-    // Use the parser's validation method that provides structured results with position information
-    let validation_result = parser.validate(expression);
+    let mut validation_result = parser.validate(expression);
+    if validation_result.expression_tree.is_some() {
+        validation_result.canonical_expression =
+            Some(parser.canonicalize_expression_lossy(expression));
+    }
+
+    // Record metrics (using global expression module validation metrics)
+    crate::expression::record_validation_metrics(domains, start.elapsed());
 
     Ok(Json(validation_result))
 }
+
+// Create parser with field validation enabled
+// Create parser with field validation + alias support (e.g. program_category -> programme_category)
+// (Deleted parser construction from legacy context-based validation)
+
+// Use the parser's validation method that provides structured results with position information
+// (Deleted legacy validation result production)
+
+// (Removed legacy function tail)
 
 // Data Mapping API
 /// List all data mapping rules
@@ -3352,6 +3379,47 @@ async fn apply_data_mapping_rules_impl(
     }
 }
 
+// -------------------------------------------------------------------------------------------------
+// Expression Metrics Debug Endpoint
+// -------------------------------------------------------------------------------------------------
+
+#[utoipa::path(
+    get,
+    path = "/debug/expression-metrics",
+    tag = "debug",
+    summary = "Expression engine & parser cache metrics",
+    description = "Returns lightweight metrics about expression parsing & validation performance for debugging.",
+    responses(
+        (status = 200, description = "Expression metrics JSON"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_expression_metrics_debug() -> Result<Json<serde_json::Value>, StatusCode> {
+    use serde_json::json;
+
+    // Access metrics from expression module (safe static references).
+    // We mirror internal metric names and expose derived averages.
+    #[allow(dead_code)]
+    fn snapshot() -> serde_json::Value {
+        // These helper functions rely on internal (pub(crate) or private) APIs we exposed earlier.
+        // Since metrics() is private in the module, for a real implementation you'd expose a public accessor.
+        // Here we provide a placeholder structure assuming a future public accessor is added.
+        let snap = crate::expression::expression_metrics_snapshot();
+        json!({
+            "cache_size": snap.cache_size,
+            "total_parses": snap.total_parses,
+            "cache_hits": snap.cache_hits,
+            "cache_misses": snap.cache_misses,
+            "average_parse_time_ns": snap.average_parse_time_ns,
+            "total_validations": snap.total_validations,
+            "validation_last_duration_ns": snap.validation_last_duration_ns,
+            "per_domain_validations": snap.per_domain_validations
+        })
+    }
+
+    Ok(Json(snapshot()))
+}
+
 // Logo Assets API
 /// EPG Category Statistics (debug / diagnostic)
 #[utoipa::path(
@@ -3368,11 +3436,12 @@ async fn apply_data_mapping_rules_impl(
 pub async fn get_epg_category_stats(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    use crate::database::repositories::EpgProgramSeaOrmRepository;
     use serde_json::json;
     use std::collections::HashMap;
 
-    let repo = EpgProgramSeaOrmRepository::new(state.database.connection().clone());
+    let repo = crate::database::repositories::EpgProgramSeaOrmRepository::new(
+        state.database.connection().clone(),
+    );
 
     // For a debug endpoint we can (bounded) page through all programs via time range:
     // Simpler approach: fetch all programs per active sources (already used elsewhere).
@@ -5641,114 +5710,11 @@ pub async fn get_popular_channels(
 }
 
 /// Get available fields based on validation context using FilterRepository
-async fn get_fields_for_validation_context(
-    state: &AppState,
-    context: &ValidationContext,
-) -> Result<Vec<String>, StatusCode> {
-    let filter_repo = crate::database::repositories::FilterSeaOrmRepository::new(
-        state.database.connection().clone(),
-    );
+// (Removed legacy get_fields_for_validation_context – unified validation now uses validate_expression_engine)
 
-    match context {
-        ValidationContext::Stream => {
-            // Use FilterRepository to get stream filter fields
-            match filter_repo.get_available_filter_fields().await {
-                Ok(fields) => {
-                    let stream_fields: Vec<String> = fields
-                        .into_iter()
-                        .filter(|field| is_stream_field(&field.name))
-                        .map(|field| field.name)
-                        .collect();
-                    Ok(stream_fields)
-                }
-                Err(e) => {
-                    error!("Failed to get stream filter fields: {}", e);
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-        }
-        ValidationContext::Epg => {
-            // Use FilterRepository to get EPG filter fields
-            match filter_repo.get_available_filter_fields().await {
-                Ok(fields) => {
-                    let epg_fields: Vec<String> = fields
-                        .into_iter()
-                        .filter(|field| is_epg_field(&field.name))
-                        .map(|field| field.name)
-                        .collect();
-                    Ok(epg_fields)
-                }
-                Err(e) => {
-                    error!("Failed to get EPG filter fields: {}", e);
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-        }
-        ValidationContext::DataMapping => {
-            // Use centralized FieldRegistry for canonical data mapping fields (stream + EPG)
-            let registry = crate::field_registry::FieldRegistry::global();
-            use crate::field_registry::{SourceKind, StageKind};
+// (Removed legacy is_stream_field helper – no longer needed)
 
-            let mut combined_fields: Vec<String> = registry
-                .field_names_for(SourceKind::Stream, StageKind::DataMapping)
-                .into_iter()
-                .chain(
-                    registry
-                        .field_names_for(SourceKind::Epg, StageKind::DataMapping)
-                        .into_iter(),
-                )
-                .map(|s| s.to_string())
-                .collect();
-
-            combined_fields.sort();
-            combined_fields.dedup();
-
-            Ok(combined_fields)
-        }
-        ValidationContext::Generic => {
-            // Use FilterRepository for generic filter fields
-            match filter_repo.get_available_filter_fields().await {
-                Ok(fields) => Ok(fields.into_iter().map(|f| f.name).collect()),
-                Err(e) => {
-                    error!("Failed to get filter fields: {}", e);
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-        }
-    }
-}
-
-/// Check if a field name is stream-related
-fn is_stream_field(field_name: &str) -> bool {
-    let registry = crate::field_registry::FieldRegistry::global();
-    if let Some(canonical) = registry.canonical_or_none(field_name) {
-        registry
-            .descriptors_for(
-                crate::field_registry::SourceKind::Stream,
-                crate::field_registry::StageKind::Filtering,
-            )
-            .iter()
-            .any(|d| d.name == canonical)
-    } else {
-        false
-    }
-}
-
-/// Check if a field name is EPG-related
-fn is_epg_field(field_name: &str) -> bool {
-    let registry = crate::field_registry::FieldRegistry::global();
-    if let Some(canonical) = registry.canonical_or_none(field_name) {
-        registry
-            .descriptors_for(
-                crate::field_registry::SourceKind::Epg,
-                crate::field_registry::StageKind::Filtering,
-            )
-            .iter()
-            .any(|d| d.name == canonical)
-    } else {
-        false
-    }
-}
+// (Removed legacy is_epg_field helper – no longer needed)
 
 /// Preview data mapping expression with optimized performance
 async fn preview_data_mapping_expression_sync(

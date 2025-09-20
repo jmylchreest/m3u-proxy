@@ -14,11 +14,13 @@ pub struct MigrationAssets;
 
 impl StaticAssets {
     /// Get a static asset by path
+    #[must_use]
     pub fn get_asset(path: &str) -> Option<rust_embed::EmbeddedFile> {
         Self::get(path)
     }
 
     /// Get the content type for a given file extension
+    #[must_use]
     pub fn get_content_type(path: &str) -> &'static str {
         match path.split('.').next_back() {
             Some("html") => "text/html; charset=utf-8",
@@ -26,7 +28,7 @@ impl StaticAssets {
             Some("js") => "application/javascript; charset=utf-8",
             Some("json") => "application/json; charset=utf-8",
             Some("png") => "image/png",
-            Some("jpg") | Some("jpeg") => "image/jpeg",
+            Some("jpg" | "jpeg") => "image/jpeg",
             Some("gif") => "image/gif",
             Some("svg") => "image/svg+xml; charset=utf-8",
             Some("ico") => "image/x-icon",
@@ -46,11 +48,13 @@ impl StaticAssets {
 
 impl MigrationAssets {
     /// Get a migration file by path
+    #[must_use]
     pub fn get_migration(path: &str) -> Option<rust_embed::EmbeddedFile> {
         Self::get(path)
     }
 
     /// Get all migration files in order
+    #[must_use]
     pub fn get_migrations() -> Vec<(String, String)> {
         let mut migrations = Vec::new();
 

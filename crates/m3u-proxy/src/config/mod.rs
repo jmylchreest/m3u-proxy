@@ -62,10 +62,12 @@ impl FeaturesConfig {
         &self,
         feature_name: &str,
     ) -> &std::collections::HashMap<String, serde_json::Value> {
-        use std::sync::LazyLock;
-        static EMPTY_CONFIG: LazyLock<std::collections::HashMap<String, serde_json::Value>> =
-            LazyLock::new(std::collections::HashMap::new);
-        self.config.get(feature_name).unwrap_or(&EMPTY_CONFIG)
+        use std::sync::OnceLock;
+        static EMPTY_CONFIG: OnceLock<std::collections::HashMap<String, serde_json::Value>> =
+            OnceLock::new();
+        self.config
+            .get(feature_name)
+            .unwrap_or_else(|| EMPTY_CONFIG.get_or_init(std::collections::HashMap::new))
     }
 
     /// Get a specific config value for a feature (returns None if not found)

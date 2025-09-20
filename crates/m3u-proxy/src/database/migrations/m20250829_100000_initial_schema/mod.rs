@@ -1,7 +1,7 @@
 use sea_orm_migration::prelude::*;
 
-#[derive(DeriveMigrationName)]
 pub struct Migration;
+folder_migration_name!();
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {

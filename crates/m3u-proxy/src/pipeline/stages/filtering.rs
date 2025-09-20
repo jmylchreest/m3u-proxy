@@ -7,7 +7,8 @@ use crate::database::repositories::filter::FilterSeaOrmRepository;
 use crate::database::repositories::stream_proxy::StreamProxySeaOrmRepository;
 use crate::models::{Channel, FilterSourceType};
 use crate::pipeline::engines::{
-    ChannelFilteringEngine, FilterEngineResult, RegexEvaluator, StreamFilterProcessor,
+    ChannelFilteringEngine, EpgFilterProcessor, FilterEngineResult, FilteringEngine,
+    RegexEvaluator, StreamFilterProcessor,
 };
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::models::{ArtifactType, ContentType, PipelineArtifact};
@@ -421,39 +422,108 @@ impl FilteringStage {
 
         // EPG filter rules loaded
 
-        // For now, apply deduplication and pass through EPG artifacts since EpgFilterProcessor is a placeholder
-        // TODO: Implement actual EPG filtering when EpgFilterProcessor is complete
-        warn!("EPG filtering not yet implemented, applying deduplication and passing through");
-
-        // Read EPG programs from input artifact with deduplication
+        // Read & deduplicate EPG programs from input artifact
         self.report_progress(60.0, "Reading EPG programs for filtering")
             .await;
         let programs = self.read_epg_programs_from_artifact(&artifact).await?;
+        let total_input = programs.len();
         debug!(
             "Read EPG programs from input artifact count={}",
-            programs.len()
+            total_input
         );
-        let programs_count = programs.len();
 
-        // Send progress update after reading
-        self.report_progress(85.0, &format!("Processing {programs_count} EPG programs"))
-            .await;
+        // Build filtering engine (reuse unified expression framework)
+        let mut epg_engine: FilteringEngine<crate::pipeline::engines::rule_processor::EpgProgram> =
+            FilteringEngine::new();
+        let mut filter_name_map = std::collections::HashMap::new();
+        let mut filter_priority_map = std::collections::HashMap::new();
 
-        // Update file path to include stage name
+        for rule in &filter_rules {
+            filter_name_map.insert(rule.id.clone(), rule.name.clone());
+            filter_priority_map.insert(rule.id.clone(), rule.priority_order);
+            let regex_evaluator = RegexEvaluator::new(self.regex_preprocessor.clone());
+            let processor = EpgFilterProcessor::new(
+                rule.id.clone(),
+                rule.name.clone(),
+                rule.is_inverse,
+                &rule.expression,
+                regex_evaluator,
+            )?;
+            epg_engine.add_filter_processor(Box::new(processor));
+        }
+
+        self.report_progress(
+            75.0,
+            &format!(
+                "Applying {} EPG filters to {} programs",
+                filter_rules.len(),
+                total_input
+            ),
+        )
+        .await;
+
+        // Evaluate programs
+        let mut included = Vec::with_capacity(total_input);
+        let mut excluded_count = 0usize;
+
+        for program in programs {
+            match epg_engine.should_include(&program) {
+                Ok(should) => {
+                    if should {
+                        included.push(program);
+                    } else {
+                        excluded_count += 1;
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "EPG filter evaluation error program_id={} err={}",
+                        program.id, e
+                    );
+                    excluded_count += 1;
+                }
+            }
+        }
+
+        let total_output = included.len();
+        self.report_progress(
+            85.0,
+            &format!("Filtered EPG programs to {} results", total_output),
+        )
+        .await;
+
+        // Write filtered programs to new artifact path
         let filtered_file_path = artifact
             .file_path
             .replace("_mapping_programs.jsonl", "_filtered_programs.jsonl");
 
-        // Write deduplicated programs to new artifact
         let output_artifact = self
-            .write_epg_programs_to_artifact(programs, &filtered_file_path)
-            .await?;
+            .write_epg_programs_to_artifact(included, &filtered_file_path)
+            .await?
+            .with_metadata(
+                "epg_filters_applied".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(filter_rules.len() as u64)),
+            )
+            .with_metadata(
+                "epg_programs_excluded".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(excluded_count as u64)),
+            )
+            .with_metadata(
+                "epg_programs_included".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(total_output as u64)),
+            )
+            .with_metadata(
+                "epg_programs_input".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(total_input as u64)),
+            );
 
         info!(
-            "Completed EPG filtering duration={} mode=dedup-passthrough input_programs={} output_programs={}",
+            "[EPG_FILTER] duration={} input_programs={} included={} excluded={} filters={} ",
             crate::utils::human_format::format_duration_precise(process_start.elapsed()),
-            artifact.record_count.unwrap_or(0),
-            programs_count
+            total_input,
+            total_output,
+            excluded_count,
+            filter_rules.len()
         );
 
         info!(
@@ -464,9 +534,6 @@ impl FilteringStage {
                 .unwrap_or_else(|_| filtered_file_path.clone())
         );
 
-        // Memory cleanup is handled automatically when variables go out of scope
-
-        info!("EPG filtering stage completed, memory cleanup performed");
         Ok(output_artifact)
     }
 

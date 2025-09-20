@@ -126,7 +126,7 @@ impl LogoCacheMaintenanceService {
 mod tests {
 
     #[tokio::test]
-    #[ignore] // Requires full service setup
+    #[ignore = "Requires full service setup (needs mock scheduler, cache service, and timing); migrate to integration test"]
     async fn test_maintenance_scheduling() {
         // This would require mocking the job scheduler and logo cache service
         // Implementation would test that jobs are scheduled with correct priorities

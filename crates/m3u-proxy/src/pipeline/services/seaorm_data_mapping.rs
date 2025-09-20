@@ -4,9 +4,11 @@
 //! with the essential methods needed by the web API.
 
 use crate::database::repositories::DataMappingRuleSeaOrmRepository;
+use crate::field_registry::FieldRegistry;
 use crate::models::data_mapping::*;
 use crate::pipeline::engines::DataMappingValidator;
 use anyhow::Result;
+use regex::Regex;
 use sea_orm::DatabaseConnection;
 use tracing::error;
 use uuid::Uuid;
@@ -15,6 +17,33 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct SeaOrmDataMappingService {
     repository: DataMappingRuleSeaOrmRepository,
+}
+
+// Canonicalize field aliases (e.g. program_* -> programme_*) for storage.
+// This operates purely on token word boundaries to avoid touching string literal contents.
+pub(crate) fn canonicalize_expression(expr: &str) -> String {
+    let registry = FieldRegistry::global();
+    let alias_map = registry.alias_map();
+
+    // Collect alias->canonical pairs (owning Strings) and sort by descending alias length
+    let mut pairs: Vec<(String, String)> = alias_map
+        .iter()
+        .map(|(a, c)| (a.to_string(), c.to_string()))
+        .collect();
+    pairs.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+
+    let mut result = expr.to_string();
+    for (alias, canonical) in pairs {
+        if alias == canonical {
+            continue;
+        }
+        // Word boundary replacement so we only replace standalone field tokens.
+        let pattern = format!(r"\b{}\b", regex::escape(&alias));
+        if let Ok(re) = Regex::new(&pattern) {
+            result = re.replace_all(&result, canonical.as_str()).into_owned();
+        }
+    }
+    result
 }
 
 impl SeaOrmDataMappingService {
@@ -26,7 +55,7 @@ impl SeaOrmDataMappingService {
     /// Create a new data mapping rule
     pub async fn create_rule(
         &self,
-        request: DataMappingRuleCreateRequest,
+        mut request: DataMappingRuleCreateRequest,
     ) -> Result<DataMappingRule> {
         // Validate expression if provided
         if let Some(ref expression) = request.expression {
@@ -42,6 +71,11 @@ impl SeaOrmDataMappingService {
                     validation.error.unwrap_or_default()
                 ));
             }
+        }
+
+        // Canonicalize aliases (program_* -> programme_*, etc.) after validation
+        if let Some(ref mut expression) = request.expression {
+            *expression = canonicalize_expression(expression);
         }
 
         self.repository.create(request).await
@@ -61,9 +95,9 @@ impl SeaOrmDataMappingService {
     pub async fn update_rule(
         &self,
         rule_id: Uuid,
-        request: DataMappingRuleUpdateRequest,
+        mut request: DataMappingRuleUpdateRequest,
     ) -> Result<DataMappingRule> {
-        // Validate expression if provided
+        // Validate expression if provided (needs source_type context if changed)
         if let Some(ref expression) = request.expression
             && let Some(ref source_type) = request.source_type
         {
@@ -75,6 +109,11 @@ impl SeaOrmDataMappingService {
                     validation.error.unwrap_or_default()
                 ));
             }
+        }
+
+        // Canonicalize aliases if an expression is provided
+        if let Some(ref mut expression) = request.expression {
+            *expression = canonicalize_expression(expression);
         }
 
         self.repository.update(&rule_id, request).await

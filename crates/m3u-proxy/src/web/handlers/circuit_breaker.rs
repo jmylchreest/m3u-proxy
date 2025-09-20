@@ -31,11 +31,11 @@ use crate::{
 pub async fn get_circuit_breaker_stats(State(state): State<AppState>) -> impl IntoResponse {
     match state.circuit_breaker_manager.as_ref() {
         Some(manager) => {
-            let stats = manager.get_all_stats().await;
+            let breaker_stats = manager.get_all_stats().await;
             (
                 StatusCode::OK,
                 Json(ApiResponse::success(serde_json::json!({
-                    "circuit_breakers": stats,
+                    "circuit_breakers": breaker_stats,
                     "timestamp": chrono::Utc::now()
                 }))),
             )
@@ -55,7 +55,7 @@ pub async fn get_circuit_breaker_stats(State(state): State<AppState>) -> impl In
 #[utoipa::path(
     get,
     path = "/api/v1/circuit-breakers/config",
-    tag = "circuit-breaker", 
+    tag = "circuit-breaker",
     summary = "Get circuit breaker config",
     description = "Get current circuit breaker configuration including global and profile-specific settings",
     responses(

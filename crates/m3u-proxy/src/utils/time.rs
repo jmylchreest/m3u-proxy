@@ -451,7 +451,7 @@ mod tests {
         assert!(parse_time_string("20240101000000").is_ok()); // Fixed: XMLTV date needs time
 
         // Test Unix timestamp
-        assert_eq!(parse_time_string("1704110400").unwrap(), 1704110400); // 2024-01-01 12:00:00 UTC
+        assert_eq!(parse_time_string("1704110400").unwrap(), 1_704_110_400); // 2024-01-01 12:00:00 UTC
 
         // Test RFC3339
         assert!(parse_time_string("2024-01-01T12:00:00Z").is_ok());

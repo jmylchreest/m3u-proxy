@@ -919,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Requires mocking LogoAssetService for proper testing
+    #[ignore = "Requires mocking LogoAssetService for proper testing"]
     fn test_logo_url_classification() {
         let config = LogoCachingConfig {
             cache_channel_logos: true,

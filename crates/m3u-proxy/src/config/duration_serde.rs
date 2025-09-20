@@ -1,13 +1,16 @@
 //! Common serde utilities for human-readable durations across configuration.
 
-use serde::de::{self, Visitor};
-use serde::{Deserializer, Serializer};
-use std::{fmt, time::Duration};
-
 /// Custom serde functions for Duration that support human-readable strings
 pub mod duration {
-    use super::*;
+    use serde::de::{self, Visitor};
+    use serde::{Deserializer, Serializer};
+    use std::fmt;
+    use std::time::Duration;
 
+    /// Serialize a `Duration` into a human‑readable string (e.g. "5m", "1h30m").
+    ///
+    /// # Errors
+    /// Returns an error only if the underlying serializer fails to serialize the string.
     pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -17,6 +20,14 @@ pub mod duration {
         serializer.serialize_str(&duration_str)
     }
 
+    /// Deserialize a human‑readable duration string or numeric seconds into a `Duration`.
+    ///
+    /// Accepts either:
+    /// - an integer number of seconds
+    /// - a string understood by `humantime` (e.g. "30s", "5m", "1h30m")
+    ///
+    /// # Errors
+    /// Returns an error if the value cannot be parsed as a valid duration.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
     where
         D: Deserializer<'de>,
@@ -52,8 +63,15 @@ pub mod duration {
 
 /// Custom serde functions for Option<Duration> that support human-readable strings
 pub mod option_duration {
-    use super::*;
+    use serde::de::{self, Visitor};
+    use serde::{Deserializer, Serializer};
+    use std::fmt;
+    use std::time::Duration;
 
+    /// Serialize an `Option<Duration>` as a human‑readable string or `null`.
+    ///
+    /// # Errors
+    /// Returns an error only if the underlying serializer fails.
     pub fn serialize<S>(duration: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -67,6 +85,10 @@ pub mod option_duration {
         }
     }
 
+    /// Deserialize an optional human‑readable duration or number of seconds.
+    ///
+    /// # Errors
+    /// Returns an error if the input is neither `null` nor a valid duration.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
     where
         D: Deserializer<'de>,
@@ -102,8 +124,15 @@ pub mod option_duration {
 
 /// Custom serde functions for i32 timeouts that support human-readable strings and convert to seconds
 pub mod timeout_seconds {
-    use super::*;
+    use serde::de::{self, Visitor};
+    use serde::{Deserializer, Serializer};
+    use std::fmt;
+    use std::time::Duration;
 
+    /// Serialize an `i32` timeout (seconds) as either the raw integer (if <= 0) or a human‑readable string.
+    ///
+    /// # Errors
+    /// Returns an error only if the underlying serializer fails.
     pub fn serialize<S>(timeout_secs: &i32, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -111,12 +140,17 @@ pub mod timeout_seconds {
         if *timeout_secs <= 0 {
             serializer.serialize_i32(*timeout_secs)
         } else {
+            // Safe: branch only taken when timeout_secs > 0
             let duration = Duration::from_secs(*timeout_secs as u64);
             let duration_str = humantime::format_duration(duration).to_string();
             serializer.serialize_str(&duration_str)
         }
     }
 
+    /// Deserialize a timeout from either an integer number of seconds or a human‑readable duration string.
+    ///
+    /// # Errors
+    /// Returns an error if the value cannot be parsed or exceeds `i32::MAX` seconds.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<i32, D::Error>
     where
         D: Deserializer<'de>,
@@ -176,8 +210,15 @@ pub mod timeout_seconds {
 
 /// Custom serde functions for Option<i32> timeouts that support human-readable strings
 pub mod option_timeout_seconds {
-    use super::*;
+    use serde::de::{self, Visitor};
+    use serde::{Deserializer, Serializer};
+    use std::fmt;
+    use std::time::Duration;
 
+    /// Serialize an optional timeout seconds value; non‑positive values are emitted as numbers, positive as human‑readable strings.
+    ///
+    /// # Errors
+    /// Returns an error only if the underlying serializer fails.
     pub fn serialize<S>(timeout_secs: &Option<i32>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -187,6 +228,7 @@ pub mod option_timeout_seconds {
                 if *secs <= 0 {
                     serializer.serialize_some(secs)
                 } else {
+                    // Safe: branch only taken when secs > 0
                     let duration = Duration::from_secs(*secs as u64);
                     let duration_str = humantime::format_duration(duration).to_string();
                     serializer.serialize_some(&duration_str)
@@ -196,6 +238,10 @@ pub mod option_timeout_seconds {
         }
     }
 
+    /// Deserialize an optional timeout from either `null`, an integer number of seconds, or a human‑readable duration string.
+    ///
+    /// # Errors
+    /// Returns an error if the value (when present) cannot be parsed or exceeds `i32::MAX` seconds.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
     where
         D: Deserializer<'de>,
@@ -221,7 +267,7 @@ pub mod option_timeout_seconds {
             where
                 D: Deserializer<'de>,
             {
-                timeout_seconds::deserialize(deserializer).map(Some)
+                super::timeout_seconds::deserialize(deserializer).map(Some)
             }
         }
 

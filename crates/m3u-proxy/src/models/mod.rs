@@ -270,7 +270,7 @@ pub struct ProxyFilterCreateRequest {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct Channel {
     pub id: Uuid,
     pub source_id: Uuid,
@@ -472,9 +472,18 @@ pub struct FilterTestResult {
     pub is_valid: bool,
     pub error: Option<String>,
     pub matching_channels: Vec<FilterTestChannel>,
+    /// Total records considered for this filter test (channels or programs depending on source_type)
     pub total_channels: usize,
+    /// Number of records that matched the condition
     pub matched_count: usize,
+    /// Canonical JSON representation of the parsed expression tree (when parse succeeded)
     pub expression_tree: Option<serde_json::Value>,
+    /// Total records scanned (may be less than total_channels if early termination or server-side cap applied)
+    #[serde(default)]
+    pub scanned_records: Option<usize>,
+    /// Whether the scan was truncated due to a server-side cap (so counts may be partial)
+    #[serde(default)]
+    pub truncated: Option<bool>,
 }
 
 // New generalized error category
@@ -562,7 +571,7 @@ pub struct ExpressionValidateResult {
 
     #[schema(example = json!({
         "type": "condition",
-        "field": "channel_name", 
+        "field": "channel_name",
         "operator": "Contains",
         "value": "Sports",
         "case_sensitive": false,
@@ -890,7 +899,10 @@ impl Filter {
         }
 
         // Parse expression to condition tree
-        let parser = crate::expression_parser::ExpressionParser::new();
+        let registry = crate::field_registry::FieldRegistry::global();
+        let parser = crate::expression_parser::ExpressionParser::new()
+            // Inject alias support (American -> British spellings etc.)
+            .with_aliases(registry.alias_map());
         match parser.parse(&self.expression) {
             Ok(tree) => {
                 if self.name.contains("Adult") {
@@ -917,120 +929,47 @@ impl Filter {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FilterFieldInfo {
     pub name: String,
+    pub canonical_name: String,
     pub display_name: String,
     pub field_type: String,
     pub nullable: bool,
     pub source_type: FilterSourceType,
+    pub read_only: bool,
+    pub aliases: Vec<String>,
 }
 
 impl FilterFieldInfo {
-    /// Get available fields for a specific filter source type
+    /// Get available fields for a specific filter source type (registry-driven)
     pub fn available_for_source_type(source_type: &FilterSourceType) -> Vec<FilterFieldInfo> {
-        match source_type {
-            FilterSourceType::Stream => vec![
-                FilterFieldInfo {
-                    name: "channel_name".to_string(),
-                    display_name: "Channel Name".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: FilterSourceType::Stream,
-                },
-                FilterFieldInfo {
-                    name: "tvg_id".to_string(),
-                    display_name: "TVG ID".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: FilterSourceType::Stream,
-                },
-                FilterFieldInfo {
-                    name: "tvg_name".to_string(),
-                    display_name: "TVG Name".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: FilterSourceType::Stream,
-                },
-                FilterFieldInfo {
-                    name: "tvg_logo".to_string(),
-                    display_name: "TVG Logo".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: FilterSourceType::Stream,
-                },
-                FilterFieldInfo {
-                    name: "group_title".to_string(),
-                    display_name: "Group Title".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: FilterSourceType::Stream,
-                },
-                FilterFieldInfo {
-                    name: "stream_url".to_string(),
-                    display_name: "Stream URL".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: FilterSourceType::Stream,
-                },
-            ],
-            FilterSourceType::Epg => vec![
-                FilterFieldInfo {
-                    name: "channel_id".to_string(),
-                    display_name: "EPG Channel ID".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: FilterSourceType::Epg,
-                },
-                FilterFieldInfo {
-                    name: "channel_name".to_string(),
-                    display_name: "EPG Channel Name".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: FilterSourceType::Epg,
-                },
-                FilterFieldInfo {
-                    name: "channel_logo".to_string(),
-                    display_name: "EPG Channel Logo".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: FilterSourceType::Epg,
-                },
-                FilterFieldInfo {
-                    name: "channel_group".to_string(),
-                    display_name: "EPG Channel Group".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: FilterSourceType::Epg,
-                },
-                FilterFieldInfo {
-                    name: "language".to_string(),
-                    display_name: "EPG Language".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: FilterSourceType::Epg,
-                },
-                FilterFieldInfo {
-                    name: "program_title".to_string(),
-                    display_name: "Program Title".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: FilterSourceType::Epg,
-                },
-                FilterFieldInfo {
-                    name: "program_category".to_string(),
-                    display_name: "Program Category".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: FilterSourceType::Epg,
-                },
-                FilterFieldInfo {
-                    name: "program_description".to_string(),
-                    display_name: "Program Description".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: FilterSourceType::Epg,
-                },
-            ],
-        }
+        use crate::field_registry::{FieldDataType, FieldRegistry, SourceKind, StageKind};
+        let registry = FieldRegistry::global();
+        let source_kind = match source_type {
+            FilterSourceType::Stream => SourceKind::Stream,
+            FilterSourceType::Epg => SourceKind::Epg,
+        };
+        registry
+            .descriptors_for(source_kind, StageKind::Filtering)
+            .into_iter()
+            .map(|d| FilterFieldInfo {
+                name: d.name.to_string(),
+                canonical_name: d.name.to_string(),
+                display_name: d.display_name.to_string(),
+                field_type: match d.data_type {
+                    FieldDataType::Url => "url",
+                    FieldDataType::Integer => "integer",
+                    FieldDataType::DateTime => "datetime",
+                    FieldDataType::Duration => "duration",
+                    FieldDataType::String => "string",
+                }
+                .to_string(),
+                nullable: d.nullable,
+                source_type: source_type.clone(),
+                read_only: d.read_only,
+                aliases: d.aliases.iter().map(|a| a.to_string()).collect(),
+            })
+            .collect()
     }
+    // (Removed legacy hard-coded FilterFieldInfo variants; now fully registry-driven.)
 
     /// Validate if a field is valid for a filter source type
     pub fn is_valid_field_for_source_type(
@@ -1079,6 +1018,8 @@ pub enum ChannelNumberAssignmentType {
     /// Assigned sequentially
     Sequential,
 }
+
+// Manual ToSchema implementation to avoid derive duplication issues
 
 impl NumberedChannel {
     /// Get a description of how this channel number was assigned
@@ -1173,7 +1114,7 @@ pub enum EpgSourceType {
     Xtream,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EpgProgram {
     pub id: Uuid,
     pub source_id: Uuid,
@@ -1196,7 +1137,7 @@ pub struct EpgProgram {
 }
 
 /// EPG Program with associated channel information for API responses
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EpgProgramWithChannel {
     pub id: Uuid,
     pub source_id: Option<Uuid>,
@@ -1270,7 +1211,7 @@ pub struct EpgViewerResponse {
     pub end_time: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EpgRefreshResponse {
     pub success: bool,
     pub message: String,
@@ -1497,7 +1438,7 @@ impl GenerationOutput {
 }
 
 /// Comprehensive generation statistics for performance monitoring and UI display
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct GenerationStats {
     /// Overall timing
     pub total_duration_ms: u64,

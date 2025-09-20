@@ -81,11 +81,17 @@ M3U_PROXY_STORAGE__LOGO_PATH=./data/logos
 
 ## Expression Syntax
 
-The system uses natural language expressions for filtering and data mapping:
+The system uses natural language expressions for filtering (selection) and data mapping (field mutation).  
+All expressions are parsed through a unified engine with:
+- Canonical field names (British spelling for programme_* EPG fields)
+- Alias resolution (American spelling program_* and legacy variants)
+- Case‑insensitive matching by default
+- Optional `case_sensitive` modifier
+- Structured parse logging for observability
 
 ### Filter Expressions
 
-Control which channels are included/excluded from proxy outputs:
+Control which channels or EPG programmes are included/excluded:
 
 ```
 # Basic patterns
@@ -99,12 +105,12 @@ channel_name contains "sport" AND group_title not contains "adult"
 
 # Advanced matching
 channel_name matches "^(StreamCast|ViewMedia).*HD$"
-channel_name starts_with "StreamCast" AND channel_name ends_with "HD"
+channel_name case_sensitive starts_with "StreamCast" AND channel_name ends_with "HD"
 ```
 
 ### Data Mapping Expressions
 
-Transform channel metadata during proxy generation:
+Transform metadata during pipeline data‑mapping stages:
 
 ```
 # Set values
@@ -114,29 +120,116 @@ group_title = "News Channels"
 # Conditional assignment (only if empty)
 group_title ?= "General"
 
-# Regex transformations
+# Regex condition + action
 channel_name matches "^(.+)\\s+HD$" SET channel_name = "$1 High Definition"
 
-# Remove channels
+# Remove channels (filter-style action)
 channel_name contains "test" REMOVE
 ```
 
-### Available Fields
+### Canonical Fields & Aliases
 
-**Stream Fields**: `channel_name`, `group_title`, `tvg_id`, `tvg_name`, `tvg_logo`, `stream_url`  
-**EPG Fields**: `channel_id`, `channel_name`, `channel_logo`, `channel_group`, `language`, `program_title`, `program_category`
+EPG canonical fields use British spelling: `programme_title`, `programme_description`, etc.  
+Aliases (American spelling & short forms) are accepted transparently: `program_title`, `title`, `prog_title`, etc.
+
+| Domain | Canonical Examples | Accepted Aliases (sample, not exhaustive) |
+|--------|--------------------|-------------------------------------------|
+| Stream | `channel_name`, `group_title`, `tvg_id`, `tvg_name`, `tvg_logo`, `stream_url`, `tvg_chno` | `channel_number` (→ `tvg_chno`) |
+| EPG    | `channel_id`, `channel_name`, `channel_logo`, `channel_group`, `programme_title`, `programme_description`, `programme_category`, `programme_icon`, `programme_subtitle`, `episode_num`, `season_num`, `language`, `rating`, `aspect_ratio` | `program_title`, `title`, `program_description`, `description`, `program_category`, `program_icon`, `subtitles`, `prog_title`, `prog_desc` |
+
+If you reference an unknown field the parser returns a structured validation error and (when similarity is high) a suggestion:
+```
+Unknown field 'program_titel'. Did you mean 'programme_title'?
+```
 
 ### Operators
 
 | Operator | Description |
 |----------|-------------|
-| `contains` | Text contains substring (case insensitive) |
-| `equals` | Exact match (case insensitive) |
-| `matches` | Regular expression match |
-| `starts_with` | Text starts with substring |
-| `ends_with` | Text ends with substring |
-| `not` | Negates any operator |
-| `case_sensitive` | Makes match case sensitive |
+| `contains` | Substring match (default case‑insensitive) |
+| `equals` | Exact match (case‑insensitive by default) |
+| `matches` | Regular expression (Rust regex) |
+| `starts_with` | Prefix match |
+| `ends_with` | Suffix match |
+| `not` | Prefix to negate any condition (`not contains`, `not matches`) |
+| `case_sensitive` | Modifier: applies to the immediately preceding comparison (e.g. `channel_name equals "News" case_sensitive`) |
+| Comparison (`>`, `>=`, `<`, `<=`) | Numeric if both sides parse as number, else lexicographic |
+
+#### Case Sensitivity
+All text comparisons are case‑insensitive unless `case_sensitive` modifier is appended:
+```
+channel_name contains "News"            # matches "NEWS", "news", "News"
+channel_name contains "News" case_sensitive  # matches only exact "News"
+```
+
+### Numeric Comparison & Coercion
+If both operands parse as f64 the comparison is numeric; otherwise a string (lexicographic) comparison is used:
+```
+tvg_chno > "100"
+episode_num >= "10"
+```
+
+### Alias Handling Examples
+```
+program_title contains "Match"        # OK (alias)
+programme_title contains "Match"      # OK (canonical)
+title contains "Match"                # OK (alias)
+```
+
+All three resolve internally to the canonical `programme_title`.
+
+### Actions & Aliases
+Actions use the same alias resolution layer as conditions. Any accepted alias on the left or right side of an action is canonicalized internally before evaluation or mutation.
+
+Examples:
+```
+program_title equals "Show" SET program_title = "Show (HD)"
+programme_title equals "Show" SET programme_title = "Show (HD)"
+title equals "Show" SET program_title = "Show (HD)"
+```
+
+All of the above are equivalent; both the condition field and the action target field normalize to the canonical `programme_title`. You can freely mix canonical and alias forms in complex expressions (including conditional groups and regex capture substitutions) without changing behavior.
+
+### Structured Parse Logs
+When trace logging is enabled you will see parse summaries:
+```
+[EXPR_PARSE] domain=StreamFilter id=123 name=Sports node_count=2 fields=[channel_name,group_title] expr='channel_name contains "sport" AND group_title not contains "adult"'
+[EXPR_PARSE] domain=EpgFilter   id=456 name=NewsEPG node_count=1 fields=[programme_title] expr='program_title contains "News"'
+[EXPR_PARSE] domain=EpgRule     id=789 name=CatMap  node_count=2 fields=[programme_title,programme_category] expr='programme_title contains "Sport" SET programme_category ?= "Sports"'
+```
+Fields list shows canonical names after alias resolution; `node_count` counts condition nodes (groups excluded).
+
+### Evaluation Order (Pipeline)
+1. Data Mapping (mutations)  
+2. Filtering (uses mutated values)  
+3. Logo / enrichment stages  
+4. Generation (M3U & XMLTV serialization – no filtering logic)  
+
+This ensures filters operate on the final, mapped metadata.
+
+### Available Field Summary (Quick List)
+
+**Stream (canonical)**: `channel_name`, `group_title`, `tvg_id`, `tvg_name`, `tvg_logo`, `tvg_chno`, `stream_url`, plus read‑only `source_name`, `source_type`, `source_url`  
+**EPG (canonical)**: `channel_id`, `channel_name`, `channel_logo`, `channel_group`, `programme_title`, `programme_description`, `programme_category`, `programme_icon`, `programme_subtitle`, `episode_num`, `season_num`, `language`, `rating`, `aspect_ratio`, plus read‑only `source_name`, `source_type`, `source_url`  
+
+Aliases: American spellings (`program_*`), short forms (`title`, `description`, `subtitles`), and legacy forms are accepted transparently.
+
+### Examples With Modifiers
+```
+channel_name case_sensitive equals "FOX"
+programme_title not contains "Live"
+programme_title contains "Live" AND programme_category equals "Sports"
+programme_title matches "^(Live: )?(.*)$"
+```
+
+### Troubleshooting
+| Symptom | Likely Cause | Action |
+|---------|--------------|--------|
+| 0 matches but expected results | Field alias not recognized previously (now fixed) | Verify field names resolve; check parse log fields list |
+| Regex always false | Preprocessor short‑circuited due to cost heuristic | Test simpler pattern; confirm pattern is valid |
+| Case mismatch | Forgot `case_sensitive` modifier | Append modifier where exact casing required |
+| Suggested field in error | Typo in field | Use the provided suggestion (canonical name) |
+
 
 ## Core Workflow
 

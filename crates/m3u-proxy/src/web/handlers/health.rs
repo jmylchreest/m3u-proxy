@@ -770,7 +770,7 @@ pub async fn logo_cache_debug(
 
     // Get logo cache statistics
     let cache_stats = match state.logo_cache_maintenance_service.get_cache_stats().await {
-        Ok(stats) => stats,
+        Ok(health_stats) => health_stats,
         Err(e) => {
             return axum::response::Json(json!({
                 "error": format!("Failed to get cache stats: {}", e)

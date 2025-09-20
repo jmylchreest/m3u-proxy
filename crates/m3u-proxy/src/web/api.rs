@@ -19,7 +19,9 @@ pub mod relay;
 pub mod settings;
 
 use crate::data_mapping::DataMappingService;
-use crate::models::data_mapping::DataMappingSourceType;
+use crate::models::data_mapping::{
+    DataMappingExpressionPreviewRequest, DataMappingPreviewResponse, DataMappingSourceType,
+};
 use crate::models::*;
 use crate::services::progress_service::{OperationType, UniversalState};
 use crate::web::api::progress_events::{ProgressEvent, ProgressStageEvent};
@@ -91,7 +93,7 @@ fn universal_state_to_string(state: &UniversalState) -> String {
     get,
     path = "/progress/operations",
     tag = "progress",
-    summary = "Get active operation progress",  
+    summary = "Get active operation progress",
     description = "Retrieve progress information for currently active operations only, returns same format as SSE events",
     responses(
         (status = 200, description = "Active operation progress retrieved", body = Vec<ProgressEvent>),
@@ -376,8 +378,14 @@ pub async fn list_filters(
                 Ok(fields) => fields.into_iter().map(|f| f.name).collect::<Vec<String>>(),
                 Err(_) => vec![], // Fallback to empty if fields can't be retrieved
             };
-            let parser =
-                crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
+
+            // Integrate canonical + alias resolution via field registry
+            let registry = crate::field_registry::FieldRegistry::global();
+            let alias_map = registry.alias_map();
+
+            let parser = crate::expression_parser::ExpressionParser::new()
+                .with_fields(available_fields)
+                .with_aliases(alias_map);
 
             let enhanced_filters: Vec<serde_json::Value> = filters
                 .into_iter()
@@ -433,21 +441,42 @@ pub async fn list_filters(
     )
 )]
 pub async fn get_stream_filter_fields(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<FilterFieldInfo>>, StatusCode> {
-    let filter_repo = crate::database::repositories::FilterSeaOrmRepository::new(
-        state.database.connection().clone(),
+    State(_state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Unified field info using central FieldRegistry (canonical only + alias map)
+    let registry = crate::field_registry::FieldRegistry::global();
+    let descriptors = registry.descriptors_for(
+        crate::field_registry::SourceKind::Stream,
+        crate::field_registry::StageKind::Filtering,
     );
-    match filter_repo.get_available_filter_fields().await {
-        Ok(mut fields) => {
-            fields.retain(|field| field.source_type == FilterSourceType::Stream);
-            Ok(Json(fields))
-        }
-        Err(e) => {
-            error!("Failed to get stream filter fields: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
+
+    let fields: Vec<serde_json::Value> = descriptors
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "name": d.name,
+                "display_name": d.display_name,
+                "read_only": d.read_only,
+                "sources": d.source_kinds.iter().map(|s| match s {
+                    crate::field_registry::SourceKind::Stream => "stream",
+                    crate::field_registry::SourceKind::Epg => "epg",
+                }).collect::<Vec<_>>(),
+                "stages": d.stages.iter().map(|st| match st {
+                    crate::field_registry::StageKind::Filtering => "filtering",
+                    crate::field_registry::StageKind::DataMapping => "data_mapping",
+                    crate::field_registry::StageKind::Numbering => "numbering",
+                    crate::field_registry::StageKind::Generation => "generation",
+                }).collect::<Vec<_>>()
+            })
+        })
+        .collect();
+
+    let alias_map = registry.alias_map();
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "fields": fields,
+        "aliases": alias_map
+    })))
 }
 
 /// Get available filter fields for EPG sources
@@ -463,21 +492,42 @@ pub async fn get_stream_filter_fields(
     )
 )]
 pub async fn get_epg_filter_fields(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<FilterFieldInfo>>, StatusCode> {
-    let filter_repo = crate::database::repositories::FilterSeaOrmRepository::new(
-        state.database.connection().clone(),
+    State(_state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Unified field info using central FieldRegistry (canonical only + alias map)
+    let registry = crate::field_registry::FieldRegistry::global();
+    let descriptors = registry.descriptors_for(
+        crate::field_registry::SourceKind::Epg,
+        crate::field_registry::StageKind::Filtering,
     );
-    match filter_repo.get_available_filter_fields().await {
-        Ok(mut fields) => {
-            fields.retain(|field| field.source_type == FilterSourceType::Epg);
-            Ok(Json(fields))
-        }
-        Err(e) => {
-            error!("Failed to get EPG filter fields: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
+
+    let fields: Vec<serde_json::Value> = descriptors
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "name": d.name,
+                "display_name": d.display_name,
+                "read_only": d.read_only,
+                "sources": d.source_kinds.iter().map(|s| match s {
+                    crate::field_registry::SourceKind::Stream => "stream",
+                    crate::field_registry::SourceKind::Epg => "epg",
+                }).collect::<Vec<_>>(),
+                "stages": d.stages.iter().map(|st| match st {
+                    crate::field_registry::StageKind::Filtering => "filtering",
+                    crate::field_registry::StageKind::DataMapping => "data_mapping",
+                    crate::field_registry::StageKind::Numbering => "numbering",
+                    crate::field_registry::StageKind::Generation => "generation",
+                }).collect::<Vec<_>>()
+            })
+        })
+        .collect();
+
+    let alias_map = registry.alias_map();
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "fields": fields,
+        "aliases": alias_map
+    })))
 }
 
 /// Get available data mapping helper functions
@@ -690,7 +740,7 @@ pub async fn search_logo_assets_for_helper(
 #[utoipa::path(
     post,
     path = "/data-mapping/helpers/date/complete",
-    tag = "data-mapping", 
+    tag = "data-mapping",
     summary = "Get date formatting completions",
     description = "Get dynamic date formatting completions based on context",
     request_body = serde_json::Value,
@@ -843,8 +893,11 @@ pub async fn get_filter(
                     Ok(fields) => fields.into_iter().map(|f| f.name).collect::<Vec<String>>(),
                     Err(_) => vec![],
                 };
-                let parser =
-                    crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
+                let registry = crate::field_registry::FieldRegistry::global();
+                let alias_map = registry.alias_map();
+                let parser = crate::expression_parser::ExpressionParser::new()
+                    .with_fields(available_fields)
+                    .with_aliases(alias_map);
                 parser.parse(&filter.expression).ok()
             } else {
                 None
@@ -943,7 +996,7 @@ pub async fn delete_filter(
     path = "/filters/test",
     tag = "filters",
     summary = "Test filter expression",
-    description = "Test a filter expression against all channels from the specified source. Validates source_id matches the source_type.",
+    description = "Test a filter expression against the full set of records (internally paginated, no sampling) for the specified source. Returns full matching_channels (no truncation), canonicalized parsed tree (expression_tree), and metrics: total_channels, matched_count, scanned_records, truncated (always false unless a future cap is applied). Validates source_id matches source_type and applies alias canonicalization identical to runtime filtering.",
     request_body = FilterTestRequest,
     responses(
         (status = 200, description = "Filter test result", body = FilterTestResult),
@@ -966,7 +1019,13 @@ pub async fn test_filter(
         )
         .await
     {
-        Ok(result) => Ok(Json(result)),
+        Ok(result) => {
+            // If repository returned a syntactically/semantically invalid result, downgrade to 400
+            if !result.is_valid {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            Ok(Json(result))
+        }
         Err(e) => {
             error!("Failed to test filter: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -985,7 +1044,7 @@ Validate expression syntax and semantic correctness including context-specific f
 
 ## Context Types
 - **stream**: Stream source filtering (channel_name, group_title, stream_url, etc.)
-- **epg**: EPG source filtering (programme_title, programme_description, start_time, etc.)  
+- **epg**: EPG source filtering (programme_title, programme_description, start_time, etc.)
 - **data_mapping**: Data transformation mapping (input + output fields)
 - **generic**: Legacy mode using combined fields (default if not specified)
 
@@ -1034,11 +1093,11 @@ pub async fn validate_stream_expression(
     validate_expression_with_context(&state, &payload.expression, ValidationContext::Stream).await
 }
 
-/// Validate EPG source filter expressions  
+/// Validate EPG source filter expressions
 #[utoipa::path(
     post,
     path = "/api/v1/expressions/validate/epg",
-    tag = "expressions", 
+    tag = "expressions",
     summary = "Validate EPG source filter expression",
     description = "Validate expression for EPG source filtering with EPG-specific fields (programme_title, programme_description, start_time, etc.)",
     request_body = ExpressionValidateRequest,
@@ -1060,7 +1119,7 @@ pub async fn validate_epg_expression(
     post,
     path = "/api/v1/expressions/validate/data-mapping",
     tag = "expressions",
-    summary = "Validate data mapping expression", 
+    summary = "Validate data mapping expression",
     description = "Validate expression for data mapping transformations with mapping-specific fields (input and output fields)",
     request_body = ExpressionValidateRequest,
     responses(
@@ -1095,7 +1154,12 @@ async fn validate_expression_with_context(
     let available_fields = get_fields_for_validation_context(state, &context).await?;
 
     // Create parser with field validation enabled
-    let parser = crate::expression_parser::ExpressionParser::new().with_fields(available_fields);
+    // Create parser with field validation + alias support (e.g. program_category -> programme_category)
+    let registry = crate::field_registry::FieldRegistry::global();
+    let alias_map = registry.alias_map();
+    let parser = crate::expression_parser::ExpressionParser::new()
+        .with_fields(available_fields)
+        .with_aliases(alias_map);
 
     // Use the parser's validation method that provides structured results with position information
     let validation_result = parser.validate(expression);
@@ -1488,7 +1552,7 @@ pub async fn validate_pipeline_expression(
 #[utoipa::path(
     get,
     path = "/pipeline/fields/{stage}",
-    tag = "pipeline", 
+    tag = "pipeline",
     summary = "Get available fields for a pipeline stage",
     description = "Get available fields for data mapping, filtering, numbering, or generation stages",
     responses(
@@ -1501,33 +1565,90 @@ pub async fn get_pipeline_stage_fields(
     Path(stage_name): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    use crate::pipeline::ApiValidationService;
-
     let source_type = params.get("source_type").map(|s| s.as_str());
 
-    match ApiValidationService::get_fields_by_stage_name(&stage_name, source_type) {
-        Ok(fields) => {
-            let field_list = fields
-                .into_iter()
-                .map(|field| {
-                    serde_json::json!({
-                        "name": field,
-                        "description": get_field_description(&field),
-                        "type": "string"
-                    })
-                })
-                .collect::<Vec<_>>();
+    // Enhanced registry-driven field metadata (canonical_name, read_only, aliases)
+    {
+        use crate::field_registry::{FieldRegistry, SourceKind, StageKind};
+        let registry = FieldRegistry::global();
+        let stage_kind = match stage_name.as_str() {
+            "filtering" => StageKind::Filtering,
+            "data_mapping" => StageKind::DataMapping,
+            "numbering" => StageKind::Numbering,
+            "generation" => StageKind::Generation,
+            other => {
+                return Ok(Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Unknown stage: {other}")
+                })));
+            }
+        };
 
-            Ok(Json(serde_json::json!({
-                "success": true,
-                "stage": stage_name,
-                "fields": field_list
-            })))
+        // Determine which source kinds to include
+        let source_kinds: Vec<SourceKind> = if let Some(st) = source_type {
+            match st {
+                "stream" => vec![SourceKind::Stream],
+                "epg" => vec![SourceKind::Epg],
+                other => {
+                    return Ok(Json(serde_json::json!({
+                        "success": false,
+                        "error": format!("Unknown source_type: {other}")
+                    })));
+                }
+            }
+        } else {
+            // If source_type not supplied, include both (useful for generic UI views)
+            vec![SourceKind::Stream, SourceKind::Epg]
+        };
+
+        use std::collections::BTreeMap;
+        let mut by_name: BTreeMap<&'static str, &'static crate::field_registry::FieldDescriptor> =
+            BTreeMap::new();
+        for sk in source_kinds {
+            for d in registry.descriptors_for(sk, stage_kind) {
+                by_name.entry(d.name).or_insert(d);
+            }
         }
-        Err(e) => Ok(Json(serde_json::json!({
-            "success": false,
-            "error": e
-        }))),
+
+        let fields: Vec<serde_json::Value> = by_name
+            .values()
+            .map(|d| {
+                serde_json::json!({
+                    "name": d.name,
+                    "canonical_name": d.name,
+                    "display_name": d.display_name,
+                    "read_only": d.read_only,
+                    "aliases": d.aliases,
+                    "data_type": match d.data_type {
+                        crate::field_registry::FieldDataType::Url => "url",
+                        crate::field_registry::FieldDataType::Integer => "integer",
+                        crate::field_registry::FieldDataType::DateTime => "datetime",
+                        crate::field_registry::FieldDataType::Duration => "duration",
+                        crate::field_registry::FieldDataType::String => "string",
+                    },
+                    "description": get_field_description(d.name),
+                    "sources": d.source_kinds.iter().map(|s| match s {
+                        SourceKind::Stream => "stream",
+                        SourceKind::Epg => "epg",
+                    }).collect::<Vec<_>>(),
+                    "stages": d.stages.iter().map(|st| match st {
+                        StageKind::Filtering => "filtering",
+                        StageKind::DataMapping => "data_mapping",
+                        StageKind::Numbering => "numbering",
+                        StageKind::Generation => "generation",
+                    }).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let alias_map = registry.alias_map();
+
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "stage": stage_name,
+            "fields": fields,
+            "aliases": alias_map
+        })))
     }
 }
 
@@ -1543,27 +1664,62 @@ pub async fn get_pipeline_stage_fields(
     )
 )]
 pub async fn get_data_mapping_stream_fields() -> Result<Json<serde_json::Value>, StatusCode> {
-    use crate::models::data_mapping::DataMappingSourceType;
-    use crate::pipeline::engines::DataMappingValidator;
+    // Unified via FieldRegistry (canonical names + alias map). Includes read-only source_* meta.
+    let registry = crate::field_registry::FieldRegistry::global();
+    let descriptors = registry.descriptors_for(
+        crate::field_registry::SourceKind::Stream,
+        crate::field_registry::StageKind::DataMapping,
+    );
 
-    let field_infos =
-        DataMappingValidator::get_available_fields_for_source(&DataMappingSourceType::Stream);
-
-    let fields = field_infos
-        .into_iter()
-        .map(|field_info| {
+    let fields: Vec<serde_json::Value> = descriptors
+        .iter()
+        .map(|d| {
             serde_json::json!({
-                "name": field_info.field_name,
-                "description": get_field_description(&field_info.field_name),
-                "type": "string",
-                "display_name": field_info.display_name
+                "name": d.name,
+                "canonical_name": d.name,
+                "display_name": d.display_name,
+                "read_only": d.read_only,
+                "aliases": d.aliases,
+                "data_type": match d.data_type {
+                    crate::field_registry::FieldDataType::Url => "url",
+                    crate::field_registry::FieldDataType::Integer => "integer",
+                    crate::field_registry::FieldDataType::DateTime => "datetime",
+                    crate::field_registry::FieldDataType::Duration => "duration",
+                    crate::field_registry::FieldDataType::String => "string",
+                },
+                "description": get_field_description(d.name),
+                "sources": d.source_kinds.iter().map(|s| match s {
+                    crate::field_registry::SourceKind::Stream => "stream",
+                    crate::field_registry::SourceKind::Epg => "epg",
+                }).collect::<Vec<_>>(),
+                "stages": d.stages.iter().map(|st| match st {
+                    crate::field_registry::StageKind::Filtering => "filtering",
+                    crate::field_registry::StageKind::DataMapping => "data_mapping",
+                    crate::field_registry::StageKind::Numbering => "numbering",
+                    crate::field_registry::StageKind::Generation => "generation",
+                }).collect::<Vec<_>>()
             })
         })
-        .collect::<Vec<_>>();
+        .collect();
+
+    let alias_map = registry.alias_map();
+
+    let alias_examples: Vec<serde_json::Value> = alias_map
+        .iter()
+        .take(10)
+        .map(|(alias, canonical)| {
+            serde_json::json!({
+                "alias": alias,
+                "canonical": canonical
+            })
+        })
+        .collect();
 
     Ok(Json(serde_json::json!({
         "success": true,
-        "fields": fields
+        "fields": fields,
+        "aliases": alias_map,
+        "alias_examples": alias_examples
     })))
 }
 
@@ -1579,44 +1735,103 @@ pub async fn get_data_mapping_stream_fields() -> Result<Json<serde_json::Value>,
     )
 )]
 pub async fn get_data_mapping_epg_fields() -> Result<Json<serde_json::Value>, StatusCode> {
-    use crate::models::data_mapping::DataMappingSourceType;
-    use crate::pipeline::engines::DataMappingValidator;
+    // Unified via FieldRegistry (canonical names + alias map). Includes read-only source_* meta.
+    let registry = crate::field_registry::FieldRegistry::global();
+    let descriptors = registry.descriptors_for(
+        crate::field_registry::SourceKind::Epg,
+        crate::field_registry::StageKind::DataMapping,
+    );
 
-    let field_infos =
-        DataMappingValidator::get_available_fields_for_source(&DataMappingSourceType::Epg);
-
-    let fields = field_infos
-        .into_iter()
-        .map(|field_info| {
+    let fields: Vec<serde_json::Value> = descriptors
+        .iter()
+        .map(|d| {
             serde_json::json!({
-                "name": field_info.field_name,
-                "description": get_field_description(&field_info.field_name),
-                "type": "string",
-                "display_name": field_info.display_name
+                "name": d.name,
+                "canonical_name": d.name,
+                "display_name": d.display_name,
+                "read_only": d.read_only,
+                "aliases": d.aliases,
+                "data_type": match d.data_type {
+                    crate::field_registry::FieldDataType::Url => "url",
+                    crate::field_registry::FieldDataType::Integer => "integer",
+                    crate::field_registry::FieldDataType::DateTime => "datetime",
+                    crate::field_registry::FieldDataType::Duration => "duration",
+                    crate::field_registry::FieldDataType::String => "string",
+                },
+                "description": get_field_description(d.name),
+                "sources": d.source_kinds.iter().map(|s| match s {
+                    crate::field_registry::SourceKind::Stream => "stream",
+                    crate::field_registry::SourceKind::Epg => "epg",
+                }).collect::<Vec<_>>(),
+                "stages": d.stages.iter().map(|st| match st {
+                    crate::field_registry::StageKind::Filtering => "filtering",
+                    crate::field_registry::StageKind::DataMapping => "data_mapping",
+                    crate::field_registry::StageKind::Numbering => "numbering",
+                    crate::field_registry::StageKind::Generation => "generation",
+                }).collect::<Vec<_>>()
             })
         })
-        .collect::<Vec<_>>();
+        .collect();
+
+    let alias_map = registry.alias_map();
+
+    let alias_examples: Vec<serde_json::Value> = alias_map
+        .iter()
+        .take(10)
+        .map(|(alias, canonical)| {
+            serde_json::json!({
+                "alias": alias,
+                "canonical": canonical
+            })
+        })
+        .collect();
 
     Ok(Json(serde_json::json!({
         "success": true,
-        "fields": fields
+        "fields": fields,
+        "aliases": alias_map,
+        "alias_examples": alias_examples
     })))
 }
 
 fn get_field_description(field: &str) -> &'static str {
     match field {
+        // Stream / shared
         "channel_name" => "The name/title of the channel",
+        "group_title" => "Category/group name for the channel",
         "tvg_id" => "Electronic program guide identifier",
         "tvg_name" => "Name for EPG matching",
         "tvg_logo" => "URL to channel logo image",
         "tvg_shift" => "Time shift in hours for EPG data",
-        "group_title" => "Category/group name for the channel",
+        "tvg_chno" => "Channel number / logical ordering",
         "stream_url" => "Direct URL to the media stream",
-        "channel_id" => "Unique channel identifier",
+        // Source meta (read-only)
+        "source_name" => "Human-friendly name of the originating source (read-only)",
+        "source_type" => "Type of originating source (m3u, xmltv, etc) (read-only)",
+        "source_url" => "Sanitised URL of the originating source (read-only)",
+        // EPG channel / linkage
+        "channel_id" => "Unique EPG channel identifier",
         "channel_logo" => "Channel logo URL",
-        "channel_group" => "Channel category/group",
-        "language" => "Channel language",
-        _ => "Channel data field",
+        "channel_group" => "EPG channel category/group",
+        // Programme canonical (British)
+        "programme_title" => "Programme title",
+        "programme_description" => "Programme long description",
+        "programme_category" => "Programme category/genre",
+        "programme_icon" => "Programme thumbnail/icon URL",
+        "programme_subtitle" => "Episode subtitle / secondary title",
+        // Programme (American / legacy aliases) still map to canonical, but we describe them
+        "program_title" => "Alias of programme_title",
+        "program_description" => "Alias of programme_description",
+        "program_category" => "Alias of programme_category",
+        "program_icon" => "Alias of programme_icon",
+        "subtitles" => "Alias of programme_subtitle",
+        // Other programme metadata
+        "episode_num" => "Episode number",
+        "season_num" => "Season number",
+        "language" => "Programme language",
+        "rating" => "Content rating",
+        "aspect_ratio" => "Video aspect ratio",
+        _ => "Channel / programme field",
     }
 }
 
@@ -2084,11 +2299,18 @@ pub async fn apply_epg_source_data_mapping(
     post,
     path = "/data-mapping/preview",
     tag = "data-mapping",
-    summary = "Preview custom data mapping expression",
-    description = "Test a custom data mapping expression against channels from specified sources",
+    summary = "Preview custom data mapping expression (legacy JSON)",
+    description = "LEGACY (Deprecated): Returns an untyped JSON payload. Prefer /data-mapping/preview/typed for the structured DataMappingPreviewResponse.",
+
     request_body = DataMappingPreviewRequest,
     responses(
-        (status = 200, description = "Data mapping expression preview result"),
+        (status = 200,
+            description = "Legacy data mapping expression preview result (untyped JSON)",
+            headers(
+                ("Deprecation" = String, description = "Indicates this endpoint is deprecated; use /api/v1/data-mapping/preview/typed"),
+                ("Link" = String, description = "Provides a link relation to the successor endpoint /api/v1/data-mapping/preview/typed")
+            )
+        ),
         (status = 400, description = "Invalid request or missing expression"),
         (status = 500, description = "Internal server error")
     )
@@ -2096,7 +2318,7 @@ pub async fn apply_epg_source_data_mapping(
 pub async fn apply_data_mapping_rules_post(
     State(state): State<AppState>,
     Json(payload): Json<DataMappingPreviewRequest>,
-) -> Result<axum::Json<serde_json::Value>, StatusCode> {
+) -> Result<impl IntoResponse, StatusCode> {
     // Extract all needed values first to avoid borrow checker issues
     let source_ids = payload.source_ids;
     let source_type = payload.source_type.clone();
@@ -2111,7 +2333,609 @@ pub async fn apply_data_mapping_rules_post(
         }
     };
 
-    preview_data_mapping_expression_sync(state, source_type, source_ids, expression, limit).await
+    let legacy =
+        preview_data_mapping_expression_sync(state, source_type, source_ids, expression, limit)
+            .await?;
+
+    // Add deprecation headers
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("Deprecation", axum::http::HeaderValue::from_static("true"));
+    headers.insert(
+        "Link",
+        axum::http::HeaderValue::from_static(
+            "</api/v1/data-mapping/preview/typed>; rel=\"successor-version\"",
+        ),
+    );
+    headers.insert(
+        "Warning",
+        axum::http::HeaderValue::from_static(
+            "299 - \"Deprecated endpoint; use /api/v1/data-mapping/preview/typed\"",
+        ),
+    );
+
+    Ok((headers, legacy).into_response())
+}
+
+#[utoipa::path(
+    post,
+    path = "/data-mapping/preview/typed",
+    tag = "data-mapping",
+    summary = "Preview custom data mapping expression (typed)",
+    description = "Parse and apply an ad-hoc data mapping expression using the unified expression engine (full alias canonicalization + domain validation). Returns DataMappingPreviewResponse with: summary.total_records, summary.condition_matches, summary.modified_records, summary.canonical_expression, and per-type (stream/epg) sections showing all counted effects. Samples (if requested) are drawn via the legacy compatibility path but expression parsing & field validation now use the new canonical layer for parity with execution.",
+    request_body = DataMappingExpressionPreviewRequest,
+    responses(
+        (status = 200, description = "Typed data mapping expression preview (canonicalized + alias-resolved)", body = DataMappingPreviewResponse),
+        (status = 400, description = "Invalid request or missing expression"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn preview_data_mapping_expression_typed(
+    State(state): State<AppState>,
+    Json(payload): Json<DataMappingExpressionPreviewRequest>,
+) -> Result<axum::Json<DataMappingPreviewResponse>, StatusCode> {
+    use crate::models::data_mapping::{
+        DataMappingPreviewResponse, DataMappingPreviewSummary, EpgDataMappingPreview,
+        MappedChannel, MappedEpgProgram, StreamDataMappingPreview,
+    };
+
+    use serde_json::Value;
+
+    let start = std::time::Instant::now();
+    let include_samples = payload.include_samples.unwrap_or(true);
+    let max_samples = payload.limit.unwrap_or(10).clamp(1, 50) as usize;
+
+    // Parse & canonicalize expression with alias mapping
+    let registry = crate::field_registry::FieldRegistry::global();
+    use crate::field_registry::{SourceKind, StageKind};
+    let field_list: Vec<String> = match payload.source_type {
+        DataMappingSourceType::Stream => registry
+            .field_names_for(SourceKind::Stream, StageKind::DataMapping)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        DataMappingSourceType::Epg => registry
+            .field_names_for(SourceKind::Epg, StageKind::DataMapping)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+    };
+    let parser = crate::expression_parser::ExpressionParser::for_data_mapping(field_list.clone())
+        .with_aliases(registry.alias_map());
+
+    let canonical_expression = parser.canonicalize_expression_lossy(&payload.expression);
+
+    // Direct evaluation path (replaces legacy preview_data_mapping_expression_sync)
+    // Parse extended expression once (already canonicalized above for display)
+    let parsed_expression = match parser.parse_extended(&payload.expression) {
+        Ok(expr) => expr,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    // Aggregates
+    let mut total = 0i32;
+    let mut affected = 0i32;
+    let mut condition_matches = 0i32;
+    let mut raw_samples: Vec<Value> = Vec::new();
+
+    match payload.source_type {
+        DataMappingSourceType::Stream => {
+            // Reuse repositories
+            let stream_source_repo =
+                crate::database::repositories::StreamSourceSeaOrmRepository::new(
+                    state.database.connection().clone(),
+                );
+            let channel_repo = crate::database::repositories::ChannelSeaOrmRepository::new(
+                state.database.connection().clone(),
+            );
+
+            // Resolve sources
+            let sources = if payload.source_ids.is_empty() {
+                stream_source_repo
+                    .find_all()
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            } else {
+                let mut v = Vec::new();
+                for id in &payload.source_ids {
+                    if let Ok(Some(s)) = stream_source_repo.find_by_id(id).await {
+                        v.push(s);
+                    }
+                }
+                if v.is_empty() {
+                    return Err(StatusCode::NOT_FOUND);
+                }
+                v
+            };
+
+            // Iterate sources paginated
+            for source in &sources {
+                let mut page = 1u64;
+                let page_size = 10_000u64;
+                loop {
+                    let (batch, batch_total) = channel_repo
+                        .get_source_channels_paginated(&source.id, Some(page), Some(page_size))
+                        .await
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    if page == 1 {
+                        total += batch_total as i32;
+                    }
+                    if batch.is_empty() {
+                        break;
+                    }
+
+                    for channel in batch {
+                        let mut modified = channel.clone();
+                        if let Ok((cond_matched, was_modified)) =
+                            apply_expression_to_channel(&parsed_expression, &mut modified)
+                        {
+                            if cond_matched {
+                                condition_matches += 1;
+                            }
+                            if was_modified {
+                                affected += 1;
+                                if include_samples {
+                                    let original_v =
+                                        serde_json::to_value(&channel).unwrap_or(Value::Null);
+                                    let modified_v =
+                                        serde_json::to_value(&modified).unwrap_or(Value::Null);
+                                    if max_samples == 0 || raw_samples.len() < max_samples {
+                                        raw_samples.push(Value::Object(
+                                            [
+                                                (
+                                                    "channel_id".to_string(),
+                                                    serde_json::json!(channel.id),
+                                                ),
+                                                (
+                                                    "channel_name".to_string(),
+                                                    serde_json::json!(channel.channel_name),
+                                                ),
+                                                ("original".to_string(), original_v),
+                                                ("modified".to_string(), modified_v),
+                                                (
+                                                    "changes".to_string(),
+                                                    serde_json::Value::Array(
+                                                        calculate_field_changes(
+                                                            &serde_json::to_value(&channel)
+                                                                .unwrap_or(Value::Null),
+                                                            &serde_json::to_value(&modified)
+                                                                .unwrap_or(Value::Null),
+                                                        ),
+                                                    ),
+                                                ),
+                                            ]
+                                            .into_iter()
+                                            .collect(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    page += 1;
+                }
+            }
+        }
+        DataMappingSourceType::Epg => {
+            // Collect EPG sources & programs
+            let epg_source_repo = crate::database::repositories::EpgSourceSeaOrmRepository::new(
+                state.database.connection().clone(),
+            );
+            let epg_program_repo = crate::database::repositories::EpgProgramSeaOrmRepository::new(
+                state.database.connection().clone(),
+            );
+
+            let sources = if payload.source_ids.is_empty() {
+                epg_source_repo
+                    .find_active()
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            } else {
+                let mut v = Vec::new();
+                for id in &payload.source_ids {
+                    if let Ok(Some(s)) = epg_source_repo.find_by_id(id).await {
+                        v.push(s);
+                    }
+                }
+                if v.is_empty() {
+                    return Err(StatusCode::NOT_FOUND);
+                }
+                v
+            };
+
+            let mut all_programs = Vec::new();
+            for src in &sources {
+                let programs = epg_program_repo
+                    .find_by_source_id(&src.id)
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                total += programs.len() as i32;
+                for p in programs {
+                    all_programs.push(crate::pipeline::engines::EpgProgram {
+                        id: p.id.to_string(),
+                        channel_id: p.channel_id.clone(),
+                        channel_name: p.channel_name.clone(),
+                        title: p.program_title.clone(),
+                        description: p.program_description.clone(),
+                        program_icon: p.program_icon.clone(),
+                        start_time: p.start_time,
+                        end_time: p.end_time,
+                        program_category: p.program_category.clone(),
+                        subtitles: p.subtitles.clone(),
+                        episode_num: p.episode_num.clone(),
+                        season_num: p.season_num.clone(),
+                        language: p.language.clone(),
+                        rating: p.rating.clone(),
+                        aspect_ratio: p.aspect_ratio.clone(),
+                    });
+                }
+            }
+
+            // Use test service (already respects alias canonicalization in expression)
+            if let Ok(result) =
+                crate::pipeline::engines::EpgDataMappingTestService::test_single_epg_rule(
+                    payload.expression.clone(),
+                    all_programs,
+                )
+            {
+                affected = result.programs_modified as i32;
+                // For EPG programs the test result does not expose a direct condition_matched flag.
+                // Approximate condition_matches as programs_modified (since we only record modifications here).
+                condition_matches = result.programs_modified as i32;
+
+                if include_samples {
+                    for r in
+                        result
+                            .results
+                            .iter()
+                            .filter(|r| r.was_modified)
+                            .take(if max_samples == 0 {
+                                usize::MAX
+                            } else {
+                                max_samples
+                            })
+                    {
+                        raw_samples.push(serde_json::json!({
+                            "program_id": r.program_id,
+                            "original": &r.initial_program,
+                            "modified": &r.final_program
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    // Raw samples already collected in raw_samples; metrics already tallied
+
+    // Metrics already tallied above (total, affected, condition_matches).
+    // raw_samples already holds the collected sample changes (Vec<Value>).
+
+    // Build typed samples (streams only right now)
+    let mut preview_channels_typed: Option<Vec<MappedChannel>> = None;
+    let preview_programs_typed: Option<Vec<MappedEpgProgram>> = None;
+    let mut matched_but_unmodified_channels: Option<Vec<MappedChannel>> = None;
+    let mut matched_but_unmodified_programs: Option<Vec<MappedEpgProgram>> = None;
+
+    if include_samples {
+        match payload.source_type {
+            DataMappingSourceType::Stream => {
+                let mut typed = Vec::new();
+                for sample in raw_samples.iter().take(max_samples) {
+                    let Some(orig) = sample.get("original") else {
+                        continue;
+                    };
+                    let Some(modified) = sample.get("modified") else {
+                        continue;
+                    };
+
+                    // Deserialize original & modified channels
+                    let orig_chan: Result<crate::models::Channel, _> =
+                        serde_json::from_value(orig.clone());
+                    let mod_chan: Result<crate::models::Channel, _> =
+                        serde_json::from_value(modified.clone());
+                    if let (Ok(o), Ok(m)) = (orig_chan, mod_chan) {
+                        typed.push(MappedChannel {
+                            original: o,
+                            mapped_tvg_id: m.tvg_id.clone(),
+                            mapped_tvg_name: m.tvg_name.clone(),
+                            mapped_tvg_logo: m.tvg_logo.clone(),
+                            mapped_tvg_shift: m.tvg_shift.clone(),
+                            mapped_group_title: m.group_title.clone(),
+                            mapped_channel_name: m.channel_name.clone(),
+                            applied_rules: vec![], // ad-hoc expression has no stored rule name
+                            is_removed: false,
+                            capture_group_values: std::collections::HashMap::new(),
+                        });
+                    }
+                }
+                preview_channels_typed = Some(typed);
+
+                // For now we cannot sample matched-but-unmodified from legacy output
+                // Provide empty vector if there were unmatched modifications vs matches.
+                if condition_matches > affected {
+                    matched_but_unmodified_channels = Some(Vec::new());
+                }
+            }
+            DataMappingSourceType::Epg => {
+                // Not enough data in legacy sample_changes to safely reconstruct full typed EPG programs
+                // (original only includes a subset of fields). Leave typed vectors None for now.
+                if condition_matches > affected {
+                    matched_but_unmodified_programs = Some(Vec::new());
+                }
+            }
+        }
+    }
+
+    // Assemble per-type preview sections
+    let (stream_preview, epg_preview) = match payload.source_type {
+        DataMappingSourceType::Stream => (
+            Some(StreamDataMappingPreview {
+                total_channels: total,
+                condition_matches,
+                affected_channels: affected,
+                preview_channels: if include_samples {
+                    raw_samples.clone()
+                } else {
+                    Vec::new()
+                },
+                preview_channels_typed,
+                matched_but_unmodified_channels,
+                applied_rules: Vec::new(),
+            }),
+            None,
+        ),
+        DataMappingSourceType::Epg => (
+            None,
+            Some(EpgDataMappingPreview {
+                total_programs: total,
+                condition_matches,
+                affected_programs: affected,
+                preview_programs: if include_samples {
+                    raw_samples.clone()
+                } else {
+                    Vec::new()
+                },
+                preview_programs_typed,
+                matched_but_unmodified_programs,
+                applied_rules: Vec::new(),
+            }),
+        ),
+    };
+
+    let response = DataMappingPreviewResponse {
+        source_type: payload.source_type,
+        summary: DataMappingPreviewSummary {
+            total_records: total,
+            condition_matches,
+            modified_records: affected,
+            raw_expression: Some(payload.expression.clone()),
+            canonical_expression: Some(canonical_expression.clone()),
+            scanned_records: Some(total),
+            truncated: Some(false),
+        },
+        stream: stream_preview,
+        epg: epg_preview,
+    };
+
+    let _elapsed_ms = start.elapsed().as_millis();
+    // (Future: we could return timing headers or extend summary model with timing)
+
+    Ok(axum::Json(response))
+}
+
+#[utoipa::path(
+    get,
+    path = "/data-mapping/preview/typed",
+    tag = "data-mapping",
+    summary = "Preview custom data mapping expression (typed, GET)",
+    description = "GET variant of the typed preview. Accepts query parameters instead of JSON body. Use this for quick, cacheable previews. For large or complex expressions prefer POST form.",
+    params(
+        ("source_type" = String, Query, description = "Source type: stream | epg"),
+        ("expression" = String, Query, description = "Data mapping expression to evaluate (required)"),
+        ("limit" = Option<i32>, Query, description = "Max samples (server caps to 50)"),
+        ("include_samples" = Option<bool>, Query, description = "If false, returns counts only (default true)"),
+        ("source_ids" = Option<String>, Query, description = "Comma-separated list of source UUIDs (optional)")
+    ),
+    responses(
+        (status = 200, description = "Typed data mapping expression preview (GET)", body = DataMappingPreviewResponse),
+        (status = 400, description = "Invalid request or missing/invalid parameters"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn preview_data_mapping_expression_typed_get(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<axum::Json<DataMappingPreviewResponse>, StatusCode> {
+    use crate::models::data_mapping::{
+        DataMappingPreviewResponse, DataMappingPreviewSummary, DataMappingSourceType,
+        EpgDataMappingPreview, MappedChannel, MappedEpgProgram, StreamDataMappingPreview,
+    };
+
+    use serde_json::Value;
+
+    let expression = match params.get("expression") {
+        Some(e) if !e.trim().is_empty() => e.to_string(),
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let source_type = match params.get("source_type").map(|s| s.as_str()) {
+        Some("stream") | None => DataMappingSourceType::Stream,
+        Some("epg") => DataMappingSourceType::Epg,
+        Some(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse::<i32>().ok())
+        .filter(|v| *v > 0);
+
+    let include_samples = params
+        .get("include_samples")
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(true);
+
+    let source_ids: Vec<uuid::Uuid> = params
+        .get("source_ids")
+        .map(|s| {
+            s.split(',')
+                .filter_map(|raw| uuid::Uuid::parse_str(raw.trim()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let max_samples = limit.unwrap_or(10).clamp(1, 50) as usize;
+
+    // Canonicalization pre-pass
+    let registry = crate::field_registry::FieldRegistry::global();
+    use crate::field_registry::{SourceKind, StageKind};
+    let field_list: Vec<String> = match source_type {
+        DataMappingSourceType::Stream => registry
+            .field_names_for(SourceKind::Stream, StageKind::DataMapping)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        DataMappingSourceType::Epg => registry
+            .field_names_for(SourceKind::Epg, StageKind::DataMapping)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+    };
+    let parser = crate::expression_parser::ExpressionParser::for_data_mapping(field_list.clone())
+        .with_aliases(registry.alias_map());
+    let canonical_expression = parser.canonicalize_expression_lossy(&expression);
+
+    // Reuse legacy engine path for core counting & raw samples
+    let legacy = preview_data_mapping_expression_sync(
+        state,
+        source_type.to_string(),
+        source_ids.clone(),
+        expression.clone(),
+        Some(max_samples as u32),
+    )
+    .await?;
+
+    let v: Value = legacy.0;
+
+    let total = v
+        .get("total_channels")
+        .or_else(|| v.get("total_programs"))
+        .and_then(|x| x.as_i64())
+        .unwrap_or(0) as i32;
+    let affected = v
+        .get("affected_channels")
+        .or_else(|| v.get("affected_programs"))
+        .and_then(|x| x.as_i64())
+        .unwrap_or(0) as i32;
+    let condition_matches = v
+        .get("condition_matches")
+        .and_then(|x| x.as_i64())
+        .unwrap_or(affected as i64) as i32;
+
+    let raw_samples = v
+        .get("sample_changes")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut preview_channels_typed: Option<Vec<MappedChannel>> = None;
+    let preview_programs_typed: Option<Vec<MappedEpgProgram>> = None;
+    let mut matched_but_unmodified_channels: Option<Vec<MappedChannel>> = None;
+    let mut matched_but_unmodified_programs: Option<Vec<MappedEpgProgram>> = None;
+
+    if include_samples {
+        match source_type {
+            DataMappingSourceType::Stream => {
+                let mut typed = Vec::new();
+                for sample in raw_samples.iter().take(max_samples) {
+                    let (Some(orig), Some(modified)) =
+                        (sample.get("original"), sample.get("modified"))
+                    else {
+                        continue;
+                    };
+                    let orig_chan: Result<crate::models::Channel, _> =
+                        serde_json::from_value(orig.clone());
+                    let mod_chan: Result<crate::models::Channel, _> =
+                        serde_json::from_value(modified.clone());
+                    if let (Ok(o), Ok(m)) = (orig_chan, mod_chan) {
+                        typed.push(MappedChannel {
+                            original: o,
+                            mapped_tvg_id: m.tvg_id.clone(),
+                            mapped_tvg_name: m.tvg_name.clone(),
+                            mapped_tvg_logo: m.tvg_logo.clone(),
+                            mapped_tvg_shift: m.tvg_shift.clone(),
+                            mapped_group_title: m.group_title.clone(),
+                            mapped_channel_name: m.channel_name.clone(),
+                            applied_rules: vec![],
+                            is_removed: false,
+                            capture_group_values: std::collections::HashMap::new(),
+                        });
+                    }
+                }
+                preview_channels_typed = Some(typed);
+                if condition_matches > affected {
+                    matched_but_unmodified_channels = Some(Vec::new());
+                }
+            }
+            DataMappingSourceType::Epg => {
+                if condition_matches > affected {
+                    matched_but_unmodified_programs = Some(Vec::new());
+                }
+            }
+        }
+    }
+
+    let (stream_preview, epg_preview) = match source_type {
+        DataMappingSourceType::Stream => (
+            Some(StreamDataMappingPreview {
+                total_channels: total,
+                condition_matches,
+                affected_channels: affected,
+                preview_channels: if include_samples {
+                    raw_samples.clone()
+                } else {
+                    Vec::new()
+                },
+                preview_channels_typed,
+                matched_but_unmodified_channels,
+                applied_rules: Vec::new(),
+            }),
+            None,
+        ),
+        DataMappingSourceType::Epg => (
+            None,
+            Some(EpgDataMappingPreview {
+                total_programs: total,
+                condition_matches,
+                affected_programs: affected,
+                preview_programs: if include_samples {
+                    raw_samples.clone()
+                } else {
+                    Vec::new()
+                },
+                preview_programs_typed,
+                matched_but_unmodified_programs,
+                applied_rules: Vec::new(),
+            }),
+        ),
+    };
+
+    let response = DataMappingPreviewResponse {
+        source_type,
+        summary: DataMappingPreviewSummary {
+            total_records: total,
+            condition_matches,
+            modified_records: affected,
+            raw_expression: Some(expression.clone()),
+            canonical_expression: Some(canonical_expression.clone()),
+            scanned_records: Some(total),
+            truncated: Some(false),
+        },
+        stream: stream_preview,
+        epg: epg_preview,
+    };
+
+    Ok(axum::Json(response))
 }
 
 #[utoipa::path(
@@ -2529,6 +3353,140 @@ async fn apply_data_mapping_rules_impl(
 }
 
 // Logo Assets API
+/// EPG Category Statistics (debug / diagnostic)
+#[utoipa::path(
+    get,
+    path = "/debug/epg/category-stats",
+    tag = "epg",
+    summary = "EPG category statistics (debug)",
+    description = "Returns counts of EPG program category distribution using repository access only. This is a diagnostic endpoint and may be removed in future versions.",
+    responses(
+        (status = 200, description = "EPG category statistics JSON"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_epg_category_stats(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use crate::database::repositories::EpgProgramSeaOrmRepository;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    let repo = EpgProgramSeaOrmRepository::new(state.database.connection().clone());
+
+    // For a debug endpoint we can (bounded) page through all programs via time range:
+    // Simpler approach: fetch all programs per active sources (already used elsewhere).
+    // If data volume is huge this could be optimized later; acceptable for interim diagnostics.
+
+    // Get active sources first (reuse existing repo)
+    let epg_source_repo = crate::database::repositories::EpgSourceSeaOrmRepository::new(
+        state.database.connection().clone(),
+    );
+    let sources = match epg_source_repo.find_active().await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Failed to list active EPG sources: {e}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let mut total_programs: u64 = 0;
+    let mut null_category: u64 = 0;
+    let mut blank_category: u64 = 0;
+    // Categories that are NOT empty string originally but become empty after trim (pure whitespace)
+    let mut whitespace_only_category: u64 = 0;
+    let mut sports_channel_id_total: u64 = 0;
+    let mut sports_no_category: u64 = 0;
+    let mut category_counts: HashMap<String, u64> = HashMap::new();
+
+    // NOTE: This is an O(N) scan over programs; acceptable for a temporary debug endpoint.
+    for source in sources {
+        // Count for source (fast path)
+        let programs = match repo.find_by_source_id(&source.id).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("Failed to fetch programs for source {}: {}", source.id, e);
+                continue;
+            }
+        };
+        total_programs += programs.len() as u64;
+
+        for p in programs {
+            let cid_lower = p.channel_id.to_lowercase();
+            let raw_cat = p.program_category.as_deref();
+            let trimmed = raw_cat.map(|s| s.trim());
+
+            match (raw_cat, trimmed) {
+                (None, _) => {
+                    null_category += 1;
+                    if cid_lower.contains("sports") || cid_lower.contains("sport") {
+                        sports_channel_id_total += 1;
+                        sports_no_category += 1;
+                    }
+                }
+                (Some(original), Some("")) => {
+                    // Distinguish true blank vs whitespace-only
+                    if original.is_empty() {
+                        blank_category += 1;
+                    } else {
+                        whitespace_only_category += 1;
+                    }
+                    if cid_lower.contains("sports") || cid_lower.contains("sport") {
+                        sports_channel_id_total += 1;
+                        sports_no_category += 1;
+                    }
+                }
+                (Some(_original), Some(non_empty_trimmed)) => {
+                    // Normal non-empty (trimmed) category
+                    *category_counts
+                        .entry(non_empty_trimmed.to_string())
+                        .or_insert(0) += 1;
+                    if cid_lower.contains("sports") || cid_lower.contains("sport") {
+                        sports_channel_id_total += 1;
+                    }
+                }
+                // Defensive fallback (shouldn't occur)
+                _ => {
+                    null_category += 1;
+                }
+            }
+        }
+    }
+
+    // Produce top 10 categories
+    let mut category_vec: Vec<(String, u64)> = category_counts.into_iter().collect();
+    category_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    let top_categories: Vec<serde_json::Value> = category_vec
+        .into_iter()
+        .take(10)
+        .map(|(k, v)| json!({"category": k, "count": v}))
+        .collect();
+
+    Ok(Json(json!({
+        "success": true,
+        "debug": true,
+        "total_programs": total_programs,
+        "null_category": null_category,
+        "blank_category": blank_category,
+        "whitespace_only_category": whitespace_only_category,
+        "no_category_total": null_category + blank_category + whitespace_only_category,
+        "sports_channel_id_total": sports_channel_id_total,
+        "sports_no_category": sports_no_category,
+        "top_categories": top_categories,
+        "sample_notes": {
+            "samples_present": total_programs > 0,
+            "explanation": "Whitespace-only categories counted separately from true blank ('') and NULL."
+        },
+        "notes": [
+            "Category scan performed in application layer via repository (no raw SQL).",
+            "sports_channel_id_total counts channel_id containing 'sport' or 'sports' (case-insensitive).",
+            "Whitespace-only categories are now distinguished (original not empty, trimmed empty).",
+            "no_category_total now includes NULL + blank + whitespace-only.",
+            "This endpoint is for diagnostics and may be removed later."
+        ]
+    })))
+}
+
 /// List logo assets with optional filtering
 #[utoipa::path(
     get,
@@ -3417,8 +4375,7 @@ pub async fn delete_logo_asset(
                 );
             }
             Err(_) => {
-                // File doesn't exist or error deleting, continue trying other extensions
-                continue;
+                // File doesn't exist or error deleting; proceed to next extension
             }
         }
     }
@@ -3495,7 +4452,7 @@ pub async fn get_cached_logo_asset(
                         debug!("Serving legacy cached logo: {}.{}", cache_id, ext);
                         break;
                     }
-                    Err(_) => continue,
+                    Err(_) => { /* ignore missing legacy extension and try next */ }
                 }
             }
             found_data.ok_or_else(|| {
@@ -4102,7 +5059,7 @@ pub async fn get_logo_cache_stats(
         .get_cache_stats_with_logo_cache(Some(&state.logo_cache_service))
         .await
     {
-        Ok(stats) => Ok(Json(stats)),
+        Ok(cache_stats) => Ok(Json(cache_stats)),
         Err(e) => {
             error!("Failed to get logo cache stats: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -4728,23 +5685,21 @@ async fn get_fields_for_validation_context(
             }
         }
         ValidationContext::DataMapping => {
-            // Use existing data mapping field APIs (combine stream + output fields)
-            use crate::models::data_mapping::DataMappingSourceType;
-            use crate::pipeline::engines::DataMappingValidator;
+            // Use centralized FieldRegistry for canonical data mapping fields (stream + EPG)
+            let registry = crate::field_registry::FieldRegistry::global();
+            use crate::field_registry::{SourceKind, StageKind};
 
-            let stream_fields = DataMappingValidator::get_available_fields_for_source(
-                &DataMappingSourceType::Stream,
-            );
-            let epg_fields =
-                DataMappingValidator::get_available_fields_for_source(&DataMappingSourceType::Epg);
-
-            let mut combined_fields: Vec<String> = stream_fields
+            let mut combined_fields: Vec<String> = registry
+                .field_names_for(SourceKind::Stream, StageKind::DataMapping)
                 .into_iter()
-                .chain(epg_fields.into_iter())
-                .map(|field| field.field_name)
+                .chain(
+                    registry
+                        .field_names_for(SourceKind::Epg, StageKind::DataMapping)
+                        .into_iter(),
+                )
+                .map(|s| s.to_string())
                 .collect();
 
-            // Remove duplicates
             combined_fields.sort();
             combined_fields.dedup();
 
@@ -4765,33 +5720,34 @@ async fn get_fields_for_validation_context(
 
 /// Check if a field name is stream-related
 fn is_stream_field(field_name: &str) -> bool {
-    matches!(
-        field_name,
-        "channel_name"
-            | "group_title"
-            | "stream_url"
-            | "tvg_id"
-            | "tvg_name"
-            | "tvg_logo"
-            | "tvg_shift"
-            | "tvg_chno"
-    )
+    let registry = crate::field_registry::FieldRegistry::global();
+    if let Some(canonical) = registry.canonical_or_none(field_name) {
+        registry
+            .descriptors_for(
+                crate::field_registry::SourceKind::Stream,
+                crate::field_registry::StageKind::Filtering,
+            )
+            .iter()
+            .any(|d| d.name == canonical)
+    } else {
+        false
+    }
 }
 
-/// Check if a field name is EPG-related  
+/// Check if a field name is EPG-related
 fn is_epg_field(field_name: &str) -> bool {
-    matches!(
-        field_name,
-        "programme_title"
-            | "programme_description"
-            | "programme_category"
-            | "start_time"
-            | "end_time"
-            | "duration"
-            | "channel_id"
-            | "episode_num"
-            | "season_num"
-    )
+    let registry = crate::field_registry::FieldRegistry::global();
+    if let Some(canonical) = registry.canonical_or_none(field_name) {
+        registry
+            .descriptors_for(
+                crate::field_registry::SourceKind::Epg,
+                crate::field_registry::StageKind::Filtering,
+            )
+            .iter()
+            .any(|d| d.name == canonical)
+    } else {
+        false
+    }
 }
 
 /// Preview data mapping expression with optimized performance
@@ -4805,31 +5761,28 @@ async fn preview_data_mapping_expression_sync(
     use serde_json::json;
 
     // Parse and validate the expression
-    let fields = match source_type.as_str() {
-        "stream" => vec![
-            "channel_name".to_string(),
-            "tvg_name".to_string(),
-            "tvg_id".to_string(),
-            "tvg_logo".to_string(),
-            "group_title".to_string(),
-            "tvg_chno".to_string(),
-        ],
-        "epg" => vec![
-            "channel_id".to_string(),
-            "program_title".to_string(),
-            "program_description".to_string(),
-            "program_category".to_string(),
-            "start_time".to_string(),
-            "end_time".to_string(),
-            "language".to_string(),
-            "rating".to_string(),
-            "episode_num".to_string(),
-            "season_num".to_string(),
-        ],
+    // Use the central FieldRegistry so previews stay in sync (includes source_* & canonical programme_* names)
+    let registry = crate::field_registry::FieldRegistry::global();
+    use crate::field_registry::{SourceKind, StageKind};
+    let fields: Vec<String> = match source_type.as_str() {
+        "stream" => registry
+            .field_names_for(SourceKind::Stream, StageKind::DataMapping)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        "epg" => registry
+            .field_names_for(SourceKind::Epg, StageKind::DataMapping)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
         _ => vec![], // Will be handled by validation below
     };
 
-    let parser = crate::expression_parser::ExpressionParser::for_data_mapping(fields);
+    // Integrate alias support (American -> British spellings, legacy variants)
+    let registry = crate::field_registry::FieldRegistry::global();
+    let alias_map = registry.alias_map();
+    let parser = crate::expression_parser::ExpressionParser::for_data_mapping(fields.clone())
+        .with_aliases(alias_map);
 
     let parsed_expression = match parser.parse_extended(&expression) {
         Ok(expr) => expr,
@@ -4871,6 +5824,7 @@ async fn preview_data_mapping_expression_sync(
 
             let mut total_channels = 0;
             let mut affected_channels = 0;
+            let mut condition_matches = 0;
             let mut sample_changes = Vec::new();
 
             // Process each source's channels in batches
@@ -4898,30 +5852,40 @@ async fn preview_data_mapping_expression_sync(
                     for channel in batch_channels {
                         if sample_changes.len() >= max_samples {
                             let mut test_channel = channel.clone();
-                            if let Ok(true) =
+                            if let Ok((cond_matched, was_modified)) =
                                 apply_expression_to_channel(&parsed_expression, &mut test_channel)
                             {
-                                affected_channels += 1;
+                                if cond_matched {
+                                    condition_matches += 1;
+                                }
+                                if was_modified {
+                                    affected_channels += 1;
+                                }
                             }
                         } else {
                             let mut modified_channel = channel.clone();
-                            if let Ok(true) = apply_expression_to_channel(
+                            if let Ok((cond_matched, was_modified)) = apply_expression_to_channel(
                                 &parsed_expression,
                                 &mut modified_channel,
                             ) {
-                                affected_channels += 1;
-                                let original = serde_json::to_value(&channel)
-                                    .unwrap_or(serde_json::Value::Null);
-                                let modified = serde_json::to_value(&modified_channel)
-                                    .unwrap_or(serde_json::Value::Null);
+                                if cond_matched {
+                                    condition_matches += 1;
+                                }
+                                if was_modified {
+                                    affected_channels += 1;
+                                    let original = serde_json::to_value(&channel)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    let modified = serde_json::to_value(&modified_channel)
+                                        .unwrap_or(serde_json::Value::Null);
 
-                                sample_changes.push(json!({
-                                    "channel_id": channel.id,
-                                    "channel_name": channel.channel_name,
-                                    "original": original,
-                                    "modified": modified,
-                                    "changes": calculate_field_changes(&original, &modified)
-                                }));
+                                    sample_changes.push(json!({
+                                        "channel_id": channel.id,
+                                        "channel_name": channel.channel_name,
+                                        "original": original,
+                                        "modified": modified,
+                                        "changes": calculate_field_changes(&original, &modified)
+                                    }));
+                                }
                             }
                         }
                     }
@@ -4944,6 +5908,7 @@ async fn preview_data_mapping_expression_sync(
                 "source_type": source_type,
                 "total_channels": total_channels,
                 "affected_channels": affected_channels,
+                "condition_matches": condition_matches,
                 "sample_changes": sample_changes
             })))
         }
@@ -5092,6 +6057,7 @@ async fn preview_data_mapping_expression_sync(
                 "source_type": source_type,
                 "total_channels": total_programs, // Programs count for compatibility
                 "affected_channels": affected_programs, // Programs count for compatibility
+                "condition_matches": affected_programs, // Currently using modified count as proxy; refine later for pure match count
                 "sample_changes": sample_changes
             })))
         }
@@ -5146,16 +6112,21 @@ fn calculate_field_changes(
 fn apply_expression_to_channel(
     expression: &crate::models::ExtendedExpression,
     channel: &mut crate::models::Channel,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<(bool, bool), Box<dyn std::error::Error>> {
+    // Returns (condition_matched, was_modified)
     use crate::models::ExtendedExpression;
 
-    // Track if any field was modified
+    // Track if any field was modified and whether condition matched
     let mut was_modified = false;
+    let mut condition_matched = false;
 
     match expression {
         ExtendedExpression::ConditionWithActions { condition, actions } => {
             // Check if the condition matches this channel
             let matches = evaluate_condition_for_channel(condition, channel)?;
+            if matches {
+                condition_matched = true;
+            }
 
             if matches {
                 // Apply all actions
@@ -5167,16 +6138,17 @@ fn apply_expression_to_channel(
             }
         }
         ExtendedExpression::ConditionOnly(_condition) => {
-            // Just a condition without actions, no modifications possible
-            // This type of expression is not suitable for data mapping
+            let matches = evaluate_condition_for_channel(_condition, channel)?;
+            if matches {
+                condition_matched = true;
+            }
         }
         ExtendedExpression::ConditionalActionGroups(_groups) => {
-            // Complex conditional action groups - not implemented in this simple preview
-            // This would require more complex logic to handle multiple condition groups
+            // Not implemented in simple preview path
         }
     }
 
-    Ok(was_modified)
+    Ok((condition_matched, was_modified))
 }
 
 /// Evaluate a condition against a channel

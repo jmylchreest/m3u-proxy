@@ -50,6 +50,7 @@ pub struct ChannelResponse {
     pub proxy_id: Option<String>,
     pub source_type: String,         // "database" | "source" | "proxy"
     pub source_name: Option<String>, // Actual name of the source
+    pub source_id: Option<String>,   // UUID of underlying stream source if present
     // M3U specific fields
     pub tvg_id: Option<String>,
     pub tvg_name: Option<String>,
@@ -226,7 +227,9 @@ pub async fn list_channels(
                 proxy_id,
                 source_type,
                 source_name,
-                // M3U specific fields from database
+                source_id: (channel.source_id != uuid::Uuid::nil())
+                    .then(|| channel.source_id.to_string()),
+                // M3U specific fields
                 tvg_id: channel.tvg_id.clone(),
                 tvg_name: channel.tvg_name.clone(),
                 tvg_chno: channel.tvg_chno.clone(),
@@ -346,6 +349,8 @@ pub async fn get_proxy_channels(
                 proxy_id: None,
                 source_type: "source".to_string(),
                 source_name: None,
+                source_id: (channel.source_id != uuid::Uuid::nil())
+                    .then(|| channel.source_id.to_string()),
                 tvg_id: channel.tvg_id,
                 tvg_name: channel.tvg_name,
                 tvg_chno: channel.tvg_chno,

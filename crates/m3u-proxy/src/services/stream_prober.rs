@@ -425,32 +425,32 @@ mod tests {
         assert!(should_copy_video_stream(
             "h264",
             "h264",
-            Some(2000000),
-            Some(2500)
+            Some(2_000_000),
+            Some(2_500)
         ));
 
         // Same codec, bitrate too high
         assert!(!should_copy_video_stream(
             "h264",
             "h264",
-            Some(4000000),
-            Some(2000)
+            Some(4_000_000),
+            Some(2_000)
         ));
 
         // Different codecs
         assert!(!should_copy_video_stream(
             "h264",
             "h265",
-            Some(2000000),
-            Some(2500)
+            Some(2_000_000),
+            Some(2_500)
         ));
 
         // Copy target
         assert!(should_copy_video_stream(
             "h264",
             "copy",
-            Some(2000000),
-            Some(2500)
+            Some(2_000_000),
+            Some(2_500)
         ));
     }
 
@@ -463,7 +463,7 @@ mod tests {
         assert!(should_copy_audio_stream(
             "aac",
             "aac",
-            Some(128000),
+            Some(128_000),
             Some(128)
         ));
 
@@ -479,7 +479,7 @@ mod tests {
         assert!(!should_copy_audio_stream(
             "aac",
             "mp3",
-            Some(128000),
+            Some(128_000),
             Some(128)
         ));
 
@@ -487,7 +487,7 @@ mod tests {
         assert!(should_copy_audio_stream(
             "aac",
             "copy",
-            Some(128000),
+            Some(128_000),
             Some(128)
         ));
     }
@@ -555,7 +555,7 @@ mod tests {
         assert!(result.has_audio);
         assert_eq!(result.format_name, Some("mpegts".to_string()));
         assert_eq!(result.duration, Some(3600.0));
-        assert_eq!(result.bit_rate, Some(2128000));
+        assert_eq!(result.bit_rate, Some(2_128_000));
 
         // Check stream details
         let video = &result.video_streams[0];

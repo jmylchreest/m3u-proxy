@@ -113,7 +113,7 @@ impl DurationParser {
                 current_number.clear();
             } else if ch.is_whitespace() {
                 // Skip whitespace
-                continue;
+                // (removed redundant continue)
             } else {
                 return Err(anyhow::anyhow!(
                     "Invalid character '{}' in duration string",
@@ -209,6 +209,7 @@ pub fn format_duration(millis: u64) -> String {
 }
 
 /// Formats a memory delta with appropriate sign and units
+#[must_use]
 pub fn format_memory_delta(bytes: f64) -> String {
     if bytes == 0.0 {
         return "±0B".to_string();
@@ -228,18 +229,18 @@ mod tests {
         assert_eq!(format_memory(512.0), "512B");
         assert_eq!(format_memory(1024.0), "1.00KB");
         assert_eq!(format_memory(1536.0), "1.50KB");
-        assert_eq!(format_memory(1048576.0), "1.00MB");
-        assert_eq!(format_memory(1572864.0), "1.50MB");
-        assert_eq!(format_memory(1073741824.0), "1.00GB");
-        assert_eq!(format_memory(104857600.0), "100.0MB");
-        assert_eq!(format_memory(10485760.0), "10.0MB");
-        assert_eq!(format_memory(1048576.0 * 1.234), "1.23MB");
+        assert_eq!(format_memory(1_048_576.0), "1.00MB");
+        assert_eq!(format_memory(1_572_864.0), "1.50MB");
+        assert_eq!(format_memory(1_073_741_824.0), "1.00GB");
+        assert_eq!(format_memory(104_857_600.0), "100.0MB");
+        assert_eq!(format_memory(10_485_760.0), "10.0MB");
+        assert_eq!(format_memory(1_048_576.0 * 1.234), "1.23MB");
     }
 
     #[test]
     fn test_format_memory_negative() {
-        assert_eq!(format_memory(-1024.0), "-1.00KB");
-        assert_eq!(format_memory(-1048576.0), "-1.00MB");
+        assert_eq!(format_memory(-1_024.0), "-1.00KB");
+        assert_eq!(format_memory(-1_048_576.0), "-1.00MB");
     }
 
     #[test]
@@ -253,17 +254,17 @@ mod tests {
         assert_eq!(format_duration(59000), "59.0s");
         assert_eq!(format_duration(60000), "1m");
         assert_eq!(format_duration(90000), "1m30s");
-        assert_eq!(format_duration(3600000), "1h");
-        assert_eq!(format_duration(3660000), "1h1m");
-        assert_eq!(format_duration(3661000), "1h1m1s");
+        assert_eq!(format_duration(3_600_000), "1h");
+        assert_eq!(format_duration(3_660_000), "1h1m");
+        assert_eq!(format_duration(3_661_000), "1h1m1s");
     }
 
     #[test]
     fn test_format_memory_delta() {
         assert_eq!(format_memory_delta(0.0), "±0B");
         assert_eq!(format_memory_delta(1024.0), "+1.00KB");
-        assert_eq!(format_memory_delta(-1024.0), "-1.00KB");
-        assert_eq!(format_memory_delta(1048576.0), "+1.00MB");
+        assert_eq!(format_memory_delta(-1_024.0), "-1.00KB");
+        assert_eq!(format_memory_delta(1_048_576.0), "+1.00MB");
     }
 
     #[test]
@@ -350,7 +351,7 @@ mod tests {
         );
         assert_eq!(
             DurationParser::parse_flexible("500ms200μs").unwrap(),
-            Duration::from_micros(500200)
+            Duration::from_micros(500_200)
         );
 
         // With whitespace

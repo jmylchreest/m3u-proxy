@@ -1,6 +1,6 @@
 use anyhow::Result;
 use sandboxed_file_manager::SandboxedManager;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::DatabaseConnection;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,17 +8,14 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::entities::prelude::*;
-use crate::models::{ChannelNumberAssignmentType, FilterSourceType, NumberedChannel};
-use crate::pipeline::engines::filter_processor::{
-    EpgFilterProcessor, FilteringEngine, RegexEvaluator,
-};
+use crate::models::{ChannelNumberAssignmentType, NumberedChannel};
+// (Removed EPG filtering imports – filtering now occurs in FilteringStage)
 use crate::pipeline::engines::rule_processor::EpgProgram;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::models::{ArtifactType, ContentType, PipelineArtifact, ProcessingStage};
 use crate::pipeline::traits::{PipelineStage, ProgressAware};
 use crate::services::progress_service::ProgressManager;
-use crate::utils::regex_preprocessor::{RegexPreprocessor, RegexPreprocessorConfig};
+// (Removed regex preprocessor imports – EPG filtering moved out of GenerationStage)
 
 /// Progress update interval for combined progress reporting
 const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_secs(5);
@@ -90,7 +87,7 @@ pub struct GenerationStage {
 
     base_url: String,
     progress_manager: Option<Arc<ProgressManager>>,
-    db_connection: Arc<DatabaseConnection>,
+    _db_connection: Arc<DatabaseConnection>, // prefixed underscore to silence unused field warning (retained for future DB use)
 }
 
 impl GenerationStage {
@@ -108,7 +105,7 @@ impl GenerationStage {
             proxy_id,
             base_url,
             progress_manager,
-            db_connection,
+            _db_connection: db_connection,
         })
     }
 
@@ -126,50 +123,7 @@ impl GenerationStage {
         self.progress_manager = Some(progress_manager);
     }
 
-    /// Load EPG filters for this proxy
-    async fn load_epg_filters(&self) -> Result<FilteringEngine<EpgProgram>> {
-        // Load filters for this proxy that are EPG-type and active
-        let proxy_filters = ProxyFilters::find()
-            .filter(crate::entities::proxy_filters::Column::ProxyId.eq(self.proxy_id))
-            .filter(crate::entities::proxy_filters::Column::IsActive.eq(true))
-            .order_by_asc(crate::entities::proxy_filters::Column::PriorityOrder)
-            .find_with_related(Filters)
-            .all(&*self.db_connection)
-            .await?;
-
-        let mut engine = FilteringEngine::new();
-        let regex_config = RegexPreprocessorConfig::default();
-        let regex_preprocessor = RegexPreprocessor::new(regex_config);
-
-        for (_proxy_filter, filters) in proxy_filters {
-            for filter in filters {
-                if filter.source_type == FilterSourceType::Epg {
-                    let regex_evaluator = RegexEvaluator::new(regex_preprocessor.clone());
-
-                    match EpgFilterProcessor::new(
-                        filter.id.to_string(),
-                        filter.name.clone(),
-                        filter.is_inverse,
-                        &filter.expression,
-                        regex_evaluator,
-                    ) {
-                        Ok(processor) => {
-                            info!("Loaded EPG filter: {} ({})", filter.name, filter.id);
-                            engine.add_filter_processor(Box::new(processor));
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to load EPG filter {} ({}): {}",
-                                filter.name, filter.id, e
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(engine)
-    }
+    // EPG filter loading removed – filtering is now performed earlier in the pipeline (FilteringStage).
 
     /// Generate temporary M3U and XMLTV files for atomic publishing
     pub async fn process_channels_and_programs(
@@ -460,11 +414,9 @@ impl GenerationStage {
     ) -> Result<u64> {
         let xmltv_start = Instant::now();
 
-        // Load EPG filters for this proxy
-        let mut epg_filter_engine = self.load_epg_filters().await?;
+        // EPG filters already applied in FilteringStage; no filter loading here.
 
         let mut programs_written = 0;
-        let programs_filtered = 0;
 
         // Using manual XML generation with proper escaping (works correctly)
 
@@ -532,7 +484,7 @@ impl GenerationStage {
 
         // Write program data (only for M3U channels that exist in channel_map and pass EPG filters)
         let mut programs_filtered_by_channel = 0;
-        let mut programs_filtered_by_epg_rules = 0;
+        // EPG rule-level filtering already applied earlier in pipeline; no additional counters needed here
 
         for program in epg_programs {
             // Update combined progress
@@ -544,28 +496,8 @@ impl GenerationStage {
                 continue;
             }
 
-            // Apply EPG filters if any are configured
-            let mut include_program = true;
-            if epg_filter_engine.has_filters() {
-                match epg_filter_engine.should_include(program) {
-                    Ok(should_include) => {
-                        if !should_include {
-                            programs_filtered_by_epg_rules += 1;
-                            include_program = false;
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            "EPG filter evaluation error for program {}: {}",
-                            program.id, e
-                        );
-                        programs_filtered_by_epg_rules += 1;
-                        include_program = false;
-                    }
-                }
-            }
-
-            if !include_program {
+            // EPG inclusion already determined prior to this stage; only channel existence is enforced here.
+            if !channel_map.contains_key(&program.channel_id) {
                 continue;
             }
 
@@ -672,24 +604,21 @@ impl GenerationStage {
         writer.flush().await?;
         drop(writer);
 
-        let total_programs_filtered = programs_filtered_by_channel + programs_filtered_by_epg_rules;
+        let total_programs_filtered = programs_filtered_by_channel;
         debug!(
-            "Program filtering completed: total_programs={} programs_written={} programs_filtered_out={} (by_channel={}, by_epg_filters={})",
+            "Program channel filtering summary: total_programs={} programs_written={} filtered_out_by_channel={}",
             epg_programs.len(),
             programs_written,
-            total_programs_filtered,
-            programs_filtered_by_channel,
-            programs_filtered_by_epg_rules
+            total_programs_filtered
         );
 
-        // Free XMLTV streaming memory
         debug!("Freed XMLTV streaming writer and buffers");
 
         info!(
-            "XMLTV streaming completed: channels={} programs={} programs_filtered={} bytes={} duration={} (database_first=true using_quick_xml_escape=true)",
+            "XMLTV streaming completed: channels={} programs={} filtered_out_by_channel={} bytes={} duration={} (database_first=true using_quick_xml_escape=true)",
             channel_map.len(),
             programs_written,
-            programs_filtered,
+            total_programs_filtered,
             bytes_written,
             crate::utils::human_format::format_duration_precise(xmltv_start.elapsed())
         );

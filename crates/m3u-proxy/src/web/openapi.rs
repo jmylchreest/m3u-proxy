@@ -139,6 +139,12 @@ Check the endpoints below to see the complete API surface.
             crate::models::FilterTestChannel,
             crate::models::FilterWithUsage,
             crate::models::FilterFieldInfo,
+            crate::models::data_mapping::DataMappingPreviewRequest,
+            crate::models::data_mapping::DataMappingExpressionPreviewRequest,
+            crate::models::data_mapping::DataMappingPreviewResponse,
+            crate::models::data_mapping::DataMappingPreviewSummary,
+            crate::models::data_mapping::StreamDataMappingPreview,
+            crate::models::data_mapping::EpgDataMappingPreview,
 
             // Filter query parameters
             crate::web::api::FilterQueryParams,
@@ -234,6 +240,7 @@ Check the endpoints below to see the complete API surface.
         // EPG viewer
         crate::web::handlers::epg::list_epg_programs,
         crate::web::handlers::epg::get_epg_guide,
+        crate::web::api::get_epg_category_stats,
 
         // Proxy endpoints
         crate::web::handlers::proxies::list_proxies,

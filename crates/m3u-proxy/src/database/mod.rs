@@ -6,7 +6,10 @@
 //! - MySQL (with specific optimizations)
 
 use anyhow::{Context, Result};
-use sea_orm::{ConnectOptions, Database as SeaOrmDatabase, DatabaseBackend, DatabaseConnection};
+use sea_orm::{
+    ConnectOptions, ConnectionTrait, Database as SeaOrmDatabase, DatabaseBackend,
+    DatabaseConnection,
+};
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
@@ -221,6 +224,7 @@ impl Database {
     /// Run database migrations
     pub async fn migrate(&self) -> Result<()> {
         use migrations::Migrator;
+        use sea_orm::{DatabaseBackend, Statement};
         use sea_orm_migration::MigratorTrait;
 
         info!(
@@ -228,11 +232,146 @@ impl Database {
             self.database_type.as_str()
         );
 
+        // (1) Pre-flight: log what migrations are already recorded (best-effort)
+        // This helps diagnose cases where only initial migrations are present.
+        if self.backend == DatabaseBackend::Postgres {
+            if let Ok(rows) = self
+                .connection
+                .query_all(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
+                ))
+                .await
+            {
+                let applied: Vec<String> = rows
+                    .iter()
+                    .filter_map(|r| r.try_get("", "version").ok())
+                    .collect();
+                info!("Already applied migrations (pre-run): {:?}", applied);
+            } else {
+                info!("Could not list existing migrations (pre-run)");
+            }
+        }
+
+        // (2) Run migrations as usual
         Migrator::up(&*self.connection, None)
             .await
             .context("Failed to run migrations")?;
 
-        info!("Database migrations completed successfully");
+        // (3) Post-migration verification & auto-repair for legacy filters uniqueness
+        // Goal: ensure legacy UNIQUE(name) constraint is removed and composite (name, source_type) uniqueness is available.
+        if self.backend == DatabaseBackend::Postgres {
+            // Detect any single-column UNIQUE(name) constraints still present
+            let detect_sql = r#"
+SELECT conname
+FROM pg_constraint c
+JOIN pg_class t ON t.oid = c.conrelid
+JOIN pg_namespace n ON n.oid = t.relnamespace
+WHERE t.relname = 'filters'
+  AND n.nspname = current_schema()
+  AND c.contype = 'u'
+  AND (
+    SELECT array_agg(att.attname ORDER BY att.attnum)
+    FROM unnest(c.conkey) WITH ORDINALITY AS cols(attnum, ord)
+    JOIN pg_attribute att ON att.attrelid = c.conrelid AND att.attnum = cols.attnum
+  ) = ARRAY['name'];
+"#;
+            match self
+                .connection
+                .query_all(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    detect_sql,
+                ))
+                .await
+            {
+                Ok(rows) if !rows.is_empty() => {
+                    let mut dropped_any = false;
+                    for row in rows {
+                        if let Ok(conname) = row.try_get::<String>("", "conname") {
+                            let drop_stmt = format!(
+                                "ALTER TABLE filters DROP CONSTRAINT IF EXISTS {}",
+                                conname
+                            );
+                            if let Err(e) = self
+                                .connection
+                                .execute(Statement::from_string(
+                                    DatabaseBackend::Postgres,
+                                    drop_stmt.clone(),
+                                ))
+                                .await
+                            {
+                                tracing::warn!(
+                                    "Failed to drop legacy filters constraint {}: {}",
+                                    conname,
+                                    e
+                                );
+                            } else {
+                                dropped_any = true;
+                                info!(
+                                    "Dropped legacy single-column filters uniqueness constraint: {}",
+                                    conname
+                                );
+                            }
+                        }
+                    }
+
+                    // Ensure composite unique index exists
+                    let ensure_idx = "CREATE UNIQUE INDEX IF NOT EXISTS idx_filters_name_source_type_unique ON filters (name, source_type)";
+                    if let Err(e) = self
+                        .connection
+                        .execute(Statement::from_string(
+                            DatabaseBackend::Postgres,
+                            ensure_idx.to_string(),
+                        ))
+                        .await
+                    {
+                        tracing::error!(
+                            "Failed to ensure composite (name, source_type) unique index: {}",
+                            e
+                        );
+                    } else if dropped_any {
+                        info!(
+                            "Ensured composite unique index (name, source_type) after dropping legacy constraint(s)"
+                        );
+                    }
+
+                    if dropped_any {
+                        info!(
+                            "Auto-repair completed: legacy UNIQUE(name) removed; composite uniqueness active"
+                        );
+                    } else {
+                        tracing::warn!(
+                            "Legacy UNIQUE(name) constraint(s) detected but not dropped (see prior warnings)"
+                        );
+                    }
+                }
+                Ok(_) => {
+                    // No legacy constraints; still ensure composite index (idempotent).
+                    let ensure_idx = "CREATE UNIQUE INDEX IF NOT EXISTS idx_filters_name_source_type_unique ON filters (name, source_type)";
+                    if let Err(e) = self
+                        .connection
+                        .execute(Statement::from_string(
+                            DatabaseBackend::Postgres,
+                            ensure_idx.to_string(),
+                        ))
+                        .await
+                    {
+                        tracing::warn!(
+                            "Could not ensure composite unique index (name, source_type): {}",
+                            e
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Post-migration filters uniqueness verification failed (continuing): {}",
+                        e
+                    );
+                }
+            }
+        }
+
+        info!("Database migrations completed successfully (with post-migration verification)");
         Ok(())
     }
 

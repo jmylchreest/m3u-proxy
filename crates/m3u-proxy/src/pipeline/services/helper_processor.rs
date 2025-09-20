@@ -101,14 +101,13 @@ impl LogoRepository for SeaOrmLogoRepository {
                         return Err(HelperProcessorError::CriticalDatabaseError(format!(
                             "Failed to check logo UUID {uuid} after {MAX_RETRIES} retries: {e}"
                         )));
-                    } else {
-                        let delay_ms = BASE_DELAY_MS * (2_u64.pow(attempt - 1));
-                        debug!(
-                            "Logo UUID lookup attempt {} failed for UUID {}: {}. Retrying in {}ms...",
-                            attempt, uuid, e, delay_ms
-                        );
-                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                     }
+                    let delay_ms = BASE_DELAY_MS * (2_u64.pow(attempt - 1));
+                    debug!(
+                        "Logo UUID lookup attempt {} failed for UUID {}: {}. Retrying in {}ms...",
+                        attempt, uuid, e, delay_ms
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 }
             }
         }

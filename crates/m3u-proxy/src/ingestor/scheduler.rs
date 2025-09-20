@@ -931,17 +931,15 @@ impl SchedulerService {
                         // Source in backoff - add backoff expiry time
                         upcoming_times.push(retry_after);
                         continue;
-                    } else {
-                        // Backoff expired - check if we have a timer active to avoid spam
-                        let timers = self.active_backoff_timers.read().await;
-                        if timers.contains(source_id) {
-                            continue; // Timer already scheduled for this source
-                        }
-
-                        // Add immediate processing
-                        upcoming_times.push(now);
-                        continue;
                     }
+                    // Backoff expired - check if we have a timer active to avoid spam
+                    let timers = self.active_backoff_timers.read().await;
+                    if timers.contains(source_id) {
+                        continue; // Timer already scheduled for this source
+                    }
+                    // Add immediate processing
+                    upcoming_times.push(now);
+                    continue;
                 }
 
                 // Source actively processing - skip

@@ -197,9 +197,8 @@ impl Validator {
         let mut errors = Vec::new();
 
         for rule in &self.rules {
-            match self.apply_rule(rule, data) {
-                Ok(_) => continue,
-                Err(error) => errors.push(error),
+            if let Err(error) = self.apply_rule(rule, data) {
+                errors.push(error);
             }
         }
 

@@ -407,6 +407,15 @@ impl WebServer {
                 get(api::apply_data_mapping_rules).post(api::apply_data_mapping_rules_post),
             )
             .route(
+                "/data-mapping/preview/typed",
+                get(api::preview_data_mapping_expression_typed_get)
+                    .post(api::preview_data_mapping_expression_typed),
+            )
+            .route(
+                "/debug/epg/category-stats",
+                get(api::get_epg_category_stats),
+            )
+            .route(
                 "/data-mapping/reorder",
                 post(api::reorder_data_mapping_rules).put(api::reorder_data_mapping_rules),
             )

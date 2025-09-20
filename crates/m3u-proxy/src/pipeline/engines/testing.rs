@@ -34,6 +34,7 @@ pub struct RuleApplicationResult {
     pub rule_id: String,
     pub rule_name: String,
     pub applied: bool,
+    pub condition_matched: bool,
     pub execution_time_ms: u128,
     pub field_changes: Vec<String>, // Simple descriptions of changes
     pub error: Option<String>,
@@ -85,6 +86,7 @@ impl DataMappingTestService {
                         rule_id: rule_id.clone(),
                         rule_name: "Test Rule".to_string(), // TODO: Get from processor
                         applied: rule_result.rule_applied,
+                        condition_matched: rule_result.condition_matched,
                         execution_time_ms: rule_result.execution_time.as_millis(),
                         field_changes: rule_result
                             .field_modifications
@@ -187,6 +189,12 @@ impl EpgDataMappingTestService {
         for (rule_id, rule_name, expression) in rules {
             let _regex_evaluator = RegexEvaluator::new(regex_preprocessor.clone());
             let processor = EpgRuleProcessor::new(rule_id, rule_name, expression);
+            if let Some(err) = &processor.parse_error {
+                println!(
+                    "(TEST_DEBUG) EPG rule parse_error: id={} name='{}' error={}",
+                    processor.rule_id, processor.rule_name, err
+                );
+            }
             engine.add_rule_processor(processor);
         }
 
@@ -210,6 +218,7 @@ impl EpgDataMappingTestService {
                         rule_id: rule_id.clone(),
                         rule_name: "Test EPG Rule".to_string(), // TODO: Get from processor
                         applied: rule_result.rule_applied,
+                        condition_matched: rule_result.condition_matched,
                         execution_time_ms: rule_result.execution_time.as_millis(),
                         field_changes: rule_result
                             .field_modifications
@@ -453,6 +462,40 @@ mod tests {
         assert_eq!(
             modified_program.final_program.subtitles,
             Some("No subtitles available".to_string())
+        );
+    }
+
+    #[test]
+    fn test_epg_rule_alias_action_program_title() {
+        // Verify that using program_title (alias) in the action updates the canonical programme_title
+        let programs = EpgDataMappingTestService::create_sample_epg_programs();
+
+        let rule_expression =
+            r#"program_category equals "Movies" SET program_title = "ALIased Movie Title""#;
+
+        let result =
+            EpgDataMappingTestService::test_single_epg_rule(rule_expression.to_string(), programs)
+                .expect("EPG rule alias action test should succeed");
+
+        // Exactly one movie category program should be modified
+        assert_eq!(
+            result.programs_modified, 1,
+            "Expected exactly one modified program (movie)"
+        );
+
+        let modified_movie = result
+            .results
+            .iter()
+            .find(|r| r.initial_program.program_category.as_deref() == Some("Movies"))
+            .expect("Should find movie program result");
+
+        assert!(
+            modified_movie.was_modified,
+            "Alias action should mark program as modified"
+        );
+        assert_eq!(
+            modified_movie.final_program.title, "ALIased Movie Title",
+            "Title should be updated via alias action field"
         );
     }
 }

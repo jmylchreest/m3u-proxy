@@ -17,12 +17,97 @@ pub struct ExpressionParser {
     operators: Vec<String>,
     logical_operators: Vec<String>,
     valid_fields: Vec<String>,
+    // Map of alias -> canonical field name (e.g. program_title -> programme_title)
+    alias_map: std::collections::HashMap<String, String>,
+}
+
+// -------------------------------------------------------------------------------------------------
+// Canonicalization utilities
+// -------------------------------------------------------------------------------------------------
+impl ExpressionParser {
+    /// Return a canonicalized version of an expression by replacing any field
+    /// aliases with their canonical equivalents using the parser's alias_map.
+    ///
+    /// This is a lossy transformation (it does not preserve original spacing or
+    /// quoting nuances beyond basic copying) but is safe for:
+    ///   - Storing a normalized expression
+    ///   - Displaying a standardized form in preview responses
+    ///
+    /// It purposefully does NOT attempt a full round‑trip reconstruction from
+    /// the parsed AST; instead it performs a token scan so that unknown tokens
+    /// or future syntax additions pass through unchanged.
+    pub fn canonicalize_expression_lossy(&self, expression: &str) -> String {
+        // Fast path: if no aliases, return original
+        if self.alias_map.is_empty() {
+            return expression.to_string();
+        }
+
+        let mut out = String::with_capacity(expression.len());
+        let mut current = String::new();
+
+        // Helper to flush an accumulated word token (identifier) applying alias mapping
+        let flush_word =
+            |word: &mut String,
+             out: &mut String,
+             alias_map: &std::collections::HashMap<String, String>| {
+                if !word.is_empty() {
+                    if let Some(canon) = alias_map.get(&word.to_lowercase()) {
+                        out.push_str(canon);
+                    } else if let Some(canon_exact) = alias_map.get(word) {
+                        // Exact (case-sensitive) match fallback
+                        out.push_str(canon_exact);
+                    } else {
+                        out.push_str(word);
+                    }
+                    word.clear();
+                }
+            };
+
+        let mut chars = expression.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                // Identifier characters we accumulate
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => {
+                    current.push(ch);
+                }
+                // Quoted string literals: copy verbatim (no alias substitution inside)
+                '"' | '\'' => {
+                    // Flush any pending identifier before starting a literal
+                    flush_word(&mut current, &mut out, &self.alias_map);
+                    out.push(ch);
+                    // Copy until matching quote or end
+                    while let Some(&next_c) = chars.peek() {
+                        out.push(next_c);
+                        chars.next();
+                        if next_c == ch {
+                            break;
+                        }
+                    }
+                }
+                // Anything else is a delimiter; flush identifier then copy delimiter
+                _ => {
+                    flush_word(&mut current, &mut out, &self.alias_map);
+                    out.push(ch);
+                }
+            }
+        }
+        // Flush any trailing identifier
+        flush_word(&mut current, &mut out, &self.alias_map);
+
+        out
+    }
 }
 
 impl ExpressionParser {
     pub fn new() -> Self {
         Self {
             operators: vec![
+                // Negated forms first (longest / most specific)
+                "not_starts_with".to_string(),
+                "not_ends_with".to_string(),
+                "not_contains".to_string(),
+                "not_equals".to_string(),
+                "not_matches".to_string(),
                 // Base operators
                 "starts_with".to_string(),
                 "ends_with".to_string(),
@@ -37,6 +122,7 @@ impl ExpressionParser {
             ],
             logical_operators: vec!["AND".to_string(), "OR".to_string()],
             valid_fields: vec![], // Empty by default, will be set via with_fields
+            alias_map: std::collections::HashMap::new(),
         }
     }
 
@@ -45,12 +131,26 @@ impl ExpressionParser {
         self
     }
 
+    /// Provide an alias mapping (alias -> canonical). Canonical names must
+    /// already appear in `valid_fields` for validation to pass.
+    pub fn with_aliases<I, A>(mut self, aliases: I) -> Self
+    where
+        I: IntoIterator<Item = (A, A)>,
+        A: Into<String>,
+    {
+        self.alias_map = aliases
+            .into_iter()
+            .map(|(from, to)| (from.into(), to.into()))
+            .collect();
+        self
+    }
+
     /// Create a parser specifically for data mapping expressions
     pub fn for_data_mapping(fields: Vec<String>) -> Self {
         Self::new().with_fields(fields)
     }
 
-    /// Create a parser specifically for filter expressions  
+    /// Create a parser specifically for filter expressions
     pub fn for_filtering(fields: Vec<String>) -> Self {
         Self::new().with_fields(fields)
     }
@@ -330,7 +430,7 @@ impl ExpressionParser {
                         || remaining
                             .chars()
                             .nth(end_pos)
-                            .is_none_or(|c| c.is_whitespace() || c == '(' || c == ')')
+                            .map_or(true, |c| c.is_whitespace() || c == '(' || c == ')')
                     {
                         let operator = match logical_op.as_str() {
                             "AND" | "ALL" => LogicalOperator::And,
@@ -404,7 +504,7 @@ impl ExpressionParser {
                     || remaining
                         .chars()
                         .nth(end_pos)
-                        .is_none_or(|c| c.is_whitespace())
+                        .map_or(true, |c| c.is_whitespace())
                 {
                     tokens.push(Token::Modifier("not".to_string()));
                     current_pos += end_pos;
@@ -418,7 +518,7 @@ impl ExpressionParser {
                     || remaining
                         .chars()
                         .nth(end_pos)
-                        .is_none_or(|c| c.is_whitespace())
+                        .map_or(true, |c| c.is_whitespace())
                 {
                     tokens.push(Token::Modifier("case_sensitive".to_string()));
                     current_pos += end_pos;
@@ -433,7 +533,7 @@ impl ExpressionParser {
                     || remaining
                         .chars()
                         .nth(end_pos)
-                        .is_none_or(|c| c.is_whitespace())
+                        .map_or(true, |c| c.is_whitespace())
                 {
                     tokens.push(Token::SetKeyword);
                     current_pos += end_pos;
@@ -479,9 +579,31 @@ impl ExpressionParser {
                         || remaining
                             .chars()
                             .nth(end_pos)
-                            .is_none_or(|c| c.is_whitespace() || c == '"' || c == '\'')
+                            .map_or(true, |c| c.is_whitespace() || c == '"' || c == '\'')
                     {
                         let filter_op = match op.as_str() {
+                            // Negated snake_case forms: inject a preceding 'not' modifier token
+                            "not_contains" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::Contains
+                            }
+                            "not_equals" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::Equals
+                            }
+                            "not_matches" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::Matches
+                            }
+                            "not_starts_with" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::StartsWith
+                            }
+                            "not_ends_with" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::EndsWith
+                            }
+                            // Base operators
                             "contains" => FilterOperator::Contains,
                             "equals" => FilterOperator::Equals,
                             "matches" => FilterOperator::Matches,
@@ -550,7 +672,7 @@ impl ExpressionParser {
                         || remaining
                             .chars()
                             .nth(end_pos)
-                            .is_none_or(|c| c.is_whitespace() || c == '"' || c == '\'')
+                            .map_or(true, |c| c.is_whitespace() || c == '"' || c == '\'')
                     {
                         let context = if remaining.len() > 15 {
                             format!("{}...", &remaining[..15])
@@ -571,7 +693,7 @@ impl ExpressionParser {
                         });
                         // Skip the problematic token and continue to find more errors
                         current_pos += 1;
-                        continue;
+                        // removed needless continue; loop proceeds naturally
                     }
                 }
             }
@@ -608,7 +730,7 @@ impl ExpressionParser {
                 });
                 // Skip the problematic character and continue to find more errors
                 current_pos += 1;
-                continue;
+                // removed needless continue; loop proceeds naturally
             }
         }
 
@@ -1204,7 +1326,7 @@ impl ExpressionParser {
                         || remaining
                             .chars()
                             .nth(end_pos)
-                            .is_none_or(|c| c.is_whitespace() || c == '(' || c == ')')
+                            .map_or(true, |c| c.is_whitespace() || c == '(' || c == ')')
                     {
                         let operator = match logical_op.as_str() {
                             "AND" | "ALL" => LogicalOperator::And,
@@ -1229,7 +1351,7 @@ impl ExpressionParser {
                     || remaining
                         .chars()
                         .nth(end_pos)
-                        .is_none_or(|c| c.is_whitespace())
+                        .map_or(true, |c| c.is_whitespace())
                 {
                     tokens.push(Token::Modifier("not".to_string()));
                     current_pos += end_pos;
@@ -1243,7 +1365,7 @@ impl ExpressionParser {
                     || remaining
                         .chars()
                         .nth(end_pos)
-                        .is_none_or(|c| c.is_whitespace())
+                        .map_or(true, |c| c.is_whitespace())
                 {
                     tokens.push(Token::Modifier("case_sensitive".to_string()));
                     current_pos += end_pos;
@@ -1258,7 +1380,7 @@ impl ExpressionParser {
                     || remaining
                         .chars()
                         .nth(end_pos)
-                        .is_none_or(|c| c.is_whitespace())
+                        .map_or(true, |c| c.is_whitespace())
                 {
                     tokens.push(Token::SetKeyword);
                     current_pos += end_pos;
@@ -1305,9 +1427,31 @@ impl ExpressionParser {
                         || remaining
                             .chars()
                             .nth(end_pos)
-                            .is_none_or(|c| c.is_whitespace() || c == '"' || c == '\'')
+                            .map_or(true, |c| c.is_whitespace() || c == '"' || c == '\'')
                     {
                         let filter_op = match op.as_str() {
+                            // Negated snake_case forms: inject a preceding 'not' modifier token
+                            "not_contains" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::Contains
+                            }
+                            "not_equals" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::Equals
+                            }
+                            "not_matches" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::Matches
+                            }
+                            "not_starts_with" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::StartsWith
+                            }
+                            "not_ends_with" => {
+                                tokens.push(Token::Modifier("not".to_string()));
+                                FilterOperator::EndsWith
+                            }
+                            // Base operators
                             "contains" => FilterOperator::Contains,
                             "equals" => FilterOperator::Equals,
                             "matches" => FilterOperator::Matches,
@@ -1337,7 +1481,14 @@ impl ExpressionParser {
                 .unwrap_or(remaining.len());
 
             if word_end > 0 {
-                let word = remaining[..word_end].to_string();
+                let mut word = remaining[..word_end].to_string();
+
+                // Alias resolution: if the token matches an alias exactly,
+                // replace it with its canonical equivalent before further parsing.
+                if let Some(canonical) = self.alias_map.get(&word) {
+                    word = canonical.clone();
+                }
+
                 tokens.push(Token::Field(word));
                 current_pos += word_end;
             } else {
@@ -1408,31 +1559,32 @@ impl ExpressionParser {
                 let field = field.clone();
                 *pos += 1;
 
-                // Parse modifiers (not, case_sensitive) before operator
+                // Mid-field modifiers only: initialize flags (no pre-field modifier support)
                 let mut negate = false;
                 let mut case_sensitive = false;
 
+                if *pos >= tokens.len() {
+                    return Err(anyhow!("Expected operator after field '{}'", field));
+                }
+
+                // Support modifiers appearing BETWEEN field and operator (e.g. channel_name case_sensitive contains "X")
                 while *pos < tokens.len() {
                     match &tokens[*pos] {
-                        Token::Modifier(modifier) => {
-                            match modifier.as_str() {
-                                "not" => {
-                                    if negate {
-                                        return Err(anyhow!("Duplicate 'not' modifier"));
-                                    }
-                                    negate = true;
-                                }
-                                "case_sensitive" => {
-                                    if case_sensitive {
-                                        return Err(anyhow!("Duplicate 'case_sensitive' modifier"));
-                                    }
-                                    case_sensitive = true;
-                                }
-                                _ => return Err(anyhow!("Unknown modifier: {}", modifier)),
+                        Token::Modifier(m) if m == "case_sensitive" => {
+                            if case_sensitive {
+                                return Err(anyhow!("Duplicate 'case_sensitive' modifier"));
                             }
+                            case_sensitive = true;
                             *pos += 1;
                         }
-                        _ => break, // Not a modifier, continue to operator parsing
+                        Token::Modifier(m) if m == "not" => {
+                            if negate {
+                                return Err(anyhow!("Duplicate 'not' modifier"));
+                            }
+                            negate = true;
+                            *pos += 1;
+                        }
+                        _ => break,
                     }
                 }
 
@@ -1440,7 +1592,6 @@ impl ExpressionParser {
                     return Err(anyhow!("Expected operator after field '{}'", field));
                 }
 
-                // Apply modifiers to the base operator to get the final operator
                 let base_operator = match &tokens[*pos] {
                     Token::Operator(op) => op.clone(),
                     _ => return Err(anyhow!("Expected operator after field '{}'", field)),
@@ -1453,13 +1604,11 @@ impl ExpressionParser {
                         FilterOperator::Matches => FilterOperator::NotMatches,
                         FilterOperator::StartsWith => FilterOperator::NotStartsWith,
                         FilterOperator::EndsWith => FilterOperator::NotEndsWith,
-                        // Already negated operators - double negation becomes positive
                         FilterOperator::NotContains => FilterOperator::Contains,
                         FilterOperator::NotEquals => FilterOperator::Equals,
                         FilterOperator::NotMatches => FilterOperator::Matches,
                         FilterOperator::NotStartsWith => FilterOperator::StartsWith,
                         FilterOperator::NotEndsWith => FilterOperator::EndsWith,
-                        // Comparison operators don't have negated versions, so return error
                         FilterOperator::GreaterThan
                         | FilterOperator::LessThan
                         | FilterOperator::GreaterThanOrEqual
@@ -1487,102 +1636,15 @@ impl ExpressionParser {
                     operator,
                     value,
                     case_sensitive,
-                    negate: false, // negate is now handled through operator transformation
+                    negate: false,
                 })
             }
-            Token::Modifier(_) => {
-                // Handle cases where modifiers come before field name
-                let mut negate = false;
-                let mut case_sensitive = false;
-
-                // Parse all modifiers first
-                while *pos < tokens.len() {
-                    match &tokens[*pos] {
-                        Token::Modifier(modifier) => {
-                            match modifier.as_str() {
-                                "not" => {
-                                    if negate {
-                                        return Err(anyhow!("Duplicate 'not' modifier"));
-                                    }
-                                    negate = true;
-                                }
-                                "case_sensitive" => {
-                                    if case_sensitive {
-                                        return Err(anyhow!("Duplicate 'case_sensitive' modifier"));
-                                    }
-                                    case_sensitive = true;
-                                }
-                                _ => return Err(anyhow!("Unknown modifier: {}", modifier)),
-                            }
-                            *pos += 1;
-                        }
-                        _ => break, // Not a modifier, continue to field parsing
-                    }
-                }
-
-                if *pos >= tokens.len() {
-                    return Err(anyhow!("Expected field name after modifiers"));
-                }
-
-                let field = match &tokens[*pos] {
-                    Token::Field(field) => field.clone(),
-                    _ => return Err(anyhow!("Expected field name after modifiers")),
-                };
-                *pos += 1;
-
-                if *pos >= tokens.len() {
-                    return Err(anyhow!("Expected operator after field '{}'", field));
-                }
-
-                // Apply modifiers to the base operator to get the final operator
-                let base_operator = match &tokens[*pos] {
-                    Token::Operator(op) => op.clone(),
-                    _ => return Err(anyhow!("Expected operator after field '{}'", field)),
-                };
-
-                let operator = if negate {
-                    match base_operator {
-                        FilterOperator::Contains => FilterOperator::NotContains,
-                        FilterOperator::Equals => FilterOperator::NotEquals,
-                        FilterOperator::Matches => FilterOperator::NotMatches,
-                        FilterOperator::StartsWith => FilterOperator::NotStartsWith,
-                        FilterOperator::EndsWith => FilterOperator::NotEndsWith,
-                        // Already negated operators - double negation becomes positive
-                        FilterOperator::NotContains => FilterOperator::Contains,
-                        FilterOperator::NotEquals => FilterOperator::Equals,
-                        FilterOperator::NotMatches => FilterOperator::Matches,
-                        FilterOperator::NotStartsWith => FilterOperator::StartsWith,
-                        FilterOperator::NotEndsWith => FilterOperator::EndsWith,
-                        // Comparison operators don't have negated versions, so return error
-                        FilterOperator::GreaterThan
-                        | FilterOperator::LessThan
-                        | FilterOperator::GreaterThanOrEqual
-                        | FilterOperator::LessThanOrEqual => {
-                            return Err(anyhow!("Cannot negate comparison operators"));
-                        }
-                    }
-                } else {
-                    base_operator
-                };
-                *pos += 1;
-
-                if *pos >= tokens.len() {
-                    return Err(anyhow!("Expected value after operator"));
-                }
-
-                let value = match &tokens[*pos] {
-                    Token::Value(val) => val.clone(),
-                    _ => return Err(anyhow!("Expected value after operator")),
-                };
-                *pos += 1;
-
-                Ok(ConditionNode::Condition {
-                    field,
-                    operator,
-                    value,
-                    case_sensitive,
-                    negate: false, // negate is now handled through operator transformation
-                })
+            Token::Modifier(modifier) => {
+                // clippy: needless_return already addressed (no `return` keyword needed here)
+                Err(anyhow!(
+                    "Pre-field modifier '{}' not supported; place modifiers after the field name",
+                    modifier
+                ))
             }
             _ => Err(anyhow!(
                 "Expected field name, modifier, or opening parenthesis"
@@ -1610,7 +1672,7 @@ impl ExpressionParser {
                 if *pos >= tokens.len() {
                     return Err(anyhow!("Expected action after comma"));
                 }
-                continue;
+            // removed needless continue; loop proceeds naturally
             } else {
                 break;
             }

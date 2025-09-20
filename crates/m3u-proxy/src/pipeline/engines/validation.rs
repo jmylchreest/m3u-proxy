@@ -1,4 +1,5 @@
 use crate::expression_parser::ExpressionParser;
+use crate::field_registry::{FieldRegistry, SourceKind, StageKind};
 use crate::models::data_mapping::{DataMappingFieldInfo, DataMappingSourceType};
 
 /// Rule validation result
@@ -47,8 +48,14 @@ impl DataMappingValidator {
     }
 
     fn validate_expression_impl(&self, expression: &str) -> RuleValidationResult {
-        let available_fields = self.get_available_fields();
-        let parser = ExpressionParser::new().with_fields(available_fields.clone());
+        // Use FieldRegistry for canonical field set + alias mapping (unifies with rest of system)
+        let registry = FieldRegistry::global();
+        let canonical_fields = self.get_available_fields();
+        let alias_map = registry.alias_map();
+
+        let parser = ExpressionParser::new()
+            .with_fields(canonical_fields.clone())
+            .with_aliases(alias_map.clone());
 
         match parser.parse_extended(expression) {
             Ok(_parsed_expression) => RuleValidationResult {
@@ -59,9 +66,13 @@ impl DataMappingValidator {
             },
             Err(parse_error) => {
                 let error_message = parse_error.to_string();
-                let mut field_errors = vec![];
 
-                for field in &available_fields {
+                // Collect both canonical + alias names to surface more precise field error hints.
+                let mut field_errors = vec![];
+                let mut all_names: Vec<String> = canonical_fields.clone();
+                all_names.extend(alias_map.keys().cloned());
+
+                for field in &all_names {
                     if error_message.contains(field) {
                         field_errors.push(format!("Issue with field: {field}"));
                     }
@@ -109,23 +120,16 @@ impl StageValidator for DataMappingValidator {
     }
 
     fn get_available_fields(&self) -> Vec<String> {
-        match self.source_type {
-            DataMappingSourceType::Stream => vec![
-                "tvg_id".to_string(),
-                "tvg_name".to_string(),
-                "tvg_logo".to_string(),
-                "tvg_shift".to_string(),
-                "group_title".to_string(),
-                "channel_name".to_string(),
-            ],
-            DataMappingSourceType::Epg => vec![
-                "channel_id".to_string(),
-                "channel_name".to_string(),
-                "channel_logo".to_string(),
-                "channel_group".to_string(),
-                "language".to_string(),
-            ],
-        }
+        let registry = FieldRegistry::global();
+        let source_kind = match self.source_type {
+            DataMappingSourceType::Stream => SourceKind::Stream,
+            DataMappingSourceType::Epg => SourceKind::Epg,
+        };
+        registry
+            .field_names_for(source_kind, StageKind::DataMapping)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     fn get_stage_type(&self) -> PipelineStageType {

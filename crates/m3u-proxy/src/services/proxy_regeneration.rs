@@ -212,32 +212,32 @@ impl ProxyRegenerationService {
                         &http_client_factory,
                     )
                     .await;
-                    continue; // Immediately check for more work
-                }
-
-                // Step 2: If no manual work, check auto queue
-                match auto_queue_receiver.try_recv() {
-                    Ok(auto_request) => {
-                        Self::process_regeneration_request(
-                            auto_request,
-                            &database,
-                            &temp_file_manager,
-                            &ingestion_state_manager,
-                            &active_regenerations,
-                            &queued_proxies,
-                            &app_config,
-                            &http_client_factory,
-                        )
-                        .await;
-                        continue; // Immediately check for more work
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {
-                        // No work available, brief pause before checking again
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                    }
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        info!("Auto queue disconnected, stopping processor");
-                        break;
+                    // Immediately iterate again to prioritise any additional manual work
+                } else {
+                    // Step 2: If no manual work, check auto queue
+                    match auto_queue_receiver.try_recv() {
+                        Ok(auto_request) => {
+                            Self::process_regeneration_request(
+                                auto_request,
+                                &database,
+                                &temp_file_manager,
+                                &ingestion_state_manager,
+                                &active_regenerations,
+                                &queued_proxies,
+                                &app_config,
+                                &http_client_factory,
+                            )
+                            .await;
+                            // Loop will naturally continue to the next iteration
+                        }
+                        Err(mpsc::error::TryRecvError::Empty) => {
+                            // No work available, brief pause before checking again
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                        Err(mpsc::error::TryRecvError::Disconnected) => {
+                            info!("Auto queue disconnected, stopping processor");
+                            break;
+                        }
                     }
                 }
             }

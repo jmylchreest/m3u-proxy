@@ -21,12 +21,11 @@ impl EpgSource {
             if crate::utils::time::validate_timezone(&detected).is_ok() {
                 log_timezone_detection(&self.name, Some(&detected), &detected);
                 return Ok(Some(detected));
-            } else {
-                warn!(
-                    "EPG source '{}': Detected invalid timezone '{}', ignoring",
-                    self.name, detected
-                );
             }
+            warn!(
+                "EPG source '{}': Detected invalid timezone '{}', ignoring",
+                self.name, detected
+            );
         } else {
             log_timezone_detection(&self.name, None, "UTC");
         }

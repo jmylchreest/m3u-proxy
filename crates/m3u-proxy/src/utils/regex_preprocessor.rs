@@ -429,7 +429,7 @@ impl RegexPreprocessor {
         chars: &mut std::iter::Peekable<std::str::Chars>,
     ) -> bool {
         match chars.peek() {
-            Some('?') | Some('*') => true,
+            Some('?' | '*') => true,
             Some('{') => {
                 // Need to parse the quantifier to see if min is 0
                 let mut chars_clone = chars.clone();

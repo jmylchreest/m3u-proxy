@@ -100,171 +100,46 @@ impl EpgMappingFields {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataMappingFieldInfo {
     pub field_name: String,
+    pub canonical_name: String,
     pub display_name: String,
     pub field_type: String,
     pub nullable: bool,
     pub source_type: DataMappingSourceType,
+    pub read_only: bool,
+    pub aliases: Vec<String>,
 }
 
 impl DataMappingFieldInfo {
     pub fn available_for_source_type(
         source_type: &DataMappingSourceType,
     ) -> Vec<DataMappingFieldInfo> {
-        match source_type {
-            DataMappingSourceType::Stream => vec![
-                DataMappingFieldInfo {
-                    field_name: "tvg_id".to_string(),
-                    display_name: "TVG ID".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Stream,
-                },
-                DataMappingFieldInfo {
-                    field_name: "tvg_name".to_string(),
-                    display_name: "TVG Name".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Stream,
-                },
-                DataMappingFieldInfo {
-                    field_name: "tvg_logo".to_string(),
-                    display_name: "TVG Logo".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Stream,
-                },
-                DataMappingFieldInfo {
-                    field_name: "tvg_shift".to_string(),
-                    display_name: "TVG Shift".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Stream,
-                },
-                DataMappingFieldInfo {
-                    field_name: "tvg_chno".to_string(),
-                    display_name: "TVG Channel Number".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Stream,
-                },
-                DataMappingFieldInfo {
-                    field_name: "group_title".to_string(),
-                    display_name: "Group Title".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Stream,
-                },
-                DataMappingFieldInfo {
-                    field_name: "channel_name".to_string(),
-                    display_name: "Channel Name".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: DataMappingSourceType::Stream,
-                },
-            ],
-            DataMappingSourceType::Epg => vec![
-                // Core EPG fields
-                DataMappingFieldInfo {
-                    field_name: "channel_id".to_string(),
-                    display_name: "Channel ID".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "channel_name".to_string(),
-                    display_name: "Channel Name".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "channel_logo".to_string(),
-                    display_name: "Channel Logo".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "channel_group".to_string(),
-                    display_name: "Channel Group".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "title".to_string(),
-                    display_name: "Program Title".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: false,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "description".to_string(),
-                    display_name: "Program Description".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "program_icon".to_string(),
-                    display_name: "Program Icon".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                // Extended XMLTV metadata fields
-                DataMappingFieldInfo {
-                    field_name: "program_category".to_string(),
-                    display_name: "Program Category".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "subtitles".to_string(),
-                    display_name: "Episode Subtitle".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "episode_num".to_string(),
-                    display_name: "Episode Number".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "season_num".to_string(),
-                    display_name: "Season Number".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "language".to_string(),
-                    display_name: "Program Language".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "rating".to_string(),
-                    display_name: "Content Rating".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-                DataMappingFieldInfo {
-                    field_name: "aspect_ratio".to_string(),
-                    display_name: "Aspect Ratio".to_string(),
-                    field_type: "string".to_string(),
-                    nullable: true,
-                    source_type: DataMappingSourceType::Epg,
-                },
-            ],
-        }
+        use crate::field_registry::{FieldDataType, FieldRegistry, SourceKind, StageKind};
+        let registry = FieldRegistry::global();
+        let source_kind = match source_type {
+            DataMappingSourceType::Stream => SourceKind::Stream,
+            DataMappingSourceType::Epg => SourceKind::Epg,
+        };
+        registry
+            .descriptors_for(source_kind, StageKind::DataMapping)
+            .into_iter()
+            .map(|d| DataMappingFieldInfo {
+                field_name: d.name.to_string(),
+                canonical_name: d.name.to_string(),
+                display_name: d.display_name.to_string(),
+                field_type: match d.data_type {
+                    FieldDataType::Url => "url",
+                    FieldDataType::Integer => "integer",
+                    FieldDataType::DateTime => "datetime",
+                    FieldDataType::Duration => "duration",
+                    FieldDataType::String => "string",
+                }
+                .to_string(),
+                nullable: d.nullable,
+                source_type: source_type.clone(),
+                read_only: d.read_only,
+                aliases: d.aliases.iter().map(|a| a.to_string()).collect(),
+            })
+            .collect()
     }
 
     pub fn is_valid_field_for_source_type(
@@ -277,7 +152,7 @@ impl DataMappingFieldInfo {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MappedChannel {
     #[serde(flatten)]
     pub original: crate::models::Channel,
@@ -293,7 +168,7 @@ pub struct MappedChannel {
     pub capture_group_values: HashMap<String, HashMap<String, String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MappedEpgProgram {
     #[serde(flatten)]
     pub original: EpgProgram,
@@ -351,23 +226,125 @@ pub struct DataMappingTestChannel {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DataMappingPreviewRequest {
+    /// Source type to preview (stream or epg)
     pub source_type: DataMappingSourceType,
+    /// Optional single source filter (legacy – superseded by source_ids in POST body elsewhere)
     pub source_id: Option<Uuid>,
+    /// Maximum number of sample changes to return
     pub limit: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataMappingPreviewResponse {
+/// Typed request for ad-hoc expression preview (POST /data-mapping/preview).
+///
+/// This is the strongly-typed counterpart to the older ad-hoc preview payload
+/// that lived only in the web layer. It allows clients (and OpenAPI) to
+/// understand the shape of an expression-based preview request that:
+///   - Targets one source kind (stream or epg)
+///   - Optionally restricts to a list of specific source IDs (empty => all)
+///   - Supplies a single expression to be parsed, canonicalized (aliases -> canonical),
+///     validated and then applied virtually
+///   - Supports an optional sample limit (server may cap to a safe maximum)
+///
+/// NOTE:
+///   expression is required for expression previews (unlike rule previews
+///   where expression may be absent because existing stored rules are used).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DataMappingExpressionPreviewRequest {
+    /// Source type to preview (stream or epg)
     pub source_type: DataMappingSourceType,
-    pub stream_preview: Option<StreamDataMappingPreview>,
+    /// Specific sources to include (empty = all active/available sources of this type)
+    pub source_ids: Vec<Uuid>,
+    /// The raw user-entered expression (aliases allowed; will be canonicalized internally)
+    pub expression: String,
+    /// Maximum number of modified (or matched) sample records to return (server caps hard maximum)
+    pub limit: Option<i32>,
+    /// Whether to include sample detail payloads (modified & matched-but-unmodified).
+    /// Defaults to true if omitted. Set false for a fast counts-only preview.
+    pub include_samples: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DataMappingPreviewResponse {
+    /// Source type evaluated
+    pub source_type: DataMappingSourceType,
+    /// Unified summary totals (independent of stream/epg specifics).
+    ///
+    /// The summary always reflects:
+    ///   - total_records: total candidates considered
+    ///   - condition_matches: records whose condition evaluated true (even if unchanged)
+    ///   - modified_records: records with at least one field modification
+    ///   - canonical_expression: the fully canonicalized expression string
+    ///     (all aliases resolved to canonical registry field names) when
+    ///     the preview originated from an ad-hoc expression submission.
+    ///     For previews of stored rules this may be None if no re-canonicalization
+    ///     was necessary/recorded.
+    pub summary: DataMappingPreviewSummary,
+    /// Stream preview details (present when source_type == stream).
+    /// Provides stream-specific counts plus sampled channel transformations.
+    pub stream: Option<StreamDataMappingPreview>,
+    /// EPG preview details (present when source_type == epg).
+    /// Provides EPG program–specific counts plus sampled program transformations.
+    pub epg: Option<EpgDataMappingPreview>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct StreamDataMappingPreview {
+    /// Total channels processed
     pub total_channels: i32,
+    /// Number of channels where the condition matched (even if no modification)
+    pub condition_matches: i32,
+    /// Number of channels with at least one modification
     pub affected_channels: i32,
-    pub preview_channels: Vec<MappedChannel>,
+    /// Sample channel modifications as raw JSON objects (legacy structure). Empty when not requested.
+    pub preview_channels: Vec<serde_json::Value>,
+    /// Typed sample channel modifications (preferred new field). Present only when samples requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_channels_typed: Option<Vec<MappedChannel>>,
+    /// Condition-matched but unmodified channel samples (typed). Allows UI to explain zero-mod scenarios.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_but_unmodified_channels: Option<Vec<MappedChannel>>,
+    /// Names or identifiers of rules applied to produce changes
     pub applied_rules: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EpgDataMappingPreview {
+    /// Total programs processed
+    pub total_programs: i32,
+    /// Number of programs whose condition matched (even if not modified)
+    pub condition_matches: i32,
+    /// Number of programs actually modified
+    pub affected_programs: i32,
+    /// Sample program modifications as raw JSON objects (legacy structure). Empty when not requested.
+    pub preview_programs: Vec<serde_json::Value>,
+    /// Typed sample program modifications (preferred new field). Present only when samples requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_programs_typed: Option<Vec<MappedEpgProgram>>,
+    /// Condition-matched but unmodified program samples (typed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_but_unmodified_programs: Option<Vec<MappedEpgProgram>>,
+    /// Applied rule names / identifiers
+    pub applied_rules: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DataMappingPreviewSummary {
+    /// Total records processed (channels or programs)
+    pub total_records: i32,
+    /// Total condition matches (channels or programs where a condition evaluated true)
+    pub condition_matches: i32,
+    /// Total modified records
+    pub modified_records: i32,
+    /// Original submitted expression (with aliases as entered) if available
+    pub raw_expression: Option<String>,
+    /// Expression string after canonicalization (aliases -> canonical) if performed
+    pub canonical_expression: Option<String>,
+    /// Total records actually scanned/evaluated (may differ from total_records if future caps or early exits are introduced)
+    #[serde(default)]
+    pub scanned_records: Option<i32>,
+    /// Whether the scan was truncated due to a server-side cap (future-proof; always false currently)
+    #[serde(default)]
+    pub truncated: Option<bool>,
 }
 
 impl DataMappingRuleCreateRequest {

@@ -5,8 +5,8 @@
 
 use sea_orm_migration::prelude::*;
 
-#[derive(DeriveMigrationName)]
 pub struct Migration;
+folder_migration_name!();
 
 impl Migration {
     /// Create UUID value for database insertion with proper type casting

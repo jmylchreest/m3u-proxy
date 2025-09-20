@@ -5,7 +5,9 @@ use crate::pipeline::services::{HelperPostProcessor, HelperProcessorError};
 use crate::pipeline::traits::{PipelineStage, ProgressAware};
 use crate::services::progress_service::ProgressManager;
 // Import helper traits implementation (this ensures the trait implementations are available)
-use crate::entities::{channels, data_mapping_rules, epg_programs, prelude::*, stream_sources};
+use crate::entities::{
+    channels, data_mapping_rules, epg_programs, epg_sources, prelude::*, stream_sources,
+};
 use crate::pipeline::engines::rule_processor::{EpgRuleProcessor, RegexEvaluator};
 use crate::pipeline::engines::{
     ChannelDataMappingEngine, DataMappingEngine, EngineResult, EpgProgram,
@@ -177,13 +179,33 @@ impl DataMappingStage {
                         let rule_id_str = rule.id.to_string();
                         rule_name_map.insert(rule_id_str.clone(), rule.name.clone());
 
+                        // Build (or reuse) a runtime source metadata map (single-source in this stage)
+                        // NOTE: We construct it lazily here so we can attach it to each rule processor
+                        // before adding the processor to the engine.
+                        let mut meta_map: std::collections::HashMap<
+                            uuid::Uuid,
+                            crate::pipeline::eval_context::SourceMeta,
+                        > = std::collections::HashMap::new();
+                        // Build source metadata directly from the current `source` (we are already iterating it)
+                        let sanitised =
+                            crate::field_registry::FieldRegistry::sanitise_source_url(&source.url);
+                        meta_map.insert(
+                            source_id,
+                            crate::pipeline::eval_context::SourceMeta::new(
+                                source.name.clone(),
+                                source.source_type.to_string(),
+                                sanitised,
+                            ),
+                        );
+                        let meta_map = std::sync::Arc::new(meta_map);
                         let regex_evaluator = RegexEvaluator::new(self.regex_preprocessor.clone());
                         let processor = StreamRuleProcessor::new(
                             rule_id_str,
                             rule.name.clone(),
                             expression,
                             regex_evaluator,
-                        );
+                        )
+                        .with_source_meta_map(meta_map.clone());
                         engine.add_rule_processor(processor);
                     }
                 }
@@ -266,6 +288,7 @@ impl DataMappingStage {
                                             processed_records: batch_data,
                                             total_processed: batch_len,
                                             total_modified: 0,
+                                            total_condition_matches: 0,
                                             rule_results: HashMap::new(),
                                             execution_time: std::time::Duration::ZERO,
                                         }
@@ -438,6 +461,7 @@ impl DataMappingStage {
                         processed_records: current_batch,
                         total_processed: batch_len,
                         total_modified: 0,
+                        total_condition_matches: 0,
                         rule_results: HashMap::new(),
                         execution_time: std::time::Duration::ZERO,
                     }
@@ -554,10 +578,6 @@ impl DataMappingStage {
             // Clean up engine if we created one
             if let Some((engine, _)) = engine {
                 engine.destroy();
-            }
-
-            if channel_count == 0 {
-                continue;
             }
         }
 
@@ -722,12 +742,35 @@ impl DataMappingStage {
                 HashMap::new();
 
             // Add rule processors to the engine
+            // Build source metadata map for all active EPG sources (sanitised URLs)
+            let active_epg_sources = EpgSources::find()
+                .filter(epg_sources::Column::IsActive.eq(true))
+                .all(&*self.db_connection)
+                .await
+                .unwrap_or_default();
+            let mut epg_meta_map: std::collections::HashMap<
+                uuid::Uuid,
+                crate::pipeline::eval_context::SourceMeta,
+            > = std::collections::HashMap::new();
+            for s in &active_epg_sources {
+                let sanitised = crate::field_registry::FieldRegistry::sanitise_source_url(&s.url);
+                epg_meta_map.insert(
+                    s.id,
+                    crate::pipeline::eval_context::SourceMeta::new(
+                        s.name.clone(),
+                        s.source_type.to_string(),
+                        sanitised,
+                    ),
+                );
+            }
+            let epg_meta_map = std::sync::Arc::new(epg_meta_map);
             for rule in epg_rules {
                 if let Some(expression) = rule.expression {
                     let rule_id_str = rule.id.to_string();
                     let _regex_evaluator = RegexEvaluator::new(self.regex_preprocessor.clone());
                     let processor =
-                        EpgRuleProcessor::new(rule_id_str.clone(), rule.name.clone(), expression);
+                        EpgRuleProcessor::new(rule_id_str.clone(), rule.name.clone(), expression)
+                            .with_source_meta_map(epg_meta_map.clone());
                     engine.add_rule_processor(processor);
                     rule_stats.insert(rule_id_str, (rule.name, 0, 0, std::time::Duration::ZERO));
                 }

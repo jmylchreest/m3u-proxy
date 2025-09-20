@@ -193,10 +193,16 @@ mod tests {
         }
 
         // Parameter sorting
-        let url1 = "https://cdn.tv.com/logo?b=2&a=1&c=3";
-        let url2 = "http://cdn.tv.com/logo?c=3&a=1&b=2";
-        assert_eq!(normalize_logo_url(url1), normalize_logo_url(url2));
-        assert_eq!(normalize_logo_url(url1), "cdn.tv.com/logo?a=1&b=2&c=3");
+        let primary_url = "https://cdn.tv.com/logo?b=2&a=1&c=3";
+        let secondary_url = "http://cdn.tv.com/logo?c=3&a=1&b=2";
+        assert_eq!(
+            normalize_logo_url(primary_url),
+            normalize_logo_url(secondary_url)
+        );
+        assert_eq!(
+            normalize_logo_url(primary_url),
+            "cdn.tv.com/logo?a=1&b=2&c=3"
+        );
     }
 
     #[test]

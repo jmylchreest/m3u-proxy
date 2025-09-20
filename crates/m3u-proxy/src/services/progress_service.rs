@@ -2,7 +2,7 @@
 //!
 //! This service provides a unified interface for tracking and reporting progress
 //! across all operations in the system, including:
-//! - Source ingestion (M3U, Xtream, EPG)  
+//! - Source ingestion (M3U, Xtream, EPG)
 //! - Proxy regeneration
 //! - Pipeline processing
 //! - Background tasks
@@ -45,7 +45,7 @@ impl ProgressContext {
     }
 }
 
-/// Universal progress state that works for all operation types  
+/// Universal progress state that works for all operation types
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UniversalState {
@@ -1267,7 +1267,6 @@ impl ProgressService {
                 }
                 _ => {
                     // Non-ingestion operations don't block shutdown
-                    continue;
                 }
             }
         }

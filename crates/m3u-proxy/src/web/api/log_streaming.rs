@@ -207,7 +207,7 @@ pub async fn stream_logs(
     )
 )]
 pub async fn get_log_stats(State(state): State<AppState>) -> impl IntoResponse {
-    let stats = match state.log_broadcaster.as_ref() {
+    let log_stats = match state.log_broadcaster.as_ref() {
         Some(broadcaster) => {
             serde_json::json!({
                 "active_subscribers": broadcaster.receiver_count(),
@@ -230,14 +230,14 @@ pub async fn get_log_stats(State(state): State<AppState>) -> impl IntoResponse {
         }
     };
 
-    axum::response::Json(stats)
+    axum::response::Json(log_stats)
 }
 
 /// Send a test log event (for development/testing)
 #[utoipa::path(
     post,
     path = "/logs/test",
-    tag = "logs", 
+    tag = "logs",
     summary = "Send test log event",
     description = "Send a test log event through the streaming system (development only)",
     responses(

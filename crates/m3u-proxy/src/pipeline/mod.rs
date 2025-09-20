@@ -5,7 +5,7 @@
 //!
 //! - **Core**: Pipeline orchestration and execution coordination
 //! - **Engines**: Data mapping engines with rule-based processing
-//! - **Models**: Pipeline execution tracking and state management  
+//! - **Models**: Pipeline execution tracking and state management
 //! - **Stages**: Individual pipeline stages (data mapping, filtering, etc.)
 //!
 //! The new architecture removes all legacy iterator/accumulator/chunking complexity
@@ -15,6 +15,7 @@
 pub mod core;
 pub mod engines;
 pub mod error;
+pub mod eval_context;
 pub mod models;
 pub mod services;
 pub mod stages;

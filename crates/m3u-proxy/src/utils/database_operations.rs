@@ -161,7 +161,6 @@ impl DatabaseOperations {
                                 e
                             );
                             sleep(delay).await;
-                            continue;
                         } else {
                             return Err(AppError::internal(format!(
                                 "Failed to process EPG batch {} after {} attempts: {}",
@@ -515,26 +514,26 @@ impl DatabaseOperations {
                 }
                 Err(e) => {
                     attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    if attempts.load(std::sync::atomic::Ordering::SeqCst) < max_attempts
-                        && e.to_string().to_lowercase().contains("database is locked")
-                    {
-                        let delay = Duration::from_millis(
-                            100 * 2_u64.pow(attempts.load(std::sync::atomic::Ordering::SeqCst)),
-                        );
-                        debug!(
-                            "Delete EPG programs failed (attempt {}), retrying in {:?}: {}",
-                            attempts.load(std::sync::atomic::Ordering::SeqCst),
-                            delay,
-                            e
-                        );
-                        sleep(delay).await;
-                        continue;
-                    } else {
+                    let should_retry = attempts.load(std::sync::atomic::Ordering::SeqCst)
+                        < max_attempts
+                        && e.to_string().to_lowercase().contains("database is locked");
+                    if !should_retry {
                         return Err(AppError::internal(format!(
                             "Failed to delete EPG programs after {:?} attempts: {e}",
                             attempts.load(std::sync::atomic::Ordering::SeqCst)
                         )));
                     }
+                    let delay = Duration::from_millis(
+                        100 * 2_u64.pow(attempts.load(std::sync::atomic::Ordering::SeqCst)),
+                    );
+                    debug!(
+                        "Delete EPG programs failed (attempt {}), retrying in {:?}: {}",
+                        attempts.load(std::sync::atomic::Ordering::SeqCst),
+                        delay,
+                        e
+                    );
+                    sleep(delay).await;
+                    // Loop will retry without a redundant continue/else
                 }
             }
         }

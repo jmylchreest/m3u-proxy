@@ -11,7 +11,7 @@ pub struct LogoCacheEntry {
     pub url_hash: u64,
     /// xxHash64 hash of channel name (if available)
     pub channel_name_hash: Option<u64>,
-    /// xxHash64 hash of channel group (if available)  
+    /// xxHash64 hash of channel group (if available)
     pub channel_group_hash: Option<u64>,
     /// 12-bit encoded width
     pub encoded_width: u16,
@@ -212,7 +212,7 @@ mod tests {
             Some("Very Long Group Name Here"),
             Some(1920),
             Some(1080),
-            524288, // 512KB
+            524_288, // 512KB
             "cached_logo.png".to_string(),
         );
 

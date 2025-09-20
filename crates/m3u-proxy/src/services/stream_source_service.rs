@@ -523,21 +523,88 @@ impl StreamSourceService {
         }
     }
 
-    /// Check if Xtream server has EPG data
+    /// Check if Xtream server has EPG data (robust: HEAD + GET fallback + content sniff)
+    ///
+    /// Strategy:
+    /// 1. Attempt HEAD (cheap). If 2xx, treat as available.
+    /// 2. If HEAD non-success or error (many panels/WAFs block HEAD), perform GET.
+    /// 3. On GET success, read a bounded amount of body and look for XMLTV markers (`<tv`, `<programme>` or `<channel>`).
+    ///
+    /// Returns `Ok(true)` only if we have reasonable confidence EPG XML is present.
     async fn check_epg_availability(
         &self,
         url: &str,
         username: &str,
         password: &str,
     ) -> Result<bool> {
-        let client = reqwest::Client::new();
-        let epg_url = crate::utils::UrlUtils::build_xtream_xmltv_url(url, username, password)
-            .map_err(|e| anyhow::anyhow!("Invalid URL for Xtream EPG check: {}", e))?;
+        use tracing::debug;
 
-        match client.head(&epg_url).send().await {
-            Ok(response) if response.status().is_success() => Ok(true),
-            _ => Ok(false),
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?;
+
+        let epg_url = crate::utils::UrlUtils::build_xtream_xmltv_url(url, username, password)
+            .map_err(|e| anyhow::anyhow!("Invalid URL for Xtream EPG check: {e}"))?;
+
+        // Phase 1: HEAD probe
+        let head_result = client.head(&epg_url).send().await;
+        match head_result {
+            Ok(resp) if resp.status().is_success() => {
+                debug!(%epg_url, status=?resp.status(), "EPG HEAD probe success");
+                return Ok(true);
+            }
+            Ok(resp) => {
+                debug!(
+                    %epg_url,
+                    status=?resp.status(),
+                    "EPG HEAD probe non-success, attempting GET fallback"
+                );
+            }
+            Err(e) => {
+                debug!(%epg_url, error=%e, "EPG HEAD probe error, attempting GET fallback");
+            }
         }
+
+        // Phase 2: GET fallback (some providers return 403/405/520 on HEAD but 200 on GET)
+        let get_resp = match client.get(&epg_url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                debug!(%epg_url, error=%e, "EPG GET fallback request failed");
+                return Ok(false);
+            }
+        };
+
+        if !get_resp.status().is_success() {
+            debug!(
+                %epg_url,
+                status=?get_resp.status(),
+                "EPG GET fallback non-success status"
+            );
+            return Ok(false);
+        }
+
+        // Phase 3: Content sniff (limit read to avoid large download if not XMLTV)
+        let text = match get_resp.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                debug!(%epg_url, error=%e, "EPG GET fallback body read failed");
+                return Ok(false);
+            }
+        };
+
+        // Peek only first ~300 KB for signature (avoid holding giant XML in memory unnecessarily)
+        let peek: String = text.chars().take(300_000).collect();
+        let looks_like_xmltv =
+            peek.contains("<tv") && (peek.contains("<programme") || peek.contains("<channel"));
+
+        debug!(
+            %epg_url,
+            looks_like_xmltv,
+            peek_len = peek.len(),
+            "EPG GET fallback completed"
+        );
+
+        Ok(looks_like_xmltv)
     }
 
     /// Save channels to database using ChannelRepository

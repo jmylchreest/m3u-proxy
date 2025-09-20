@@ -380,7 +380,7 @@ impl IngestionStateManager {
                 | crate::models::IngestionState::Completed
                 | crate::models::IngestionState::Error => {
                     // These are not active
-                    continue;
+                    // (removed redundant continue)
                 }
                 crate::models::IngestionState::Connecting
                 | crate::models::IngestionState::Downloading

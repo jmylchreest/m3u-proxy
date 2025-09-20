@@ -315,7 +315,7 @@ impl NumberingStage {
                             // We'll update the actual channel later to avoid borrowing issues
                             channels_needing_numbers.push((idx, Some(desired_channo)));
                         }
-                        continue;
+                    // removed redundant continue (clippy::needless_continue)
                     } else {
                         // Invalid number (0) - mark for sequential numbering
                         debug!(

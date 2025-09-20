@@ -42,6 +42,14 @@ pub struct FileCategoryConfig {
 
 impl FileManagerConfig {
     /// Create a new configuration with sensible defaults for M3U Proxy categories.
+    ///
+    /// Categories initialized:
+    /// * `temp`: short‑lived temporary artifacts (5 minutes retention)
+    /// * `proxy_output`: generated proxy output (30 days retention)
+    ///
+    /// # Panics
+    /// Never panics.
+    #[must_use]
     pub fn with_defaults(base_directory: PathBuf) -> Self {
         let mut categories = HashMap::new();
 
@@ -50,7 +58,7 @@ impl FileManagerConfig {
             "temp".to_string(),
             FileCategoryConfig {
                 subdirectory: "temp".to_string(),
-                retention_duration: humantime::parse_duration("5m").unwrap(), // 5 minutes
+                retention_duration: Duration::from_secs(5 * 60), // 5 minutes
                 time_match: TimeMatch::LastAccess,
                 enabled: true,
                 cleanup_interval: None, // Use recommended (every minute)
@@ -62,7 +70,7 @@ impl FileManagerConfig {
             "proxy_output".to_string(),
             FileCategoryConfig {
                 subdirectory: "proxy-output".to_string(),
-                retention_duration: humantime::parse_duration("30days").unwrap(), // 30 days
+                retention_duration: Duration::from_secs(30 * 24 * 60 * 60), // 30 days
                 time_match: TimeMatch::LastAccess,
                 enabled: true,
                 cleanup_interval: None, // Use recommended (every 12 hours)
@@ -76,17 +84,31 @@ impl FileManagerConfig {
     }
 
     /// Get configuration for a specific category.
+    ///
+    /// # Returns
+    /// `Some(&FileCategoryConfig)` if the category exists, otherwise `None`.
+    #[must_use]
     pub fn get_category(&self, category: &str) -> Option<&FileCategoryConfig> {
         self.categories.get(category)
     }
 
     /// Get the full path for a category's storage directory.
+    ///
+    /// # Returns
+    /// `Some(PathBuf)` if the category exists, otherwise `None`.
+    #[must_use]
     pub fn category_path(&self, category: &str) -> Option<PathBuf> {
         self.get_category(category)
             .map(|config| self.base_directory.join(&config.subdirectory))
     }
 
-    /// Convert a category config to a CleanupPolicy.
+    /// Convert a category config to a `CleanupPolicy`.
+    ///
+    /// Disabled categories are represented with an infinite retention policy.
+    ///
+    /// # Returns
+    /// `Some(CleanupPolicy)` if the category exists, otherwise `None`.
+    #[must_use]
     pub fn cleanup_policy_for_category(&self, category: &str) -> Option<CleanupPolicy> {
         self.get_category(category).map(|config| {
             if !config.enabled {
@@ -102,6 +124,10 @@ impl FileManagerConfig {
     }
 
     /// Get the cleanup interval for a category (uses recommended if not specified).
+    ///
+    /// # Returns
+    /// `Some(Duration)` if the category exists, otherwise `None`.
+    #[must_use]
     pub fn cleanup_interval_for_category(&self, category: &str) -> Option<Duration> {
         self.get_category(category).map(|config| {
             config.cleanup_interval.unwrap_or_else(|| {
@@ -120,11 +146,22 @@ impl FileManagerConfig {
     }
 
     /// List all configured categories.
+    ///
+    /// # Returns
+    /// A vector of references to the category name strings.
+    #[must_use]
     pub fn category_names(&self) -> Vec<&String> {
         self.categories.keys().collect()
     }
 
-    /// Create a sandboxed manager for logo storage using direct paths from storage config
+    /// Create a sandboxed manager for logo storage using direct paths from storage config.
+    ///
+    /// When `infinite_retention` is true, files are never cleaned up. Otherwise a finite
+    /// retention (≈3 months) is applied with a 12 hour cleanup interval.
+    ///
+    /// # Errors
+    /// Returns any error produced while building the underlying `SandboxedManager`
+    /// (for example, filesystem permission issues or invalid base directory).
     pub async fn create_logo_manager(
         path: &std::path::Path,
         infinite_retention: bool,
@@ -136,7 +173,8 @@ impl FileManagerConfig {
             CleanupPolicy::infinite_retention()
         } else {
             CleanupPolicy::new()
-                .remove_after(humantime::parse_duration("3months").unwrap())
+                // Approximate 3 months as 90 days to avoid parsing + unwrap
+                .remove_after(Duration::from_secs(90 * 24 * 60 * 60))
                 .time_match(TimeMatch::LastAccess)
                 .enabled(true)
         };
@@ -205,7 +243,9 @@ mod tests {
         assert_eq!(config.categories.len(), 2);
 
         // Check temp category has short retention
-        let temp = config.get_category("temp").unwrap();
+        let temp = config
+            .get_category("temp")
+            .expect("temp category should exist");
         assert_eq!(temp.retention_duration, Duration::from_secs(5 * 60));
         assert_eq!(temp.time_match, TimeMatch::LastAccess);
         assert!(temp.enabled);

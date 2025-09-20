@@ -1,6 +1,6 @@
 [package]
 name = "m3u-proxy"
-version = "0.2.19-dev.1.gdf3604a"
+version = "0.2.19-dev.3.g7d6c6dd"
 edition = "2024"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 description = "A modern M3U proxy service with filtering and source management"
@@ -8,6 +8,7 @@ repository = "https://github.com/jmylchreest/m3u-proxy"
 license = "MIT"
 keywords = ["m3u", "iptv", "proxy", "streaming", "xtream"]
 categories = ["multimedia", "web-programming", "network-programming"]
+readme = "README.md"
 
 [[bin]]
 name = "m3u-proxy"

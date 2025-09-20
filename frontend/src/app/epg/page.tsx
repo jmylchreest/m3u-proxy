@@ -45,7 +45,9 @@ import {
   CommandEmpty,
   CommandGroup,
   CommandItem,
+  CommandSeparator,
 } from '@/components/ui/command';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Check, ChevronsUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { VideoPlayerModal } from '@/components/video-player-modal';
@@ -120,7 +122,20 @@ export default function EpgPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [selectedSource, setSelectedSource] = useState<string>('');
+  // Multi-select source filter (replaces legacy single selectedSource)
+  const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  // Toggle a single source selection
+  const handleSourceToggle = useCallback((id: string) => {
+    setSelectedSources((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
+    );
+  }, []);
+  // Toggle all / clear all sources
+  const handleAllSourcesToggle = useCallback(() => {
+    setSelectedSources((prev) =>
+      prev.length === sourceOptions.length ? [] : sourceOptions.map((s) => s.id)
+    );
+  }, [sourceOptions]);
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'table' | 'guide'>('guide');
   const [currentPage, setCurrentPage] = useState(1);
@@ -134,7 +149,7 @@ export default function EpgPage() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [guideTimeRange, setGuideTimeRange] = useState<
     '6h' | '12h' | '18h' | '24h' | '30h' | '36h' | '42h' | '48h'
-  >('24h');
+  >('12h');
   const [guideStartTime, setGuideStartTime] = useState<Date | undefined>(undefined);
   const [selectedTimezone, setSelectedTimezone] = useState<string>(
     // Detect user's timezone on component mount
@@ -401,17 +416,15 @@ export default function EpgPage() {
     try {
       const options: SourceOption[] = [];
 
-      // Fetch EPG Sources
+      // Fetch ONLY EPG Sources
       try {
         const epgSourcesResponse = await fetch('/api/v1/sources/epg');
         if (epgSourcesResponse.ok) {
           const epgSourcesData: { success: boolean; data: { items: any[] } } =
             await epgSourcesResponse.json();
           if (epgSourcesData.success && epgSourcesData.data.items) {
-            // Only store active EPG sources (backend should already filter, but ensure consistency)
             const activeEpgSources = epgSourcesData.data.items.filter((source) => source.is_active);
             setSources(activeEpgSources);
-
             activeEpgSources.forEach((source) => {
               options.push({
                 id: source.id,
@@ -426,35 +439,15 @@ export default function EpgPage() {
         Debug.warn('Failed to fetch EPG sources:', err);
       }
 
-      // Fetch Stream Sources (so user can filter programs/guide by originating stream source as well)
-      try {
-        const streamSourcesResponse = await fetch('/api/v1/sources/stream');
-        if (streamSourcesResponse.ok) {
-          const streamSourcesData: { success: boolean; data: { items?: any[] } } =
-            await streamSourcesResponse.json();
-          if (streamSourcesData.success) {
-            const streamItems = (streamSourcesData.data?.items ?? []).filter(
-              (s) => s && (s.is_active === undefined || s.is_active === true)
-            );
-            streamItems.forEach((source) => {
-              if (source?.id && source?.name) {
-                options.push({
-                  id: source.id,
-                  name: source.name,
-                  type: 'stream_source',
-                  display_name: `${source.name} (${(source.source_type || 'stream').toUpperCase()})`,
-                });
-              }
-            });
-          }
+      // Deduplicate by normalized name + type to avoid duplicates
+      const uniqueMap = new Map<string, SourceOption>();
+      for (const opt of options) {
+        const key = `${opt.name.trim().toLowerCase()}::${opt.type}`;
+        if (!uniqueMap.has(key)) {
+          uniqueMap.set(key, opt);
         }
-      } catch (err) {
-        Debug.warn('Failed to fetch stream sources:', err);
       }
-
-      // Deduplicate sources based on ID to ensure uniqueness (EPG + Stream)
-      const uniqueOptions = Array.from(new Map(options.map((opt) => [opt.id, opt])).values());
-      setSourceOptions(uniqueOptions);
+      setSourceOptions(Array.from(uniqueMap.values()));
     } catch (err) {
       console.error('Failed to fetch sources:', err);
     }
@@ -489,7 +482,7 @@ export default function EpgPage() {
         end_time: endTime.toISOString(),
       });
 
-      if (selectedSource) params.append('source_id', selectedSource);
+      if (selectedSources.length > 0) params.append('source_id', selectedSources.join(','));
 
       const response = await fetch(`/api/v1/epg/guide?${params}`);
 
@@ -515,14 +508,20 @@ export default function EpgPage() {
 
   const handleLoadMore = useCallback(() => {
     if (hasMore && !loading && viewMode !== 'guide') {
-      fetchPrograms(debouncedSearch, selectedSource, selectedCategory, currentPage + 1, true);
+      fetchPrograms(
+        debouncedSearch,
+        selectedSources.join(','),
+        selectedCategory,
+        currentPage + 1,
+        true
+      );
     }
   }, [
     hasMore,
     loading,
     viewMode,
     debouncedSearch,
-    selectedSource,
+    selectedSources,
     selectedCategory,
     currentPage,
     fetchPrograms,
@@ -537,9 +536,9 @@ export default function EpgPage() {
     if (viewMode !== 'guide') {
       setPrograms([]);
       setCurrentPage(1);
-      fetchPrograms(debouncedSearch, selectedSource, selectedCategory, 1, false);
+      fetchPrograms(debouncedSearch, selectedSources.join(','), selectedCategory, 1, false);
     }
-  }, [viewMode, debouncedSearch, selectedSource, selectedCategory, fetchPrograms]);
+  }, [viewMode, debouncedSearch, selectedSources, selectedCategory, fetchPrograms]);
 
   useEffect(() => {
     performProgramSearch();
@@ -552,10 +551,10 @@ export default function EpgPage() {
     } else {
       setPrograms([]);
       setCurrentPage(1);
-      fetchPrograms(debouncedSearch, selectedSource, selectedCategory, 1, false);
+      fetchPrograms(debouncedSearch, selectedSources.join(','), selectedCategory, 1, false);
     }
   }, [
-    selectedSource,
+    selectedSources,
     selectedCategory,
     timeRange,
     viewMode,
@@ -597,9 +596,7 @@ export default function EpgPage() {
     setSearch(value);
   };
 
-  const handleSourceFilter = (value: string) => {
-    setSelectedSource(value === 'all' ? '' : value);
-  };
+  // Legacy single-source handler removed in favor of multi-select (handleSourceToggle / handleAllSourcesToggle)
 
   const handleCategoryFilter = (value: string) => {
     setSelectedCategory(value === 'all' ? '' : value);
@@ -873,133 +870,8 @@ export default function EpgPage() {
     );
   };
 
-  if (loading && programs.length === 0 && !guideData) {
-    return (
-      <TooltipProvider>
-        <div className="container mx-auto p-6">
-          <div className="mb-6">
-            <p className="text-muted-foreground">
-              Browse electronic program guide and schedule information
-            </p>
-          </div>
-
-          <div className="space-y-6">
-            {/* Skeleton Unified Filters and Controls */}
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex flex-col lg:flex-row gap-4 items-center">
-                  <div className="relative flex-1 min-w-0">
-                    <Skeleton className="h-10 w-full" />
-                  </div>
-                  <Skeleton className="h-10 w-48" />
-                  <Skeleton className="h-10 w-32" />
-                  <Skeleton className="h-10 w-48" />
-                  <div className="flex bg-muted rounded-lg p-1">
-                    <Skeleton className="h-8 w-8 m-1" />
-                    <Skeleton className="h-8 w-8 m-1" />
-                    <Skeleton className="h-8 w-8 m-1" />
-                    <Skeleton className="h-8 w-8 m-1" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Skeleton TV Guide (default view) */}
-            <Card className="overflow-hidden">
-              <div className="relative">
-                {/* Skeleton TV Guide Header */}
-                <div className="flex bg-background border-b">
-                  <div className="w-48 flex-shrink-0 p-3 border-r bg-muted/50">
-                    <Skeleton className="h-5 w-20" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex">
-                      {Array.from({ length: 6 }).map((_, i) => (
-                        <div key={i} className="w-40 p-3 border-r text-center bg-muted/30">
-                          <Skeleton className="h-6 w-16 mx-auto" />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Skeleton TV Guide Rows */}
-                <div className="h-[600px] overflow-hidden">
-                  {Array.from({ length: 8 }).map((_, i) => (
-                    <div key={i} className="flex border-b">
-                      {/* Skeleton Channel Info */}
-                      <div className="w-48 flex-shrink-0 p-3 border-r bg-background">
-                        <div className="flex items-center space-x-2">
-                          <Skeleton className="w-6 h-6 rounded" />
-                          <Skeleton className="w-8 h-8 rounded" />
-                          <div className="flex-1">
-                            <Skeleton className="h-4 w-24 mb-1" />
-                            <Skeleton className="h-3 w-16" />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Skeleton Program Cells */}
-                      <div className="flex-1">
-                        <div className="flex">
-                          {(() => {
-                            // Generate realistic program widths (30min, 1hr, 1.5hr, 2hr shows)
-                            const programWidths = [80, 120, 160, 180, 240]; // 30min to 2hr in 40px increments
-                            let remainingWidth = 240 * 6; // Total width available (6 x 40px cells)
-                            const programs = [];
-                            let totalUsed = 0;
-
-                            while (totalUsed < remainingWidth - 80) {
-                              const availableWidths = programWidths.filter(
-                                (w) => w <= remainingWidth - totalUsed
-                              );
-                              if (availableWidths.length === 0) break;
-
-                              const width =
-                                availableWidths[Math.floor(Math.random() * availableWidths.length)];
-                              programs.push(width);
-                              totalUsed += width;
-                            }
-
-                            return programs.map((width, j) => (
-                              <div
-                                key={j}
-                                className="border-r h-16 p-1 flex-shrink-0"
-                                style={{ width: `${width}px` }}
-                              >
-                                {Math.random() > 0.2 ? (
-                                  <div className="h-full bg-secondary p-1 rounded">
-                                    <Skeleton className="h-3 w-3/4 mb-1" />
-                                    <Skeleton className="h-3 w-1/2" />
-                                  </div>
-                                ) : (
-                                  <div className="h-full bg-muted/30 flex items-center justify-center">
-                                    <Skeleton className="h-3 w-16" />
-                                  </div>
-                                )}
-                              </div>
-                            ));
-                          })()}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Skeleton Guide Footer */}
-              <div className="border-t bg-muted/50 p-3">
-                <div className="flex justify-between items-center">
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-4 w-20" />
-                </div>
-              </div>
-            </Card>
-          </div>
-        </div>
-      </TooltipProvider>
-    );
-  }
+  // Removed full-page skeleton return so that the filter bar remains visible during loading.
+  // The loading state will now be represented only within the guide/program sections below.
 
   return (
     <TooltipProvider>
@@ -1086,21 +958,60 @@ export default function EpgPage() {
                   </Select>
                 )}
 
-                {/* Source Filter */}
-                <Select value={selectedSource || 'all'} onValueChange={handleSourceFilter}>
-                  <SelectTrigger className="w-48">
-                    <Filter className="w-4 h-4 mr-2" />
-                    <SelectValue placeholder="All Sources" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Sources</SelectItem>
-                    {sourceOptions.map((option) => (
-                      <SelectItem key={option.id} value={option.id}>
-                        {option.display_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {/* Source Filter (multi-select command style) */}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="w-48 justify-between">
+                      <div className="flex items-center">
+                        <Filter className="w-4 h-4 mr-2" />
+                        <span>
+                          {selectedSources.length === 0
+                            ? 'All Sources'
+                            : selectedSources.length === sourceOptions.length
+                              ? 'All Sources'
+                              : `${selectedSources.length} Source${selectedSources.length > 1 ? 's' : ''}`}
+                        </span>
+                      </div>
+                      <ChevronsUpDown className="w-4 h-4 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="p-0 w-64">
+                    <Command>
+                      <CommandInput placeholder="Filter sources..." />
+                      <CommandList>
+                        <CommandGroup>
+                          <CommandItem
+                            onSelect={() => handleAllSourcesToggle()}
+                            className="cursor-pointer"
+                          >
+                            <Checkbox
+                              checked={
+                                selectedSources.length === sourceOptions.length &&
+                                sourceOptions.length > 0
+                              }
+                              className="mr-2"
+                            />
+                            All Sources
+                          </CommandItem>
+                          <CommandSeparator />
+                          {sourceOptions.map((option) => {
+                            const checked = selectedSources.includes(option.id);
+                            return (
+                              <CommandItem
+                                key={option.id}
+                                onSelect={() => handleSourceToggle(option.id)}
+                                className="cursor-pointer"
+                              >
+                                <Checkbox checked={checked} className="mr-2" />
+                                <span className="truncate">{option.display_name}</span>
+                              </CommandItem>
+                            );
+                          })}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
 
                 {/* Timezone Selector */}
                 <Popover open={timezoneOpen} onOpenChange={setTimezoneOpen}>
@@ -1237,7 +1148,13 @@ export default function EpgPage() {
                       variant="outline"
                       size="sm"
                       onClick={() =>
-                        fetchPrograms(debouncedSearch, selectedSource, selectedCategory, 1, false)
+                        fetchPrograms(
+                          debouncedSearch,
+                          selectedSources.join(','),
+                          selectedCategory,
+                          1,
+                          false
+                        )
                       }
                       className="mt-2"
                     >
@@ -1496,6 +1413,68 @@ export default function EpgPage() {
               {guideData ? (
                 <Card className="overflow-hidden flex flex-col h-[600px]">
                   <div className="relative flex-1 min-h-0">
+                    {/* Existing guide stays visible; overlay skeleton only while reloading */}
+                    {loading && (
+                      <div className="absolute inset-0 z-20 pointer-events-none flex flex-col bg-background/80 backdrop-blur-sm">
+                        {/* Header skeleton */}
+                        <div className="flex border-b border-border px-3 py-2 bg-background/90">
+                          {Array.from({ length: 6 }).map((_, i) => (
+                            <div
+                              key={i}
+                              className="h-4 w-28 mr-4 last:mr-0 rounded bg-muted animate-pulse"
+                            />
+                          ))}
+                        </div>
+                        {/* Rows skeleton */}
+                        <div className="flex-1 overflow-hidden">
+                          {Array.from({ length: 8 }).map((_, r) => (
+                            <div
+                              key={r}
+                              className="flex h-14 border-b border-border last:border-b-0 items-stretch"
+                            >
+                              {/* Channel cell */}
+                              <div className="flex items-center gap-3 px-3 w-48">
+                                <div className="w-8 h-8 rounded bg-muted animate-pulse" />
+                                <div className="flex-1 space-y-1">
+                                  <div className="h-3 w-24 bg-muted rounded animate-pulse" />
+                                  <div className="h-2 w-16 bg-muted rounded animate-pulse" />
+                                </div>
+                              </div>
+                              {/* Program placeholders */}
+                              <div className="flex-1 flex overflow-hidden px-1">
+                                {(() => {
+                                  const widths = [96, 128, 160, 192];
+                                  let remaining = 960;
+                                  const blocks: number[] = [];
+                                  while (remaining > 110) {
+                                    const w = widths[Math.floor(Math.random() * widths.length)];
+                                    if (w > remaining) break;
+                                    blocks.push(w);
+                                    remaining -= w + 6;
+                                  }
+                                  return blocks.map((w, i2) => (
+                                    <div
+                                      key={i2}
+                                      style={{ width: w }}
+                                      className="h-10 my-auto mr-1 last:mr-0 rounded-md bg-muted relative flex flex-col justify-center px-2 animate-pulse"
+                                    >
+                                      <div className="h-2 w-3/4 bg-background/40 rounded mb-1" />
+                                      <div className="h-2 w-1/2 bg-background/30 rounded" />
+                                    </div>
+                                  ));
+                                })()}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {/* Footer skeleton */}
+                        <div className="border-t border-border bg-background/90 px-3 py-2 flex justify-between">
+                          <div className="h-3 w-40 bg-muted rounded animate-pulse" />
+                          <div className="h-3 w-24 bg-muted rounded animate-pulse" />
+                        </div>
+                      </div>
+                    )}
+
                     <CanvasEPG
                       guideData={guideData}
                       guideTimeRange={guideTimeRange}
@@ -1525,10 +1504,92 @@ export default function EpgPage() {
                 </Card>
               ) : loading ? (
                 <Card className="overflow-hidden">
-                  <div className="h-[600px] w-full flex items-center justify-center">
-                    <div className="flex flex-col items-center space-y-4">
-                      <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent"></div>
-                      <p className="text-muted-foreground">Loading EPG guide...</p>
+                  <div className="relative">
+                    {/* Skeleton TV Guide Header */}
+                    <div className="flex bg-background border-b">
+                      <div className="w-48 flex-shrink-0 p-3 border-r bg-muted/50">
+                        <Skeleton className="h-5 w-20" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex">
+                          {Array.from({ length: 6 }).map((_, i) => (
+                            <div key={i} className="w-40 p-3 border-r text-center bg-muted/30">
+                              <Skeleton className="h-6 w-16 mx-auto" />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Skeleton TV Guide Rows */}
+                    <div className="h-[600px] overflow-hidden">
+                      {Array.from({ length: 8 }).map((_, i) => (
+                        <div key={i} className="flex border-b">
+                          {/* Skeleton Channel Info */}
+                          <div className="w-48 flex-shrink-0 p-3 border-r bg-background">
+                            <div className="flex items-center space-x-2">
+                              <Skeleton className="w-6 h-6 rounded" />
+                              <Skeleton className="w-8 h-8 rounded" />
+                              <div className="flex-1">
+                                <Skeleton className="h-4 w-24 mb-1" />
+                                <Skeleton className="h-3 w-16" />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Skeleton Program Cells */}
+                          <div className="flex-1">
+                            <div className="flex">
+                              {(() => {
+                                const programWidths = [80, 120, 160, 180, 240];
+                                let remainingWidth = 240 * 6;
+                                const programs: number[] = [];
+                                let totalUsed = 0;
+
+                                while (totalUsed < remainingWidth - 80) {
+                                  const availableWidths = programWidths.filter(
+                                    (w) => w <= remainingWidth - totalUsed
+                                  );
+                                  if (!availableWidths.length) break;
+                                  const width =
+                                    availableWidths[
+                                      Math.floor(Math.random() * availableWidths.length)
+                                    ];
+                                  programs.push(width);
+                                  totalUsed += width;
+                                }
+
+                                return programs.map((width, j) => (
+                                  <div
+                                    key={j}
+                                    className="border-r h-16 p-1 flex-shrink-0"
+                                    style={{ width: `${width}px` }}
+                                  >
+                                    {Math.random() > 0.2 ? (
+                                      <div className="h-full bg-secondary p-1 rounded">
+                                        <Skeleton className="h-3 w-3/4 mb-1" />
+                                        <Skeleton className="h-3 w-1/2" />
+                                      </div>
+                                    ) : (
+                                      <div className="h-full bg-muted/30 flex items-center justify-center">
+                                        <Skeleton className="h-3 w-16" />
+                                      </div>
+                                    )}
+                                  </div>
+                                ));
+                              })()}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Skeleton Guide Footer */}
+                    <div className="border-t bg-muted/50 p-3">
+                      <div className="flex justify-between items-center">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-4 w-20" />
+                      </div>
                     </div>
                   </div>
                 </Card>

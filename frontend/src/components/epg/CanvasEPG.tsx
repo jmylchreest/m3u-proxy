@@ -843,15 +843,20 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
         onClick={handleClick}
         tabIndex={0}
       />
-      <ScrollArea className="w-full h-full" ref={scrollAreaRef} style={{ height: '100%' }}>
+      <ScrollArea
+        className="w-full h-full epg-scroll overflow-auto"
+        ref={scrollAreaRef}
+        style={{ height: '100%', overflow: 'auto' }}
+      >
         <div
           ref={containerRef}
           className="relative"
           style={{
             width: totalWidth,
             height: totalHeight,
-            minWidth: totalWidth,
-            minHeight: totalHeight,
+            // Increase min dimensions slightly so scrollbars are always available
+            minWidth: totalWidth + 200,
+            minHeight: totalHeight + 120,
           }}
         >
           {/* Invisible content area for proper scrolling */}
@@ -859,6 +864,32 @@ export const CanvasEPG: React.FC<CanvasEPGProps> = ({
         <ScrollBar orientation="vertical" />
         <ScrollBar orientation="horizontal" />
       </ScrollArea>
+      {/* Themed scrollbar styles (scoped to this component) */}
+      <style jsx>{`
+        .epg-scroll [data-radix-scroll-area-viewport] {
+          scrollbar-width: thin;
+          scrollbar-color: var(--muted-foreground) var(--muted);
+        }
+        .epg-scroll [data-radix-scroll-area-viewport]::-webkit-scrollbar {
+          width: 10px;
+          height: 10px;
+        }
+        .epg-scroll [data-radix-scroll-area-viewport]::-webkit-scrollbar-track {
+          background: var(--muted);
+        }
+        .epg-scroll [data-radix-scroll-area-viewport]::-webkit-scrollbar-thumb {
+          background: var(--accent);
+          border-radius: 8px;
+          border: 2px solid var(--muted);
+        }
+        .epg-scroll [data-radix-scroll-area-viewport]::-webkit-scrollbar-thumb:hover {
+          background: var(--accent-foreground);
+        }
+        /* Fallback for environments without CSS vars */
+        .epg-scroll [data-radix-scroll-area-viewport]::-webkit-scrollbar-thumb:active {
+          background: var(--primary);
+        }
+      `}</style>
     </div>
   );
 };

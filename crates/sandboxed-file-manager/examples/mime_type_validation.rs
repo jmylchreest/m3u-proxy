@@ -3,11 +3,43 @@
 //! This example shows how to configure the sandboxed file manager to only
 //! allow specific file types based on their MIME types (detected via magic numbers).
 
+#![allow(clippy::print_stdout, clippy::doc_markdown)]
+
 use sandboxed_file_manager::{
     CleanupPolicy, SandboxedManager,
     file_types::{FileTypeConfigBuilder, FileTypeValidator},
 };
 use std::collections::HashSet;
+
+/// Helper wrapper that enforces validation after writes for the examples.
+/// Moved to module scope to satisfy clippy::items_after_statements.
+struct SecureFileManager {
+    manager: SandboxedManager,
+    validator: FileTypeValidator,
+}
+
+impl SecureFileManager {
+    async fn secure_write(
+        &self,
+        path: &str,
+        content: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.manager.write(path, content).await?;
+        match self.manager.validate_file_type(path, &self.validator).await {
+            Ok(info) => {
+                println!(
+                    "  Wrote and validated {}: {} ({})",
+                    path, info.mime_type, info.extension
+                );
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.manager.remove_file(path).await;
+                Err(format!("File validation failed for {path}: {e}").into())
+            }
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -151,7 +183,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .allow_custom_matchers(true)
             .build(),
         |infer| {
-            // Add custom M3U detection
             infer.add("application/vnd.apple.mpegurl", "m3u", |buf| {
                 if buf.len() >= 7 {
                     let header = std::str::from_utf8(&buf[..7]).unwrap_or("");
@@ -162,7 +193,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // Create M3U playlist
     let m3u_content = "#EXTM3U\n#EXTINF:180,Artist - Song\nhttp://example.com/song.mp3\n";
     manager.write("playlist.m3u", m3u_content).await?;
 
@@ -180,51 +210,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // === EXAMPLE 6: Integration with file operations ===
     println!("6. Practical usage - validate before operations:");
-
-    struct SecureFileManager {
-        manager: SandboxedManager,
-        validator: FileTypeValidator,
-    }
-
-    impl SecureFileManager {
-        async fn secure_write(
-            &self,
-            path: &str,
-            content: &[u8],
-        ) -> Result<(), Box<dyn std::error::Error>> {
-            // Write file first
-            self.manager.write(path, content).await?;
-
-            // Then validate its type
-            match self.manager.validate_file_type(path, &self.validator).await {
-                Ok(info) => {
-                    println!(
-                        "  Wrote and validated {}: {} ({})",
-                        path, info.mime_type, info.extension
-                    );
-                    Ok(())
-                }
-                Err(e) => {
-                    // Remove the file if validation fails
-                    let _ = self.manager.remove_file(path).await;
-                    Err(format!("File validation failed for {path}: {e}").into())
-                }
-            }
-        }
-    }
-
     let secure_manager = SecureFileManager {
         manager,
         validator: validator_images, // Only allow images
     };
 
-    // Try to write different file types
     let _ = secure_manager
         .secure_write("valid_image.png", &png_bytes)
         .await;
     let _ = secure_manager
         .secure_write("invalid_exe.png", &exe_bytes)
-        .await; // Will fail validation
+        .await;
 
     println!();
     println!(

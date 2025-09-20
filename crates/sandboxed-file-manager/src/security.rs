@@ -4,6 +4,10 @@ use crate::error::{Result, SandboxedFileError};
 use std::path::Path;
 
 /// Sets secure permissions on a directory (Unix only).
+///
+/// # Errors
+/// Returns an error if secure permissions cannot be applied (Unix) or if the directory
+/// does not exist on non-Unix platforms.
 pub async fn set_secure_permissions(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -33,6 +37,9 @@ pub async fn set_secure_permissions(path: &Path) -> Result<()> {
 }
 
 /// Validates that a file path doesn't contain null bytes or other basic issues.
+///
+/// # Errors
+/// Returns an error if the path contains null bytes.
 pub fn validate_file_path_security(path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy();
 
@@ -49,6 +56,10 @@ pub fn validate_file_path_security(path: &Path) -> Result<()> {
 
 /// Validates that a resolved path is within the specified sandbox directory.
 /// Uses OS path resolution to handle symlinks, .., ., etc. properly.
+///
+/// # Errors
+/// Returns an error if the sandbox base or target path cannot be resolved or if the
+/// resolved path would escape the sandbox base directory.
 pub fn validate_path_within_sandbox(resolved_path: &Path, sandbox_base: &Path) -> Result<()> {
     // Get canonical sandbox base
     let canonical_base =
@@ -125,23 +136,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_path_within_sandbox() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    async fn test_validate_path_within_sandbox()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = tempfile::tempdir()?;
         let base = temp_dir.path();
 
         // Create a test file within the sandbox
         let test_file = base.join("test.txt");
-        std::fs::write(&test_file, "test content").unwrap();
+        std::fs::write(&test_file, "test content")?;
 
         // Valid path within sandbox
         assert!(validate_path_within_sandbox(&test_file, base).is_ok());
 
         // Create a file outside the sandbox
-        let outside_temp = tempfile::tempdir().unwrap();
+        let outside_temp = tempfile::tempdir()?;
         let outside_file = outside_temp.path().join("outside.txt");
-        std::fs::write(&outside_file, "outside content").unwrap();
+        std::fs::write(&outside_file, "outside content")?;
 
         // Invalid path outside sandbox
         assert!(validate_path_within_sandbox(&outside_file, base).is_err());
+        Ok(())
     }
 }

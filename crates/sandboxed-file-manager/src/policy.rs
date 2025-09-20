@@ -24,7 +24,7 @@ pub struct CleanupPolicy {
     /// Which timestamp to use for cleanup decisions
     pub time_match: TimeMatch,
     /// Whether files should never be cleaned up (infinite retention)
-    /// When true, files are kept forever regardless of retention_duration
+    /// When true, files are kept forever regardless of `retention_duration`
     pub infinite_retention: bool,
 }
 
@@ -32,6 +32,8 @@ impl CleanupPolicy {
     /// Create a new cleanup policy with default settings.
     ///
     /// Default: 24 hours retention based on last access time.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn new() -> Self {
         Self {
             retention_duration: Duration::from_secs(24 * 60 * 60), // 24 hours
@@ -41,24 +43,32 @@ impl CleanupPolicy {
     }
 
     /// Set the retention duration.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn remove_after(mut self, duration: Duration) -> Self {
         self.retention_duration = duration;
         self
     }
 
     /// Set which timestamp to match against.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn time_match(mut self, time_match: TimeMatch) -> Self {
         self.time_match = time_match;
         self
     }
 
     /// Enable or disable cleanup (inverse of infinite retention).
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.infinite_retention = !enabled;
         self
     }
 
     /// Disable cleanup entirely.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn disabled() -> Self {
         Self {
             retention_duration: Duration::ZERO,
@@ -68,7 +78,9 @@ impl CleanupPolicy {
     }
 
     /// Create a policy for infinite retention (never cleanup).
-    /// This is semantically clearer than disabled() for files that should never expire.
+    /// This is semantically clearer than `disabled()` for files that should never expire.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn infinite_retention() -> Self {
         Self {
             retention_duration: Duration::MAX,
@@ -86,6 +98,8 @@ impl CleanupPolicy {
     /// - For retention < 7 days: check every 1 hour (max 1 hour drift)
     /// - For retention < 30 days: check every 4 hours (max 4 hour drift)
     /// - For retention >= 30 days: check every 12 hours (max 12 hour drift)
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn recommended_cleanup_interval(&self) -> Duration {
         let retention_secs = self.retention_duration.as_secs();
 
@@ -99,7 +113,8 @@ impl CleanupPolicy {
     }
 
     /// Check if a file should be cleaned up based on this policy.
-    /// For LastAccess mode, prefers filesystem_atime if available, falls back to in_memory_access, then modified.
+    /// For `LastAccess` mode, prefers `filesystem_atime` if available, falls back to `in_memory_access`, then modified.
+    #[must_use]
     pub fn should_cleanup(
         &self,
         filesystem_atime: Option<DateTime<Utc>>,
@@ -117,27 +132,24 @@ impl CleanupPolicy {
         let timestamp = match self.time_match {
             TimeMatch::LastAccess => {
                 let unix_epoch_utc: DateTime<Utc> = DateTime::from(std::time::UNIX_EPOCH);
-
-                // Prefer filesystem atime if available and seems valid (not Unix epoch)
-                if let Some(fs_atime) = filesystem_atime {
-                    if fs_atime > unix_epoch_utc {
-                        fs_atime
-                    } else {
-                        // Filesystem atime not reliable, use in-memory tracking, fallback to mtime
+                filesystem_atime.map_or_else(
+                    || {
                         if in_memory_access > unix_epoch_utc {
                             in_memory_access
                         } else {
                             modified
                         }
-                    }
-                } else {
-                    // No filesystem atime available, use in-memory tracking, fallback to mtime
-                    if in_memory_access > unix_epoch_utc {
-                        in_memory_access
-                    } else {
-                        modified
-                    }
-                }
+                    },
+                    |fs_atime| {
+                        if fs_atime > unix_epoch_utc {
+                            fs_atime
+                        } else if in_memory_access > unix_epoch_utc {
+                            in_memory_access
+                        } else {
+                            modified
+                        }
+                    },
+                )
             }
             TimeMatch::Modified => modified,
             TimeMatch::Created => created,
@@ -190,9 +202,9 @@ mod tests {
 
     #[test]
     fn test_time_match_variants() {
-        let policy_atime = CleanupPolicy::new().time_match(TimeMatch::LastAccess);
-        let policy_mtime = CleanupPolicy::new().time_match(TimeMatch::Modified);
-        let policy_ctime = CleanupPolicy::new().time_match(TimeMatch::Created);
+        let atime_policy = CleanupPolicy::new().time_match(TimeMatch::LastAccess);
+        let mtime_policy = CleanupPolicy::new().time_match(TimeMatch::Modified);
+        let ctime_policy = CleanupPolicy::new().time_match(TimeMatch::Created);
 
         let now = Utc::now();
         let old_access = now - ChronoDuration::days(2);
@@ -201,15 +213,14 @@ mod tests {
         let recent = now - ChronoDuration::minutes(1);
 
         // Test access time matching
-        assert!(policy_atime.should_cleanup(None, old_access, recent, recent));
-        assert!(!policy_atime.should_cleanup(None, recent, old_modified, old_created));
+        assert!(atime_policy.should_cleanup(None, old_access, recent, recent));
+        assert!(!atime_policy.should_cleanup(None, recent, old_modified, old_created));
 
         // Test modified time matching
-        assert!(policy_mtime.should_cleanup(None, recent, old_modified, recent));
-        assert!(!policy_mtime.should_cleanup(None, old_access, recent, old_created));
+        assert!(mtime_policy.should_cleanup(None, recent, old_modified, recent));
+        assert!(!mtime_policy.should_cleanup(None, old_access, recent, old_created));
 
-        // Test created time matching
-        assert!(policy_ctime.should_cleanup(None, recent, recent, old_created));
-        assert!(!policy_ctime.should_cleanup(None, old_access, old_modified, recent));
+        assert!(ctime_policy.should_cleanup(None, recent, recent, old_created));
+        assert!(!ctime_policy.should_cleanup(None, old_access, old_modified, recent));
     }
 }

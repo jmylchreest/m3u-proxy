@@ -8,6 +8,7 @@ repository = "https://github.com/jmylchreest/m3u-proxy"
 license = "MIT"
 keywords = ["file", "sandbox", "cleanup", "retention", "security"]
 categories = ["filesystem", "os"]
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0"

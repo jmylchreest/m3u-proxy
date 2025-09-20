@@ -1,3 +1,5 @@
+#![allow(clippy::multiple_crate_versions)]
+// TODO: Unify transitive dependency versions (wasi, windows-link) and remove this allow.
 //! # Sandboxed File Manager
 //!
 //! A secure, sandboxed file management library with configurable retention policies
@@ -189,7 +191,7 @@
 //! ```rust,ignore
 //! // These operations would fail with security errors:
 //! // manager.write("../../../etc/passwd", "evil").await?;           // Escapes sandbox
-//! // manager.write("/etc/passwd", "evil").await?;                   // Absolute path  
+//! // manager.write("/etc/passwd", "evil").await?;                   // Absolute path
 //! // manager.write("file\0.txt", "evil").await?;                    // Null bytes
 //! ```
 

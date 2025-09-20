@@ -1,7 +1,11 @@
-//! Comparison example showing how to use SandboxedManager like std::fs
-//!
-//! This example demonstrates how the SandboxedManager provides a drop-in
+//! Comparison example showing how to use `SandboxedManager` like `std::fs`
+//
+//! This example demonstrates how the `SandboxedManager` provides a drop-in
 //! replacement for standard Rust file operations, but with sandbox security.
+//
+//! NOTE: This example uses stdout output for demonstration purposes; printing
+//! is intentional to illustrate typical usage patterns during development.
+#![allow(clippy::print_stdout, clippy::doc_markdown)]
 
 use sandboxed_file_manager::{CleanupPolicy, SandboxedManager};
 
@@ -91,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (bad_path, description) in results {
         match manager.write(bad_path, "malicious").await {
-            Ok(_) => println!("   SECURITY BREACH: {description} should have been blocked!"),
+            Ok(()) => println!("   SECURITY BREACH: {description} should have been blocked!"),
             Err(_) => println!("   Blocked: {description}"),
         }
     }

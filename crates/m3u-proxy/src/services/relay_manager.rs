@@ -16,10 +16,13 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::database::Database;
-use crate::database::repositories::channel::ChannelSeaOrmRepository;
+use crate::database::repositories::{
+    LastKnownCodecSeaOrmRepository, channel::ChannelSeaOrmRepository,
+};
 use crate::models::relay::*;
 use crate::observability::AppObservability;
 use crate::proxy::session_tracker::ClientInfo;
+use crate::services::ProbePersistenceService;
 use crate::services::ffmpeg_wrapper::{FFmpegProcess, FFmpegProcessWrapper};
 use opentelemetry::KeyValue;
 use sandboxed_file_manager::SandboxedManager;
@@ -38,6 +41,8 @@ pub struct RelayManager {
     pub ffprobe_version: Option<String>,
     pub hwaccel_available: bool,
     pub hwaccel_capabilities: HwAccelCapabilities,
+    /// Unified probe persistence (manual + relay)
+    pub probe_persistence: Option<Arc<ProbePersistenceService>>,
 }
 
 impl RelayManager {
@@ -91,20 +96,41 @@ impl RelayManager {
             None
         };
 
+        // Create probe persistence service if ffprobe available
+        let probe_persistence = if ffprobe_available {
+            let persistence_prober =
+                crate::services::StreamProber::new(Some(ffprobe_command.clone()));
+            let codec_repo = Arc::new(LastKnownCodecSeaOrmRepository::new(
+                database.connection().clone(),
+            ));
+            Some(Arc::new(ProbePersistenceService::new(
+                persistence_prober,
+                codec_repo,
+            )))
+        } else {
+            None
+        };
+        // Build FFmpeg wrapper then inject probe persistence if available
+        let mut ffmpeg_wrapper = FFmpegProcessWrapper::new(
+            temp_manager,
+            hwaccel_capabilities.clone(),
+            config
+                .relay
+                .as_ref()
+                .map(|r| r.buffer.clone())
+                .unwrap_or_default(),
+            stream_prober,
+            ffmpeg_command.clone(),
+        );
+
+        if let Some(persistence) = &probe_persistence {
+            ffmpeg_wrapper.set_probe_persistence(persistence.clone());
+        }
+
         let manager = Self {
             active_processes: Arc::new(RwLock::new(HashMap::new())),
             database,
-            ffmpeg_wrapper: FFmpegProcessWrapper::new(
-                temp_manager,
-                hwaccel_capabilities.clone(),
-                config
-                    .relay
-                    .as_ref()
-                    .map(|r| r.buffer.clone())
-                    .unwrap_or_default(),
-                stream_prober,
-                ffmpeg_command.clone(),
-            ),
+            ffmpeg_wrapper,
             cleanup_interval: Duration::from_secs(10),
             system_manager: SystemManager::new(Duration::from_secs(5)),
             observability: None,
@@ -114,6 +140,7 @@ impl RelayManager {
             ffprobe_version: ffprobe_version.clone(),
             hwaccel_available,
             hwaccel_capabilities,
+            probe_persistence,
         };
 
         // Start cleanup task

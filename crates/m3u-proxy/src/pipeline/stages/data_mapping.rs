@@ -28,7 +28,7 @@ use tracing::{debug, error, info, trace, warn};
 // Configurable batch sizes for memory optimization
 const CHANNEL_PROCESSING_BATCH_SIZE: usize = 100; // Process channels in batches for detailed logging
 const EPG_PROGRAMS_BATCH_SIZE: usize = 1000; // Process EPG programs in batches to avoid loading all into memory
-const EPG_PROGRESS_LOG_INTERVAL: usize = 10000; // Log EPG progress every N programs
+
 const CHANNEL_PROGRESS_INTERVAL: usize = 1000; // Report progress every N channels
 
 pub struct DataMappingStage {
@@ -38,6 +38,8 @@ pub struct DataMappingStage {
     regex_preprocessor: RegexPreprocessor,
     helper_processor: Option<HelperPostProcessor>,
     progress_manager: Option<Arc<ProgressManager>>,
+    // Prevent unbounded debug spam if progress manager not present
+    missing_progress_log_emitted: bool,
 }
 
 impl DataMappingStage {
@@ -58,6 +60,7 @@ impl DataMappingStage {
             regex_preprocessor,
             helper_processor: None,
             progress_manager,
+            missing_progress_log_emitted: false,
         })
     }
 
@@ -76,7 +79,10 @@ impl DataMappingStage {
         &mut self,
     ) -> Result<PipelineArtifact, Box<dyn std::error::Error>> {
         let stage_start = Instant::now();
-        info!("Starting channel processing in data mapping stage");
+        info!(
+            "exec={} Starting channel processing in data mapping stage",
+            self.pipeline_execution_prefix
+        );
 
         // Query all stream sources using SeaORM
         let stream_sources = StreamSources::find()
@@ -84,7 +90,11 @@ impl DataMappingStage {
             .all(&*self.db_connection)
             .await?;
 
-        info!("Found {} active stream sources", stream_sources.len());
+        info!(
+            "exec={} Found {} active stream sources",
+            self.pipeline_execution_prefix,
+            stream_sources.len()
+        );
 
         // Debug: Log all found stream sources
         for source in &stream_sources {
@@ -103,14 +113,39 @@ impl DataMappingStage {
             HashMap::new(); // (rule_name, applied_count, processed_count, total_time)
         let mut output_file_created = false; // Track if output file has been created across all sources
 
+        // Pre-compute grand total channels across all sources for unified progress (10-50%)
+        let mut grand_total_channels: u64 = 0;
+        let mut per_source_totals: HashMap<uuid::Uuid, u64> = HashMap::new();
+        for s in &stream_sources {
+            let count = Channels::find()
+                .filter(channels::Column::SourceId.eq(s.id))
+                .count(&*self.db_connection)
+                .await
+                .unwrap_or(0) as u64;
+            per_source_totals.insert(s.id, count);
+            grand_total_channels += count;
+        }
+        info!(
+            "exec={} Grand total channels across sources: {}",
+            self.pipeline_execution_prefix, grand_total_channels
+        );
+        let stream_sources_len = stream_sources.len();
+        let mut cumulative_processed: u64 = 0;
+
         for source in stream_sources {
             let source_id = source.id;
             let source_name = source.name.clone();
 
-            info!("Processing source: {} ({})", source_name, source_id);
+            info!(
+                "exec={} Processing source: {} ({})",
+                self.pipeline_execution_prefix, source_name, source_id
+            );
 
             // Check if we have any rules for this source type using SeaORM
-            info!("Querying data mapping rules for stream sources");
+            info!(
+                "exec={} Querying data mapping rules for stream sources",
+                self.pipeline_execution_prefix
+            );
             let rule_models = match DataMappingRules::find()
                 .filter(data_mapping_rules::Column::SourceType.eq("stream"))
                 .filter(data_mapping_rules::Column::IsActive.eq(true))
@@ -120,7 +155,8 @@ impl DataMappingStage {
             {
                 Ok(models) => {
                     info!(
-                        "Successfully fetched {} data mapping rule models",
+                        "exec={} Successfully fetched {} data mapping rule models",
+                        self.pipeline_execution_prefix,
                         models.len()
                     );
                     models
@@ -134,8 +170,11 @@ impl DataMappingStage {
             let mut rules = Vec::new();
             for rule_model in rule_models {
                 info!(
-                    "Processing data mapping rule id={} rule_name='{}' priority={}",
-                    rule_model.id, rule_model.name, rule_model.sort_order
+                    "exec={} Processing data mapping rule id={} rule_name='{}' priority={}",
+                    self.pipeline_execution_prefix,
+                    rule_model.id,
+                    rule_model.name,
+                    rule_model.sort_order
                 );
 
                 let rule = match self.create_data_mapping_rule_from_model(&rule_model) {
@@ -149,14 +188,22 @@ impl DataMappingStage {
             }
 
             info!(
-                "Found {} data mapping rules for stream sources",
+                "exec={} Found {} data mapping rules for stream sources",
+                self.pipeline_execution_prefix,
                 rules.len()
             );
 
             // Process channels through data mapping rules with enhanced logging
             let source_start = Instant::now();
-            info!("Processing channels for source: {}", source_id);
-            debug!("Binding source_id as string: '{}'", source_id.to_string());
+            info!(
+                "exec={} Processing channels for source: {}",
+                self.pipeline_execution_prefix, source_id
+            );
+            debug!(
+                "exec={} Binding source_id as string: '{}'",
+                self.pipeline_execution_prefix,
+                source_id.to_string()
+            );
 
             // Set up output file for batch writes
             let output_file_path =
@@ -223,8 +270,8 @@ impl DataMappingStage {
                 .unwrap_or(0);
 
             info!(
-                "Found {} channels for source {}",
-                total_channels, source_name
+                "exec={} Found {} channels for source {}",
+                self.pipeline_execution_prefix, total_channels, source_name
             );
 
             // Get all channels for this source using SeaORM (we'll process in batches)
@@ -244,6 +291,7 @@ impl DataMappingStage {
                         current_batch.push(channel);
 
                         // Process batch when it reaches BATCH_SIZE
+                        #[allow(clippy::collapsible_if)]
                         if current_batch.len() >= BATCH_SIZE {
                             if !current_batch.is_empty() {
                                 let batch_result =
@@ -294,6 +342,25 @@ impl DataMappingStage {
                                         }
                                     };
 
+                                // Update cumulative progress & report unified channel mapping progress (10%-50%)
+                                cumulative_processed += batch_result.total_processed as u64;
+                                if grand_total_channels > 0
+                                    && cumulative_processed % (CHANNEL_PROGRESS_INTERVAL as u64)
+                                        == 0
+                                {
+                                    let frac =
+                                        cumulative_processed as f64 / grand_total_channels as f64;
+                                    let pct = 10.0 + (frac * 40.0);
+                                    let progress_message = format!(
+                                        "Mapping channels: {}/{} overall ({} sources) ({} modified so far)",
+                                        cumulative_processed,
+                                        grand_total_channels,
+                                        stream_sources_len,
+                                        total_channels_modified + source_modified_count
+                                    );
+                                    self.report_progress(pct, &progress_message).await;
+                                }
+
                                 // Post-process channels with helper processor if configured
                                 let mut final_channels = Vec::new();
                                 let mut helper_modifications = 0;
@@ -333,7 +400,10 @@ impl DataMappingStage {
                                                     error!(
                                                         "Halting pipeline execution due to critical database error"
                                                     );
-                                                    return Err(format!("Critical database error in helper processing: {db_error}").into());
+                                                    return Err(format!(
+                                                        "Critical database error in helper processing: {db_error}"
+                                                    )
+                                                    .into());
                                                 }
                                                 Err(e) => {
                                                     // Other errors - log and continue without this channel
@@ -392,26 +462,6 @@ impl DataMappingStage {
                                     }
                                     batch_content.clear();
                                 }
-                            }
-
-                            // Update progress every CHANNEL_PROGRESS_INTERVAL channels
-                            if channel_count % CHANNEL_PROGRESS_INTERVAL == 0 {
-                                let completion_percentage = if total_channels > 0 {
-                                    (channel_count as f64 / total_channels as f64 * 100.0).round()
-                                        as u32
-                                } else {
-                                    0
-                                };
-
-                                // Broadcast progress update via SSE
-                                let progress_message = format!(
-                                    "Processing {source_name}: {channel_count}/{total_channels} channels ({source_modified_count} modified)"
-                                );
-                                self.report_progress(
-                                    10.0 + (completion_percentage as f64 * 0.4),
-                                    &progress_message,
-                                )
-                                .await;
                             }
                         }
                     }
@@ -563,7 +613,8 @@ impl DataMappingStage {
                 100
             };
             info!(
-                "Source processing completed: source={} total_channels={} modified_channels={} completion_percentage={:.0}% duration={}",
+                "exec={} Source processing completed: source={} total_channels={} modified_channels={} completion_percentage={:.0}% duration={}",
+                self.pipeline_execution_prefix,
                 source_name,
                 channel_count,
                 source_modified_count,
@@ -584,8 +635,12 @@ impl DataMappingStage {
         // Log overall performance summary
         let stage_duration = stage_start.elapsed();
         let overall_completion_percentage = 100u32; // Stage completed fully
+        // Ensure we report exact 50% at end of channels if not already reached
+        self.report_progress(50.0, "Channel mapping complete").await;
+
         info!(
-            "Data mapping stage completed: total_channels_processed={} total_channels_modified={} completion_percentage={:.0}% stage_duration={}",
+            "exec={} Data mapping stage completed: total_channels_processed={} total_channels_modified={} completion_percentage={:.0}% stage_duration={}",
+            self.pipeline_execution_prefix,
             total_channels_processed,
             total_channels_modified,
             overall_completion_percentage,
@@ -607,7 +662,8 @@ impl DataMappingStage {
                     0.0
                 };
                 info!(
-                    "  Rule performance: rule_id={} rule_name='{}' applied_count={} processed_count={} affected_percent={:.3}% avg_duration={}",
+                    "exec={}   Rule performance: rule_id={} rule_name='{}' applied_count={} processed_count={} affected_percent={:.3}% avg_duration={}",
+                    self.pipeline_execution_prefix,
                     rule_id,
                     rule_name,
                     applied_count,
@@ -656,7 +712,10 @@ impl DataMappingStage {
 
         // Memory cleanup is handled automatically when variables go out of scope
 
-        info!("Data mapping channels stage completed, memory cleanup performed");
+        info!(
+            "exec={} Data mapping channels stage completed, memory cleanup performed",
+            self.pipeline_execution_prefix
+        );
         Ok(artifact)
     }
 
@@ -664,7 +723,45 @@ impl DataMappingStage {
         &mut self,
     ) -> Result<PipelineArtifact, Box<dyn std::error::Error>> {
         let stage_start = Instant::now();
-        info!("Starting EPG programs processing in data mapping stage");
+        info!(
+            "exec={} Starting EPG programs processing in data mapping stage",
+            self.pipeline_execution_prefix
+        );
+
+        // EPG snapshot version & active sources logging
+        let active_epg_sources = EpgSources::find()
+            .filter(epg_sources::Column::IsActive.eq(true))
+            .all(&*self.db_connection)
+            .await
+            .unwrap_or_default();
+
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        info!(
+            "exec={} Active EPG sources: {}",
+            self.pipeline_execution_prefix,
+            active_epg_sources.len()
+        );
+        for s in &active_epg_sources {
+            s.id.hash(&mut hasher);
+            if let Some(ts) = s.last_ingested_at {
+                ts.timestamp().hash(&mut hasher);
+            }
+            let prog_cnt = EpgPrograms::find()
+                .filter(epg_programs::Column::SourceId.eq(s.id))
+                .count(&*self.db_connection)
+                .await
+                .unwrap_or(0);
+            info!(
+                "exec={} EPG source id={} name='{}' last_ingested_at={:?} program_count={}",
+                self.pipeline_execution_prefix, s.id, s.name, s.last_ingested_at, prog_cnt
+            );
+        }
+        let snapshot_token = format!("{:x}", hasher.finish());
+        info!(
+            "exec={} Computed EPG snapshot version token: {}",
+            self.pipeline_execution_prefix, snapshot_token
+        );
 
         let output_file_path = format!("{}_mapping_programs.jsonl", self.pipeline_execution_prefix);
 
@@ -853,8 +950,10 @@ impl DataMappingStage {
         };
 
         let stage_duration = stage_start.elapsed();
+        self.report_progress(95.0, "EPG mapping complete").await;
         info!(
-            "EPG programs processing completed: total_programs={} stage_duration={}",
+            "exec={} EPG programs processing completed: total_programs={} stage_duration={}",
+            self.pipeline_execution_prefix,
             program_count,
             format_duration_precise(stage_duration)
         );
@@ -899,14 +998,20 @@ impl DataMappingStage {
 
         // Memory cleanup is handled automatically when variables go out of scope
 
-        info!("Data mapping programs stage completed, memory cleanup performed");
+        info!(
+            "exec={} Data mapping programs stage completed, memory cleanup performed",
+            self.pipeline_execution_prefix
+        );
         Ok(artifact)
     }
 
     async fn serialize_epg_programs_from_database(
-        &self,
+        &mut self,
     ) -> Result<Vec<EpgProgram>, Box<dyn std::error::Error>> {
-        info!("Serializing EPG programs from database using SeaORM approach");
+        info!(
+            "exec={} Serializing EPG programs from database using SeaORM approach",
+            self.pipeline_execution_prefix
+        );
 
         // Get all EPG programs using SeaORM (ordered by start_time)
         // NOTE: We need all programs in memory because the generation stage filters
@@ -917,7 +1022,10 @@ impl DataMappingStage {
             .await?;
 
         let total_programs = epg_models.len();
-        info!("Found {} EPG programs to process", total_programs);
+        info!(
+            "exec={} Found {} EPG programs to process",
+            self.pipeline_execution_prefix, total_programs
+        );
 
         let mut all_programs = Vec::with_capacity(total_programs);
         let mut batch_programs = Vec::new();
@@ -935,10 +1043,11 @@ impl DataMappingStage {
                 all_programs.append(&mut batch_programs);
 
                 // Log progress periodically with real percentage
-                if processed_count % EPG_PROGRESS_LOG_INTERVAL == 0 && total_programs > 0 {
-                    let progress = 15.0 + (processed_count as f64 / total_programs as f64) * 80.0; // 15-95% range
+                if processed_count % EPG_PROGRAMS_BATCH_SIZE == 0 && total_programs > 0 {
+                    let frac = processed_count as f64 / total_programs as f64;
+                    let progress = 50.0 + (frac * 45.0); // 50-95% mapped to EPG processing
                     let progress_message = format!(
-                        "Processing EPG programs: {}/{} processed",
+                        "Mapping EPG programs: {}/{} processed",
                         processed_count, total_programs
                     );
                     self.report_progress(progress, &progress_message).await;
@@ -952,7 +1061,8 @@ impl DataMappingStage {
         }
 
         info!(
-            "Serialized {} EPG programs from database using batch processing approach",
+            "exec={} Serialized {} EPG programs from database using batch processing approach",
+            self.pipeline_execution_prefix,
             all_programs.len()
         );
         Ok(all_programs)
@@ -1100,16 +1210,23 @@ impl DataMappingStage {
     }
 
     /// Helper method for reporting progress
-    async fn report_progress(&self, percentage: f64, message: &str) {
+    async fn report_progress(&mut self, percentage: f64, message: &str) {
         if let Some(pm) = &self.progress_manager {
             if let Some(updater) = pm.get_stage_updater("data_mapping").await {
-                debug!("Data mapping progress: {:.0}% - {}", percentage, message);
+                debug!(
+                    "exec={} Data mapping progress: {:.0}% - {}",
+                    self.pipeline_execution_prefix, percentage, message
+                );
                 updater.update_progress(percentage, message).await;
             } else {
-                debug!("No stage updater found for 'data_mapping'");
+                debug!(
+                    "exec={} No stage updater found for 'data_mapping'",
+                    self.pipeline_execution_prefix
+                );
             }
-        } else {
-            debug!("No progress manager set on DataMappingStage");
+        } else if !self.missing_progress_log_emitted {
+            debug!("No progress manager set on DataMappingStage (further messages suppressed)");
+            self.missing_progress_log_emitted = true;
         }
     }
 }

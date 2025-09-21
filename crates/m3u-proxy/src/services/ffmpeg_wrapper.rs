@@ -2,6 +2,8 @@
 //!
 //! This module provides a generic wrapper for FFmpeg processes with support for
 //! template variable resolution, process management, and content serving.
+use crate::models::last_known_codec::ProbeMethod;
+use crate::services::ProbePersistenceService;
 
 use anyhow::Result;
 use futures::Stream;
@@ -148,6 +150,8 @@ pub struct FFmpegProcessWrapper {
     stream_prober: Option<StreamProber>,
     ffmpeg_command: String,
     command_builder: FFmpegCommandBuilder,
+    /// Optional unified probe persistence service (injected after construction)
+    probe_persistence: Option<Arc<ProbePersistenceService>>,
 }
 
 impl FFmpegProcessWrapper {
@@ -175,7 +179,13 @@ impl FFmpegProcessWrapper {
             stream_prober,
             ffmpeg_command,
             command_builder,
+            probe_persistence: None,
         }
+    }
+
+    /// Inject a probe persistence service after construction (to avoid changing existing constructor call sites)
+    pub fn set_probe_persistence(&mut self, svc: Arc<ProbePersistenceService>) {
+        self.probe_persistence = Some(svc);
     }
 
     /// Start an FFmpeg process with the given configuration
@@ -277,6 +287,20 @@ impl FFmpegProcessWrapper {
                         strategy.video_copy,
                         strategy.audio_copy
                     );
+
+                    // Persist probe result (relay context) if service available
+                    if let Some(persistence) = &self.probe_persistence {
+                        if let Err(e) = persistence
+                            .probe_and_persist(
+                                input_url,
+                                ProbeMethod::FfprobeRelay,
+                                Some(format!("relay:{}", config.config.id)),
+                            )
+                            .await
+                        {
+                            warn!("Failed to persist relay probe for {}: {}", input_url, e);
+                        }
+                    }
 
                     Some(strategy)
                 }

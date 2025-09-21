@@ -343,32 +343,36 @@ export default function ChannelsPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to probe channel: ${response.statusText}`);
+        const text = await response.text();
+        throw new Error(`Failed to probe channel: ${response.status} ${text}`);
       }
 
-      const result = await response.json();
+      // Backend now returns a LastKnownCodec object directly
+      const codec: {
+        video_codec?: string;
+        audio_codec?: string;
+        resolution?: string;
+        framerate?: string;
+        probe_method?: string;
+        detected_at?: string;
+      } = await response.json();
 
-      if (result.success === 'true' || result.success === true) {
-        // Update the specific channel in the local state with the new codec information
-        setChannels((prev) =>
-          prev.map((ch) => {
-            if (ch.id === channel.id) {
-              return {
-                ...ch,
-                video_codec: result.data?.video_codec || ch.video_codec,
-                audio_codec: result.data?.audio_codec || ch.audio_codec,
-                resolution: result.data?.resolution || ch.resolution,
-                last_probed_at: new Date().toISOString(),
-                probe_method: 'ffprobe_manual',
-              };
-            }
-            return ch;
-          })
-        );
-        setError(null);
-      } else {
-        setError(result.data?.error || result.error || 'Failed to probe channel');
-      }
+      setChannels((prev) =>
+        prev.map((ch) => {
+          if (ch.id === channel.id) {
+            return {
+              ...ch,
+              video_codec: codec.video_codec || ch.video_codec,
+              audio_codec: codec.audio_codec || ch.audio_codec,
+              resolution: codec.resolution || ch.resolution,
+              last_probed_at: codec.detected_at || new Date().toISOString(),
+              probe_method: codec.probe_method || 'ffprobe_manual',
+            };
+          }
+          return ch;
+        })
+      );
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to probe channel');
     } finally {

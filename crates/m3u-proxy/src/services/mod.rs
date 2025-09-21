@@ -46,6 +46,7 @@ pub mod file_categories;
 // logo_cache_scanner module removed - replaced by logo_cache service
 pub mod logo_cache;
 pub mod logo_cache_maintenance;
+pub mod probe_persistence;
 pub mod progress_service;
 pub mod proxy_regeneration;
 pub mod relay_config_resolver;
@@ -71,6 +72,7 @@ pub use epg_source_service::EpgSourceService;
 pub use error_fallback::{ErrorFallbackGenerator, StreamHealthMonitor};
 pub use ffmpeg_command_builder::FFmpegCommandBuilder;
 pub use ffmpeg_wrapper::FFmpegProcessWrapper;
+pub use probe_persistence::ProbePersistenceService;
 pub use progress_service::{OperationType, ProgressService};
 pub use proxy_regeneration::ProxyRegenerationService;
 pub use relay_config_resolver::RelayConfigResolver;

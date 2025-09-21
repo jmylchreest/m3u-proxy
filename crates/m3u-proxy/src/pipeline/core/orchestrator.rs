@@ -397,6 +397,43 @@ impl PipelineOrchestrator {
         let pipeline_start = Instant::now();
         let _reporter = ProgressReporter::new(self);
 
+        // Concurrency guard to prevent overlapping executions with the same execution ID
+        {
+            use std::collections::HashSet;
+            use std::sync::{Mutex, OnceLock};
+
+            static ACTIVE_EXECUTIONS: OnceLock<Mutex<HashSet<uuid::Uuid>>> = OnceLock::new();
+            let set = ACTIVE_EXECUTIONS.get_or_init(|| Mutex::new(HashSet::new()));
+            {
+                let mut guard = set.lock().unwrap();
+                if !guard.insert(self.execution.id) {
+                    warn!(
+                        "Execution {} already active; refusing duplicate start (prefix={})",
+                        self.execution.id, self.execution.execution_prefix
+                    );
+                    return Err(PipelineError::stage_error(
+                        "orchestrator",
+                        format!("Duplicate pipeline execution {}", self.execution.id),
+                    ));
+                }
+            }
+            struct ExecGuard {
+                id: uuid::Uuid,
+            }
+            impl Drop for ExecGuard {
+                fn drop(&mut self) {
+                    if let Some(m) = ACTIVE_EXECUTIONS.get() {
+                        if let Ok(mut set) = m.lock() {
+                            set.remove(&self.id);
+                        }
+                    }
+                }
+            }
+            let _exec_guard = ExecGuard {
+                id: self.execution.id,
+            };
+        }
+
         info!(
             "Starting pipeline execution: {}",
             self.execution.execution_prefix

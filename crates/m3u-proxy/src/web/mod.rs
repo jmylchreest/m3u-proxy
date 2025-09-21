@@ -176,7 +176,7 @@ impl WebServer {
             session_tracker: std::sync::Arc::new(
                 crate::proxy::session_tracker::SessionTracker::default(),
             ),
-            relay_manager: builder.relay_manager,
+            relay_manager: builder.relay_manager.clone(),
             relay_config_resolver: builder.relay_config_resolver,
             system: builder.system,
             stream_source_service: builder.stream_source_service,
@@ -191,6 +191,7 @@ impl WebServer {
             circuit_breaker_manager: builder.circuit_breaker_manager,
             logo_cache_service: builder.logo_cache_service,
             logo_cache_maintenance_service: builder.logo_cache_maintenance_service,
+            probe_persistence_service: builder.relay_manager.probe_persistence.clone(),
         })
         .await;
 
@@ -668,6 +669,8 @@ pub struct AppState {
     /// Logo cache maintenance service
     pub logo_cache_maintenance_service:
         Arc<crate::services::logo_cache_maintenance::LogoCacheMaintenanceService>,
+    /// Probe persistence service (codec info)
+    pub probe_persistence_service: Option<std::sync::Arc<crate::services::ProbePersistenceService>>,
 }
 
 impl AppState {}

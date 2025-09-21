@@ -476,14 +476,11 @@ pub async fn probe_channel_codecs(
     async fn inner(
         state: AppState,
         channel_id: String,
-    ) -> AppResult<std::collections::HashMap<String, String>> {
+    ) -> AppResult<crate::models::last_known_codec::LastKnownCodec> {
         let channel_uuid = parse_uuid_flexible(&channel_id).map_err(|e| AppError::Validation {
             message: format!("Invalid channel ID format: {}", e),
         })?;
-
-        // Use read pool to get channel information
         let channel_repo = ChannelSeaOrmRepository::new(state.database.connection().clone());
-
         let channel = channel_repo
             .find_by_id(&channel_uuid)
             .await
@@ -494,143 +491,25 @@ pub async fn probe_channel_codecs(
                 resource: "Channel".to_string(),
                 id: channel_id.clone(),
             })?;
-
-        // Get the stream URL for probing
-        let stream_url = if channel.source_id != uuid::Uuid::nil() {
-            // Channel from a stream source - use direct URL
-            channel.stream_url
-        } else {
-            // Database channel
-            channel.stream_url
-        };
-
-        // Create a simple StreamProber to probe the stream
-        let stream_prober = crate::services::stream_prober::StreamProber::new(None);
-
-        let probe_result = match stream_prober.probe_input(&stream_url).await {
-            Ok(probe_info) => probe_info,
-            Err(e) => {
-                // Store failed probe attempt in database
-                let codec_repo =
-                    LastKnownCodecSeaOrmRepository::new(state.database.connection().clone());
-                let failed_codec_request =
-                    crate::models::last_known_codec::CreateLastKnownCodecRequest {
-                        video_codec: None,
-                        audio_codec: None,
-                        container_format: None,
-                        resolution: None,
-                        framerate: None,
-                        bitrate: None,
-                        video_bitrate: None,
-                        audio_bitrate: None,
-                        audio_channels: None,
-                        audio_sample_rate: None,
-                        probe_method: crate::models::last_known_codec::ProbeMethod::FfprobeManual,
-                        probe_source: Some(format!("admin_failed: {}", e)),
-                    };
-
-                // Store the failed probe attempt (ignore errors from this operation, with timeout)
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    codec_repo.upsert_codec_info(&stream_url, failed_codec_request),
-                )
-                .await;
-
-                return Ok(std::collections::HashMap::from([
-                    ("success".to_string(), "false".to_string()),
-                    (
-                        "error".to_string(),
-                        format!("Failed to probe stream: {}", e),
-                    ),
-                ]));
-            }
-        };
-
-        // Extract codec information from probe result
-        let video_codec = probe_result
-            .video_streams
-            .first()
-            .map(|s| s.codec_name.clone());
-
-        let audio_codec = probe_result
-            .audio_streams
-            .first()
-            .map(|s| s.codec_name.clone());
-
-        let resolution = probe_result.video_streams.first().and_then(|s| {
-            if let (Some(width), Some(height)) = (s.width, s.height) {
-                Some(format!("{}x{}", width, height))
-            } else {
-                None
-            }
-        });
-
-        // Store codec information using SeaORM connection
-        let codec_repo = LastKnownCodecSeaOrmRepository::new(state.database.connection().clone());
-
-        let codec_request = crate::models::last_known_codec::CreateLastKnownCodecRequest {
-            video_codec: video_codec.clone(),
-            audio_codec: audio_codec.clone(),
-            container_format: probe_result.format_name.clone(),
-            resolution: resolution.clone(),
-            framerate: probe_result
-                .video_streams
-                .first()
-                .and_then(|s| s.r_frame_rate.clone()),
-            bitrate: probe_result.bit_rate.map(|br| br as i32),
-            video_bitrate: probe_result
-                .video_streams
-                .first()
-                .and_then(|s| s.bit_rate.map(|br| br as i32)),
-            audio_bitrate: probe_result
-                .audio_streams
-                .first()
-                .and_then(|s| s.bit_rate.map(|br| br as i32)),
-            audio_channels: probe_result
-                .audio_streams
-                .first()
-                .and_then(|s| s.channels.map(|c| c.to_string())),
-            audio_sample_rate: probe_result
-                .audio_streams
-                .first()
-                .and_then(|s| s.sample_rate.map(|sr| sr as i32)),
-            probe_method: crate::models::last_known_codec::ProbeMethod::FfprobeManual,
-            probe_source: Some("admin".to_string()),
-        };
-
-        // Store the codec information
-        if let Err(e) = codec_repo
-            .upsert_codec_info(&stream_url, codec_request)
+        let stream_url = channel.stream_url;
+        let persistence =
+            state
+                .probe_persistence_service
+                .clone()
+                .ok_or_else(|| AppError::Validation {
+                    message: "Probe persistence unavailable (ffprobe not configured)".to_string(),
+                })?;
+        let stored = persistence
+            .probe_and_persist(
+                &stream_url,
+                crate::models::last_known_codec::ProbeMethod::FfprobeManual,
+                Some("admin".to_string()),
+            )
             .await
-        {
-            return Ok(std::collections::HashMap::from([
-                ("success".to_string(), "false".to_string()),
-                (
-                    "error".to_string(),
-                    format!("Failed to store codec information: {}", e),
-                ),
-            ]));
-        }
-
-        // Return success with codec information
-        let mut response = std::collections::HashMap::new();
-        response.insert("success".to_string(), "true".to_string());
-        response.insert(
-            "message".to_string(),
-            "Channel probed successfully".to_string(),
-        );
-
-        if let Some(vc) = video_codec {
-            response.insert("video_codec".to_string(), vc);
-        }
-        if let Some(ac) = audio_codec {
-            response.insert("audio_codec".to_string(), ac);
-        }
-        if let Some(res) = resolution {
-            response.insert("resolution".to_string(), res);
-        }
-
-        Ok(response)
+            .map_err(|e| AppError::Validation {
+                message: format!("Probe failed: {}", e),
+            })?;
+        Ok(stored)
     }
 
     handle_result(inner(state, channel_id).await)

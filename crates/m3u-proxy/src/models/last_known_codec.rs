@@ -9,18 +9,24 @@ pub struct LastKnownCodec {
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
     pub container_format: Option<String>,
-    pub resolution: Option<String>,
+    /// Stored as separate width / height values (preferred canonical form)
+    pub video_width: Option<i32>,
+    pub video_height: Option<i32>,
     pub framerate: Option<String>,
+    /// Overall/container bitrate
     pub bitrate: Option<i32>,
     pub video_bitrate: Option<i32>,
     pub audio_bitrate: Option<i32>,
-    pub audio_channels: Option<String>,
+    /// Number of audio channels (e.g. 2)
+    pub audio_channels: Option<i32>,
     pub audio_sample_rate: Option<i32>,
     pub probe_method: ProbeMethod,
     pub probe_source: Option<String>,
     pub detected_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Derived convenience field (not stored directly; serialize if present)
+    pub resolution: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -62,12 +68,13 @@ pub struct CreateLastKnownCodecRequest {
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
     pub container_format: Option<String>,
-    pub resolution: Option<String>,
+    pub video_width: Option<i32>,
+    pub video_height: Option<i32>,
     pub framerate: Option<String>,
     pub bitrate: Option<i32>,
     pub video_bitrate: Option<i32>,
     pub audio_bitrate: Option<i32>,
-    pub audio_channels: Option<String>,
+    pub audio_channels: Option<i32>,
     pub audio_sample_rate: Option<i32>,
     pub probe_method: ProbeMethod,
     pub probe_source: Option<String>,
@@ -78,12 +85,13 @@ pub struct UpdateLastKnownCodecRequest {
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
     pub container_format: Option<String>,
-    pub resolution: Option<String>,
+    pub video_width: Option<i32>,
+    pub video_height: Option<i32>,
     pub framerate: Option<String>,
     pub bitrate: Option<i32>,
     pub video_bitrate: Option<i32>,
     pub audio_bitrate: Option<i32>,
-    pub audio_channels: Option<String>,
+    pub audio_channels: Option<i32>,
     pub audio_sample_rate: Option<i32>,
     pub probe_method: ProbeMethod,
     pub probe_source: Option<String>,
@@ -108,6 +116,9 @@ pub struct ChannelWithCodec {
     // Last known codec information
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
+    pub video_width: Option<i32>,
+    pub video_height: Option<i32>,
+    /// Derived convenience (width x height)
     pub resolution: Option<String>,
     pub last_probed_at: Option<DateTime<Utc>>,
     pub probe_method: Option<ProbeMethod>,

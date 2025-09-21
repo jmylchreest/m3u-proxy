@@ -162,23 +162,20 @@ impl ProbePersistenceService {
         let video = probe.video_streams.first();
         let audio = probe.audio_streams.first();
 
-        let resolution = video.and_then(|v| match (v.width, v.height) {
-            (Some(w), Some(h)) => Some(format!("{}x{}", w, h)),
-            _ => None,
-        });
-
         let framerate = video.and_then(|v| v.r_frame_rate.clone());
 
         CreateLastKnownCodecRequest {
             video_codec: video.map(|s| s.codec_name.clone()),
             audio_codec: audio.map(|s| s.codec_name.clone()),
             container_format: probe.format_name.clone(),
-            resolution,
+            video_width: video.and_then(|v| v.width.map(|w| w as i32)),
+            video_height: video.and_then(|v| v.height.map(|h| h as i32)),
             framerate,
             bitrate: probe.bit_rate.map(|b| b as i32),
             video_bitrate: video.and_then(|v| v.bit_rate.map(|b| b as i32)),
             audio_bitrate: audio.and_then(|a| a.bit_rate.map(|b| b as i32)),
-            audio_channels: audio.and_then(|a| a.channels.map(|c| c.to_string())),
+            // Store channel count as integer (matches DB schema INTEGER)
+            audio_channels: audio.and_then(|a| a.channels.map(|c| c as i32)),
             audio_sample_rate: audio.and_then(|a| a.sample_rate.map(|sr| sr as i32)),
             probe_method: method,
             probe_source,
@@ -194,7 +191,8 @@ impl ProbePersistenceService {
             video_codec: None,
             audio_codec: None,
             container_format: None,
-            resolution: None,
+            video_width: None,
+            video_height: None,
             framerate: None,
             bitrate: None,
             video_bitrate: None,
@@ -214,7 +212,8 @@ impl ProbePersistenceService {
         prev.video_codec == new_req.video_codec
             && prev.audio_codec == new_req.audio_codec
             && prev.container_format == new_req.container_format
-            && prev.resolution == new_req.resolution
+            && prev.video_width == new_req.video_width
+            && prev.video_height == new_req.video_height
             && prev.framerate == new_req.framerate
             && prev.video_bitrate == new_req.video_bitrate
             && prev.audio_bitrate == new_req.audio_bitrate
@@ -238,12 +237,14 @@ mod tests {
             video_codec: Some("h264".into()),
             audio_codec: Some("aac".into()),
             container_format: Some("mpegts".into()),
+            video_width: Some(1920),
+            video_height: Some(1080),
             resolution: Some("1920x1080".into()),
             framerate: Some("25/1".into()),
             bitrate: Some(2_000_000),
             video_bitrate: Some(2_000_000),
             audio_bitrate: Some(128_000),
-            audio_channels: Some("2".into()),
+            audio_channels: Some(2),
             audio_sample_rate: Some(48000),
             probe_method: ProbeMethod::FfprobeManual,
             probe_source: Some("test".into()),
@@ -256,12 +257,13 @@ mod tests {
             video_codec: Some("h264".into()),
             audio_codec: Some("aac".into()),
             container_format: Some("mpegts".into()),
-            resolution: Some("1920x1080".into()),
+            video_width: Some(1920),
+            video_height: Some(1080),
             framerate: Some("25/1".into()),
             bitrate: Some(2_000_000),
             video_bitrate: Some(2_000_000),
             audio_bitrate: Some(128_000),
-            audio_channels: Some("2".into()),
+            audio_channels: Some(2),
             audio_sample_rate: Some(48000),
             probe_method: ProbeMethod::FfprobeManual,
             probe_source: Some("test".into()),
@@ -292,12 +294,14 @@ mod tests {
             video_codec: Some("h264".into()),
             audio_codec: Some("aac".into()),
             container_format: Some("mpegts".into()),
+            video_width: Some(1920),
+            video_height: Some(1080),
             resolution: Some("1920x1080".into()),
             framerate: Some("25/1".into()),
             bitrate: Some(2_000_000),
             video_bitrate: Some(2_000_000),
             audio_bitrate: Some(128_000),
-            audio_channels: Some("2".into()),
+            audio_channels: Some(2),
             audio_sample_rate: Some(48000),
             probe_method: ProbeMethod::FfprobeManual,
             probe_source: Some("test".into()),
@@ -310,12 +314,13 @@ mod tests {
             video_codec: Some("hevc".into()), // changed
             audio_codec: Some("aac".into()),
             container_format: Some("mpegts".into()),
-            resolution: Some("1920x1080".into()),
+            video_width: Some(1920),
+            video_height: Some(1080),
             framerate: Some("25/1".into()),
             bitrate: Some(2_000_000),
             video_bitrate: Some(2_000_000),
             audio_bitrate: Some(128_000),
-            audio_channels: Some("2".into()),
+            audio_channels: Some(2),
             audio_sample_rate: Some(48000),
             probe_method: ProbeMethod::FfprobeManual,
             probe_source: Some("test".into()),

@@ -18,15 +18,16 @@ pub struct Model {
     pub audio_codec: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub container_format: Option<String>,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub resolution: Option<String>,
+    /// Width of primary video stream in pixels
+    pub video_width: Option<i32>,
+    /// Height of primary video stream in pixels
+    pub video_height: Option<i32>,
     #[sea_orm(column_type = "Text", nullable)]
     pub framerate: Option<String>,
     pub bitrate: Option<i32>,
     pub video_bitrate: Option<i32>,
     pub audio_bitrate: Option<i32>,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub audio_channels: Option<String>,
+    pub audio_channels: Option<i32>,
     pub audio_sample_rate: Option<i32>,
     #[sea_orm(column_type = "Text")]
     pub probe_method: String,

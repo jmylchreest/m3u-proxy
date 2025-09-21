@@ -43,11 +43,14 @@ impl LastKnownCodecSeaOrmRepository {
                 active_model.video_codec = Set(request.video_codec);
                 active_model.audio_codec = Set(request.audio_codec);
                 active_model.container_format = Set(request.container_format);
-                active_model.resolution = Set(request.resolution);
+                // Store canonical width/height directly
+                active_model.video_width = Set(request.video_width);
+                active_model.video_height = Set(request.video_height);
                 active_model.framerate = Set(request.framerate);
                 active_model.bitrate = Set(request.bitrate);
                 active_model.video_bitrate = Set(request.video_bitrate);
                 active_model.audio_bitrate = Set(request.audio_bitrate);
+                // audio_channels stored as integer (DB column is INTEGER)
                 active_model.audio_channels = Set(request.audio_channels);
                 active_model.audio_sample_rate = Set(request.audio_sample_rate);
                 active_model.probe_method = Set(request.probe_method.to_string());
@@ -68,11 +71,13 @@ impl LastKnownCodecSeaOrmRepository {
                     video_codec: Set(request.video_codec),
                     audio_codec: Set(request.audio_codec),
                     container_format: Set(request.container_format),
-                    resolution: Set(request.resolution),
+                    video_width: Set(request.video_width),
+                    video_height: Set(request.video_height),
                     framerate: Set(request.framerate),
                     bitrate: Set(request.bitrate),
                     video_bitrate: Set(request.video_bitrate),
                     audio_bitrate: Set(request.audio_bitrate),
+                    // audio_channels stored as integer (DB column is INTEGER)
                     audio_channels: Set(request.audio_channels),
                     audio_sample_rate: Set(request.audio_sample_rate),
                     probe_method: Set(request.probe_method.to_string()),
@@ -119,17 +124,26 @@ impl LastKnownCodecSeaOrmRepository {
         let probe_method = ProbeMethod::from_str(&model.probe_method)
             .map_err(|e| anyhow::anyhow!("Invalid probe method: {}", e))?;
 
+        // Use canonical stored width/height directly
+        let (video_width, video_height) = (model.video_width, model.video_height);
+        let resolution = match (video_width, video_height) {
+            (Some(w), Some(h)) if w > 0 && h > 0 => Some(format!("{w}x{h}")),
+            _ => None,
+        };
         Ok(LastKnownCodec {
             id,
             stream_url,
             video_codec: model.video_codec,
             audio_codec: model.audio_codec,
             container_format: model.container_format,
-            resolution: model.resolution,
+            video_width,
+            video_height,
+            resolution,
             framerate: model.framerate,
             bitrate: model.bitrate,
             video_bitrate: model.video_bitrate,
             audio_bitrate: model.audio_bitrate,
+            // audio_channels comes from INTEGER column
             audio_channels: model.audio_channels,
             audio_sample_rate: model.audio_sample_rate,
             probe_method,

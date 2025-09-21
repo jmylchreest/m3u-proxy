@@ -47,6 +47,8 @@ macro_rules! folder_migration_name {
 pub mod m20250829_100000_initial_schema;
 pub mod m20250829_100001_insert_defaults;
 pub mod m20250920_150000_pg_trgm_indexes;
+pub mod m20250921_120000_add_codec_metadata;
+
 // (Consolidated into m20250920_150000_pg_trgm_indexes migration)
 
 pub struct Migrator;
@@ -58,6 +60,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20250829_100000_initial_schema::Migration),
             Box::new(m20250829_100001_insert_defaults::Migration),
             Box::new(m20250920_150000_pg_trgm_indexes::Migration),
+            Box::new(m20250921_120000_add_codec_metadata::Migration),
             // Consolidated uniqueness normalization migrations removed (now handled inside m20250920_150000_pg_trgm_indexes)
         ]
     }

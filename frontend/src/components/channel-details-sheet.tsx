@@ -1,7 +1,13 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
@@ -86,7 +92,7 @@ function humanizeKey(key: string): string {
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .split(/[_\s]+/)
     .filter(Boolean)
-    .map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
     .join(' ');
 }
 
@@ -125,7 +131,15 @@ interface FieldRowProps {
   copied: boolean;
 }
 
-const FieldRow: React.FC<FieldRowProps> = ({ index, label, rawKey, value, muted, onCopy, copied }) => {
+const FieldRow: React.FC<FieldRowProps> = ({
+  index,
+  label,
+  rawKey,
+  value,
+  muted,
+  onCopy,
+  copied,
+}) => {
   const isEmptyName = rawKey === 'name' && value === 'empty';
   const display = value === '' ? (rawKey === 'name' ? 'empty' : '—') : value;
 
@@ -230,7 +244,7 @@ export const ChannelDetailsSheet: React.FC<ChannelDetailsSheetProps> = ({
 
     const seen = new Set(orderedKeys);
 
-    const baseEntries = orderedKeys.map(k => {
+    const baseEntries = orderedKeys.map((k) => {
       const raw = (channel as any)[k];
       const value = formatValue(k, raw);
       const muted = value === '' || (k === 'name' && value === 'empty');
@@ -265,7 +279,7 @@ export const ChannelDetailsSheet: React.FC<ChannelDetailsSheetProps> = ({
     return [
       ...baseEntries,
       ...(extraFromProp ?? []),
-      ...extraFromChannel.filter(e => !extraFromProp?.some(p => p.rawKey === e.rawKey)),
+      ...extraFromChannel.filter((e) => !extraFromProp?.some((p) => p.rawKey === e.rawKey)),
     ];
   }, [channel, additionalFields]);
 
@@ -278,9 +292,9 @@ export const ChannelDetailsSheet: React.FC<ChannelDetailsSheetProps> = ({
     navigator.clipboard
       .writeText(text)
       .then(() => {
-        setCopiedMap(prev => ({ ...prev, [key]: Date.now() }));
+        setCopiedMap((prev) => ({ ...prev, [key]: Date.now() }));
         setTimeout(() => {
-          setCopiedMap(prev => {
+          setCopiedMap((prev) => {
             const next = { ...prev };
             if (next[key] && Date.now() - next[key] >= 1800) {
               delete next[key];
@@ -301,9 +315,9 @@ export const ChannelDetailsSheet: React.FC<ChannelDetailsSheetProps> = ({
       <SheetContent
         side="right"
         className={cn(
-            // Wider sheet for lengthy values; responsive max width
-            'sm:max-w-4xl w-[97%] sm:w-[960px] p-0 flex flex-col min-h-0',
-            className
+          // Wider sheet for lengthy values; responsive max width
+          'sm:max-w-4xl w-[97%] sm:w-[960px] p-0 flex flex-col min-h-0',
+          className
         )}
       >
         <SheetHeader className="border-b bg-muted/40 px-6 py-4">
@@ -334,7 +348,7 @@ export const ChannelDetailsSheet: React.FC<ChannelDetailsSheetProps> = ({
               src={channel.logo_url}
               alt={title}
               className="max-h-28 object-contain"
-              onError={e => {
+              onError={(e) => {
                 const img = e.currentTarget;
                 img.style.display = 'none';
               }}
@@ -359,7 +373,7 @@ export const ChannelDetailsSheet: React.FC<ChannelDetailsSheetProps> = ({
                   value={r.value}
                   muted={r.muted}
                   copied={!!copiedMap[r.rawKey]}
-                  onCopy={text => handleCopy(r.rawKey, text)}
+                  onCopy={(text) => handleCopy(r.rawKey, text)}
                 />
               ))}
             </div>

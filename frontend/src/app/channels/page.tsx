@@ -178,23 +178,21 @@ export default function ChannelsPage() {
    * All filter inputs are passed as arguments so regressions are easier to spot.
    */
   const fetchChannels = useCallback(
-    async (
-      {
-        searchTerm = '',
-        group = '',
-        pageNum = 1,
-        append = false,
-        isSearchChange = false,
-        sourceIds = [],
-      }: {
-        searchTerm?: string;
-        group?: string;
-        pageNum?: number;
-        append?: boolean;
-        isSearchChange?: boolean;
-        sourceIds?: string[];
-      }
-    ) => {
+    async ({
+      searchTerm = '',
+      group = '',
+      pageNum = 1,
+      append = false,
+      isSearchChange = false,
+      sourceIds = [],
+    }: {
+      searchTerm?: string;
+      group?: string;
+      pageNum?: number;
+      append?: boolean;
+      isSearchChange?: boolean;
+      sourceIds?: string[];
+    }) => {
       try {
         setLoading(true);
 
@@ -233,9 +231,9 @@ export default function ChannelsPage() {
         const channelsData = data.data.channels;
 
         if (append) {
-          setChannels(prev => {
-            const existing = new Set(prev.map(c => c.id));
-            const merged = channelsData.filter(c => !existing.has(c.id));
+          setChannels((prev) => {
+            const existing = new Set(prev.map((c) => c.id));
+            const merged = channelsData.filter((c) => !existing.has(c.id));
             return [...prev, ...merged];
           });
         } else if (isSearchChange && pageNum === 1) {
@@ -250,9 +248,9 @@ export default function ChannelsPage() {
 
         if (!append) {
           const uniqueGroups = Array.from(
-            new Set(channelsData.map(c => c.group).filter(Boolean))
+            new Set(channelsData.map((c) => c.group).filter(Boolean))
           ) as string[];
-            setGroups(uniqueGroups);
+          setGroups(uniqueGroups);
         }
 
         setError(null);
@@ -402,41 +400,43 @@ export default function ChannelsPage() {
       }
 
       // Backend now returns { success, data: { ...probeFields } } – map all provided detail fields
-            const raw = await response.json();
-            const probe = raw?.data ?? raw ?? {};
+      const raw = await response.json();
+      const probe = raw?.data ?? raw ?? {};
 
-            const updated: Partial<Channel> = {
-              video_codec: probe.video_codec,
-              audio_codec: probe.audio_codec,
-              resolution: probe.resolution || (probe.video_width && probe.video_height
-                ? `${probe.video_width}x${probe.video_height}`
-                : undefined),
-              last_probed_at: probe.detected_at || new Date().toISOString(),
-              probe_method: probe.probe_method,
-              container_format: probe.container_format,
-              video_width: probe.video_width,
-              video_height: probe.video_height,
-              framerate: probe.framerate,
-              bitrate: probe.bitrate ?? null,
-              video_bitrate: probe.video_bitrate ?? null,
-              audio_bitrate: probe.audio_bitrate ?? null,
-              audio_channels: probe.audio_channels ?? null,
-              audio_sample_rate: probe.audio_sample_rate ?? null,
-              probe_source: probe.probe_source,
-              // If backend responds with a (potentially updated) stream_url include it
-              stream_url: probe.stream_url || `${getBackendUrl()}/channel/${channel.id}/stream`,
-            };
+      const updated: Partial<Channel> = {
+        video_codec: probe.video_codec,
+        audio_codec: probe.audio_codec,
+        resolution:
+          probe.resolution ||
+          (probe.video_width && probe.video_height
+            ? `${probe.video_width}x${probe.video_height}`
+            : undefined),
+        last_probed_at: probe.detected_at || new Date().toISOString(),
+        probe_method: probe.probe_method,
+        container_format: probe.container_format,
+        video_width: probe.video_width,
+        video_height: probe.video_height,
+        framerate: probe.framerate,
+        bitrate: probe.bitrate ?? null,
+        video_bitrate: probe.video_bitrate ?? null,
+        audio_bitrate: probe.audio_bitrate ?? null,
+        audio_channels: probe.audio_channels ?? null,
+        audio_sample_rate: probe.audio_sample_rate ?? null,
+        probe_source: probe.probe_source,
+        // If backend responds with a (potentially updated) stream_url include it
+        stream_url: probe.stream_url || `${getBackendUrl()}/channel/${channel.id}/stream`,
+      };
 
-            setChannels(prev =>
-              prev.map(ch => (ch.id === channel.id
-                ? {
-                    ...ch,
-                    ...Object.fromEntries(
-                      Object.entries(updated).filter(([, v]) => v !== undefined)
-                    ),
-                  }
-                : ch))
-            );
+      setChannels((prev) =>
+        prev.map((ch) =>
+          ch.id === channel.id
+            ? {
+                ...ch,
+                ...Object.fromEntries(Object.entries(updated).filter(([, v]) => v !== undefined)),
+              }
+            : ch
+        )
+      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to probe channel');
@@ -544,20 +544,24 @@ export default function ChannelsPage() {
             <TooltipTrigger asChild>
               <span className="cursor-help">
                 {channel.framerate
-                  ? (channel.framerate.includes('/')
-                      ? (() => {
-                          const [n,d] = channel.framerate.split('/');
-                          const v = parseFloat(d) ? (parseFloat(n)/parseFloat(d)).toFixed(2) : channel.framerate;
-                          return `${v} fps`;
-                        })()
-                      : `${channel.framerate} fps`)
+                  ? channel.framerate.includes('/')
+                    ? (() => {
+                        const [n, d] = channel.framerate.split('/');
+                        const v = parseFloat(d)
+                          ? (parseFloat(n) / parseFloat(d)).toFixed(2)
+                          : channel.framerate;
+                        return `${v} fps`;
+                      })()
+                    : `${channel.framerate} fps`
                   : channel.container_format}
               </span>
             </TooltipTrigger>
             <TooltipContent className="text-xs space-y-1">
               <div>Container: {channel.container_format}</div>
               {channel.framerate && <div>Framerate: {channel.framerate}</div>}
-              {channel.audio_channels != null && <div>Audio Channels: {channel.audio_channels}</div>}
+              {channel.audio_channels != null && (
+                <div>Audio Channels: {channel.audio_channels}</div>
+              )}
               {channel.audio_sample_rate != null && (
                 <div>Audio Sample Rate: {channel.audio_sample_rate} Hz</div>
               )}
@@ -566,20 +570,12 @@ export default function ChannelsPage() {
                   Bitrate:
                   <ul className="ml-3 list-disc">
                     {channel.video_bitrate && (
-                      <li>
-                        Video: {Math.round(channel.video_bitrate / 1000)} kbps
-                      </li>
+                      <li>Video: {Math.round(channel.video_bitrate / 1000)} kbps</li>
                     )}
                     {channel.audio_bitrate && (
-                      <li>
-                        Audio: {Math.round(channel.audio_bitrate / 1000)} kbps
-                      </li>
+                      <li>Audio: {Math.round(channel.audio_bitrate / 1000)} kbps</li>
                     )}
-                    {channel.bitrate && (
-                      <li>
-                        Total: {Math.round(channel.bitrate / 1000)} kbps
-                      </li>
-                    )}
+                    {channel.bitrate && <li>Total: {Math.round(channel.bitrate / 1000)} kbps</li>}
                   </ul>
                 </div>
               )}
@@ -1089,12 +1085,12 @@ export default function ChannelsPage() {
           />
         )}
         <ChannelDetailsSheet
-            channel={detailsChannel}
-            open={isDetailsOpen}
-            onOpenChange={(open) => {
-              setIsDetailsOpen(open);
-              if (!open) setDetailsChannel(null);
-            }}
+          channel={detailsChannel}
+          open={isDetailsOpen}
+          onOpenChange={(open) => {
+            setIsDetailsOpen(open);
+            if (!open) setDetailsChannel(null);
+          }}
         />
       </div>
     </TooltipProvider>

@@ -327,9 +327,7 @@ export function buildPlaybackEnv(): PlaybackEnv {
   }
   const ua = navigator.userAgent;
   const isSafari =
-    /Safari/i.test(ua) &&
-    !/Chrome|CriOS|Chromium|Edg/i.test(ua) &&
-    !/Android/i.test(ua);
+    /Safari/i.test(ua) && !/Chrome|CriOS|Chromium|Edg/i.test(ua) && !/Android/i.test(ua);
   const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(ua);
   const mseSupported = typeof (window as any).MediaSource !== 'undefined';
   return { isSafari, isMobile, mseSupported, ua };

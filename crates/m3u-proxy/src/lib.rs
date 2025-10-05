@@ -25,5 +25,6 @@ pub mod repositories;
 pub mod runtime_settings;
 pub mod services;
 pub mod sources;
+pub mod streaming;
 pub mod utils;
 pub mod web;

@@ -19,6 +19,7 @@ use crate::{
     },
     models::{StreamProxy, StreamProxyMode},
     proxy::session_tracker::{ClientInfo, SessionStats},
+    streaming::classification::{ClassificationParams, StreamModeDecision, classify_stream},
     utils::{resolve_proxy_id, uuid_parser::parse_uuid_flexible},
     web::{
         AppState,
@@ -1261,6 +1262,7 @@ The proxy_id and channel_id are base64-encoded UUIDs from the M3U playlist.",
 )]
 pub async fn proxy_stream(
     axum::extract::Path((proxy_id, channel_id_str)): axum::extract::Path<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
     headers: axum::http::HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
@@ -1520,14 +1522,137 @@ pub async fn proxy_stream(
                 .start_session(session_stats.clone())
                 .await;
 
-            // Implement HTTP proxying (SeaORM-compatible implementation)
-            proxy_http_stream_seaorm(
-                channel.stream_url.clone(),
-                headers,
-                state.session_tracker.clone(),
-                session_stats,
+            // Hybrid streaming classification (only for proxy mode and only affects headers here).
+            // Parse ?format=raw|auto (defaults to auto; unknown values -> auto).
+            let format_param = match q.get("format").map(|s| s.as_str()) {
+                Some("raw") => "raw",
+                _ => "auto",
+            };
+            let classification_result = classify_stream(
+                &channel.stream_url,
+                &reqwest::Client::new(),
+                ClassificationParams {
+                    format: format_param,
+                    ..Default::default()
+                },
             )
             .await
+            .ok();
+
+            // Perform streaming (collapsed or passthrough) using unified proxy implementation.
+            // 1. If classification decided on collapsing a single-variant TS playlist, run collapsing pipeline.
+            // 2. Else use unified HTTP proxy (no total timeout, connect-timeout only), with normalized headers.
+            if let Some(class_res) = &classification_result {
+                if matches!(
+                    class_res.decision,
+                    StreamModeDecision::CollapsedSingleVariantTs
+                ) {
+                    use axum::body::Body;
+                    use axum::http::{Response, StatusCode, header};
+                    use futures::StreamExt;
+                    use std::sync::Arc;
+                    debug!("Starting collapsed single-variant HLS session (experimental)");
+                    let collapsing_playlist_url = class_res
+                        .selected_media_playlist_url
+                        .clone()
+                        .unwrap_or_else(|| channel.stream_url.clone());
+                    let handle = crate::streaming::collapsing::spawn_collapsing_session(
+                        Arc::new(reqwest::Client::new()),
+                        collapsing_playlist_url,
+                        class_res.target_duration,
+                        crate::streaming::collapsing::CollapsingConfig::default(),
+                    );
+                    let collapsing_stream = handle.map(|r| match r {
+                        Ok(bytes) => Ok(bytes),
+                        Err(e) => {
+                            debug!(error=?e, "Collapsing stream error – terminating");
+                            Err(std::io::Error::other(format!("collapsing: {e}")))
+                        }
+                    });
+                    let body = Body::from_stream(collapsing_stream);
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "video/mp2t")
+                        .header(header::CACHE_CONTROL, "no-store")
+                        .body(body)
+                        .unwrap()
+                } else {
+                    // Passthrough via unified helper
+                    let meta = crate::proxy::http_stream::StreamHeaderMeta {
+                        origin_kind: Some(
+                            match class_res.decision {
+                                StreamModeDecision::PassthroughRawTs => "RAW_TS",
+                                StreamModeDecision::CollapsedSingleVariantTs => "RAW_TS",
+                                StreamModeDecision::TransparentHls { .. } => "HLS_PLAYLIST",
+                                StreamModeDecision::TransparentUnknown => "UNKNOWN",
+                            }
+                            .into(),
+                        ),
+                        decision: Some(
+                            match class_res.decision {
+                                StreamModeDecision::PassthroughRawTs => "passthrough-raw-ts",
+                                StreamModeDecision::CollapsedSingleVariantTs => "hls-to-ts",
+                                StreamModeDecision::TransparentHls { .. } => {
+                                    "hls-playlist-passthrough"
+                                }
+                                StreamModeDecision::TransparentUnknown => "transparent-unknown",
+                            }
+                            .into(),
+                        ),
+                        mode: Some(
+                            match class_res.decision {
+                                StreamModeDecision::CollapsedSingleVariantTs => "hls-to-ts",
+                                _ => "passthrough",
+                            }
+                            .into(),
+                        ),
+                        variant_count: class_res.variant_count,
+                        variant_bandwidth: class_res.selected_variant_bandwidth,
+                        variant_resolution: class_res.selected_variant_resolution,
+                        target_duration: class_res.target_duration,
+                        fallback: if class_res.forced_raw_rejected {
+                            Some("forced-raw-rejected".into())
+                        } else if class_res
+                            .reasons
+                            .iter()
+                            .any(|r| r.contains("unsupported-non-ts"))
+                        {
+                            Some("unsupported-non-ts".into())
+                        } else {
+                            None
+                        },
+                        relay_profile_id: None,
+                    };
+                    crate::proxy::http_stream::proxy_http_stream(
+                        &channel.stream_url,
+                        &headers,
+                        &state.config,
+                        state.session_tracker.clone(),
+                        session_stats,
+                        Some(meta),
+                    )
+                    .await
+                }
+            } else {
+                let meta = crate::proxy::http_stream::StreamHeaderMeta {
+                    origin_kind: Some("UNKNOWN".into()),
+                    decision: Some("transparent-unknown".into()),
+                    mode: Some("passthrough".into()),
+                    ..Default::default()
+                };
+                crate::proxy::http_stream::proxy_http_stream(
+                    &channel.stream_url,
+                    &headers,
+                    &state.config,
+                    state.session_tracker.clone(),
+                    session_stats,
+                    Some(meta),
+                )
+                .await
+            }
+
+            // (Classification headers applied inside the unified proxy or collapsing branch.)
+            // (Result returned directly from the if/else expression above per clippy suggestion)
         }
         StreamProxyMode::Relay => {
             info!(
@@ -1670,13 +1795,23 @@ pub async fn proxy_stream(
                         chunk_result
                     });
 
-                    axum::response::Response::builder()
+                    let mut resp = axum::response::Response::builder()
                         .status(StatusCode::OK)
                         .header(header::CONTENT_TYPE, "video/mp2t")
                         .header(header::CACHE_CONTROL, "no-cache, no-store")
                         .body(Body::from_stream(tracked_stream))
-                        .unwrap()
-                        .into_response()
+                        .unwrap();
+                    crate::proxy::http_stream::apply_uniform_stream_headers(
+                        &mut resp,
+                        &crate::proxy::http_stream::StreamHeaderMeta {
+                            origin_kind: Some("RELAY".into()),
+                            decision: Some("relay-stream".into()),
+                            mode: Some("relay".into()),
+                            relay_profile_id: Some(relay_config.config.id.to_string()),
+                            ..Default::default()
+                        },
+                    );
+                    resp.into_response()
                 }
                 Ok(crate::models::relay::RelayContent::Segment(data)) => {
                     use axum::body::Body;
@@ -1693,13 +1828,23 @@ pub async fn proxy_stream(
                             .await;
                     });
 
-                    axum::response::Response::builder()
+                    let mut resp = axum::response::Response::builder()
                         .status(StatusCode::OK)
                         .header(header::CONTENT_TYPE, "video/mp2t")
                         .header(header::CACHE_CONTROL, "no-cache, no-store")
                         .body(Body::from(data))
-                        .unwrap()
-                        .into_response()
+                        .unwrap();
+                    crate::proxy::http_stream::apply_uniform_stream_headers(
+                        &mut resp,
+                        &crate::proxy::http_stream::StreamHeaderMeta {
+                            origin_kind: Some("RELAY".into()),
+                            decision: Some("relay-stream".into()),
+                            mode: Some("relay".into()),
+                            relay_profile_id: Some(relay_config.config.id.to_string()),
+                            ..Default::default()
+                        },
+                    );
+                    resp.into_response()
                 }
                 Ok(crate::models::relay::RelayContent::Playlist(playlist_content)) => {
                     use axum::body::Body;
@@ -1707,13 +1852,23 @@ pub async fn proxy_stream(
 
                     info!("Serving relay playlist: {} bytes", playlist_content.len());
 
-                    axum::response::Response::builder()
+                    let mut resp = axum::response::Response::builder()
                         .status(StatusCode::OK)
                         .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
                         .header(header::CACHE_CONTROL, "no-cache, no-store")
                         .body(Body::from(playlist_content))
-                        .unwrap()
-                        .into_response()
+                        .unwrap();
+                    crate::proxy::http_stream::apply_uniform_stream_headers(
+                        &mut resp,
+                        &crate::proxy::http_stream::StreamHeaderMeta {
+                            origin_kind: Some("RELAY".into()),
+                            decision: Some("relay-stream".into()),
+                            mode: Some("relay".into()),
+                            relay_profile_id: Some(relay_config.config.id.to_string()),
+                            ..Default::default()
+                        },
+                    );
+                    resp.into_response()
                 }
                 Err(e) => {
                     error!("Failed to serve relay content: {}", e);
@@ -1724,98 +1879,6 @@ pub async fn proxy_stream(
                         .into_response()
                 }
             }
-        }
-    }
-}
-
-/// HTTP stream proxying implementation compatible with SeaORM migration
-async fn proxy_http_stream_seaorm(
-    stream_url: String,
-    _headers: axum::http::HeaderMap,
-    session_tracker: std::sync::Arc<crate::proxy::session_tracker::SessionTracker>,
-    session_stats: crate::proxy::session_tracker::SessionStats,
-) -> axum::response::Response<axum::body::Body> {
-    use axum::body::Body;
-    use axum::http::{StatusCode, header};
-    use axum::response::Response;
-
-    info!("Proxying HTTP stream from: {}", stream_url);
-
-    // Create HTTP client for proxying
-    let client = reqwest::Client::builder()
-        .user_agent("m3u-proxy/SeaORM")
-        .timeout(std::time::Duration::from_secs(30))
-        .build();
-
-    let client = match client {
-        Ok(client) => client,
-        Err(e) => {
-            error!("Failed to create HTTP client: {}", e);
-            session_tracker.end_session(&session_stats.session_id).await;
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create HTTP client",
-            )
-                .into_response();
-        }
-    };
-
-    // Make request to source stream
-    let response = match client.get(&stream_url).send().await {
-        Ok(response) => response,
-        Err(e) => {
-            error!("Failed to connect to stream URL {}: {}", stream_url, e);
-            session_tracker.end_session(&session_stats.session_id).await;
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to connect to stream: {}", e),
-            )
-                .into_response();
-        }
-    };
-
-    // Check if source responded successfully
-    if !response.status().is_success() {
-        error!("Stream source returned error: {}", response.status());
-        session_tracker.end_session(&session_stats.session_id).await;
-        return (
-            StatusCode::BAD_GATEWAY,
-            format!("Stream source error: {}", response.status()),
-        )
-            .into_response();
-    }
-
-    // Extract content type from source
-    let content_type = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|ct| ct.to_str().ok())
-        .unwrap_or("video/mp2t") // Default to MPEG-TS for streams
-        .to_string(); // Convert to owned String
-
-    info!("Streaming content type: {}", content_type);
-
-    // Convert response to streaming body
-    let stream_body = response.bytes_stream();
-    let body = Body::from_stream(stream_body);
-
-    // Create response with appropriate headers
-    match Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, "no-cache, no-store")
-        .header("Access-Control-Allow-Origin", "*")
-        .header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-        .header("Access-Control-Allow-Headers", "Range, Content-Type")
-        .body(body)
-    {
-        Ok(response) => response.into_response(),
-        Err(e) => {
-            error!("Failed to create response: {}", e);
-            tokio::spawn(async move {
-                session_tracker.end_session(&session_stats.session_id).await;
-            });
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
         }
     }
 }

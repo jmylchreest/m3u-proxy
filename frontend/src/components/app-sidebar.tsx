@@ -17,7 +17,10 @@ import {
   Tv,
   Calendar,
   Paintbrush,
+  ChevronRight,
+  ChevronDown,
 } from 'lucide-react';
+import { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import {
   Sidebar,
@@ -152,6 +155,20 @@ export function AppSidebar() {
   const pathname = usePathname();
   const operationType = getOperationTypeForPath(pathname);
 
+  // Track collapsed groups; Debug collapsed by default
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set(['Debug']));
+  const toggleGroup = (title: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(title)) {
+        next.delete(title);
+      } else {
+        next.add(title);
+      }
+      return next;
+    });
+  };
+
   return (
     <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
@@ -164,29 +181,46 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        {navigation.map((group) => (
-          <SidebarGroup key={group.title}>
-            <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {group.items.map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={pathname === item.url}
-                      tooltip={item.title}
-                    >
-                      <a href={item.url}>
-                        <item.icon />
-                        <span>{item.title}</span>
-                      </a>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
+        {navigation.map((group) => {
+          const isCollapsed = collapsedGroups.has(group.title);
+          return (
+            <SidebarGroup key={group.title}>
+              <SidebarGroupLabel
+                className="flex items-center justify-between cursor-pointer select-none"
+                onClick={() => toggleGroup(group.title)}
+              >
+                <span className="flex items-center gap-1">
+                  {isCollapsed ? (
+                    <ChevronRight className="h-3 w-3" />
+                  ) : (
+                    <ChevronDown className="h-3 w-3" />
+                  )}
+                  {group.title}
+                </span>
+              </SidebarGroupLabel>
+              {!isCollapsed && (
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {group.items.map((item) => (
+                      <SidebarMenuItem key={item.title}>
+                        <SidebarMenuButton
+                          asChild
+                          isActive={pathname === item.url}
+                          tooltip={item.title}
+                        >
+                          <a href={item.url}>
+                            <item.icon />
+                            <span>{item.title}</span>
+                          </a>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              )}
+            </SidebarGroup>
+          );
+        })}
       </SidebarContent>
     </Sidebar>
   );

@@ -370,6 +370,7 @@ WHERE t.relname = 'filters'
                 }
             }
         }
+        // (SQLite uniqueness normalization removed here; handled directly in migration m20250920_150000_pg_trgm_indexes)
 
         info!("Database migrations completed successfully (with post-migration verification)");
         Ok(())

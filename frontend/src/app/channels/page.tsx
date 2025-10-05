@@ -42,6 +42,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { VideoPlayerModal } from '@/components/video-player-modal';
+import { ChannelDetailsSheet } from '@/components/channel-details-sheet';
 import { getBackendUrl } from '@/lib/config';
 import { Debug } from '@/utils/debug';
 
@@ -51,6 +52,13 @@ interface Channel {
   logo_url?: string;
   group?: string;
   stream_url: string;
+  /**
+   * The original upstream stream URL (before being replaced with the proxy
+   * endpoint for playback). Added so the player / sheet UI can reason about
+   * the true underlying format (e.g. .ts vs .m3u8) without re-parsing or
+   * losing the original value once proxied.
+   */
+  original_stream_url?: string;
   proxy_id?: string;
   source_type: string;
   source_name?: string;
@@ -59,12 +67,23 @@ interface Channel {
   tvg_name?: string;
   tvg_chno?: string;
   tvg_shift?: string;
-  // Codec information
+  // Codec / Probe information
   video_codec?: string;
   audio_codec?: string;
   resolution?: string;
   last_probed_at?: string;
   probe_method?: string;
+  // Extended probe metadata
+  container_format?: string;
+  video_width?: number;
+  video_height?: number;
+  framerate?: string;
+  bitrate?: number | null;
+  video_bitrate?: number | null;
+  audio_bitrate?: number | null;
+  audio_channels?: number | null;
+  audio_sample_rate?: number | null;
+  probe_source?: string;
 }
 
 interface ChannelsResponse {
@@ -122,6 +141,8 @@ export default function ChannelsPage() {
   const [probingChannels, setProbingChannels] = useState<Set<string>>(new Set());
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const isSearchChangeRef = useRef(false);
+  const [detailsChannel, setDetailsChannel] = useState<Channel | null>(null);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
   // No longer need proxy resolution - only using direct stream sources
   // Fetch stream sources (id + name) for reliable ID-based filtering
@@ -152,13 +173,27 @@ export default function ChannelsPage() {
     return () => clearTimeout(timer);
   }, [search]);
 
+  /**
+   * Explicit channel fetch that does NOT rely on closure-captured filter state.
+   * All filter inputs are passed as arguments so regressions are easier to spot.
+   */
   const fetchChannels = useCallback(
     async (
-      searchTerm: string = '',
-      group: string = '',
-      pageNum: number = 1,
-      append: boolean = false,
-      isSearchChange: boolean = false
+      {
+        searchTerm = '',
+        group = '',
+        pageNum = 1,
+        append = false,
+        isSearchChange = false,
+        sourceIds = [],
+      }: {
+        searchTerm?: string;
+        group?: string;
+        pageNum?: number;
+        append?: boolean;
+        isSearchChange?: boolean;
+        sourceIds?: string[];
+      }
     ) => {
       try {
         setLoading(true);
@@ -170,38 +205,40 @@ export default function ChannelsPage() {
 
         if (searchTerm) params.append('search', searchTerm);
         if (group) params.append('group', group);
-        // Multi-source filtering: always send selected source IDs (we store IDs now)
-        if (selectedSources.length > 0) {
-          params.append('source_id', selectedSources.join(','));
+
+        // Multi-source param (backend expects a single comma-separated source_id value)
+        if (sourceIds.length > 0) {
+          const joined = sourceIds.filter(Boolean).join(',');
+          if (joined) {
+            params.append('source_id', joined);
+          }
         }
 
-        let apiUrl = '/api/v1/channels';
+        if (Debug.isEnabled()) {
+          Debug.log('[Channels] Fetch params', Object.fromEntries(params.entries()));
+        }
 
-        const response = await fetch(`${apiUrl}?${params}`);
+        const apiUrl = '/api/v1/channels';
+        const response = await fetch(`${apiUrl}?${params.toString()}`);
 
         if (!response.ok) {
-          throw new Error(`Failed to fetch channels: ${response.statusText}`);
+          throw new Error(`Failed to fetch channels: ${response.status} ${response.statusText}`);
         }
 
         const data: { success: boolean; data: ChannelsResponse } = await response.json();
-
         if (!data.success) {
           throw new Error('API returned unsuccessful response');
         }
 
-        let channelsData = data.data.channels;
-
-        // No client-side name fallback needed; backend filtering handles source IDs.
+        const channelsData = data.data.channels;
 
         if (append) {
-          setChannels((prev) => {
-            // Deduplicate by ID
-            const existing = new Set(prev.map((channel) => channel.id));
-            const newChannels = channelsData.filter((channel) => !existing.has(channel.id));
-            return [...prev, ...newChannels];
+          setChannels(prev => {
+            const existing = new Set(prev.map(c => c.id));
+            const merged = channelsData.filter(c => !existing.has(c.id));
+            return [...prev, ...merged];
           });
         } else if (isSearchChange && pageNum === 1) {
-          // For search changes, replace the list but don't trigger a full page refresh
           setChannels(channelsData);
         } else {
           setChannels(channelsData);
@@ -211,21 +248,17 @@ export default function ChannelsPage() {
         setTotal(data.data.total);
         setHasMore(data.data.has_more);
 
-        // Extract unique groups and sources for filtering - only update on fresh fetch
         if (!append) {
           const uniqueGroups = Array.from(
-            new Set(data.data.channels.map((c) => c.group).filter(Boolean))
+            new Set(channelsData.map(c => c.group).filter(Boolean))
           ) as string[];
-          setGroups(uniqueGroups);
-          // Stream source options are loaded separately from /api/v1/sources/stream; no derivation needed here.
+            setGroups(uniqueGroups);
         }
 
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An error occurred');
-        if (!append) {
-          setChannels([]);
-        }
+        if (!append) setChannels([]);
       } finally {
         setLoading(false);
       }
@@ -235,7 +268,14 @@ export default function ChannelsPage() {
 
   const handleLoadMore = useCallback(() => {
     if (hasMore && !loading) {
-      fetchChannels(debouncedSearch, selectedGroup, currentPage + 1, true, false);
+      fetchChannels({
+        searchTerm: debouncedSearch,
+        group: selectedGroup,
+        pageNum: currentPage + 1,
+        append: true,
+        isSearchChange: false,
+        sourceIds: selectedSources,
+      });
     }
   }, [
     hasMore,
@@ -250,14 +290,26 @@ export default function ChannelsPage() {
   // Single effect that handles both search and filter changes intelligently
   useEffect(() => {
     if (isSearchChangeRef.current) {
-      // This is a search change - don't clear channels to prevent focus loss
-      isSearchChangeRef.current = false; // Reset the flag
-      fetchChannels(debouncedSearch, selectedGroup, 1, false, true);
+      isSearchChangeRef.current = false;
+      fetchChannels({
+        searchTerm: debouncedSearch,
+        group: selectedGroup,
+        pageNum: 1,
+        append: false,
+        isSearchChange: true,
+        sourceIds: selectedSources,
+      });
     } else {
-      // This is a filter change - clear channels
       setChannels([]);
       setCurrentPage(1);
-      fetchChannels(debouncedSearch, selectedGroup, 1, false, false);
+      fetchChannels({
+        searchTerm: debouncedSearch,
+        group: selectedGroup,
+        pageNum: 1,
+        append: false,
+        isSearchChange: false,
+        sourceIds: selectedSources,
+      });
     }
   }, [debouncedSearch, selectedGroup, selectedSources, fetchChannels]);
 
@@ -318,12 +370,14 @@ export default function ChannelsPage() {
 
   const handlePlayChannel = async (channel: Channel) => {
     try {
-      // Use the new unified channel streaming endpoint (directly streams content, no CORS issues)
-      const streamUrl = `${getBackendUrl()}/channel/${channel.id}/stream`;
+      // Construct proxied playback URL
+      const proxyUrl = `${getBackendUrl()}/channel/${channel.id}/stream`;
 
       setSelectedChannel({
         ...channel,
-        stream_url: streamUrl,
+        // Preserve the original upstream URL (only set once if not already present)
+        original_stream_url: channel.original_stream_url ?? channel.stream_url,
+        stream_url: proxyUrl,
       });
       setIsPlayerOpen(true);
     } catch (err) {
@@ -347,31 +401,42 @@ export default function ChannelsPage() {
         throw new Error(`Failed to probe channel: ${response.status} ${text}`);
       }
 
-      // Backend now returns a LastKnownCodec object directly
-      const codec: {
-        video_codec?: string;
-        audio_codec?: string;
-        resolution?: string;
-        framerate?: string;
-        probe_method?: string;
-        detected_at?: string;
-      } = await response.json();
+      // Backend now returns { success, data: { ...probeFields } } – map all provided detail fields
+            const raw = await response.json();
+            const probe = raw?.data ?? raw ?? {};
 
-      setChannels((prev) =>
-        prev.map((ch) => {
-          if (ch.id === channel.id) {
-            return {
-              ...ch,
-              video_codec: codec.video_codec || ch.video_codec,
-              audio_codec: codec.audio_codec || ch.audio_codec,
-              resolution: codec.resolution || ch.resolution,
-              last_probed_at: codec.detected_at || new Date().toISOString(),
-              probe_method: codec.probe_method || 'ffprobe_manual',
+            const updated: Partial<Channel> = {
+              video_codec: probe.video_codec,
+              audio_codec: probe.audio_codec,
+              resolution: probe.resolution || (probe.video_width && probe.video_height
+                ? `${probe.video_width}x${probe.video_height}`
+                : undefined),
+              last_probed_at: probe.detected_at || new Date().toISOString(),
+              probe_method: probe.probe_method,
+              container_format: probe.container_format,
+              video_width: probe.video_width,
+              video_height: probe.video_height,
+              framerate: probe.framerate,
+              bitrate: probe.bitrate ?? null,
+              video_bitrate: probe.video_bitrate ?? null,
+              audio_bitrate: probe.audio_bitrate ?? null,
+              audio_channels: probe.audio_channels ?? null,
+              audio_sample_rate: probe.audio_sample_rate ?? null,
+              probe_source: probe.probe_source,
+              // If backend responds with a (potentially updated) stream_url include it
+              stream_url: probe.stream_url || `${getBackendUrl()}/channel/${channel.id}/stream`,
             };
-          }
-          return ch;
-        })
-      );
+
+            setChannels(prev =>
+              prev.map(ch => (ch.id === channel.id
+                ? {
+                    ...ch,
+                    ...Object.fromEntries(
+                      Object.entries(updated).filter(([, v]) => v !== undefined)
+                    ),
+                  }
+                : ch))
+            );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to probe channel');
@@ -435,9 +500,21 @@ export default function ChannelsPage() {
         <LogoWithPopover channel={channel} />
       </TableCell>
       <TableCell className="font-medium max-w-xs">
-        <div className="truncate" title={channel.name}>
-          {channel.name}
-        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setDetailsChannel(channel);
+            setIsDetailsOpen(true);
+          }}
+          className="truncate text-left w-full hover:underline focus:outline-none focus:ring-2 focus:ring-ring rounded-sm"
+          title={channel.name || 'empty'}
+        >
+          {channel.name && channel.name.trim() !== '' ? (
+            channel.name
+          ) : (
+            <span className="text-muted-foreground italic">empty</span>
+          )}
+        </button>
       </TableCell>
       <TableCell className="text-sm">
         {channel.tvg_chno || <span className="text-muted-foreground">-</span>}
@@ -460,6 +537,59 @@ export default function ChannelsPage() {
       </TableCell>
       <TableCell className="text-sm">
         {channel.resolution || <span className="text-muted-foreground">-</span>}
+      </TableCell>
+      <TableCell className="text-xs">
+        {channel.container_format ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-help">
+                {channel.framerate
+                  ? (channel.framerate.includes('/')
+                      ? (() => {
+                          const [n,d] = channel.framerate.split('/');
+                          const v = parseFloat(d) ? (parseFloat(n)/parseFloat(d)).toFixed(2) : channel.framerate;
+                          return `${v} fps`;
+                        })()
+                      : `${channel.framerate} fps`)
+                  : channel.container_format}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="text-xs space-y-1">
+              <div>Container: {channel.container_format}</div>
+              {channel.framerate && <div>Framerate: {channel.framerate}</div>}
+              {channel.audio_channels != null && <div>Audio Channels: {channel.audio_channels}</div>}
+              {channel.audio_sample_rate != null && (
+                <div>Audio Sample Rate: {channel.audio_sample_rate} Hz</div>
+              )}
+              {(channel.video_bitrate || channel.audio_bitrate || channel.bitrate) && (
+                <div>
+                  Bitrate:
+                  <ul className="ml-3 list-disc">
+                    {channel.video_bitrate && (
+                      <li>
+                        Video: {Math.round(channel.video_bitrate / 1000)} kbps
+                      </li>
+                    )}
+                    {channel.audio_bitrate && (
+                      <li>
+                        Audio: {Math.round(channel.audio_bitrate / 1000)} kbps
+                      </li>
+                    )}
+                    {channel.bitrate && (
+                      <li>
+                        Total: {Math.round(channel.bitrate / 1000)} kbps
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+              {channel.probe_source && <div>Source: {channel.probe_source}</div>}
+              {channel.probe_method && <div>Method: {channel.probe_method}</div>}
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        )}
       </TableCell>
       <TableCell className="text-sm">
         {channel.last_probed_at ? (
@@ -522,7 +652,23 @@ export default function ChannelsPage() {
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0">
-            <CardTitle className="text-sm font-medium truncate">{channel.name}</CardTitle>
+            <CardTitle className="text-sm font-medium truncate">
+              <button
+                type="button"
+                onClick={() => {
+                  setDetailsChannel(channel);
+                  setIsDetailsOpen(true);
+                }}
+                className="truncate w-full text-left hover:underline focus:outline-none focus:ring-2 focus:ring-ring rounded-sm"
+                title={channel.name || 'empty'}
+              >
+                {channel.name && channel.name.trim() !== '' ? (
+                  channel.name
+                ) : (
+                  <span className="text-muted-foreground italic">empty</span>
+                )}
+              </button>
+            </CardTitle>
             {channel.group && (
               <CardDescription className="mt-1">
                 <Badge variant="secondary" className="text-xs">
@@ -615,7 +761,23 @@ export default function ChannelsPage() {
               />
             )}
             <div>
-              <h3 className="font-medium">{channel.name}</h3>
+              <h3 className="font-medium">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDetailsChannel(channel);
+                    setIsDetailsOpen(true);
+                  }}
+                  className="hover:underline focus:outline-none focus:ring-2 focus:ring-ring rounded-sm text-left"
+                  title={channel.name || 'empty'}
+                >
+                  {channel.name && channel.name.trim() !== '' ? (
+                    channel.name
+                  ) : (
+                    <span className="text-muted-foreground italic">empty</span>
+                  )}
+                </button>
+              </h3>
               <div className="flex items-center space-x-2 text-sm text-muted-foreground">
                 {channel.group && (
                   <Badge variant="secondary" className="text-xs">
@@ -789,7 +951,16 @@ export default function ChannelsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => fetchChannels(debouncedSearch, selectedGroup, 1, false, false)}
+                onClick={() =>
+                  fetchChannels({
+                    searchTerm: debouncedSearch,
+                    group: selectedGroup,
+                    pageNum: 1,
+                    append: false,
+                    isSearchChange: false,
+                    sourceIds: selectedSources,
+                  })
+                }
                 className="mt-2"
               >
                 Retry
@@ -917,6 +1088,14 @@ export default function ChannelsPage() {
             channel={selectedChannel}
           />
         )}
+        <ChannelDetailsSheet
+            channel={detailsChannel}
+            open={isDetailsOpen}
+            onOpenChange={(open) => {
+              setIsDetailsOpen(open);
+              if (!open) setDetailsChannel(null);
+            }}
+        />
       </div>
     </TooltipProvider>
   );

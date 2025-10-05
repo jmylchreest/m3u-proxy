@@ -606,7 +606,7 @@ mod epg_filter_test_endpoint_tests {
     async fn test_epg_filter_test_pattern_channel_id_contains_sport() {
         // In-memory SQLite (unique URI to avoid migration version collisions)
         let db_url = format!(
-            "sqlite::memory:?cache=shared&mode=memory&filename={}",
+            "sqlite::memory:{}?cache=shared&mode=memory",
             uuid::Uuid::new_v4()
         );
         let db = sea_orm::Database::connect(&db_url)
@@ -705,7 +705,7 @@ mod epg_filter_test_endpoint_tests {
 
         // In-memory SQLite (after rebuild migration ensures composite uniqueness)
         let db_url = format!(
-            "sqlite::memory:?cache=shared&mode=memory&filename={}",
+            "sqlite::memory:{}?cache=shared&mode=memory",
             uuid::Uuid::new_v4()
         );
         let db = sea_orm::Database::connect(&db_url)
@@ -756,7 +756,7 @@ mod epg_filter_test_endpoint_tests {
         use crate::models::{FilterCreateRequest, FilterSourceType};
 
         let db_url = format!(
-            "sqlite::memory:?cache=shared&mode=memory&filename={}",
+            "sqlite::memory:{}?cache=shared&mode=memory",
             uuid::Uuid::new_v4()
         );
         let db = sea_orm::Database::connect(&db_url)

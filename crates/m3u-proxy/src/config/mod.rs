@@ -195,6 +195,26 @@ pub struct WebConfig {
     pub enable_request_logging: bool,
     #[serde(default = "default_user_agent")]
     pub user_agent: String,
+    /// Upstream connect timeout for proxied stream origins (e.g. raw TS, HLS media/master)
+    /// Only applies to establishing the TCP/TLS connection; no total request timeout is enforced for streaming.
+    #[serde(default = "default_proxy_upstream_connect_timeout")]
+    pub proxy_upstream_connect_timeout: String,
+}
+
+fn default_proxy_upstream_connect_timeout() -> String {
+    "15s".to_string()
+}
+
+impl WebConfig {
+    /// Parses the proxy_upstream_connect_timeout string into a Duration.
+    /// Falls back to 15s if parsing fails or value is empty.
+    pub fn proxy_upstream_connect_timeout_duration(&self) -> std::time::Duration {
+        if self.proxy_upstream_connect_timeout.trim().is_empty() {
+            return std::time::Duration::from_secs(15);
+        }
+        humantime::parse_duration(&self.proxy_upstream_connect_timeout)
+            .unwrap_or_else(|_| std::time::Duration::from_secs(15))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -856,6 +876,7 @@ impl Default for Config {
                 max_request_size: default_max_request_size(),
                 enable_request_logging: default_enable_request_logging(),
                 user_agent: default_user_agent(),
+                proxy_upstream_connect_timeout: default_proxy_upstream_connect_timeout(),
             },
             storage: StorageConfig {
                 m3u_path: PathBuf::from("./data/m3u"),

@@ -22,39 +22,21 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let backend = manager.get_database_backend();
 
-        // 1. Add missing columns (portable IF NOT EXISTS for Pg / MySQL 8 / modern SQLite)
-        raw_exec(
+        // Column addition helper (backend-conditional)
+        add_column_if_missing(manager, "last_known_codecs", "framerate", "varchar NULL").await?;
+        add_column_if_missing(manager, "last_known_codecs", "bitrate", "integer NULL").await?;
+        add_column_if_missing(manager, "last_known_codecs", "probe_method", "varchar NULL").await?;
+        add_column_if_missing(manager, "last_known_codecs", "probe_source", "varchar NULL").await?;
+        add_column_if_missing(
             manager,
-            "ALTER TABLE last_known_codecs ADD COLUMN IF NOT EXISTS framerate varchar NULL",
+            "last_known_codecs",
+            "detected_at",
+            "timestamp NULL",
         )
         .await?;
-        raw_exec(
-            manager,
-            "ALTER TABLE last_known_codecs ADD COLUMN IF NOT EXISTS bitrate integer NULL",
-        )
-        .await?;
-        raw_exec(
-            manager,
-            "ALTER TABLE last_known_codecs ADD COLUMN IF NOT EXISTS probe_method varchar NULL",
-        )
-        .await?;
-        raw_exec(
-            manager,
-            "ALTER TABLE last_known_codecs ADD COLUMN IF NOT EXISTS probe_source varchar NULL",
-        )
-        .await?;
-        raw_exec(
-            manager,
-            "ALTER TABLE last_known_codecs ADD COLUMN IF NOT EXISTS detected_at timestamp NULL",
-        )
-        .await?;
-        raw_exec(
-            manager,
-            "ALTER TABLE last_known_codecs ADD COLUMN IF NOT EXISTS created_at timestamp NULL",
-        )
-        .await?;
+        add_column_if_missing(manager, "last_known_codecs", "created_at", "timestamp NULL").await?;
 
-        // 2. Backfill newly added timestamps
+        // 2. Backfill newly added timestamps (portable)
         raw_exec(
             manager,
             "UPDATE last_known_codecs SET detected_at = updated_at WHERE detected_at IS NULL",
@@ -111,6 +93,52 @@ async fn raw_exec(manager: &SchemaManager<'_>, sql: &str) -> Result<(), DbErr> {
         .execute(sea_orm::Statement::from_string(backend, sql.to_string()))
         .await
         .map(|_| ())
+}
+
+/// Backend-aware portable column addition:
+/// - Postgres / MySQL: use IF NOT EXISTS
+/// - SQLite: manually inspect PRAGMA table_info and add if absent, ignoring duplicate-column errors.
+async fn add_column_if_missing(
+    manager: &SchemaManager<'_>,
+    table: &str,
+    column: &str,
+    type_sql: &str,
+) -> Result<(), DbErr> {
+    let backend = manager.get_database_backend();
+    match backend {
+        DatabaseBackend::Postgres | DatabaseBackend::MySql => {
+            let stmt = format!("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {type_sql}");
+            raw_exec(manager, &stmt).await
+        }
+        DatabaseBackend::Sqlite => {
+            // Check existence via PRAGMA
+            let pragma_sql = format!("PRAGMA table_info({table})");
+            let rows = manager
+                .get_connection()
+                .query_all(sea_orm::Statement::from_string(backend, pragma_sql))
+                .await?;
+            let exists = rows.iter().any(|row| {
+                row.try_get::<String>("", "name")
+                    .map(|n| n.eq_ignore_ascii_case(column))
+                    .unwrap_or(false)
+            });
+            if exists {
+                return Ok(());
+            }
+            let add_sql = format!("ALTER TABLE {table} ADD COLUMN {column} {type_sql}");
+            match raw_exec(manager, &add_sql).await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    let msg = e.to_string().to_lowercase();
+                    if msg.contains("duplicate column") {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Execute raw SQL but ignore benign "does not exist" / "unknown" errors (used for down()).

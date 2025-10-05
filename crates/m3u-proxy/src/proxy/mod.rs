@@ -10,6 +10,7 @@ use crate::models::*;
 
 pub mod config_resolver;
 // Legacy filter engine removed - replaced by pipeline-based filtering
+pub mod http_stream;
 pub mod robust_streaming;
 pub mod session_tracker;
 

@@ -34,28 +34,24 @@ folder_migration_name!();
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if manager.get_database_backend() != sea_orm::DatabaseBackend::Postgres {
-            // Silently succeed for other databases
-            return Ok(());
-        }
-
+        let backend = manager.get_database_backend();
         let conn = manager.get_connection();
 
-        // 1. Ensure pg_trgm extension exists (idempotent)
-        //    Using execute_unprepared because extension creation is DDL outside schema builder.
-        if let Err(e) = conn
-            .execute_unprepared("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-            .await
-        {
-            // Do not fail entire migration if extension creation lacks privileges; log & continue.
-            println!(
-                "Warning: unable to create pg_trgm extension (continuing without trigram indexes): {e}"
-            );
-            return Ok(());
+        // (Postgres only) Ensure pg_trgm extension exists (idempotent)
+        if backend == sea_orm::DatabaseBackend::Postgres {
+            if let Err(e) = conn
+                .execute_unprepared("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+                .await
+            {
+                // Do not fail entire migration if extension creation lacks privileges; log & continue.
+                println!(
+                    "Warning: unable to create pg_trgm extension (continuing without trigram indexes): {e}"
+                );
+            }
         }
 
-        // 2. Normalize / consolidate filters uniqueness across backends (idempotent)
-        match manager.get_database_backend() {
+        // Normalize / consolidate filters uniqueness across backends (idempotent)
+        match backend {
             sea_orm::DatabaseBackend::Postgres => {
                 // Drop old single-column uniqueness if still present
                 let _ = conn
@@ -87,10 +83,7 @@ impl MigrationTrait for Migration {
                     .await;
             }
             sea_orm::DatabaseBackend::Sqlite => {
-                // Rebuild table only if legacy schema still present.
-                // Heuristic: attempt to create composite index; if it succeeds AND
-                // legacy UNIQUE(name) still blocks duplicates, we perform rebuild.
-                // (Safe on a new database; idempotent enough for consolidation.)
+                // Ensure composite index (idempotent)
                 let _ = conn
                     .execute_unprepared(
                         r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_filters_name_source_type_unique
@@ -98,12 +91,62 @@ impl MigrationTrait for Migration {
                     )
                     .await;
 
-                // Perform rebuild to eliminate legacy UNIQUE(name)
-                // (Adapted from earlier dedicated migration.)
-                let txn = conn.begin().await?;
-                txn.execute(Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    r#"
+                // Detect legacy single-column UNIQUE(name)
+                let (legacy_unique, _have_composite) = {
+                    let mut legacy = false;
+                    let mut composite = false;
+                    if let Ok(rows) = conn
+                        .query_all(Statement::from_string(
+                            sea_orm::DatabaseBackend::Sqlite,
+                            "PRAGMA index_list('filters')".to_string(),
+                        ))
+                        .await
+                    {
+                        for row in rows {
+                            if let Ok(uq) = row.try_get::<i64>("", "unique") {
+                                if uq == 1 {
+                                    if let Ok(idx_name) = row.try_get::<String>("", "name") {
+                                        if let Ok(cols) = conn
+                                            .query_all(Statement::from_string(
+                                                sea_orm::DatabaseBackend::Sqlite,
+                                                format!("PRAGMA index_info('{idx_name}')"),
+                                            ))
+                                            .await
+                                        {
+                                            let mut col_names = Vec::new();
+                                            for c in cols {
+                                                if let Ok(col_name) =
+                                                    c.try_get::<String>("", "name")
+                                                {
+                                                    col_names.push(col_name);
+                                                }
+                                            }
+                                            if col_names.len() == 1 && col_names[0] == "name" {
+                                                legacy = true;
+                                            }
+                                            if col_names.len() == 2
+                                                && ((col_names[0] == "name"
+                                                    && col_names[1] == "source_type")
+                                                    || (col_names[0] == "source_type"
+                                                        && col_names[1] == "name"))
+                                            {
+                                                composite = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (legacy, composite)
+                };
+
+                // Always rebuild if legacy single-column uniqueness detected, regardless of composite index presence
+                if legacy_unique {
+                    let txn = conn.begin().await?;
+                    txn.execute(Statement::from_string(
+                        sea_orm::DatabaseBackend::Sqlite,
+                        r#"
 CREATE TABLE IF NOT EXISTS filters_new (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
@@ -115,52 +158,49 @@ CREATE TABLE IF NOT EXISTS filters_new (
     updated_at TEXT NOT NULL,
     CONSTRAINT filters_name_source_type_unique UNIQUE (name, source_type)
 );"#
-                    .to_string(),
-                ))
-                .await?;
+                        .to_string(),
+                    ))
+                    .await?;
 
-                txn.execute(Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    r#"
+                    txn.execute(Statement::from_string(
+                        sea_orm::DatabaseBackend::Sqlite,
+                        r#"
 INSERT OR IGNORE INTO filters_new
 (id, name, source_type, is_inverse, is_system_default, expression, created_at, updated_at)
 SELECT id, name, source_type, is_inverse, is_system_default, expression, created_at, updated_at
 FROM filters;
 "#
-                    .to_string(),
-                ))
-                .await?;
+                        .to_string(),
+                    ))
+                    .await?;
 
-                txn.execute(Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    "DROP TABLE filters;".to_string(),
-                ))
-                .await?;
-                txn.execute(Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    "ALTER TABLE filters_new RENAME TO filters;".to_string(),
-                ))
-                .await?;
-                // Recreate secondary indexes
-                txn.execute(Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    "CREATE INDEX IF NOT EXISTS idx_filters_source_type ON filters (source_type);"
-                        .to_string(),
-                ))
-                .await?;
-                txn.execute(Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    "CREATE INDEX IF NOT EXISTS idx_filters_is_inverse ON filters (is_inverse);"
-                        .to_string(),
-                ))
-                .await?;
-                txn.execute(Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    "CREATE INDEX IF NOT EXISTS idx_filters_is_system_default ON filters (is_system_default);"
-                        .to_string(),
-                ))
-                .await?;
-                txn.commit().await?;
+                    txn.execute(Statement::from_string(
+                        sea_orm::DatabaseBackend::Sqlite,
+                        "DROP TABLE filters;".to_string(),
+                    ))
+                    .await?;
+                    txn.execute(Statement::from_string(
+                        sea_orm::DatabaseBackend::Sqlite,
+                        "ALTER TABLE filters_new RENAME TO filters;".to_string(),
+                    ))
+                    .await?;
+
+                    // Secondary indexes
+                    for idx_sql in [
+                        "CREATE INDEX IF NOT EXISTS idx_filters_source_type ON filters (source_type);",
+                        "CREATE INDEX IF NOT EXISTS idx_filters_is_inverse ON filters (is_inverse);",
+                        "CREATE INDEX IF NOT EXISTS idx_filters_is_system_default ON filters (is_system_default);",
+                    ] {
+                        let _ = txn
+                            .execute(Statement::from_string(
+                                sea_orm::DatabaseBackend::Sqlite,
+                                idx_sql.to_string(),
+                            ))
+                            .await;
+                    }
+
+                    txn.commit().await?;
+                }
             }
         }
 
